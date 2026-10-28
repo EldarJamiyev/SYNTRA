@@ -15,6 +15,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import './ProjectBuilder.css';
+import LocalModelPanel from './LocalModelPanel';
 
 type WorkspaceFile = { path: string; size: number; language: string };
 type WorkspaceInfo = {
@@ -91,6 +92,7 @@ export default function ProjectBuilder() {
   const [relativePath, setRelativePath] = useState('src/example.ts');
   const [content, setContent] = useState('');
   const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [modelBaseHash, setModelBaseHash] = useState<string | null>(null);
   const [applyConsent, setApplyConsent] = useState(false);
   const [checkTask, setCheckTask] = useState('test');
   const [checkConsent, setCheckConsent] = useState(false);
@@ -152,6 +154,7 @@ export default function ProjectBuilder() {
         root: rememberRoot(), path: relativePath,
       });
       setContent(value.content);
+      setModelBaseHash(null);
       setProposal(null);
       setApplyConsent(false);
       setNotice('Loaded ' + value.path + ' · SHA-256 ' + value.sha256.slice(0, 16) + '…');
@@ -163,7 +166,7 @@ export default function ProjectBuilder() {
     setBusy('propose'); setError(''); setNotice('');
     try {
       const value = await postJson<Proposal>('/local-api/workspace/propose', {
-        root: rememberRoot(), path: relativePath, content,
+        root: rememberRoot(), path: relativePath, content, expectedSha256: modelBaseHash || undefined,
       });
       setProposal(value);
       setApplyConsent(false);
@@ -185,6 +188,7 @@ export default function ProjectBuilder() {
       });
       setNotice('Applied ' + result.path + (result.backupCreated ? ' · previous version backed up.' : ' · new file created.'));
       setProposal(null);
+      setModelBaseHash(null);
       setApplyConsent(false);
       await inspect();
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
@@ -230,8 +234,8 @@ export default function ProjectBuilder() {
       <div className="builder-callout">
         <AlertTriangle size={18} />
         <div>
-          <strong>Current model limitation</strong>
-          <p>The browser model is a byte-transition baseline, not a trained neural coding model. The workspace and verification tools are real; autonomous model-driven implementation is a future milestone. SYNTRA does not call external AI APIs.</p>
+          <strong>Native model capability boundary</strong>
+          <p>SYNTRA now has a locally trained Transformer and a supervised instruction-tuning pipeline, both initialized without pretrained weights. The current generator is still a small byte-level continuation model—not an autonomous, EJI-scale coding agent—and may emit invalid code. No hosted AI API is used.</p>
         </div>
       </div>
 
@@ -258,6 +262,20 @@ export default function ProjectBuilder() {
           <div className="builder-stat"><span>AVAILABLE CHECKS</span><strong>{Object.keys(inspection.scripts).join(' · ') || 'No npm scripts'}</strong><small>Only explicit checks are run</small></div>
         </div>
       )}
+
+      <LocalModelPanel
+        root={root}
+        relativePath={relativePath}
+        onGenerated={(text, message, sourceContent, sourceHash) => {
+          setContent(sourceContent + text);
+          setModelBaseHash(sourceHash);
+          setProposal(null);
+          setApplyConsent(false);
+          setError('');
+          setNotice(message + ' The output was appended to the editor as a continuation. Review and edit it, then click Create proposal.');
+        }}
+        onError={setError}
+      />
 
       <div className="builder-columns">
         <div className="builder-panel">
@@ -301,7 +319,7 @@ export default function ProjectBuilder() {
             {busy === 'read' ? <LoaderCircle size={15} className="spin" /> : <FileCode2 size={15} />} Load file
           </button>
         </div>
-        <textarea className="builder-code-editor" value={content} onChange={event => setContent(event.target.value)} spellCheck={false} placeholder="Enter complete proposed file contents here. The AI-driven patch generator will connect here in a later milestone." />
+        <textarea className="builder-code-editor" value={content} onChange={event => setContent(event.target.value)} spellCheck={false} placeholder="Load a source file first to append local-model completion, or enter a complete replacement manually. Review the entire contents before proposing." />
         <div className="builder-action-row">
           <span>Maximum text proposal: 512 KB. The target file hash is rechecked before apply.</span>
           <button className="builder-primary" disabled={isBusy || offline || !relativePath.trim()} onClick={() => void createProposal()}>
@@ -344,7 +362,7 @@ export default function ProjectBuilder() {
         </div>}
       </div>
 
-      <div className="builder-footnote"><Activity size={15} /><span>Project operations are local. File reads are bounded, secret-like files are blocked, file updates require explicit approval, and applied edits create backups. The current model itself is not yet capable of autonomously driving this workflow.</span><ArrowRight size={15} /></div>
+      <div className="builder-footnote"><Activity size={15} /><span>Project operations are local. File reads are bounded, secret-like files are blocked, file updates require explicit approval, and applied edits create backups. The native model is trained from random initialization. Its output is a raw continuation and is not guaranteed to be a valid patch or full-file rewrite.</span><ArrowRight size={15} /></div>
     </section>
   );
 }

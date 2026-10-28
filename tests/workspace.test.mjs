@@ -92,3 +92,14 @@ test("workspace root cannot be a filesystem root", async () => {
   const root = path.parse(process.cwd()).root;
   await assert.rejects(() => inspectWorkspace(root), /filesystem root/);
 });
+
+test("AI-generated proposal rejects a source file that changed after generation", async () => {
+  const root = await createTempProject();
+  const loaded = await readWorkspaceFile(root, "src/network.ts");
+  const proposalContent = loaded.content + "\n// generated continuation\n";
+  await fs.writeFile(path.join(root, "src", "network.ts"), loaded.content + "// concurrent change\n", "utf8");
+  await assert.rejects(
+    () => proposeFileChange(root, "src/network.ts", proposalContent, loaded.sha256),
+    /changed after SYNTRA read it for generation/
+  );
+});

@@ -1,36 +1,40 @@
 # Data and laptop resource guidance
 
-## Corpus preparation
+## Local corpus
 
-Put code/text files you have the right to use in data/raw. The tool reads supported local text file extensions, ignores common dependency/build folders, skips files larger than 2 MB, and enforces a default 50 MB source-byte budget. These bounds protect an initial laptop workflow; they are not recommended final training-corpus sizes for a strong coding model.
+SYNTRA reads the absolute local directory selected in the Project Builder or passed to `python -m syntra_ai.cli train --root ...`. It does not silently fetch source code or training sets. Supported text/code files are read as UTF-8. Common dependency/build/cache folders, symlinks, hidden directories, likely secret/credential files, non-text formats and files larger than 256 KiB are skipped. The default total token cap is two million in the CLI and the UI; the Python API can be configured with a higher limit.
 
-Do not train on confidential work files, secrets, private repositories, or material whose license does not permit the intended use. Keep raw and processed data out of Git.
+Do not train on confidential work files, secrets, private repositories, or material whose license does not permit the intended use. The exclusion rules are only heuristics and cannot guarantee that every secret will be recognized. Review the corpus and permissions before training. The repository does not bundle a coding dataset or model checkpoint.
 
-## Expected memory behavior
+## Default architecture and resources
 
-The default configuration is a small approximately 7–8 million parameter transformer, 128-token context, and batch size 4. Actual memory use depends on PyTorch version, tensor allocation, Windows, browser tabs, and other applications. Start with the default settings and reduce n_embd, n_layer, block_size, and batch_size if training is unstable or too slow.
+The native model default is a small decoder-only Transformer: 258 byte/BOS/EOS vocabulary IDs, a 1,024-byte context, four layers, four attention heads, width 128 and batch size four in the UI. It has roughly one million parameters. Actual memory and throughput depend on OS, PyTorch build, selected device, sequence length, batch size and other running programs.
 
-Suggested first-run settings:
+Use a smaller configuration for a first smoke run if it is slow:
+- `--seq-len 128`
+- `--layers 1`
+- `--heads 2`
+- `--width 32`
+- `--batch-size 1`
+- `--steps 1` or `10`
 
-- n_embd: 192
-- n_layer: 2
-- n_head: 4
-- block_size: 64
-- batch_size: 2
-- max_steps: 50
+These settings verify the end-to-end training/checkpoint pipeline only. They are not expected to produce useful coding abilities. Normal byte-level training needs a substantial corpus; the 80/20 split must leave enough byte tokens on both sides of the split for the configured context.
 
-Use these tiny settings only to check the pipeline. They are not expected to produce a useful code model.
+Example:
+```powershell
+python -m syntra_ai.cli inspect-data --root "C:\Users\You\Documents\YourProject"
+python -m syntra_ai.cli train --root "C:\Users\You\Documents\YourProject" --steps 1000
+python -m syntra_ai.cli status
+```
 
 ## Pagefile / virtual memory
 
-Windows-managed virtual memory can reduce the chance that a process immediately fails when committed memory rises, but pagefile-backed memory is much slower than RAM. It does not increase CPU/GPU speed, and heavy paging can make training impractically slow. Prefer closing memory-heavy applications and reducing the batch/context/model dimensions before relying on a large pagefile.
-
-The repository intentionally does not change Windows pagefile settings automatically. Configure Windows virtual memory manually only if you understand the disk-space and system-performance trade-offs.
+Windows-managed virtual memory can reduce the chance that a process immediately fails when committed memory rises, but pagefile-backed memory is much slower than RAM. It does not increase CPU/GPU throughput. Prefer closing memory-heavy applications and reducing batch size, context length, model width or layer count before relying on a larger pagefile. SYNTRA does not change Windows pagefile settings.
 
 ## Hardware acceleration
 
-The initial runtime automatically selects CUDA when PyTorch reports it is available; otherwise it uses CPU. An integrated Intel Arc GPU is not a CUDA device and is not used by this CUDA-only selection logic. This implementation runs without a discrete GPU, with slower training throughput.
+The runtime automatically selects CUDA when available, otherwise Apple MPS when available, then CPU. It does not currently target Intel Arc GPU acceleration through DirectML or XPU. An integrated Intel Arc GPU on a Windows laptop may therefore not be used by this version, even if the GPU is visible to Windows.
 
-## Measuring progress
+## Metrics and quality
 
-Monitor checkpoints/training_metrics.csv and compare training versus validation loss. Falling training loss with rising validation loss is a common overfitting sign. Always retain held-out code tasks and run syntax/unit tests against generated completions before treating improvements as real.
+The checkpoint metadata records measured training and held-out validation loss. It is a record of next-byte prediction, not a score for solving software tasks. Compare separate coding tasks and measure syntax validity, patch acceptance, build/test pass rate and regressions. Keep an independent hold-out set when tuning instruction data. Never treat a lower loss or the existence of a checkpoint as proof that generated code is correct.

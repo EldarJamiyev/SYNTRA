@@ -10,7 +10,10 @@
     "preview": "vite preview --host 0.0.0.0 --port 3000",
     "server": "node local/server.mjs",
     "cli": "node bin/syntra.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "ai:install": "python -m pip install -r requirements.txt",
+    "ai:server": "python -m syntra_ai.server",
+    "ai:cli": "python -m syntra_ai.cli"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

@@ -383,7 +383,7 @@ function summarizeChange(before, after) {
   };
 }
 
-export async function proposeFileChange(inputRoot, relativePath, newContent) {
+export async function proposeFileChange(inputRoot, relativePath, newContent, expectedBaseHash = undefined) {
   const root = await resolveWorkspace(inputRoot);
   if (typeof newContent !== "string" || Buffer.byteLength(newContent, "utf8") > MAX_TEXT_BYTES) {
     throw new Error("Proposed file content must be text no larger than 512 KB.");
@@ -391,6 +391,9 @@ export async function proposeFileChange(inputRoot, relativePath, newContent) {
   const resolved = await resolveFile(root, relativePath, { allowMissing: true });
   const before = resolved.stat ? await fs.readFile(resolved.target, "utf8") : null;
   const beforeHash = before === null ? null : sha256(before);
+  if (expectedBaseHash !== undefined && beforeHash !== expectedBaseHash) {
+    throw new Error("The target file changed after SYNTRA read it for generation. Reload the file and generate/review a new proposal.");
+  }
   const id = crypto.randomUUID();
   const proposal = {
     id,

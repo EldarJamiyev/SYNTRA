@@ -1,0 +1,2 @@
+# PyTorch is the tensor/autograd framework only. SYNTRA initializes and trains its own weights.
+torch>=2.4,<3.0

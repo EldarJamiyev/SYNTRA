@@ -2,51 +2,48 @@
 
 ## Product target
 
-SYNTRA is intended to grow into a local-first software-development agent that builds and maintains complete applications, not merely autocomplete a single function. EJI/EJII is representative of the target scale: web UI, Node.js services, REST routes, diagnostics and automation engines, policies, runbooks, persistence, CLI tools, and extensive tests. A system that develops applications of this scope must reason over a repository as a whole and prove changes with the project's own checks.
+SYNTRA is a local-first software-development system intended to grow toward building and maintaining applications like EJI/EJII. Such work spans the UI, APIs, services, data models, tests, documentation and deployment—not just one isolated function. The software workspace and model runtime are separate components: the workspace provides safe, real tools; the model only generates as well as its training and architecture allow.
+
+## Implemented workspace and model tools
+
+- Loopback-only Node.js workspace service at `local/server.mjs`.
+- Workspace inspection, line-level source search, bounded file reads and deterministic workflow-plan persistence in `local/workspace.mjs`.
+- File proposals under the selected project's `.syntra/proposals`, explicit apply confirmation, stale-content hash protection, backups, and an action audit log.
+- Explicit build/test/lint/typecheck commands with timeouts and captured output.
+- A native decoder-only Transformer in `syntra_ai/model.py`, initialized from random weights.
+- Local source-corpus loader, real gradient-descent training, train/validation metrics and atomic model/optimizer checkpoints.
+- Autoregressive local inference using the saved neural checkpoint.
+- Optional supervised instruction fine-tuning from a local JSONL dataset with completion-only loss.
+- React UI to start training, view measured checkpoint metrics, generate a source continuation into the editor, stage a proposal, review the change and run checks.
+- CLI commands for workspace operations and the native model; Node and Python test suites run in CI.
+
+## Limitations that remain real
+
+- The local model is small and byte-tokenized. It has not been pretrained on a large, high-quality, broadly licensed coding corpus. Initial training is not enough to match a mature coding assistant.
+- Current generation is raw continuation of the source file, not a guaranteed replacement patch. It may produce invalid, repeated or irrelevant code. The UI keeps it in the editor so it can be reviewed before creating a proposal.
+- Supervised fine-tuning is provided, but meaningful task following depends on the quality, size and rights of your local examples. A checkpoint and a falling loss do not prove reliable instruction following.
+- Project planning is still a deterministic template, not a model-reasoned plan.
+- A true multi-file agent loop—architecture/context retrieval, patch extraction, tests, failure analysis, code repairs, regression checks and acceptance evidence—is not implemented yet. The real tools exist, but the system doesn't yet autonomously orchestrate them into a reliable full-application build.
 
 ## Required development loop
 
-1. Discover project manifests, folders, entry points, dependencies, conventions, and tests.
-2. Search for relevant symbols and data flow, read bounded files, and maintain a project map.
-3. Translate the requested goal into requirements, edge cases, acceptance criteria, and non-goals.
-4. Plan small vertical slices with explicit dependencies.
-5. Generate a reviewable file proposal with a content hash and change summary.
-6. Apply only after explicit confirmation and only if the original file hash still matches; preserve a backup.
-7. Run allowlisted build/test/lint/typecheck scripts with a timeout and capture output.
-8. Use failures as evidence, revise the plan, propose a focused fix, and re-run relevant checks.
-9. Review regressions, security boundaries, UI behavior, error cases, and documentation.
-10. Preserve project notes, decisions, test outcomes, and accepted/rejected proposals in local project state.
+1. Discover manifests, entry points, dependencies, architecture and tests.
+2. Search relevant symbols, read bounded source context and build a project map.
+3. Translate the request into testable requirements and acceptance criteria.
+4. Plan a small vertical slice.
+5. Generate a source continuation from a trained local checkpoint, or manually prepare a complete change.
+6. Review the entire content, then create a proposal with a path and change summary.
+7. Apply only after explicit authorization; the system validates the expected source hash and backs up existing content.
+8. Run actual project checks; use the output as evidence and repeat manually as required.
+9. Review regressions, security boundaries, error cases and documentation.
+10. Preserve decisions and test outcomes inside the local project's `.syntra` state.
 
-## Implemented in the local workspace foundation
+## Next engineering milestones
 
-- Loopback-only Node.js service in local/server.mjs; no external service dependency.
-- Workspace inspection, source search, and bounded text reads in local/workspace.mjs.
-- Persistent deterministic planning skeleton under the selected project's .syntra/plans/current.json.
-- File-change proposals under .syntra/proposals, explicit apply confirmation, stale-file hash protection, automatic backups, and an audit log.
-- Allowlisted project checks that run only after explicit user action.
-- CLI and browser UI sharing the workspace service.
-- Unit tests using Node's built-in test runner.
+1. Build reliable source indexing and a symbol/dependency graph.
+2. Add owned/licensed supervised training data, dataset validation, train/evaluation split safeguards, and task-level code-generation benchmarks.
+3. Add robust patch proposal formats and syntax-aware extraction instead of appending raw model continuation.
+4. Implement a controlled multi-file tool loop with explicit plans, budget limits, backups, test execution and failure-driven repair iterations.
+5. Add persistent accepted/rejected patch memory and reproducible task reports.
 
-## Not yet implemented
-
-- The existing browser engine is a byte-transition baseline, not a trained transformer. Its current training process updates transition counts rather than neural-network weights. The baseline can be tested but is not suitable for autonomously developing EJI-scale applications.
-- The plan generator is a deterministic workflow skeleton, not a plan reasoned by a trained model.
-- A reliable model-driven agent loop is still required to select tools, edit multiple files, inspect errors, and iterate.
-- AST/symbol indexing, dependency graphs, retrieval over large repositories, multi-file change coordination, richer test orchestration, and durable task/decision memory remain future work.
-- The workspace service never executes generated content automatically.
-
-## Hardware and model strategy
-
-On a 32 GB laptop, the first honest goal is to build and evaluate a small model and a reliable project-tooling loop. A small randomly initialized model will not know how to produce an EJI-scale application until trained on enough suitable data. Virtual memory can help with some memory-allocation failures but does not provide GPU or CPU throughput.
-
-Evaluate on complete software tasks, not UI appearance or training metrics alone. Measure patch correctness, build pass rate, test pass rate, regressions, iterations per accepted change, and reproducibility.
-
-## Security rules
-
-- Workspace server binds only to 127.0.0.1.
-- The user explicitly selects a project root.
-- Files outside that root are never traversed or modified.
-- Symbolic links, dependency/build folders, secret files, and oversized text files are excluded.
-- Proposed changes require explicit confirmation, and apply verifies the base content hash.
-- Existing files are backed up before application.
-- Build and test checks use a small allowlist. They may execute project-defined scripts, so the user must review the project before running them.
+The goal is a genuine, verifiable engineering tool. Capability must be proven by real project tasks and test outcomes, not visual polish, placeholder metrics, or claims in the README.
