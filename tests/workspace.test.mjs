@@ -48,7 +48,10 @@ test("read exposes content hash and refuses secret files", async () => {
   const read = await readWorkspaceFile(root, "src/network.ts");
   assert.match(read.sha256, /^[a-f0-9]{64}$/);
   await fs.writeFile(path.join(root, ".env"), "SECRET=do-not-read", "utf8");
+  await fs.writeFile(path.join(root, ".env.example"), "APP_PORT=3000\\nSECRET=replace-me", "utf8");
   await assert.rejects(() => readWorkspaceFile(root, ".env"), /blocks access/);
+  const example = await readWorkspaceFile(root, ".env.example");
+  assert.match(example.content, /APP_PORT=3000/);
 });
 
 test("proposal requires confirmation and protects concurrent edits", async () => {

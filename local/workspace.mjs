@@ -87,7 +87,7 @@ function isSensitiveRelativePath(relativePath) {
   const ext = path.posix.extname(base);
   return parts.some(part => part === ".git" || part === "secrets" || part === "credentials")
     || SENSITIVE_NAMES.has(base)
-    || base.startsWith(".env.")
+    || (base.startsWith(".env.") && base !== ".env.example")
     || SENSITIVE_EXTENSIONS.has(ext)
     || base.endsWith(".secret");
 }
