@@ -92,18 +92,21 @@ def generate(
     }
 
 
-@torch.no_grad()
-def evaluate(device_name: str = "auto") -> dict:
-    # Validation loss is measured against a held-out portion of the local corpus
-    # during the last checkpoint save. The original corpus is not silently re-read.
-    _model, saved, _device = load_model(device_name=device_name)
+def evaluate() -> dict:
+    """Report the checkpoint's last measured held-out loss without reloading the model."""
+    path = checkpoint_path()
+    if not path.is_file():
+        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(path) + ". Train a local model first.")
+    saved = torch.load(path, map_location="cpu", weights_only=True)
+    if saved.get("format") != "syntra-transformer-v1":
+        raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
     val_loss = saved.get("validation_loss")
     train_loss = saved.get("train_loss")
     if val_loss is None:
         raise ValueError("This checkpoint contains no held-out validation measurement.")
     measured_loss = float(val_loss)
     return {
-        "checkpoint": str(checkpoint_path()),
+        "checkpoint": str(path),
         "step": int(saved.get("step", 0)),
         "train_loss": train_loss,
         "validation_loss": measured_loss,

@@ -3,6 +3,7 @@ import os
 import tempfile
 import threading
 import unittest
+import torch
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -46,6 +47,38 @@ class LocalApiSmokeTests(unittest.TestCase):
                 body = json.loads(response.read())
                 self.assertEqual(response.status, 409)
                 self.assertIn("No trained SYNTRA checkpoint", body["error"])
+
+                from syntra_ai.config import ModelConfig
+                from syntra_ai.model import SyntraTransformer
+
+                config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+                model = SyntraTransformer(config)
+                torch.save({
+                    "format": "syntra-transformer-v1",
+                    "config": config.to_dict(),
+                    "model_state": model.state_dict(),
+                    "step": 0,
+                    "train_loss": None,
+                    "validation_loss": None,
+                }, missing_checkpoint)
+                connection.request(
+                    "POST",
+                    "/model/generate",
+                    body=json.dumps({
+                        "prompt": "def add(",
+                        "max_new_tokens": 2,
+                        "temperature": 1.0,
+                        "top_k": 2,
+                        "device": "cpu",
+                    }),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                generated = json.loads(response.read())
+                self.assertEqual(response.status, 200)
+                self.assertTrue(generated["is_model_output"])
+                self.assertGreaterEqual(generated["generated_tokens"], 1)
+                self.assertLessEqual(generated["generated_tokens"], 2)
 
                 connection.request(
                     "POST",

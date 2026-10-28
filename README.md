@@ -74,7 +74,7 @@ npm run ai:cli -- inspect-data --root "C:\Users\You\Documents\YourProject"
 npm run ai:cli -- train --root "C:\Users\You\Documents\YourProject" --steps 1000
 npm run ai:cli -- status
 npm run ai:cli -- generate --prompt "def parse_config(" --max-new-tokens 200
-npm run ai:cli -- evaluate --device cpu
+npm run ai:cli -- evaluate
 npm run ai:cli -- finetune --dataset "C:\\Users\\You\\Documents\\syntra-instructions.jsonl" --steps 1000
 ```
 

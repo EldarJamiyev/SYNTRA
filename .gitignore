@@ -25,3 +25,14 @@ frontend/.vite/
 .idea/
 .DS_Store
 Thumbs.db
+.syntra/
+.env
+.env.*
+!.env.example
+.npmrc
+.pypirc
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
