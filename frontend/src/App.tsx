@@ -7,6 +7,7 @@ import {
   CircleAlert,
   Code2,
   Cpu,
+  Database,
   Github,
   LoaderCircle,
   Play,
@@ -28,31 +29,80 @@ type RuntimeStatus = {
   external_ai_api: boolean;
 };
 
+type TrainingStatus = {
+  status: string;
+  step: number;
+  max_steps: number;
+  train_loss: number | null;
+  validation_loss: number | null;
+  message: string;
+};
+
 function App() {
   const [status, setStatus] = useState<RuntimeStatus | null>(null);
+  const [training, setTraining] = useState<TrainingStatus | null>(null);
   const [prompt, setPrompt] = useState("def fibonacci(n: int) -> list[int]:\n    ");
   const [maxTokens, setMaxTokens] = useState(96);
   const [temperature, setTemperature] = useState(0.8);
   const [output, setOutput] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [dataBusy, setDataBusy] = useState(false);
+  const [trainingMessage, setTrainingMessage] = useState('');
   const [lastRun, setLastRun] = useState('');
 
   const refreshStatus = useCallback(async () => {
     try {
-      const response = await fetch('/api/status');
-      if (!response.ok) throw new Error('Backend returned HTTP ' + response.status);
-      setStatus(await response.json() as RuntimeStatus);
+      const [statusResponse, trainingResponse] = await Promise.all([
+        fetch('/api/status'),
+        fetch('/api/train/status'),
+      ]);
+      if (!statusResponse.ok || !trainingResponse.ok) throw new Error('Backend status request failed');
+      setStatus(await statusResponse.json() as RuntimeStatus);
+      setTraining(await trainingResponse.json() as TrainingStatus);
     } catch {
       setStatus(null);
+      setTraining(null);
     }
   }, []);
 
   useEffect(() => {
     void refreshStatus();
-    const timer = window.setInterval(() => void refreshStatus(), 10000);
+    const timer = window.setInterval(() => void refreshStatus(), 3000);
     return () => window.clearInterval(timer);
   }, [refreshStatus]);
+
+  const prepareData = async () => {
+    setDataBusy(true);
+    setTrainingMessage('');
+    try {
+      const response = await fetch('/api/data/prepare', { method: 'POST' });
+      const data = await response.json() as { files?: number; tokens?: number; output?: string; detail?: string };
+      if (!response.ok) throw new Error(data.detail || 'Data preparation failed');
+      setTrainingMessage('Prepared ' + String(data.files) + ' files · ' + String(data.tokens) + ' tokens.');
+      await refreshStatus();
+    } catch (cause) {
+      setTrainingMessage(cause instanceof Error ? cause.message : 'Data preparation failed.');
+    } finally {
+      setDataBusy(false);
+    }
+  };
+
+  const startTraining = async () => {
+    setDataBusy(true);
+    setTrainingMessage('');
+    try {
+      const response = await fetch('/api/train/start', { method: 'POST' });
+      const data = await response.json() as TrainingStatus & { detail?: string };
+      if (!response.ok) throw new Error(data.detail || 'Could not start training');
+      setTrainingMessage('Training started. Metrics update at evaluation intervals.');
+      await refreshStatus();
+    } catch (cause) {
+      setTrainingMessage(cause instanceof Error ? cause.message : 'Could not start training.');
+    } finally {
+      setDataBusy(false);
+    }
+  };
 
   const generate = async () => {
     setBusy(true);
@@ -63,12 +113,7 @@ function App() {
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt,
-          max_new_tokens: maxTokens,
-          temperature,
-          top_k: 40,
-        }),
+        body: JSON.stringify({ prompt, max_new_tokens: maxTokens, temperature, top_k: 40 }),
       });
       const data = await response.json() as { output?: string; detail?: string; step?: number; device?: string; warning?: string };
       if (!response.ok) throw new Error(data.detail || 'Generation failed with HTTP ' + response.status);
@@ -84,6 +129,10 @@ function App() {
 
   const modelReady = Boolean(status?.checkpoint_exists);
   const backendOnline = Boolean(status);
+  const isTraining = training?.status === 'running';
+  const trainingProgress = training && training.max_steps > 0
+    ? Math.min(100, Math.round((training.step / training.max_steps) * 100))
+    : 0;
 
   return (
     <div className="app-shell">
@@ -113,7 +162,7 @@ function App() {
 
       <main className="main-content">
         <header className="topbar">
-          <div className="breadcrumb">SYNTRA <span>/</span> <strong>Playground</strong></div>
+          <div className="breadcrumb">SYNTRA <span>/</span> <strong>Studio</strong></div>
           <div className="topbar-status">
             <span className={backendOnline ? 'status-indicator online' : 'status-indicator'} />
             {backendOnline ? 'LOCAL RUNTIME CONNECTED' : 'BACKEND OFFLINE'}
@@ -143,8 +192,8 @@ function App() {
           <div className="stat-card">
             <div className="stat-icon green"><Zap size={18} /></div>
             <div className="stat-label">TRAINING STEP</div>
-            <div className="stat-value">{status?.step?.toLocaleString() ?? '—'}</div>
-            <div className="stat-foot">Checkpoint-reported step</div>
+            <div className="stat-value">{training?.step?.toLocaleString() ?? '—'}</div>
+            <div className="stat-foot">{training?.max_steps ? 'Target: ' + training.max_steps.toLocaleString() : 'No active training run'}</div>
           </div>
           <div className="stat-card">
             <div className="stat-icon amber"><Server size={18} /></div>
@@ -161,27 +210,24 @@ function App() {
               <span className="panel-kicker">PROMPT INPUT</span>
             </div>
             <label className="field-label" htmlFor="prompt">Your instruction or code prefix</label>
-            <textarea
-              id="prompt"
-              className="code-input"
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              spellCheck={false}
-              placeholder="Describe a programming task or enter a code prefix..."
-            />
+            <textarea id="prompt" className="code-input" value={prompt}
+              onChange={(event) => setPrompt(event.target.value)} spellCheck={false}
+              placeholder="Describe a programming task or enter a code prefix..." />
             <div className="controls-row">
               <label className="control-group">
                 <span>MAX NEW TOKENS <strong>{maxTokens}</strong></span>
-                <input type="range" min="16" max="256" step="16" value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} />
+                <input type="range" min="16" max="256" step="16" value={maxTokens}
+                  onChange={(event) => setMaxTokens(Number(event.target.value))} />
               </label>
               <label className="control-group">
                 <span>TEMPERATURE <strong>{temperature.toFixed(1)}</strong></span>
-                <input type="range" min="0.2" max="1.4" step="0.1" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} />
+                <input type="range" min="0.2" max="1.4" step="0.1" value={temperature}
+                  onChange={(event) => setTemperature(Number(event.target.value))} />
               </label>
             </div>
             <div className="action-row">
               <span className="hint-text">Generation uses only the trained local checkpoint.</span>
-              <button className="primary-button" onClick={() => void generate()} disabled={busy || !prompt.trim()}>
+              <button className="primary-button" onClick={() => void generate()} disabled={busy || !prompt.trim() || !modelReady}>
                 {busy ? <LoaderCircle size={16} className="spin" /> : <Play size={15} fill="currentColor" />}
                 {busy ? 'Generating' : 'Generate code'}
               </button>
@@ -189,7 +235,7 @@ function App() {
             {!modelReady && (
               <div className="notice notice-warning">
                 <CircleAlert size={16} />
-                <div><strong>No trained checkpoint found.</strong><p>Prepare a local corpus and train SYNTRA using the CLI before generating text.</p></div>
+                <div><strong>No trained checkpoint found.</strong><p>Prepare local source data and train SYNTRA below before generating text.</p></div>
               </div>
             )}
             {!backendOnline && (
@@ -236,9 +282,26 @@ function App() {
               <div><CheckCircle2 size={15} /><span>Generated code execution by server</span><b className="neutral">DISABLED</b></div>
             </div>
           </div>
+          <div className="panel training-panel">
+            <div className="panel-title"><Database size={17} /> Data & training</div>
+            <p>Put permitted source code in data/raw, then prepare it for training.</p>
+            <div className="training-state"><span className={isTraining ? 'status-indicator online' : 'status-indicator'} /> {training?.status?.toUpperCase() || 'BACKEND OFFLINE'}</div>
+            <div className="progress-track"><div className="progress-fill" style={{ width: trainingProgress + '%' }} /></div>
+            <div className="training-metrics">
+              <span>Train loss <strong>{training?.train_loss == null ? '—' : training.train_loss.toFixed(4)}</strong></span>
+              <span>Val loss <strong>{training?.validation_loss == null ? '—' : training.validation_loss.toFixed(4)}</strong></span>
+            </div>
+            <div className="training-message">{trainingMessage || training?.message || 'Waiting for the local runtime.'}</div>
+            <button className="secondary-button" disabled={dataBusy || isTraining || !backendOnline} onClick={() => void prepareData()}>
+              {dataBusy ? <LoaderCircle size={14} className="spin" /> : <Database size={14} />} Prepare local data
+            </button>
+            <button className="primary-button training-button" disabled={dataBusy || isTraining || !backendOnline} onClick={() => void startTraining()}>
+              {isTraining ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />} {isTraining ? 'Training in progress' : 'Start training'}
+            </button>
+          </div>
           <div className="panel commands-panel">
-            <div className="panel-title"><TerminalSquare size={17} /> Start here</div>
-            <p>Prepare local source data and train the first model from scratch.</p>
+            <div className="panel-title"><TerminalSquare size={17} /> CLI commands</div>
+            <p>All functions are also available from PowerShell.</p>
             <div className="command-line">python -m syntra.cli prepare</div>
             <div className="command-line">python -m syntra.cli train --config config/default.json</div>
             <div className="command-line">python -m syntra.cli serve</div>

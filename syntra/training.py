@@ -7,13 +7,15 @@ import math
 import random
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 
 from syntra.config import SyntraConfig
 from syntra.data import read_token_stream
 from syntra.model import SyntraModel
+
+ProgressCallback = Callable[[dict[str, float | int]], None]
 
 
 def choose_device(requested: str) -> torch.device:
@@ -34,18 +36,13 @@ def _get_batch(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     max_start = len(data) - config.block_size - 1
     if max_start < 1:
-        raise ValueError(
-            "Not enough tokens for this block_size. Add data or reduce block_size."
-        )
+        raise ValueError("Not enough tokens for this block_size. Add data or reduce block_size.")
     starts = torch.randint(0, max_start, (config.batch_size,))
     inputs = torch.stack(
         [data[int(start) : int(start) + config.block_size] for start in starts]
     )
     targets = torch.stack(
-        [
-            data[int(start) + 1 : int(start) + config.block_size + 1]
-            for start in starts
-        ]
+        [data[int(start) + 1 : int(start) + config.block_size + 1] for start in starts]
     )
     return inputs.to(device), targets.to(device)
 
@@ -99,6 +96,7 @@ def train(
     config: SyntraConfig,
     *,
     resume_from: str | Path | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     config.validate()
     random.seed(config.seed)
@@ -187,7 +185,7 @@ def train(
             should_evaluate = (step + 1) % config.eval_interval == 0 or step == first_step
             if should_evaluate or step == config.max_steps - 1:
                 losses = estimate_loss(model, train_data, val_data, config, device)
-                row = {
+                row: dict[str, float | int] = {
                     "step": step + 1,
                     "train_loss": round(losses["train"], 6),
                     "validation_loss": round(losses["validation"], 6),
@@ -211,6 +209,8 @@ def train(
                     _save_checkpoint(
                         output_dir / "best.pt", model, optimizer, config, step + 1, best_val
                     )
+                if progress_callback is not None:
+                    progress_callback(row)
 
     print("Training finished. Latest checkpoint: " + str(output_dir / "latest.pt"))
     print("Metrics: " + str(metrics_path))
