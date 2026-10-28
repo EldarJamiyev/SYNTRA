@@ -1,5 +1,8 @@
 import http from "node:http";
-import { URL } from "node:url";
+import path from "node:path";
+import { fileURLToPath, URL } from "node:url";
+import crypto from "node:crypto";
+import { runAgentTask } from "./agent.mjs";
 import {
   applyFileProposal,
   createProjectPlan,
@@ -7,6 +10,7 @@ import {
   listProposals,
   proposeFileChange,
   readWorkspaceFile,
+  resolveWorkspace,
   runProjectCheck,
   searchWorkspace
 } from "./workspace.mjs";
@@ -21,6 +25,11 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173"
 ]);
 const MAX_BODY_BYTES = 600 * 1024;
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+let activeWorkspace = process.env.SYNTRA_WORKSPACE ? path.resolve(process.env.SYNTRA_WORKSPACE) : REPO_ROOT;
+const chatJobs = new Map();
+let activeChatJobId = null;
+let pendingProposals = { root: null, proposals: [] };
 
 function sendJson(response, status, data) {
   response.writeHead(status, {
@@ -50,14 +59,14 @@ async function parseBody(request) {
   return value;
 }
 
-async function aiRequest(method, route, body) {
+async function aiRequest(method, route, body, timeoutMs = undefined) {
   let response;
   try {
     response = await fetch(AI_BASE + route, {
       method,
       headers: method === "GET" ? {} : { "Content-Type": "application/json" },
       body: method === "GET" ? undefined : JSON.stringify(body || {}),
-      signal: AbortSignal.timeout(method === "POST" && route === "/model/generate" ? 300000 : 15000)
+      signal: AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
     });
   } catch {
     throw new Error("SYNTRA AI service is offline. Install requirements.txt and run npm run ai:server.");
@@ -113,14 +122,226 @@ async function generateAgentCompletion(body) {
   };
 }
 
+
+
+function pruneChatJobs() {
+  if (chatJobs.size <= 32) return;
+  for (const [id, job] of chatJobs) {
+    if (id !== activeChatJobId && job.status !== "running") chatJobs.delete(id);
+    if (chatJobs.size <= 24) break;
+  }
+}
+
+function finishChat(jobId, reply, details = {}) {
+  const job = chatJobs.get(jobId);
+  if (!job) return;
+  Object.assign(job, { status: "completed", phase: "completed", reply, error: null, updatedAt: new Date().toISOString() }, details);
+  if (activeChatJobId === jobId) activeChatJobId = null;
+}
+
+function failChat(jobId, error) {
+  const job = chatJobs.get(jobId);
+  if (!job) return;
+  const message = error instanceof Error ? error.message : String(error);
+  Object.assign(job, { status: "failed", phase: "failed", reply: message, error: message, updatedAt: new Date().toISOString() });
+  if (activeChatJobId === jobId) activeChatJobId = null;
+}
+
+function updateChat(jobId, value) {
+  const job = chatJobs.get(jobId);
+  if (job) Object.assign(job, value, { updatedAt: new Date().toISOString() });
+}
+
+function isCodingTask(message) {
+  return /^(?:please\s+)?(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace)\b/i.test(message.trim())
+    || /\b(?:in this codebase|in the (?:current )?repo(?:sitory)?|in the project files|edit the project|modify the codebase|fix this bug|implement this feature|add this feature)\b/i.test(message);
+}
+
+async function applyProposals(root, proposals) {
+  const checked = [];
+  for (const proposal of proposals) {
+    let current;
+    try { current = await readWorkspaceFile(root, proposal.path); }
+    catch (error) {
+      if (error instanceof Error && error.message.startsWith("File does not exist:")) current = null;
+      else throw error;
+    }
+    if ((current ? current.sha256 : null) !== proposal.beforeHash) {
+      throw new Error("Refusing to apply " + proposal.path + ": the source changed after the proposal was staged.");
+    }
+    checked.push(proposal);
+  }
+  const applied = [];
+  for (const proposal of checked) applied.push(await applyFileProposal(root, proposal.id, true));
+  return applied;
+}
+
+function compactAgentReply(result, applied) {
+  const lines = [result.patchSummary || "Code task finished.", ""];
+  if (applied.length) {
+    lines.push("Changed files:");
+    for (const item of applied) lines.push("- " + item.path);
+  } else if (result.proposals?.length) {
+    lines.push("I prepared proposed changes, but did not apply them because verification did not pass or no checks were available.");
+    for (const item of result.proposals) lines.push("- " + item.path);
+    lines.push("The original project files remain unchanged. Type /apply to explicitly apply these unverified proposals.");
+  } else {
+    lines.push("No valid patch was produced. The original project files remain unchanged.");
+  }
+  lines.push("", "Verification: " + String(result.verification?.status || "not run").replaceAll("_", " "));
+  for (const check of result.verification?.checks || []) {
+    lines.push("- " + check.task + ": " + (check.passed ? "passed" : check.timedOut ? "timed out" : "failed"));
+    if (!check.passed && check.output) lines.push(check.output.slice(-1600));
+  }
+  if (result.attempts?.length) lines.push("", "Repair attempts: " + result.attempts.length + ".");
+  if (applied.length) lines.push("", "Backups and audit records are saved in .syntra.");
+  return lines.join("\n");
+}
+
+async function runChatTurn(jobId, message, history) {
+  try {
+    updateChat(jobId, { phase: "connecting", message: "Connecting to the local model" });
+    const workspaceCommand = message.match(/^\/workspace(?:\s+(.+))?$/is);
+    if (workspaceCommand) {
+      const requested = (workspaceCommand[1] || "").trim();
+      if (!requested) {
+        finishChat(jobId, "Current workspace:\n" + activeWorkspace + "\n\nSwitch project by typing /workspace followed by an absolute folder path.");
+        return;
+      }
+      activeWorkspace = await resolveWorkspace(requested);
+      pendingProposals = { root: null, proposals: [] };
+      finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
+      return;
+    }
+    if (/^\/apply\s*$/i.test(message.trim())) {
+      if (pendingProposals.root !== activeWorkspace || !pendingProposals.proposals.length) {
+        finishChat(jobId, "There are no pending unverified changes for this workspace.");
+        return;
+      }
+      updateChat(jobId, { phase: "applying", message: "Checking source hashes and applying proposals" });
+      const applied = await applyProposals(activeWorkspace, pendingProposals.proposals);
+      pendingProposals = { root: null, proposals: [] };
+      finishChat(jobId, "Applied the explicitly requested proposals:\n" + applied.map(item => "- " + item.path).join("\n") + "\n\nBackups are saved under .syntra.");
+      return;
+    }
+
+    const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000);
+    if (!modelStatus.checkpoint_exists) {
+      finishChat(jobId,
+        "The local AI backend is running, but there is no trained checkpoint yet. Train once from the repository folder, then return here:\n\n"
+        + "npm run ai:install\n"
+        + "npm run ai:cli -- train --root \"" + activeWorkspace + "\" --seq-len 1024 --steps 1000\n"
+        + "npm run ai:server\n\n"
+        + "This is a from-scratch model: training is required and does not guarantee strong instruction-following.");
+      return;
+    }
+
+    if (isCodingTask(message)) {
+      updateChat(jobId, { phase: "planning", message: "Reading the project and planning a code change" });
+      const result = await runAgentTask({
+        root: activeWorkspace, goal: message, maxIterations: 3, runChecks: true,
+        modelRequest: aiRequest,
+        onProgress: update => updateChat(jobId, {
+          phase: update.phase || "working",
+          message: update.message || "Working on the requested change",
+          iteration: update.iteration || 0
+        })
+      });
+      let applied = [];
+      if (result.verification?.status === "passed" && result.proposals?.length) {
+        updateChat(jobId, { phase: "applying", message: "Checks passed in a temporary copy; applying hash-checked proposals" });
+        applied = await applyProposals(activeWorkspace, result.proposals);
+        pendingProposals = { root: null, proposals: [] };
+      } else if (result.proposals?.length) {
+        pendingProposals = { root: activeWorkspace, proposals: result.proposals };
+      } else pendingProposals = { root: null, proposals: [] };
+      finishChat(jobId, compactAgentReply(result, applied), {
+        verification: result.verification?.status || "not_run",
+        changedFiles: result.changedFiles?.map(item => item.path) || []
+      });
+      return;
+    }
+
+    const recentHistory = Array.isArray(history)
+      ? history.filter(item => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
+          .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-2500) }))
+      : [];
+    let userMessage = message.slice(-10000);
+    let prompt = "";
+    let tokenInfo = null;
+    const contextTokens = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 1024);
+    const contextLimit = Math.max(64, contextTokens - 64);
+    while (true) {
+      prompt = [
+        "SYNTRA ASSISTANT",
+        "Answer the user's latest message directly and clearly. Do not claim facts or tools you do not have.",
+        ...recentHistory.map(item => (item.role === "user" ? "USER: " : "ASSISTANT: ") + item.content),
+        "USER: " + userMessage,
+        "ASSISTANT:"
+      ].join("\n\n");
+      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000);
+      if (tokenInfo.token_count <= contextLimit) break;
+      if (recentHistory.length) recentHistory.shift();
+      else if (userMessage.length > 1000) userMessage = userMessage.slice(-Math.max(1000, Math.floor(userMessage.length * 0.65)));
+      else break;
+    }
+    if (tokenInfo.token_count >= contextTokens) {
+      finishChat(jobId, "Your message exceeds the trained model's context window. Please split it into a shorter message.");
+      return;
+    }
+    updateChat(jobId, { phase: "generating", message: "Generating a local response" });
+    const generation = await aiRequest("POST", "/model/generate", {
+      prompt,
+      max_new_tokens: Math.min(512, Math.max(16, contextTokens - tokenInfo.token_count - 1)),
+      temperature: 0.7,
+      top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
+      device: "auto"
+    }, 300000);
+    const reply = String(generation.text || "").trim();
+    finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more training is needed.", {
+      contextTokensUsed: tokenInfo.token_count, trainedSteps: generation.trained_steps
+    });
+  } catch (error) {
+    failChat(jobId, error);
+  }
+}
+
+function startChat(body) {
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  if (!message || message.length > 12000) throw new Error("Message must contain 1–12,000 characters.");
+  if (activeChatJobId) {
+    const active = chatJobs.get(activeChatJobId);
+    if (active?.status === "running") throw new Error("SYNTRA is still answering the previous message.");
+    activeChatJobId = null;
+  }
+  const jobId = crypto.randomUUID();
+  const job = {
+    jobId, status: "running", phase: "starting", message: "Starting local response",
+    reply: "", error: null, workspace: activeWorkspace, updatedAt: new Date().toISOString()
+  };
+  chatJobs.set(jobId, job);
+  activeChatJobId = jobId;
+  pruneChatJobs();
+  void runChatTurn(jobId, message, Array.isArray(body.history) ? body.history : []);
+  return { jobId, status: job.status, phase: job.phase };
+}
+
+function readChatStatus(body) {
+  const job = chatJobs.get(typeof body.jobId === "string" ? body.jobId : "");
+  if (!job) throw new Error("Chat turn not found or expired. Send your message again.");
+  return job;
+}
+
 const routeHandlers = {
   "GET /local-api/health": async () => ({
     status: "ok",
-    service: "SYNTRA Local Project Workspace",
+    service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["inspect", "search", "read", "plan", "propose", "apply-confirmed", "build-checks", "local-model-proxy"]
+    capabilities: ["local-chat", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests"]
   }),
+  "POST /local-api/chat": startChat,
+  "POST /local-api/chat/status": readChatStatus,
   "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
   "GET /local-api/ai/train/status": async () => aiRequest("GET", "/model/train/status"),
   "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", body),
@@ -168,7 +389,7 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(PORT, HOST, () => {
   process.stdout.write("SYNTRA local workspace service listening on http://" + HOST + ":" + PORT + "\n");
-  process.stdout.write("This service is loopback-only. Review proposals before applying changes.\n");
+  process.stdout.write("This service is loopback-only. Chat and code-task execution use the selected local model.\n");
 });
 process.on("SIGINT", () => server.close(() => process.exit(0)));
 process.on("SIGTERM", () => server.close(() => process.exit(0)));

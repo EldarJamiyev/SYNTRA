@@ -34,6 +34,7 @@ class Corpus:
     files: list[str]
     source_bytes: int
     skipped_files: int
+    documents: list[str]
 
 
 def _safe_file(path: Path, max_file_bytes: int) -> bool:
@@ -66,6 +67,7 @@ def load_corpus(
     files: list[str] = []
     total_bytes = 0
     skipped = 0
+    documents: list[str] = []
     seen: set[str] = set()
     if max_files < 1 or max_tokens < 1024:
         raise ValueError("max_files must be positive and max_tokens must be at least 1024.")
@@ -107,6 +109,7 @@ def load_corpus(
                 remaining = max_tokens - len(tokens)
                 tokens.extend(encoded[:remaining])
                 files.append(resolved)
+                documents.append(text)
                 total_bytes += len(raw)
                 if len(tokens) >= max_tokens:
                     break
@@ -114,4 +117,4 @@ def load_corpus(
                 break
     if not tokens:
         raise ValueError("No readable text/source files were found in the selected corpus root(s).")
-    return Corpus(tokens, files, total_bytes, skipped)
+    return Corpus(tokens, files, total_bytes, skipped, documents)

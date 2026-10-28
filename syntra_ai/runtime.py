@@ -1,21 +1,37 @@
-"""Local checkpoint loading, status, generation, and evaluation."""
+"""Checkpoint-backed tokenizer, inference, context counting, and fresh evaluation."""
 from pathlib import Path
 import json
 import math
+import os
 
 import torch
 
 from .config import ModelConfig
-from .model import BOS_ID, EOS_ID, SyntraTransformer
-from .training import choose_device
+from .model import BOS_ID, SyntraTransformer
+from .tokenizer import ByteBPETokenizer
+from .training import _batch, _encode_documents, _estimate_loss, choose_device
+from .data import load_corpus
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "data" / "checkpoints" / "syntra.pt"
 
 
 def checkpoint_path() -> Path:
-    import os
     return Path(os.environ.get("SYNTRA_CHECKPOINT", str(DEFAULT_CHECKPOINT))).expanduser().resolve()
+
+
+def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelConfig, ByteBPETokenizer]:
+    target = Path(path).expanduser().resolve() if path else checkpoint_path()
+    if not target.is_file():
+        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
+    saved = torch.load(target, map_location="cpu", weights_only=True)
+    if saved.get("format") != "syntra-transformer-v1":
+        raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
+    config = ModelConfig.from_dict(saved["config"])
+    tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
+    if tokenizer.vocab_size != config.vocab_size:
+        raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
+    return target, saved, config, tokenizer
 
 
 def status() -> dict:
@@ -27,11 +43,12 @@ def status() -> dict:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             metadata = {}
+    checkpoint_exists = path.is_file()
     return {
         "service": "SYNTRA native local Transformer",
         "backend": "PyTorch",
         "checkpoint": str(path),
-        "checkpoint_exists": path.is_file(),
+        "checkpoint_exists": checkpoint_exists,
         "trained_steps": int(metadata.get("step", 0)),
         "parameter_count": int(metadata.get("parameter_count", 0)),
         "config": metadata.get("config"),
@@ -39,29 +56,44 @@ def status() -> dict:
         "validation_loss": metadata.get("validation_loss"),
         "corpus_files": metadata.get("corpus_files", 0),
         "corpus_tokens": metadata.get("corpus_tokens", 0),
+        "tokenizer": metadata.get("tokenizer", "byte-BPE" if checkpoint_exists else None),
+        "tokenizer_vocab_size": metadata.get("tokenizer_vocab_size", (metadata.get("config") or {}).get("vocab_size")),
+        "context_tokens": metadata.get("context_tokens", (metadata.get("config") or {}).get("seq_len")),
         "training_mode": metadata.get("training_mode", "causal-source-pretraining"),
-        "instruction_examples": metadata.get("instruction_examples", 0),
         "pretrained_weights": False,
         "external_ai_api": False,
-        "note": "Generation is unavailable until a local checkpoint has actually been trained."
+        "note": "Local byte-BPE Transformer. Generation requires a trained checkpoint; reported loss is not a coding benchmark."
     }
 
 
 def load_model(path: str | Path | None = None, device_name: str = "auto"):
-    target = Path(path).expanduser().resolve() if path else checkpoint_path()
-    if not target.is_file():
-        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
+    target, saved, config, tokenizer = _read_checkpoint(path)
     device = choose_device(device_name)
-    saved = torch.load(target, map_location=device, weights_only=True)
-    if saved.get("format") != "syntra-transformer-v1":
-        raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
-    config = ModelConfig.from_dict(saved["config"])
     model = SyntraTransformer(config).to(device)
     model.load_state_dict(saved["model_state"])
     model.eval()
     return model, saved, device
 
 
+def tokenize_text(text: str, path: str | Path | None = None) -> dict:
+    if not isinstance(text, str):
+        raise ValueError("Text must be a string.")
+    if len(text.encode("utf-8")) > 300_000:
+        raise ValueError("Text exceeds the 300 KB token-count API limit.")
+    target, saved, config, tokenizer = _read_checkpoint(path)
+    count = len(tokenizer.encode(text))
+    return {
+        "token_count": count,
+        "context_window_tokens": config.seq_len,
+        "vocabulary_size": tokenizer.vocab_size,
+        "tokenizer": "byte-BPE",
+        "tokens_over_context": max(0, count - (config.seq_len - 1)),
+        "checkpoint": str(target),
+        "trained_steps": int(saved.get("step", 0)),
+    }
+
+
+@torch.no_grad()
 def generate(
     prompt: str,
     max_new_tokens: int = 256,
@@ -74,45 +106,72 @@ def generate(
     if len(prompt.encode("utf-8")) > 200_000:
         raise ValueError("Prompt exceeds 200 KB.")
     model, saved, device = load_model(device_name=device_name)
-    prompt_bytes = list(prompt.encode("utf-8"))
-    tokens = torch.tensor([[BOS_ID, *prompt_bytes]], dtype=torch.long, device=device)
+    config = ModelConfig.from_dict(saved["config"])
+    tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
+    full_prompt_ids = tokenizer.encode(prompt)
+    # Keep BOS plus the most recent prompt context; report truncation rather than hiding it.
+    prompt_limit = config.seq_len - 1
+    prompt_ids = full_prompt_ids[-prompt_limit:] if len(full_prompt_ids) > prompt_limit else full_prompt_ids
+    tokens = torch.tensor([[BOS_ID, *prompt_ids]], dtype=torch.long, device=device)
     output = model.generate(tokens, max_new_tokens, temperature, top_k)[0].tolist()
     generated_ids = output[len(tokens[0]):]
-    generated_bytes = bytes(token for token in generated_ids if 0 <= token <= 255)
     return {
-        "text": generated_bytes.decode("utf-8", errors="replace"),
-        "prompt_tokens": len(prompt_bytes),
+        "text": tokenizer.decode(generated_ids),
+        "prompt_tokens": len(full_prompt_ids),
+        "prompt_tokens_used": len(prompt_ids),
+        "prompt_truncated": len(prompt_ids) != len(full_prompt_ids),
+        "context_window_tokens": config.seq_len,
+        "tokenizer": "byte-BPE",
         "generated_tokens": len(generated_ids),
         "checkpoint": str(checkpoint_path()),
         "trained_steps": int(saved.get("step", 0)),
         "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
         "device": str(device),
         "is_model_output": True,
-        "warning": "Raw model continuation. Inspect and test generated code before applying it."
+        "warning": "Raw neural-model output. Structured patch workflows must validate it; inspect and test generated code before applying it."
     }
 
 
-def evaluate() -> dict:
-    """Report the checkpoint's last measured held-out loss without reloading the model."""
-    path = checkpoint_path()
-    if not path.is_file():
-        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(path) + ". Train a local model first.")
-    saved = torch.load(path, map_location="cpu", weights_only=True)
-    if saved.get("format") != "syntra-transformer-v1":
-        raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
-    val_loss = saved.get("validation_loss")
-    train_loss = saved.get("train_loss")
-    if val_loss is None:
-        raise ValueError("This checkpoint contains no held-out validation measurement.")
-    measured_loss = float(val_loss)
+@torch.no_grad()
+def evaluate(
+    root: str | Path,
+    batches: int = 16,
+    device_name: str = "auto",
+    max_tokens: int = 2_000_000,
+) -> dict:
+    """Run a fresh sampled loss pass on a newly supplied local corpus.
+
+    This is a new measurement, but not an independent benchmark if that corpus was
+    also included in training. Task-level code benchmarks remain separate.
+    """
+    if batches < 1 or batches > 1000:
+        raise ValueError("batches must be between 1 and 1,000.")
+    model, saved, device = load_model(device_name=device_name)
+    config = ModelConfig.from_dict(saved["config"])
+    tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
+    corpus = load_corpus([str(Path(root).expanduser().resolve())], max_tokens=max_tokens)
+    token_ids = _encode_documents(corpus.documents, tokenizer, max_tokens=max_tokens)
+    split = int(len(token_ids) * 0.8)
+    if split <= config.seq_len + 1 or len(token_ids) - split <= config.seq_len + 1:
+        raise ValueError(
+            f"The selected corpus produced {len(token_ids)} tokens. A fresh 80/20 evaluation "
+            f"with context={config.seq_len} needs more than {5 * (config.seq_len + 1)} tokens."
+        )
+    validation_data = torch.tensor(token_ids[split:], dtype=torch.long)
+    fresh_loss = _estimate_loss(
+        model, validation_data, batch_size=1, seq_len=config.seq_len, device=device, batches=batches
+    )
     return {
-        "checkpoint": str(path),
-        "step": int(saved.get("step", 0)),
-        "train_loss": train_loss,
-        "validation_loss": measured_loss,
-        "cross_entropy": measured_loss,
-        "perplexity": math.exp(min(measured_loss, 80.0)),
-        "measurement": "Last saved sampled held-out validation-loss estimate; this command reports the checkpoint metric and does not run a fresh evaluation pass.",
-        "evaluation_performed": False,
-        "pretrained_weights": False,
+        "checkpoint": str(checkpoint_path()),
+        "trained_steps": int(saved.get("step", 0)),
+        "evaluation_performed": True,
+        "evaluation_kind": "fresh sampled next-token cross-entropy on selected local corpus",
+        "validation_loss": fresh_loss,
+        "perplexity": math.exp(min(fresh_loss, 80.0)),
+        "corpus_files": len(corpus.files),
+        "evaluation_tokens": len(token_ids) - split,
+        "batches": batches,
+        "context_window_tokens": config.seq_len,
+        "tokenizer": "byte-BPE",
+        "note": "This measures next-token prediction, not patch correctness. If this corpus was used for training, it is not an independent benchmark.",
     }

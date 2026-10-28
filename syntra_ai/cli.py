@@ -7,7 +7,7 @@ import sys
 
 from .config import ModelConfig
 from .data import load_corpus
-from .runtime import evaluate, generate, status
+from .runtime import evaluate, generate, status, tokenize_text
 from .instruction import finetune
 from .training import train
 
@@ -24,7 +24,8 @@ def _parser() -> argparse.ArgumentParser:
     training.add_argument("--root", required=True, help="Absolute local source-code corpus path.")
     training.add_argument("--steps", type=int, default=1000)
     training.add_argument("--batch-size", type=int, default=4)
-    training.add_argument("--seq-len", type=int, default=1024)
+    training.add_argument("--seq-len", type=int, default=4096)
+    training.add_argument("--vocab-size", type=int, default=1024)
     training.add_argument("--layers", type=int, default=4)
     training.add_argument("--heads", type=int, default=4)
     training.add_argument("--width", type=int, default=128)
@@ -33,6 +34,9 @@ def _parser() -> argparse.ArgumentParser:
     training.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     training.add_argument("--seed", type=int, default=1337)
     training.add_argument("--resume", action="store_true")
+
+    tokenizer_parser = sub.add_parser("tokenize", help="Report real BPE token count and context use for text.")
+    tokenizer_parser.add_argument("--text", required=True)
 
     inference = sub.add_parser("generate", help="Generate real tokens from the trained local checkpoint.")
     inference.add_argument("--prompt", required=True)
@@ -48,7 +52,10 @@ def _parser() -> argparse.ArgumentParser:
     fine.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
 
     sub.add_parser("status", help="Report actual local checkpoint and training metrics.")
-    sub.add_parser("evaluate", help="Report saved held-out validation metrics from the current checkpoint.")
+    evaluation = sub.add_parser("evaluate", help="Run a fresh sampled loss evaluation on a local corpus.")
+    evaluation.add_argument("--root", required=True, help="Absolute local corpus directory to evaluate.")
+    evaluation.add_argument("--batches", type=int, default=16)
+    evaluation.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     serve = sub.add_parser("serve", help="Start the loopback-only local AI API.")
     serve.add_argument("--host", choices=["127.0.0.1"], default="127.0.0.1")
     serve.add_argument("--port", type=int, default=3002)
@@ -66,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2))
         return 0
     if args.command == "train":
-        config = ModelConfig(seq_len=args.seq_len, n_layer=args.layers, n_head=args.heads, n_embd=args.width)
+        config = ModelConfig(vocab_size=args.vocab_size, seq_len=args.seq_len, n_layer=args.layers, n_head=args.heads, n_embd=args.width)
         config.validate()
         checkpoint = Path(os.environ.get("SYNTRA_CHECKPOINT", str(
             Path(__file__).resolve().parent.parent / "data" / "checkpoints" / "syntra.pt"
@@ -95,6 +102,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, indent=2))
         return 0
+    if args.command == "tokenize":
+        print(json.dumps(tokenize_text(args.text), indent=2))
+        return 0
     if args.command == "generate":
         print(json.dumps(generate(args.prompt, args.max_new_tokens, args.temperature, args.top_k), indent=2))
         return 0
@@ -102,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(status(), indent=2))
         return 0
     if args.command == "evaluate":
-        print(json.dumps(evaluate(), indent=2))
+        print(json.dumps(evaluate(args.root, batches=args.batches, device_name=args.device), indent=2))
         return 0
     if args.command == "serve":
         os.environ["SYNTRA_AI_PORT"] = str(args.port)

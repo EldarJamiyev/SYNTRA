@@ -9,6 +9,7 @@ except ImportError:
     torch = None
 
 from syntra_ai.config import ModelConfig
+from syntra_ai.tokenizer import ByteBPETokenizer
 
 
 @unittest.skipIf(torch is None, "Install requirements.txt to run neural model tests.")
@@ -36,9 +37,20 @@ class TransformerTests(unittest.TestCase):
         self.assertLessEqual(generated.shape[1], prompt.shape[1] + 5)
         self.assertEqual(generated[0, :4].tolist(), prompt[0].tolist())
 
+    def test_byte_bpe_tokenizer_roundtrips_and_compresses_repeated_source(self):
+        source = ("def calculate_total(item, item_count):\\n    return item * item_count\\n") * 100
+        tokenizer = ByteBPETokenizer.train([source], vocab_size=400, max_training_bytes=20_000)
+        encoded = tokenizer.encode(source)
+        self.assertEqual(tokenizer.decode(encoded), source)
+        self.assertGreater(tokenizer.vocab_size, 258)
+        self.assertLess(len(encoded), len(source.encode("utf-8")))
+        self.assertEqual(ByteBPETokenizer.from_dict(tokenizer.to_dict()), tokenizer)
+
     def test_config_rejects_invalid_shapes(self):
         with self.assertRaises(ValueError):
             ModelConfig(n_embd=190, n_head=6).validate()
+        with self.assertRaises(ValueError):
+            ModelConfig(seq_len=16385).validate()
 
     def test_data_loader_skips_credentials_directories(self):
         from syntra_ai.data import load_corpus
@@ -90,15 +102,21 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "Write min function", "completion": "def min2(a,b): return min(a,b)"},
             ]
             dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
-            examples = load_instruction_examples(dataset, seq_len=32)
+            checkpoint_state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+            tokenizer = ByteBPETokenizer.from_dict(checkpoint_state["tokenizer"])
+            examples = load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer)
             first = examples[0]
-            prompt_bytes = first["prompt_bytes"]
-            self.assertTrue(all(token == -100 for token in first["labels"][:prompt_bytes]))
-            self.assertTrue(any(token != -100 for token in first["labels"][prompt_bytes:]))
+            prompt_tokens = first["prompt_tokens"]
+            self.assertTrue(all(token == -100 for token in first["labels"][:prompt_tokens]))
+            self.assertTrue(any(token != -100 for token in first["labels"][prompt_tokens:]))
 
             tuned = finetune(dataset, steps=1, batch_size=1, learning_rate=1e-4,
                              device_name="cpu", checkpoint=checkpoint)
             self.assertEqual(tuned["status"], "completed")
+            from syntra_ai.runtime import evaluate
+            fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000)
+            self.assertTrue(fresh_evaluation["evaluation_performed"])
+            self.assertTrue(torch.isfinite(torch.tensor(fresh_evaluation["validation_loss"])).item())
             model, saved, device = load_model(checkpoint, "cpu")
             self.assertEqual(saved["training_mode"], "supervised-instruction-finetuning")
             self.assertEqual(saved["step"], 2)

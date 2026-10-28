@@ -8,7 +8,7 @@ import os
 import time
 
 from .config import ModelConfig
-from .runtime import generate, status
+from .runtime import evaluate, generate, status, tokenize_text
 from .training import train
 from .instruction import finetune
 
@@ -206,6 +206,17 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/model/finetune":
                 result = start_finetuning(body)
                 self._send(202, result)
+            elif self.path == "/model/tokenize":
+                result = tokenize_text(body.get("text", ""))
+                self._send(200, result)
+            elif self.path == "/model/evaluate":
+                result = evaluate(
+                    root=body.get("root", ""),
+                    batches=int(body.get("batches", 16)),
+                    device_name=str(body.get("device", "auto")),
+                    max_tokens=int(body.get("max_tokens", 2_000_000)),
+                )
+                self._send(200, result)
             elif self.path == "/model/generate":
                 result = generate(
                     prompt=body.get("prompt", ""),

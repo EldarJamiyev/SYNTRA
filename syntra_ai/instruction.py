@@ -1,4 +1,4 @@
-"""Supervised prompt/completion fine-tuning using only a local JSONL dataset."""
+"""Supervised prompt/completion fine-tuning with the checkpoint's exact BPE tokenizer."""
 from pathlib import Path
 from time import monotonic
 from typing import Callable
@@ -8,15 +8,22 @@ import torch
 
 from .model import BOS_ID, EOS_ID, SyntraTransformer
 from .runtime import checkpoint_path
+from .tokenizer import ByteBPETokenizer
 from .training import _atomic_checkpoint, choose_device
 
 
-def load_instruction_examples(dataset_path: str | Path, seq_len: int, max_examples: int = 100_000) -> list[dict]:
+def load_instruction_examples(
+    dataset_path: str | Path,
+    seq_len: int,
+    tokenizer: ByteBPETokenizer | None = None,
+    max_examples: int = 100_000,
+) -> list[dict]:
     path = Path(dataset_path).expanduser().resolve()
     if not path.is_file():
         raise ValueError("Instruction dataset must be an existing local JSONL file.")
     if path.stat().st_size > 100 * 1024 * 1024:
         raise ValueError("Instruction JSONL is limited to 100 MB.")
+    tokenizer = tokenizer or ByteBPETokenizer.empty()
     examples = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -31,26 +38,22 @@ def load_instruction_examples(dataset_path: str | Path, seq_len: int, max_exampl
             prompt_text, completion_text = item["prompt"], item["completion"]
             if not prompt_text.strip() or not completion_text.strip():
                 continue
-            prompt = prompt_text.encode("utf-8")
-            completion = completion_text.encode("utf-8")
-            # Preserve a useful output target and the end of the prompt under the fixed byte context.
+            prompt = tokenizer.encode(prompt_text)
+            completion = tokenizer.encode(completion_text)
             completion = completion[:max(8, seq_len // 2)]
             prompt_limit = max(0, seq_len - len(completion) - 2)
-            prompt = prompt[-prompt_limit:] if prompt_limit else b""
+            prompt = prompt[-prompt_limit:] if prompt_limit else []
             sequence = [BOS_ID, *prompt, *completion, EOS_ID]
-            if len(sequence) > seq_len + 1:
-                sequence = sequence[:seq_len] + [EOS_ID]
-            # Labels are shifted by one in the causal LM loss; mask prompt bytes so that
-            # supervised loss is calculated only on the requested completion and EOS.
             input_ids = sequence[:-1]
             labels = sequence[1:]
+            # labels 0..len(prompt)-1 target the prompt; completion and EOS remain supervised.
             for position in range(min(len(prompt), len(labels))):
                 labels[position] = -100
             examples.append({
                 "input_ids": input_ids,
                 "labels": labels,
-                "prompt_bytes": len(prompt),
-                "completion_bytes": len(completion),
+                "prompt_tokens": len(prompt),
+                "completion_tokens": len(completion),
                 "line": line_number,
             })
             if len(examples) >= max_examples:
@@ -111,10 +114,13 @@ def finetune(
         raise ValueError("Selected checkpoint is not a SYNTRA Transformer checkpoint.")
     from .config import ModelConfig
     config = ModelConfig.from_dict(saved["config"])
+    tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
+    if tokenizer.vocab_size != config.vocab_size:
+        raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
     model = SyntraTransformer(config).to(device)
     model.load_state_dict(saved["model_state"])
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
-    examples = load_instruction_examples(dataset_path, config.seq_len)
+    examples = load_instruction_examples(dataset_path, config.seq_len, tokenizer)
     split = max(1, int(len(examples) * 0.9))
     if split >= len(examples):
         split = len(examples) - 1
@@ -137,6 +143,8 @@ def finetune(
             "checkpoint": str(checkpoint_path_value),
             "training_mode": "supervised-instruction-finetuning",
             "instruction_examples": len(examples),
+            "tokenizer_vocab_size": tokenizer.vocab_size,
+            "context_tokens": config.seq_len,
         }
         if callback:
             callback(value)
@@ -160,6 +168,7 @@ def finetune(
                 **saved,
                 "format": "syntra-transformer-v1",
                 "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
                 "model_state": model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
                 "step": step,
@@ -174,9 +183,11 @@ def finetune(
                 "checkpoint": str(checkpoint_path_value), "step": step, "config": config.to_dict(),
                 "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
                 "train_loss": last_train_loss, "validation_loss": last_val_loss,
+                "tokenizer": "byte-BPE", "tokenizer_vocab_size": tokenizer.vocab_size,
+                "context_tokens": config.seq_len,
                 "training_mode": "supervised-instruction-finetuning", "instruction_examples": len(examples),
                 "pretrained_weights": False,
             }
             metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
             report("running" if step < base_step + steps else "completed", step, "Checkpoint saved with measured supervised validation loss.")
-    return report("completed", base_step + steps, "Supervised fine-tuning finished; the local checkpoint was updated.")
+    return report("completed", base_step + steps, "Supervised fine-tuning finished; the local BPE-tokenized checkpoint was updated.")

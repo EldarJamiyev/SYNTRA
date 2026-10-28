@@ -51,16 +51,31 @@ class LocalApiSmokeTests(unittest.TestCase):
                 from syntra_ai.config import ModelConfig
                 from syntra_ai.model import SyntraTransformer
 
-                config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+                from syntra_ai.tokenizer import ByteBPETokenizer
+                config = ModelConfig(vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+                tokenizer = ByteBPETokenizer.empty()
                 model = SyntraTransformer(config)
                 torch.save({
                     "format": "syntra-transformer-v1",
                     "config": config.to_dict(),
+                    "tokenizer": tokenizer.to_dict(),
                     "model_state": model.state_dict(),
                     "step": 0,
                     "train_loss": None,
                     "validation_loss": None,
                 }, missing_checkpoint)
+                connection.request(
+                    "POST",
+                    "/model/tokenize",
+                    body=json.dumps({"text": "function add(a, b) { return a + b; }"}),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                tokenized = json.loads(response.read())
+                self.assertEqual(response.status, 200)
+                self.assertEqual(tokenized["token_count"], len("function add(a, b) { return a + b; }".encode("utf-8")))
+                self.assertEqual(tokenized["context_window_tokens"], 32)
+
                 connection.request(
                     "POST",
                     "/model/generate",
