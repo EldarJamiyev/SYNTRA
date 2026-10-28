@@ -11,11 +11,20 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 if (-not (Test-Path (Join-Path $Root "node_modules"))) {
     npm install
 }
-$TorchReady = python -c "import torch; print(torch.__version__)" 2>$null
-if (-not $TorchReady) {
-    Write-Warning "PyTorch is not installed in this Python environment. Run: python -m pip install -r requirements.txt"
-    Write-Warning "The GUI and workspace service will start, but native model training/inference will remain offline."
+
+$VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
+if (Test-Path $VenvPython) {
+    $Python = $VenvPython
 } else {
+    $Python = (Get-Command python).Source
+}
+$TorchReady = & $Python -c "import torch; print(torch.__version__)" 2>$null
+if (-not $TorchReady) {
+    Write-Warning "PyTorch is not installed in the selected Python environment."
+    Write-Warning "Run 'npm run ai:install' to create .venv and install CPU-only PyTorch, then restart SYNTRA."
+} else {
+    $PythonDirectory = Split-Path -Parent $Python
+    $env:PATH = $PythonDirectory + ";" + $env:PATH
     Start-Process powershell -ArgumentList @(
         "-NoExit", "-Command", "Set-Location '$Root'; npm run ai:server"
     )

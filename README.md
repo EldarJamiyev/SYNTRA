@@ -33,10 +33,10 @@ From PowerShell in the repository root:
 
 ```powershell
 npm install
-python -m pip install -r requirements.txt
+npm run ai:install
 ```
 
-PyTorch is a substantial Python dependency. The requirements file selects CPU-only wheels so installations do not download the NVIDIA/CUDA stack by default. SYNTRA does not download model weights. NVIDIA users can install a matching CUDA-enabled PyTorch build separately; Intel Arc acceleration is not implemented yet.
+`npm run ai:install` creates an isolated `.venv` in the repository and installs CPU-only PyTorch there, avoiding global Python package changes and the NVIDIA/CUDA stack by default. SYNTRA does not download model weights. NVIDIA users can install a matching CUDA-enabled PyTorch build separately; Intel Arc acceleration is not implemented yet.
 
 ## Start the application
 
@@ -50,7 +50,7 @@ Or run each service in its own PowerShell terminal:
 
 Terminal 1 — native Transformer API:
 ```powershell
-python -m syntra_ai.server
+npm run ai:server
 ```
 
 Terminal 2 — project workspace API:
@@ -70,12 +70,12 @@ Open http://127.0.0.1:3000. The Python model API listens on `127.0.0.1:3002`; th
 Use a local repository you own or are authorized to process as the source corpus. In the UI, enter and inspect its absolute path and select **Train from local source**. Or use the CLI:
 
 ```powershell
-python -m syntra_ai.cli inspect-data --root "C:\Users\You\Documents\YourProject"
-python -m syntra_ai.cli train --root "C:\Users\You\Documents\YourProject" --steps 1000
-python -m syntra_ai.cli status
-python -m syntra_ai.cli generate --prompt "def parse_config(" --max-new-tokens 200
-python -m syntra_ai.cli evaluate --device cpu
-python -m syntra_ai.cli finetune --dataset "C:\\Users\\You\\Documents\\syntra-instructions.jsonl" --steps 1000
+npm run ai:cli -- inspect-data --root "C:\Users\You\Documents\YourProject"
+npm run ai:cli -- train --root "C:\Users\You\Documents\YourProject" --steps 1000
+npm run ai:cli -- status
+npm run ai:cli -- generate --prompt "def parse_config(" --max-new-tokens 200
+npm run ai:cli -- evaluate --device cpu
+npm run ai:cli -- finetune --dataset "C:\\Users\\You\\Documents\\syntra-instructions.jsonl" --steps 1000
 ```
 
 Default architecture: 4 decoder blocks, 4 attention heads, width 128, context 1,024 bytes. The default checkpoint is written to `data/checkpoints/syntra.pt`, with measured training/validation metrics alongside it. Checkpoints are ignored by Git and stay on the local machine. Continue training an existing matching architecture with `--resume`. To use a CUDA device explicitly, pass `--device cuda`; by default SYNTRA chooses CUDA, Apple MPS, or CPU based on availability.
@@ -91,7 +91,7 @@ After a source-pretraining checkpoint exists, prepare a local UTF-8 JSONL file w
 {"prompt":"Write a TypeScript clamp helper.","completion":"export function clamp(n: number, low: number, high: number): number { return Math.min(high, Math.max(low, n)); }"}
 ```
 
-Then run `python -m syntra_ai.cli finetune --dataset "C:\\Users\\You\\Documents\\syntra-instructions.jsonl" --steps 1000` or enter that local path in the UI and choose **Supervised instruction fine-tuning**. The loss masks the prompt tokens and trains the model on completion tokens. The current byte context limits examples and completions to a small window; curate many high-quality examples, keep a separate hold-out set, and measure whether task performance actually improves. Fine-tuning does not guarantee useful or correct code generation.
+Then run `npm run ai:cli -- finetune --dataset "C:\\Users\\You\\Documents\\syntra-instructions.jsonl" --steps 1000` or enter that local path in the UI and choose **Supervised instruction fine-tuning**. The loss masks the prompt tokens and trains the model on completion tokens. The current byte context limits examples and completions to a small window; curate many high-quality examples, keep a separate hold-out set, and measure whether task performance actually improves. Fine-tuning does not guarantee useful or correct code generation.
 
 ## Project builder workflow
 

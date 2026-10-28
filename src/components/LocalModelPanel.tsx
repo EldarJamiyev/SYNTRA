@@ -153,7 +153,7 @@ export default function LocalModelPanel({ root, relativePath, onGenerated, onErr
         <div className="model-runtime-stat"><span>PARAMETERS</span><strong>{model?.parameter_count ? model.parameter_count.toLocaleString() : '—'}</strong><small>{model?.config ? model.config.n_layer + ' layers · ' + model.config.n_head + ' heads · ' + model.config.seq_len + ' byte context' : 'Configure at training time'}</small></div>
         <div className="model-runtime-stat"><span>VALIDATION LOSS</span><strong>{model?.validation_loss == null ? '—' : model.validation_loss.toFixed(4)}</strong><small>{model?.train_loss == null ? 'No measured checkpoint yet' : 'Train loss ' + model.train_loss.toFixed(4)}</small></div>
       </div>
-      {modelError && <div className="builder-message error"><TriangleAlert size={15} /> {modelError} Start the local Python model with <code>npm run ai:server</code>. Install dependencies first with <code>npm run ai:install</code>.</div>}
+      {modelError && <div className="builder-message error"><TriangleAlert size={15} /> {modelError} Start the local Python model with <code>npm run ai:server</code>. Install dependencies with <code>npm run ai:install</code>, then restart the AI service.</div>}
       {training && <div className="model-training-status">
         <div><strong>{training.status.toUpperCase()}</strong><span>{training.step.toLocaleString()} / {training.max_steps.toLocaleString()} steps · {training.message}</span></div>
         <div className="model-progress"><span style={{ width: (training.max_steps ? Math.min(100, training.step / training.max_steps * 100) : 0) + '%' }} /></div>

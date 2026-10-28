@@ -6,6 +6,10 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
 data/checkpoints/
 data/runtime/
 checkpoints/
