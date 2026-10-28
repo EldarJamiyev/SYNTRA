@@ -76,17 +76,23 @@ async function generateAgentCompletion(body) {
   if (file.content.length > 200000) {
     throw new Error("AI editing is limited to files of at most 200 KB; select a smaller module.");
   }
-  // Put the task after a bounded source excerpt so it remains close to the generation point
-  // in the byte-level model's limited context window.
-  const excerpt = file.content.slice(-650);
+  // Bound prompt fields in UTF-8 bytes so the actual file tail fits the native model's
+  // small context. Keep the source tail last: autoregressive generation continues from
+  // the final prompt bytes, so instruction prose must not follow the code excerpt.
+  const taskExcerpt = Buffer.from(goal, "utf8").subarray(0, 160).toString("utf8").replace(/\uFFFD$/u, "");
+  let pathBytes = Buffer.from(filePath, "utf8").subarray(-100);
+  while (pathBytes.length && (pathBytes[0] & 0xc0) === 0x80) pathBytes = pathBytes.subarray(1);
+  const targetExcerpt = pathBytes.toString("utf8").replace(/^\uFFFD/u, "");
+  let sourceBytes = Buffer.from(file.content, "utf8").subarray(-520);
+  while (sourceBytes.length && (sourceBytes[0] & 0xc0) === 0x80) sourceBytes = sourceBytes.subarray(1);
+  const excerpt = sourceBytes.toString("utf8").replace(/^\uFFFD/u, "");
   const prompt = [
-    "SYNTRA_CODE_COMPLETION",
-    "Task: " + goal.slice(0, 280),
-    "Target: " + filePath,
-    "Existing source excerpt:",
-    excerpt,
-    "Continue the source code. Prefer valid code and preserve the target language.",
-    ""
+    "SYNTRA_CODE_CONTINUATION",
+    "Task: " + taskExcerpt,
+    "Target: " + targetExcerpt,
+    "Continue with source-code bytes only; do not add markdown or explanations.",
+    "Existing source-file tail:",
+    excerpt
   ].join("\n");
   const output = await aiRequest("POST", "/model/generate", {
     prompt,
@@ -101,6 +107,7 @@ async function generateAgentCompletion(body) {
     task: goal,
     sourceHash: file.sha256,
     sourceExcerptBytes: Buffer.byteLength(excerpt),
+    promptBytes: Buffer.byteLength(prompt),
     generationMode: "trained-local-model-continuation",
     notice: "This is actual output from your checkpoint, not a hosted model. A raw continuation is not a guaranteed patch or a complete-file rewrite; review it, edit it, and run project checks before applying."
   };

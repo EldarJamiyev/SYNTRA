@@ -109,6 +109,7 @@ def evaluate(device_name: str = "auto") -> dict:
         "validation_loss": measured_loss,
         "cross_entropy": measured_loss,
         "perplexity": math.exp(min(measured_loss, 80.0)),
-        "measurement": "Held-out corpus split measured and saved during training",
+        "measurement": "Last saved sampled held-out validation-loss estimate; this command reports the checkpoint metric and does not run a fresh evaluation pass.",
+        "evaluation_performed": False,
         "pretrained_weights": False,
     }
