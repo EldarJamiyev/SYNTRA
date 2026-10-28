@@ -254,9 +254,9 @@ class SyntraEngine {
       const previous = data[i - 2];
       const current = data[i - 1];
       const next = data[i];
-      let distribution = this.byteTransitions.get(String(previous) + ',' + String(current));
+      let distribution: Map<number, number> | undefined = this.byteTransitions.get(String(previous) + ',' + String(current));
       if (!distribution || !distribution.has(next)) distribution = this.byteTransitions.get(String(current));
-      if (!distribution || !distribution.has(next)) distribution = null;
+      if (!distribution || !distribution.has(next)) distribution = undefined;
       let probability = 1 / 260;
       if (distribution) {
         let total = 0;
@@ -279,6 +279,7 @@ class SyntraEngine {
     if (!this.tokenStream || this.tokenStream.length < 32) {
       throw new Error('Token stream is empty. Add corpus files and click Prepare local data first.');
     }
+    const tokens = this.tokenStream;
 
     this.isTraining = true;
     this.trainingPaused = false;
@@ -316,8 +317,8 @@ class SyntraEngine {
       const lr = 0; // Not applicable: the byte-transition baseline has no optimizer.
 
       this.currentStep = current;
-      this.trainLoss = Math.max(0.8, Number(trainLossVal.toFixed(4)));
-      this.valLoss = Math.max(0.9, Number(valLossVal.toFixed(4)));
+      this.trainLoss = Number(trainLossVal.toFixed(4));
+      this.valLoss = Number(valLossVal.toFixed(4));
       this.checkpointExists = true;
 
       const stepDurationSec = (performance.now() - batchTimeStart) / 1000;
