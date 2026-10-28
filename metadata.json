@@ -1,0 +1,8 @@
+{
+  "name": "SYNTRA Studio",
+  "description": "SYNTRA local coding model studio — independent decoder-only transformer trained from random initialization with custom byte tokenizer, training loop, and inference playground.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
