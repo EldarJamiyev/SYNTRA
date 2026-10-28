@@ -32,8 +32,9 @@ import {
 import { calculateParameterCount } from './syntra/config';
 import { tokenizer } from './syntra/tokenizer';
 import { CorpusFile } from './syntra/data';
+import ProjectBuilder from './components/ProjectBuilder';
 
-type Tab = 'playground' | 'runtime' | 'training' | 'cli';
+type Tab = 'playground' | 'builder' | 'runtime' | 'training' | 'cli';
 
 const CODE_TEMPLATES: Record<string, string> = {
   fibonacci: 'def fibonacci(n: int) -> list[int]:\n    ',
@@ -140,7 +141,7 @@ export default function App() {
     setDataBusy(true);
     setTrainingMessage('');
     try {
-      setTrainingMessage('Training started. Optimizing transformer weights...');
+      setTrainingMessage('Updating local byte-transition counts; this prototype does not train transformer weights.');
       await syntraEngine.startTraining();
     } catch (cause) {
       setTrainingMessage(cause instanceof Error ? cause.message : 'Could not start training.');
@@ -252,7 +253,7 @@ export default function App() {
       startTraining();
       history.push({
         type: 'success',
-        text: `SYNTRA training started with device: ${status.device}.\nMetrics logging to checkpoints/training_metrics.csv. Check the Training tab or Playground stats.`,
+        text: `SYNTRA training started with device: ${status.device}.\nMetrics are stored in browser localStorage; no .pt checkpoint is produced. Check the Training tab or Playground stats.`,
       });
     } else if (cmd.includes('generate')) {
       if (!status.checkpoint_exists) {
@@ -286,7 +287,7 @@ export default function App() {
     } else if (cmd.includes('serve')) {
       history.push({
         type: 'success',
-        text: 'SYNTRA Local Runtime loopback server is running on 127.0.0.1:3000 (status: CONNECTED).',
+        text: 'The browser CLI is a simulator. Start the real workspace API separately with npm run server.',
       });
     } else {
       history.push({
@@ -365,6 +366,13 @@ export default function App() {
           <Code2 size={17} /> Playground {activeTab === 'playground' && <span className="nav-dot" />}
         </button>
         <button
+          className={`nav-item ${activeTab === 'builder' ? 'active' : ''}`}
+          onClick={() => setActiveTab('builder')}
+        >
+          <FolderSearch size={17} /> Project Builder{' '}
+          {activeTab === 'builder' && <span className="nav-dot" />}
+        </button>
+        <button
           className={`nav-item ${activeTab === 'runtime' ? 'active' : ''}`}
           onClick={() => setActiveTab('runtime')}
         >
@@ -414,6 +422,7 @@ export default function App() {
             SYNTRA <span>/</span>{' '}
             <strong>
               {activeTab === 'playground' && 'Studio Playground'}
+              {activeTab === 'builder' && 'Project Builder'}
               {activeTab === 'runtime' && 'Runtime & Architecture'}
               {activeTab === 'training' && 'Data & Training Engine'}
               {activeTab === 'cli' && 'Interactive CLI Terminal'}
@@ -437,11 +446,12 @@ export default function App() {
             <span className="eyebrow-line" /> INDEPENDENT MODEL LAB
           </div>
           <h1>
-            Build. Train. <span>Generate.</span>
+            {activeTab === 'builder' ? <>Build. Test. <span>Iterate.</span></> : <>Build. Train. <span>Generate.</span></>}
           </h1>
           <p>
-            A coding model trained from random initialization. No pretrained weights, no hosted
-            inference, no external AI API.
+            {activeTab === 'builder'
+              ? 'Local application-development tools for real repositories: inspect architecture, search source, propose changes, and run verification.'
+              : 'SYNTRA is a local-first coding-model experiment. The current browser model is a byte-transition baseline, not a trained neural transformer.'}
           </p>
         </section>
 
@@ -455,7 +465,7 @@ export default function App() {
             <div className="stat-value">{modelReady ? 'AVAILABLE' : 'NOT TRAINED'}</div>
             <div className="stat-foot">
               {modelReady
-                ? `Step ${training.step} weights ready`
+                ? `Byte-transition prototype state ready`
                 : 'Train a model to begin'}
             </div>
           </div>
@@ -490,6 +500,8 @@ export default function App() {
             <div className="stat-foot">Client sandbox · no cloud model</div>
           </div>
         </section>
+
+        {activeTab === 'builder' && <ProjectBuilder />}
 
         {/* TAB 1: PLAYGROUND */}
         {activeTab === 'playground' && (
