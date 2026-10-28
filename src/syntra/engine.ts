@@ -247,11 +247,10 @@ class SyntraEngine {
   private estimateTransitionLoss(data: Uint16Array): number {
     if (data.length < 3) return Math.log(260);
     const smoothing = 0.1;
-    const stop = Math.min(data.length, 20000);
-    const start = Math.max(2, data.length - stop);
+    const start = Math.max(2, data.length - 20000);
     let totalLoss = 0;
     let count = 0;
-    for (let i = start; i < stop; i++) {
+    for (let i = start; i < data.length; i++) {
       const previous = data[i - 2];
       const current = data[i - 1];
       const next = data[i];

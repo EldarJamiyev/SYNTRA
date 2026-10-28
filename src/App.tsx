@@ -10,6 +10,7 @@ import {
   Database,
   Download,
   Github,
+  FolderSearch,
   LoaderCircle,
   Play,
   Pause,
