@@ -53,7 +53,7 @@ class SyntraEngine {
   private trainingPaused = false;
   private listeners: Array<() => void> = [];
   private metricsHistory: MetricRow[] = [];
-  private statusMessage = 'Training has not been started.';
+  private statusMessage = 'Browser prototype ready. This is a byte-transition baseline, not a trained neural transformer.';
 
   // Statistical n-gram / byte transition matrix trained from the local corpus
   private byteTransitions: Map<string, Map<number, number>> = new Map();
@@ -135,12 +135,12 @@ class SyntraEngine {
   getRuntimeStatus(): RuntimeStatus {
     return {
       name: 'SYNTRA',
-      mode: 'local-only',
-      checkpoint: 'checkpoints/latest.pt',
+      mode: 'local-byte-transition-prototype',
+      checkpoint: 'localStorage:syntra_checkpoint',
       checkpoint_exists: this.checkpointExists,
       model_loaded: this.checkpointExists,
       step: this.checkpointExists ? this.currentStep : null,
-      device: 'browser-js-runtime',
+      device: 'browser-js-transition-table',
       pretrained_weights: false,
       external_ai_api: false,
     };
@@ -244,6 +244,32 @@ class SyntraEngine {
     }
   }
 
+  private estimateTransitionLoss(data: Uint16Array): number {
+    if (data.length < 3) return Math.log(260);
+    const smoothing = 0.1;
+    const stop = Math.min(data.length, 20000);
+    const start = Math.max(2, data.length - stop);
+    let totalLoss = 0;
+    let count = 0;
+    for (let i = start; i < stop; i++) {
+      const previous = data[i - 2];
+      const current = data[i - 1];
+      const next = data[i];
+      let distribution = this.byteTransitions.get(String(previous) + ',' + String(current));
+      if (!distribution || !distribution.has(next)) distribution = this.byteTransitions.get(String(current));
+      if (!distribution || !distribution.has(next)) distribution = null;
+      let probability = 1 / 260;
+      if (distribution) {
+        let total = 0;
+        for (const amount of distribution.values()) total += amount;
+        probability = ((distribution.get(next) || 0) + smoothing) / (total + smoothing * 260);
+      }
+      totalLoss -= Math.log(Math.max(probability, 1e-12));
+      count++;
+    }
+    return count > 0 ? totalLoss / count : Math.log(260);
+  }
+
   async startTraining(onProgress?: (status: TrainingStatus) => void): Promise<void> {
     if (this.isTraining) {
       throw new Error('Training is already in progress.');
@@ -257,7 +283,7 @@ class SyntraEngine {
 
     this.isTraining = true;
     this.trainingPaused = false;
-    this.statusMessage = 'Training process started. Optimizing transformer weights...';
+    this.statusMessage = 'Updating the byte-transition baseline. This prototype does not optimize neural-network weights.';
     this.notify();
 
     const targetMax = this.config.max_steps;
@@ -266,10 +292,7 @@ class SyntraEngine {
       this.metricsHistory = [];
     }
 
-    // Baseline cross entropy loss curve calculation (cosine schedule)
-    const initialLoss = 5.56; // ln(260) is ~5.56 (pure random uniform chance)
-    const targetLoss = 1.62;
-
+    // The browser prototype stores token transition counts; it has no gradient optimizer.
     const stepInterval = 20; // run in batches of steps to yield to UI thread
     let current = startStep;
 
@@ -288,15 +311,10 @@ class SyntraEngine {
         this.learnCorpusTransitions(15);
       }
 
-      const progress = current / targetMax;
-      // Cosine learning rate decay
-      const lr = this.config.learning_rate * 0.5 * (1.0 + Math.cos(Math.PI * progress));
-
-      // Realistic loss decay with stochastic noise
-      const decay = Math.exp(-progress * 3.8);
-      const noise = (Math.random() - 0.5) * 0.08;
-      const trainLossVal = targetLoss + (initialLoss - targetLoss) * decay + noise;
-      const valLossVal = trainLossVal + 0.12 + Math.random() * 0.06;
+      const splitIndex = Math.floor(tokens.length * 0.9);
+      const trainLossVal = this.estimateTransitionLoss(tokens.subarray(0, splitIndex));
+      const valLossVal = this.estimateTransitionLoss(tokens.subarray(splitIndex));
+      const lr = 0; // Not applicable: the byte-transition baseline has no optimizer.
 
       this.currentStep = current;
       this.trainLoss = Math.max(0.8, Number(trainLossVal.toFixed(4)));
@@ -323,7 +341,7 @@ class SyntraEngine {
         setTimeout(runBatch, 16);
       } else {
         this.isTraining = false;
-        this.statusMessage = 'Training completed. Checkpoint checkpoints/latest.pt updated locally.';
+        this.statusMessage = 'Baseline updates completed. State is stored in browser localStorage; no neural checkpoint was produced.';
         this.persistState();
         this.notify();
       }
@@ -457,7 +475,7 @@ class SyntraEngine {
     if (!this.checkpointExists) {
       throw new Error('No trained checkpoint found. Train SYNTRA first.');
     }
-    const crossEntropy = this.valLoss ?? 2.14;
+    const crossEntropy = this.valLoss ?? this.estimateTransitionLoss(this.tokenStream || new Uint16Array());
     return {
       checkpoint: 'checkpoints/latest.pt',
       step: this.currentStep,

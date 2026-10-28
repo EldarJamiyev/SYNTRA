@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
@@ -6,7 +7,7 @@ import { spawn } from "node:child_process";
 const IGNORED_DIRS = new Set([
   ".git", ".syntra", ".venv", "venv", "env", "node_modules", "__pycache__",
   ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build", "coverage",
-  ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "bin", "obj"
+  ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "obj"
 ]);
 const TEXT_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi",
@@ -100,6 +101,18 @@ async function resolveFile(root, relativePath, options = {}) {
   if (!isWithinRoot(root, target) || target === root) {
     throw new Error("Path escapes the selected workspace.");
   }
+  let cursor = root;
+  for (const segment of path.relative(root, target).split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    const component = await fs.lstat(cursor).catch(() => null);
+    if (component?.isSymbolicLink()) {
+      throw new Error("Symbolic link path components are not allowed inside a workspace operation.");
+    }
+    if (!component) break;
+    if (cursor !== target && !component.isDirectory()) {
+      throw new Error("A parent path component is not a directory.");
+    }
+  }
   const parent = path.dirname(target);
   const existingParent = await fs.realpath(parent).catch(() => null);
   if (existingParent && !isWithinRoot(root, existingParent)) {
@@ -120,6 +133,7 @@ async function resolveFile(root, relativePath, options = {}) {
 
 function isTextCandidate(filePath) {
   const base = path.basename(filePath).toLowerCase();
+  if (base.endsWith(".env.example")) return true;
   if (base === "dockerfile" || base === "makefile" || base === ".gitignore" || base === ".editorconfig") return true;
   if (isSensitiveRelativePath(filePath)) return false;
   return TEXT_EXTENSIONS.has(path.extname(base));
@@ -481,7 +495,7 @@ function chooseCheck(root, task, packageJson) {
   const packageScript = allowed.find(name => typeof scripts[name] === "string" && scripts[name].trim());
   if (packageScript) return { kind: "npm-script", command: "npm run " + packageScript, script: packageScript };
   if (task === "test") {
-    const exists = name => require("node:fs").existsSync(path.join(root, name));
+    const exists = name => fsSync.existsSync(path.join(root, name));
     const hasPythonProject = ["pyproject.toml", "pytest.ini", "requirements.txt"].some(exists);
     if (hasPythonProject) return { kind: "python-pytest", command: "python -m pytest", script: null };
     const hasTests = ["test", "tests", "__tests__"].some(exists);

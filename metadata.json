@@ -1,8 +1,12 @@
 {
   "name": "SYNTRA Studio",
-  "description": "SYNTRA local coding model studio — independent decoder-only transformer trained from random initialization with custom byte tokenizer, training loop, and inference playground.",
+  "description": "Local-first coding-model research and software application-building workspace. No external AI provider is used.",
   "permissions": [],
   "capabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+    "LOCAL_PROJECT_INSPECTION",
+    "REVIEWABLE_FILE_PROPOSALS",
+    "EXPLICIT_APPLY_WITH_BACKUP",
+    "ALLOWLISTED_BUILD_TEST_EXECUTION",
+    "FROM_SCRATCH_MODEL_RESEARCH"
   ]
 }
