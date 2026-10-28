@@ -24,7 +24,7 @@ The model's byte-level vocabulary also means its context length is measured in b
 
 - Node.js 20+
 - Python 3.11+
-- PyTorch 2.4+ (CPU is supported; CUDA/MPS is used when available and selected automatically)
+- PyTorch 2.4–2.10 CPU build by default; CUDA/MPS require a matching PyTorch GPU build
 - Enough local source code to fill both train and validation splits. With the default 1,024-byte context and an 80/20 split, provide at least about 5,126 byte tokens; in practice, use a substantial repository rather than a few tiny files.
 
 ## Install
@@ -36,7 +36,7 @@ npm install
 python -m pip install -r requirements.txt
 ```
 
-PyTorch is a substantial Python dependency. It is installed explicitly from the public package index; SYNTRA does not download model weights. Keep the virtual environment and checkpoints local if you do not want other Python projects to share these dependencies.
+PyTorch is a substantial Python dependency. The requirements file selects CPU-only wheels so installations do not download the NVIDIA/CUDA stack by default. SYNTRA does not download model weights. NVIDIA users can install a matching CUDA-enabled PyTorch build separately; Intel Arc acceleration is not implemented yet.
 
 ## Start the application
 
@@ -74,7 +74,7 @@ python -m syntra_ai.cli inspect-data --root "C:\Users\You\Documents\YourProject"
 python -m syntra_ai.cli train --root "C:\Users\You\Documents\YourProject" --steps 1000
 python -m syntra_ai.cli status
 python -m syntra_ai.cli generate --prompt "def parse_config(" --max-new-tokens 200
-python -m syntra_ai.cli evaluate
+python -m syntra_ai.cli evaluate --device cpu
 python -m syntra_ai.cli finetune --dataset "C:\\Users\\You\\Documents\\syntra-instructions.jsonl" --steps 1000
 ```
 

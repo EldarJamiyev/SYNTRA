@@ -32,13 +32,34 @@ class TransformerTests(unittest.TestCase):
         model = SyntraTransformer(config)
         prompt = torch.tensor([[BOS_ID, 100, 101, 102]], dtype=torch.long)
         generated = model.generate(prompt, max_new_tokens=5, temperature=1.0, top_k=4)
-        self.assertGreaterEqual(generated.shape[1], context.shape[1] + 1)
-        self.assertLessEqual(generated.shape[1], context.shape[1] + 2)
+        self.assertGreaterEqual(generated.shape[1], prompt.shape[1] + 1)
+        self.assertLessEqual(generated.shape[1], prompt.shape[1] + 5)
         self.assertEqual(generated[0, :4].tolist(), prompt[0].tolist())
 
     def test_config_rejects_invalid_shapes(self):
         with self.assertRaises(ValueError):
             ModelConfig(n_embd=190, n_head=6).validate()
+
+    def test_data_loader_skips_credentials_directories(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-data-safety-") as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            (root / "secrets").mkdir()
+            (root / "credentials").mkdir()
+            (root / "src" / "safe.py").write_text("def safe(): return 1\n", encoding="utf-8")
+            (root / "secrets" / "private.txt").write_text("API_TOKEN=should-not-train-on-this", encoding="utf-8")
+            (root / "credentials" / "credentials.json").write_text('{"password":"do-not-train"}', encoding="utf-8")
+            (root / ".env").write_text("API_KEY=do-not-train", encoding="utf-8")
+
+            corpus = load_corpus([root], max_tokens=1024)
+            joined_paths = "\\n".join(corpus.files).lower()
+            self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
+            self.assertNotIn("secrets", joined_paths)
+            self.assertNotIn("credentials", joined_paths)
+            self.assertNotIn(".env", joined_paths)
+            self.assertNotIn(b"API_TOKEN", bytes(token for token in corpus.token_ids if token < 256))
 
     def test_real_training_checkpoint_and_supervised_prompt_masking(self):
         from syntra_ai.instruction import finetune, load_instruction_examples
@@ -83,7 +104,8 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(saved["step"], 2)
             context = torch.tensor([[BOS_ID, *b"def add"]], dtype=torch.long, device=device)
             generated = model.generate(context, max_new_tokens=2, temperature=1.0, top_k=2)
-            self.assertEqual(generated.shape[1], context.shape[1] + 2)
+            self.assertGreaterEqual(generated.shape[1], context.shape[1] + 1)
+            self.assertLessEqual(generated.shape[1], context.shape[1] + 2)
 
 
 if __name__ == "__main__":

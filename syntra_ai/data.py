@@ -18,6 +18,9 @@ IGNORED_DIRS = {
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build", "coverage",
     ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "obj"
 }
+SENSITIVE_DIRS = {
+    "secrets", "credentials", "private_keys", "certificates", ".ssh", ".aws", ".azure"
+}
 SENSITIVE_NAMES = {
     ".env", ".env.local", ".env.production", ".npmrc", ".pypirc", "credentials",
     "credentials.json", "secrets.json", "id_rsa", "id_ed25519", "known_hosts"
@@ -38,6 +41,10 @@ def _safe_file(path: Path, max_file_bytes: int) -> bool:
     if path.is_symlink() or name in SENSITIVE_NAMES:
         return False
     if name.startswith(".env.") and name != ".env.example":
+        return False
+    if name.startswith(("secret.", "secrets.", "credential.", "credentials.")) or ".secret." in name:
+        return False
+    if any(parent.name.lower() in SENSITIVE_DIRS for parent in path.parents):
         return False
     if any(name.endswith(suffix) for suffix in SENSITIVE_SUFFIXES):
         return False
@@ -73,8 +80,8 @@ def load_corpus(
             base = Path(current)
             dirnames[:] = [
                 name for name in dirnames
-                if name not in IGNORED_DIRS and not name.startswith(".")
-                and not (base / name).is_symlink()
+                if name.lower() not in IGNORED_DIRS and name.lower() not in SENSITIVE_DIRS
+                and not name.startswith(".") and not (base / name).is_symlink()
             ]
             for filename in sorted(filenames):
                 if len(files) >= max_files or len(tokens) >= max_tokens:

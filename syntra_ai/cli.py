@@ -48,8 +48,8 @@ def _parser() -> argparse.ArgumentParser:
     fine.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
 
     sub.add_parser("status", help="Report actual local checkpoint and training metrics.")
-    evaluation = sub.add_parser("evaluate", help="Report measured held-out checkpoint metrics.")
-    evaluation.add_argument("--batches", type=int, default=16)
+    evaluation = sub.add_parser("evaluate", help="Report saved held-out validation metrics from the current checkpoint.")
+    evaluation.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     serve = sub.add_parser("serve", help="Start the loopback-only local AI API.")
     serve.add_argument("--host", choices=["127.0.0.1"], default="127.0.0.1")
     serve.add_argument("--port", type=int, default=3002)
@@ -103,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(status(), indent=2))
         return 0
     if args.command == "evaluate":
-        print(json.dumps(evaluate(args.batches), indent=2))
+        print(json.dumps(evaluate(device_name=args.device), indent=2))
         return 0
     if args.command == "serve":
         os.environ["SYNTRA_AI_PORT"] = str(args.port)

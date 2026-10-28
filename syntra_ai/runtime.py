@@ -52,7 +52,7 @@ def load_model(path: str | Path | None = None, device_name: str = "auto"):
     if not target.is_file():
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
     device = choose_device(device_name)
-    saved = torch.load(target, map_location=device, weights_only=False)
+    saved = torch.load(target, map_location=device, weights_only=True)
     if saved.get("format") != "syntra-transformer-v1":
         raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
     config = ModelConfig.from_dict(saved["config"])
@@ -93,7 +93,7 @@ def generate(
 
 
 @torch.no_grad()
-def evaluate(batches: int = 16, device_name: str = "auto") -> dict:
+def evaluate(device_name: str = "auto") -> dict:
     # Validation loss is measured against a held-out portion of the local corpus
     # during the last checkpoint save. The original corpus is not silently re-read.
     _model, saved, _device = load_model(device_name=device_name)

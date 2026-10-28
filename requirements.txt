@@ -1,2 +1,5 @@
-# PyTorch is the tensor/autograd framework only. SYNTRA initializes and trains its own weights.
-torch>=2.4,<3.0
+# CPU-only wheels keep installs practical on laptops without NVIDIA CUDA.
+# CUDA users can install a matching CUDA-enabled PyTorch build separately.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+torch>=2.4,<2.11

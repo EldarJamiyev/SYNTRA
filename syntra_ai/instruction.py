@@ -106,7 +106,7 @@ def finetune(
     if not checkpoint_path_value.is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
-    saved = torch.load(checkpoint_path_value, map_location=device, weights_only=False)
+    saved = torch.load(checkpoint_path_value, map_location=device, weights_only=True)
     if saved.get("format") != "syntra-transformer-v1":
         raise ValueError("Selected checkpoint is not a SYNTRA Transformer checkpoint.")
     from .config import ModelConfig

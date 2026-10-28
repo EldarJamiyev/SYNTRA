@@ -33,7 +33,7 @@ Windows-managed virtual memory can reduce the chance that a process immediately 
 
 ## Hardware acceleration
 
-The runtime automatically selects CUDA when available, otherwise Apple MPS when available, then CPU. It does not currently target Intel Arc GPU acceleration through DirectML or XPU. An integrated Intel Arc GPU on a Windows laptop may therefore not be used by this version, even if the GPU is visible to Windows.
+The default requirements install CPU-only PyTorch to avoid pulling multi-gigabyte NVIDIA runtime packages onto laptops without NVIDIA GPUs. The model code can choose CUDA or Apple MPS when PyTorch is installed with a matching GPU build. Intel Arc GPU acceleration through DirectML or XPU is not currently implemented; an integrated Intel Arc GPU on a Windows laptop is therefore not used by the default installation.
 
 ## Metrics and quality
 

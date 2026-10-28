@@ -106,7 +106,7 @@ def train(
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
 
     if resume and checkpoint_path.exists():
-        saved = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        saved = torch.load(checkpoint_path, map_location=device, weights_only=True)
         saved_config = ModelConfig.from_dict(saved["config"])
         if saved_config != config:
             raise ValueError("Resume configuration does not match the checkpoint architecture.")
