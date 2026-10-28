@@ -462,12 +462,12 @@ export default function App() {
             <div className="stat-icon blue">
               <BrainCircuit size={18} />
             </div>
-            <div className="stat-label">MODEL CHECKPOINT</div>
-            <div className="stat-value">{modelReady ? 'AVAILABLE' : 'NOT TRAINED'}</div>
+            <div className="stat-label">PROTOTYPE STATE</div>
+            <div className="stat-value">{modelReady ? 'STATE SAVED' : 'NOT INITIALIZED'}</div>
             <div className="stat-foot">
               {modelReady
                 ? `Byte-transition prototype state ready`
-                : 'Train a model to begin'}
+                : 'Initialize the baseline first'}
             </div>
           </div>
           <div className="stat-card">
@@ -477,7 +477,7 @@ export default function App() {
             <div className="stat-label">INFERENCE DEVICE</div>
             <div className="stat-value">{status.device?.toUpperCase() || '—'}</div>
             <div className="stat-foot">
-              {modelReady ? 'Loaded in memory' : 'Random initialization'}
+              {modelReady ? 'Browser state in memory' : 'No prototype state'}
             </div>
           </div>
           <div className="stat-card">
@@ -496,9 +496,9 @@ export default function App() {
             <div className="stat-icon amber">
               <Server size={18} />
             </div>
-            <div className="stat-label">INFERENCE MODE</div>
+            <div className="stat-label">RUNTIME MODE</div>
             <div className="stat-value">LOCAL ONLY</div>
-            <div className="stat-foot">Client sandbox · no cloud model</div>
+            <div className="stat-foot">Browser prototype · no cloud model</div>
           </div>
         </section>
 
@@ -593,7 +593,7 @@ export default function App() {
                 </div>
 
                 <div className="action-row">
-                  <span className="hint-text">Generation uses only the trained local checkpoint.</span>
+                  <span className="hint-text">Sampling uses local byte-transition counts, not neural-model inference.</span>
                   <button
                     className="primary-button"
                     onClick={() => generate()}
@@ -612,9 +612,9 @@ export default function App() {
                   <div className="notice notice-warning">
                     <CircleAlert size={16} />
                     <div>
-                      <strong>No trained checkpoint found.</strong>
+                      <strong>Prototype state has not been initialized.</strong>
                       <p>
-                        Prepare local source data and train SYNTRA below before generating text.
+                        Initialize the baseline below. This does not train transformer weights.
                       </p>
                     </div>
                   </div>
@@ -705,7 +705,7 @@ export default function App() {
                 <div className="panel-title">
                   <Database size={17} /> Data & training
                 </div>
-                <p>Curated code is ready in data/raw. Prepare it and train from scratch.</p>
+                <p>This browser prototype updates byte-transition counts from a small sample corpus. It does not train a neural transformer.</p>
                 <div className="training-state">
                   <span
                     className={isTraining ? 'status-indicator online' : 'status-indicator'}
@@ -744,7 +744,7 @@ export default function App() {
                   ) : (
                     <Database size={14} />
                   )}{' '}
-                  Prepare local data
+                  Prepare sample corpus
                 </button>
                 {isTraining ? (
                   <button
@@ -762,8 +762,8 @@ export default function App() {
                   >
                     <Play size={14} />{' '}
                     {training.step > 0 && training.step < training.max_steps
-                      ? 'Resume training'
-                      : 'Start training'}
+                      ? 'Resume baseline'
+                      : 'Update baseline'}
                   </button>
                 )}
               </div>
@@ -811,23 +811,22 @@ export default function App() {
             <div className="panel">
               <div className="panel-heading">
                 <div className="panel-title">
-                  <Cpu size={17} /> Model Architecture Specification
+                  <Cpu size={17} /> Planned Model Architecture
                 </div>
-                <span className="panel-kicker">7.2M PARAMETERS</span>
+                <span className="panel-kicker">THEORETICAL CONFIG</span>
               </div>
 
               <div className="arch-card">
                 <div className="arch-header">
-                  <div className="arch-title">Decoder-Only Causal Transformer</div>
+                  <div className="arch-title">Planned: Decoder-Only Transformer</div>
                   <span className="tag-badge">AUTOREGRESSIVE</span>
                 </div>
                 <p className="hint-text" style={{ marginTop: 4 }}>
-                  Trained strictly from random Gaussian weights (mean=0.0, std=0.02). Weight tying
-                  between token embeddings and final linear language modeling head.
+                  Proposed neural architecture only. The current browser runtime does not instantiate this transformer or optimize these parameters.
                 </p>
                 <div className="arch-specs">
                   <div className="arch-spec-item">
-                    TOTAL PARAMETERS
+                    THEORETICAL PARAMETER COUNT
                     <strong>{paramCounts.total.toLocaleString()}</strong>
                   </div>
                   <div className="arch-spec-item">
@@ -839,11 +838,11 @@ export default function App() {
                     <strong>{config.n_embd}</strong>
                   </div>
                   <div className="arch-spec-item">
-                    TRANSFORMER LAYERS
+                    PLANNED TRANSFORMER LAYERS
                     <strong>{config.n_layer} blocks</strong>
                   </div>
                   <div className="arch-spec-item">
-                    ATTENTION HEADS
+                    PLANNED ATTENTION HEADS
                     <strong>{config.n_head} heads</strong>
                   </div>
                   <div className="arch-spec-item">
@@ -855,14 +854,14 @@ export default function App() {
 
               <div className="arch-card" style={{ marginTop: 14 }}>
                 <div className="arch-header">
-                  <div className="arch-title">Active Checkpoint Status</div>
+                  <div className="arch-title">Browser Prototype State</div>
                   <span className="tag-badge">
-                    {modelReady ? 'LOADED IN MEMORY' : 'RANDOM INITIALIZATION'}
+                    {modelReady ? 'LOCAL STATE SAVED' : 'NOT INITIALIZED'}
                   </span>
                 </div>
                 <div className="arch-specs">
                   <div className="arch-spec-item">
-                    CHECKPOINT FILE
+                    STATE STORAGE
                     <strong>{status.checkpoint}</strong>
                   </div>
                   <div className="arch-spec-item">
@@ -885,7 +884,7 @@ export default function App() {
                     onClick={resetModel}
                     title="Reset model checkpoint to random weights"
                   >
-                    <RotateCcw size={14} /> Reset to Random Initialization
+                    <RotateCcw size={14} /> Reset Browser Prototype
                   </button>
                   <button
                     className="secondary-button"
@@ -893,7 +892,7 @@ export default function App() {
                     onClick={runEvaluation}
                     disabled={!modelReady}
                   >
-                    <CheckCircle2 size={14} /> Run Validation Evaluation
+                    <CheckCircle2 size={14} /> Evaluate Baseline
                   </button>
                 </div>
 
@@ -903,7 +902,7 @@ export default function App() {
                     <div>
                       <strong>Evaluation Complete</strong>
                       <p>
-                        Cross-Entropy Loss: {evalResult.cross_entropy} · Perplexity:{' '}
+                        Measured Baseline Loss: {evalResult.cross_entropy} · Perplexity:{' '}
                         {evalResult.perplexity} ({evalResult.evaluation_batches} validation batches)
                       </p>
                     </div>
@@ -1224,7 +1223,7 @@ export default function App() {
                       {metrics.length === 0 ? (
                         <tr>
                           <td colSpan={4} style={{ textAlign: 'center', color: '#68778f' }}>
-                            No evaluation rows yet. Start training to populate metrics.
+                            No evaluation rows yet. Update baseline to populate metrics.
                           </td>
                         </tr>
                       ) : (
