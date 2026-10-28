@@ -105,7 +105,7 @@ def generate(
         raise ValueError("A non-empty text prompt is required.")
     if len(prompt.encode("utf-8")) > 200_000:
         raise ValueError("Prompt exceeds 200 KB.")
-    model, saved, device = load_model(path=checkpoint, device_name=device_name)
+    model, saved, device = load_model(device_name=device_name)
     config = ModelConfig.from_dict(saved["config"])
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
     full_prompt_ids = tokenizer.encode(prompt)
@@ -147,7 +147,7 @@ def evaluate(
     """
     if batches < 1 or batches > 1000:
         raise ValueError("batches must be between 1 and 1,000.")
-    model, saved, device = load_model(device_name=device_name)
+    model, saved, device = load_model(path=checkpoint, device_name=device_name)
     config = ModelConfig.from_dict(saved["config"])
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
     corpus = load_corpus([str(Path(root).expanduser().resolve())], max_tokens=max_tokens)
