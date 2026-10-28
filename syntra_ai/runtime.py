@@ -105,7 +105,7 @@ def generate(
         raise ValueError("A non-empty text prompt is required.")
     if len(prompt.encode("utf-8")) > 200_000:
         raise ValueError("Prompt exceeds 200 KB.")
-    model, saved, device = load_model(device_name=device_name)
+    model, saved, device = load_model(path=checkpoint, device_name=device_name)
     config = ModelConfig.from_dict(saved["config"])
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
     full_prompt_ids = tokenizer.encode(prompt)
@@ -138,6 +138,7 @@ def evaluate(
     batches: int = 16,
     device_name: str = "auto",
     max_tokens: int = 2_000_000,
+    checkpoint: str | Path | None = None,
 ) -> dict:
     """Run a fresh sampled loss pass on a newly supplied local corpus.
 
@@ -162,7 +163,7 @@ def evaluate(
         model, validation_data, batch_size=1, seq_len=config.seq_len, device=device, batches=batches
     )
     return {
-        "checkpoint": str(checkpoint_path()),
+        "checkpoint": str(Path(checkpoint).expanduser().resolve()) if checkpoint else str(checkpoint_path()),
         "trained_steps": int(saved.get("step", 0)),
         "evaluation_performed": True,
         "evaluation_kind": "fresh sampled next-token cross-entropy on selected local corpus",

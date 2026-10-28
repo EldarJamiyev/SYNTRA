@@ -114,7 +114,7 @@ class TransformerTests(unittest.TestCase):
                              device_name="cpu", checkpoint=checkpoint)
             self.assertEqual(tuned["status"], "completed")
             from syntra_ai.runtime import evaluate
-            fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000)
+            fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000, checkpoint=checkpoint)
             self.assertTrue(fresh_evaluation["evaluation_performed"])
             self.assertTrue(torch.isfinite(torch.tensor(fresh_evaluation["validation_loss"])).item())
             model, saved, device = load_model(checkpoint, "cpu")
