@@ -41,8 +41,8 @@ export default function App() {
         <header className="topbar">
           <div className="breadcrumb">SYNTRA <span>/</span> <strong>Project Builder</strong></div>
           <div className="topbar-status">
-            <span className="status-indicator online" />
-            LOCAL SERVICES · HEALTH CHECK IN WORKSPACE
+            <span className="status-indicator" />
+            SERVICE CONNECTION · CHECK IN WORKSPACE
           </div>
         </header>
 

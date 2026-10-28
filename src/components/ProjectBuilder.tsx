@@ -288,7 +288,7 @@ export default function ProjectBuilder() {
             {!searchResult.results.length && <p className="builder-empty">No matches found. Try a symbol name, route, module, or feature term.</p>}
             {searchResult.results.map(item => (
               <div className="builder-search-hit" key={item.path}>
-                <div className="builder-hit-head"><button className="builder-file-link" onClick={() => { setRelativePath(item.path); void postJson<{content:string}>('/local-api/workspace/read',{root, path:item.path}).then(value=>setContent(value.content)).catch(cause=>setError(cause instanceof Error ? cause.message : String(cause))); }}>{item.path}</button><span>score {item.score}</span></div>
+                <div className="builder-hit-head"><button className="builder-file-link" onClick={() => { setRelativePath(item.path); setModelBaseHash(null); setProposal(null); void postJson<{content:string}>('/local-api/workspace/read',{root, path:item.path}).then(value=>setContent(value.content)).catch(cause=>setError(cause instanceof Error ? cause.message : String(cause))); }}>{item.path}</button><span>score {item.score}</span></div>
                 {item.matches.map(match => <div className="builder-match" key={item.path + ':' + match.line}><code>{match.line}</code><pre>{match.text}</pre></div>)}
               </div>
             ))}
