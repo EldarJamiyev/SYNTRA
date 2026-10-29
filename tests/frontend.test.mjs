@@ -18,6 +18,10 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /from 'remark-gfm'/);
   assert.match(app, /skipHtml/);
   assert.match(app, /SYNTRA's local service/);
+  assert.match(app, /AbortSignal\.timeout\(15_000\)/);
+  assert.match(app, /maxLength=\{12000\}/);
+  assert.match(app, /setInput\(content\)/);
+  assert.match(app, /within 15 seconds/);
   assert.match(app, /noopener noreferrer/);
   assert.match(html, /<title>SYNTRA Chat<\/title>/);
   for (const label of [

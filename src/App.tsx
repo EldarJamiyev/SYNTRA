@@ -18,6 +18,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
   });
 
   const raw = await response.text();
@@ -115,8 +116,10 @@ export default function App() {
     setPhase('Thinking');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
+    let requestStarted = false;
     try {
       const started = await postJson<ChatJob>('/local-api/chat', { message: content, history });
+      requestStarted = true;
       let job = started;
       while (job.status === 'running') {
         if (!mountedRef.current) return;
@@ -125,11 +128,31 @@ export default function App() {
         job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
       }
       if (!mountedRef.current) return;
-      const answer = job.reply || job.error || 'No response was returned.';
+      if (job.status === 'failed') {
+        setMessages(current => {
+          const last = current[current.length - 1];
+          return last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
+        });
+        setInput(content);
+        setError(job.error || job.reply || 'The local request failed.');
+        return;
+      }
+      const answer = job.reply || 'No response was returned.';
       setMessages(current => [...current, { role: 'assistant', content: answer }]);
-      if (job.status === 'failed') setError(job.error || job.reply || 'The local request failed.');
     } catch (cause) {
-      if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause));
+      if (mountedRef.current) {
+        if (!requestStarted) {
+          setMessages(current => {
+            const last = current[current.length - 1];
+            return last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
+          });
+          setInput(content);
+        }
+        const detail = cause instanceof Error && cause.name === 'TimeoutError'
+          ? "SYNTRA's local service did not respond within 15 seconds. Check the service windows and try again."
+          : cause instanceof Error ? cause.message : String(cause);
+        setError(detail);
+      }
     } finally {
       if (mountedRef.current) {
         setPending(false);
@@ -185,12 +208,14 @@ export default function App() {
             value={input}
             onChange={event => {
               setInput(event.target.value);
+              if (error) setError('');
               event.currentTarget.style.height = 'auto';
               event.currentTarget.style.height = Math.min(event.currentTarget.scrollHeight, 180) + 'px';
             }}
             onKeyDown={onKeyDown}
             placeholder="Message SYNTRA"
             aria-label="Message SYNTRA"
+            maxLength={12000}
             rows={1}
             disabled={pending}
           />
