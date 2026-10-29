@@ -18,7 +18,7 @@ The launcher checks the page signature, detects stale app processes on the chat 
 
 ## Chat and coding behavior
 
-The chat understands natural requests such as “Could you ping example.com?” and “Can you check port 443 on example.com?”, and can also run bounded local network checks without a trained model: `ping example.com`, `DNS lookup for example.com`, and `check port 443 on example.com`. Slash forms (`/ping`, `/dns`, `/port`) are available for explicit requests. Ping is limited to four packets, TCP checks to one host/port, and targets are validated before any system utility or socket is called. These checks run locally and do not use a hosted service.
+The chat understands natural requests such as “Could you ping example.com?” and “Can you check port 443 on example.com?”, and can also run bounded local network checks without a trained model: `ping example.com`, `DNS lookup for example.com`, and `check port 443 on example.com`. Slash forms (`/ping`, `/dns`, `/port`) are available for explicit requests. Type /help in the chat for available commands; it works even when no model is installed. Ping is limited to four packets, TCP checks to one host/port, and targets are validated before any system utility or socket is called. These checks run locally and do not use a hosted service.
 
 
 Normal requests such as writing an email, explaining a concept, or brainstorming stay in chat. Explicit software tasks—such as fixing an API endpoint, updating a component, or changing the project UI—are routed to the repository agent.

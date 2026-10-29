@@ -235,6 +235,24 @@ async function runChatTurn(jobId, message, history) {
       return;
     }
 
+    if (/^\/help\s*$/i.test(message.trim())) {
+      finishChat(jobId, [
+        "**SYNTRA help**",
+        "",
+        "Network checks (run locally, even without a trained model):",
+        "- ping example.com or /ping example.com",
+        "- DNS lookup for example.com or /dns example.com",
+        "- check port 443 on example.com or /port example.com 443",
+        "",
+        "Coding and workspace:",
+        "- Ask for a specific software change to invoke the repository-aware coding agent.",
+        "- /workspace followed by an absolute folder path switches the active project.",
+        "- /apply applies pending proposals only after you review and explicitly request it.",
+        "- /clear clears this conversation and its saved browser history."
+      ].join("\n"));
+      return;
+    }
+
     const diagnostic = classifyNetworkDiagnostic(message);
     if (diagnostic) {
       if (diagnostic.kind === "invalid") {

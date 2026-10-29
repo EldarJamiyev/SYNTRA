@@ -141,6 +141,30 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(diagnosticStatus?.diagnosticStatus, "resolved");
     assert.match(diagnosticStatus?.reply || "", /DNS lookup: 127\.0\.0\.1/);
 
+
+    const helpStartResponse = await fetch(base + "/local-api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ message: "/help" })
+    });
+    assert.equal(helpStartResponse.status, 200);
+    const helpJob = await helpStartResponse.json();
+    let helpStatus = null;
+    const helpDeadline = Date.now() + 5_000;
+    while (Date.now() < helpDeadline) {
+      const statusResponse = await fetch(base + "/local-api/chat/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+        body: JSON.stringify({ jobId: helpJob.jobId })
+      });
+      helpStatus = await statusResponse.json();
+      if (helpStatus.status !== "running") break;
+      await delay(40);
+    }
+    assert.equal(helpStatus?.status, "completed");
+    assert.match(helpStatus?.reply || "", /SYNTRA help/);
+    assert.match(helpStatus?.reply || "", /\\/dns example\\.com/);
+
     const unknownRoute = await fetch(base + "/not-a-route");
     assert.equal(unknownRoute.status, 404);
     assert.match((await unknownRoute.json()).error, /Route not found/);
