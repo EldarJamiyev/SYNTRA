@@ -235,7 +235,10 @@ async function runChatTurn(jobId, message, history) {
       return;
     }
 
-    if (/^\/help\s*$/i.test(message.trim())) {
+    const trimmedMessage = message.trim();
+    const helpRequested = /^\/help\s*$/i.test(trimmedMessage)
+      || /^(?:help|what can you do|what can syntra do|how do i use syntra|what commands are available)[?.!]*$/i.test(trimmedMessage);
+    if (helpRequested) {
       finishChat(jobId, [
         "**SYNTRA help**",
         "",
@@ -248,8 +251,53 @@ async function runChatTurn(jobId, message, history) {
         "- Ask for a specific software change to invoke the repository-aware coding agent.",
         "- /workspace followed by an absolute folder path switches the active project.",
         "- /apply applies pending proposals only after you review and explicitly request it.",
-        "- /clear clears this conversation and its saved browser history."
+        "- /status checks whether the local model backend is reachable.",
+        "- /clear clears this conversation and its saved browser history.",
+        "",
+        "Normal chat and code edits need a compatible local Ollama model or a trained SYNTRA checkpoint. No hosted AI API is used."
       ].join("\n"));
+      return;
+    }
+
+    if (/^\/status\s*$/i.test(trimmedMessage)) {
+      updateChat(jobId, { phase: "status", message: "Checking the local model backend" });
+      try {
+        const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000);
+        const provider = modelStatus.provider === "ollama-local"
+          ? "Ollama local model"
+          : modelStatus.provider || "Native local backend";
+        const lines = [
+          "**SYNTRA status**",
+          "",
+          "Workspace service: running",
+          "Model backend: reachable (" + provider + ")",
+          modelStatus.checkpoint_exists
+            ? "Model/checkpoint: available"
+            : "Model/checkpoint: not trained or not installed"
+        ];
+        if (modelStatus.model_name) lines.push("Model: " + modelStatus.model_name);
+        const context = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 0);
+        if (context > 0) lines.push("Context window: " + context.toLocaleString() + " tokens");
+        if (Number.isFinite(Number(modelStatus.trained_steps)) && Number(modelStatus.trained_steps) > 0) {
+          lines.push("Training steps: " + Number(modelStatus.trained_steps).toLocaleString());
+        }
+        if (modelStatus.pretrained_weights === true) lines.push("Weights: pretrained, installed locally");
+        else if (modelStatus.checkpoint_exists) lines.push("Weights: local SYNTRA checkpoint");
+        lines.push("", "Network diagnostics: available without a model.");
+        if (!modelStatus.checkpoint_exists) lines.push("Install a compatible local Ollama model or train the native model to enable ordinary chat and code edits.");
+        finishChat(jobId, lines.join("\n"), { modelStatus: "reachable" });
+      } catch (error) {
+        finishChat(jobId, [
+          "**SYNTRA status**",
+          "",
+          "Workspace service: running",
+          "Model backend: unavailable",
+          "Network diagnostics: available without a model.",
+          "",
+          "Check the service windows opened by Start-SYNTRA.bat. Ordinary chat and code edits need a reachable local model backend.",
+          error instanceof Error ? error.message : String(error)
+        ].join("\n"), { modelStatus: "unavailable" });
+      }
       return;
     }
 

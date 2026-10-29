@@ -57,9 +57,15 @@ async function stopChild(child) {
 
 test("local API health, origin protections, and chat validation work over HTTP", async () => {
   const port = await reservePort();
+  const aiPort = await reservePort();
   const child = spawn(process.execPath, ["local/server.mjs"], {
     cwd: projectRoot,
-    env: { ...process.env, SYNTRA_LOCAL_PORT: String(port), SYNTRA_MODEL_PROVIDER: "native" },
+    env: {
+      ...process.env,
+      SYNTRA_LOCAL_PORT: String(port),
+      SYNTRA_AI_PORT: String(aiPort),
+      SYNTRA_MODEL_PROVIDER: "native"
+    },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
   });
@@ -164,6 +170,53 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(helpStatus?.status, "completed");
     assert.match(helpStatus?.reply || "", /SYNTRA help/);
     assert.ok((helpStatus?.reply || "").includes("/dns example.com"));
+
+    const naturalHelpResponse = await fetch(base + "/local-api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ message: "What can you do?" })
+    });
+    assert.equal(naturalHelpResponse.status, 200);
+    const naturalHelpJob = await naturalHelpResponse.json();
+    let naturalHelpStatus = null;
+    const naturalHelpDeadline = Date.now() + 5_000;
+    while (Date.now() < naturalHelpDeadline) {
+      const response = await fetch(base + "/local-api/chat/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+        body: JSON.stringify({ jobId: naturalHelpJob.jobId })
+      });
+      naturalHelpStatus = await response.json();
+      if (naturalHelpStatus.status !== "running") break;
+      await delay(40);
+    }
+    assert.equal(naturalHelpStatus?.status, "completed");
+    assert.match(naturalHelpStatus?.reply || "", /SYNTRA help/);
+    assert.ok((naturalHelpStatus?.reply || "").includes("/status"));
+
+    const statusResponse = await fetch(base + "/local-api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ message: "/status" })
+    });
+    assert.equal(statusResponse.status, 200);
+    const statusJob = await statusResponse.json();
+    let statusResult = null;
+    const statusDeadline = Date.now() + 5_000;
+    while (Date.now() < statusDeadline) {
+      const response = await fetch(base + "/local-api/chat/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+        body: JSON.stringify({ jobId: statusJob.jobId })
+      });
+      statusResult = await response.json();
+      if (statusResult.status !== "running") break;
+      await delay(40);
+    }
+    assert.equal(statusResult?.status, "completed");
+    assert.equal(statusResult?.modelStatus, "unavailable");
+    assert.match(statusResult?.reply || "", /Workspace service: running/);
+    assert.match(statusResult?.reply || "", /Network diagnostics: available without a model/);
 
     const unknownRoute = await fetch(base + "/not-a-route");
     assert.equal(unknownRoute.status, 404);
