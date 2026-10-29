@@ -4,7 +4,7 @@ SYNTRA is a deliberately minimal chat interface backed by a local model and a re
 
 ## Windows launch
 
-Requirements: Node.js 20+ and Git. Python 3.11+ is required only for the native model fallback. A compatible local model in Ollama is preferred automatically.
+Requirements: Node.js 20+ and Git. The test suite includes an HTTP smoke test for the local API's origin guards and request validation. Python 3.11+ is required only for the native model fallback. A compatible local model in Ollama is preferred automatically.
 
 In your existing SYNTRA repository folder, run:
 

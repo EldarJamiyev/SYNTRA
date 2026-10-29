@@ -35,4 +35,4 @@ The native Transformer has its own tokenizer, context configuration, training lo
 - Likely credential files and secret paths are excluded from workspace read/edit operations.
 - Agent patches are restricted to recognized text/source/configuration files and validated against exact file hashes. Multi-file apply preflights every proposal, saves backups together, rechecks each source immediately before writing, and attempts a guarded rollback if a later write fails.
 - Candidate checks execute in a temporary project copy. Build/test scripts are project code and should still be reviewed when working in an untrusted repository.
-- The services are intended for local use, not direct internet exposure. A static hosted copy cannot access the user's local model or workspace agent by itself.
+- The services are intended for local use, not direct internet exposure. Automated Node tests launch an isolated loopback server on a temporary port to check request validation and origin rejection. A static hosted copy cannot access the user's local model or workspace agent by itself.
