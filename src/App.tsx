@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { BrainCircuit, LoaderCircle, Send } from 'lucide-react';
+import { LoaderCircle, Send } from 'lucide-react';
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type ChatJob = {
@@ -40,7 +40,6 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
-  const [phase, setPhase] = useState('');
   const [error, setError] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -53,7 +52,7 @@ export default function App() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, pending, phase]);
+  }, [messages, pending]);
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -65,7 +64,6 @@ export default function App() {
     setInput('');
     setError('');
     setPending(true);
-    setPhase('Connecting');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     try {
@@ -73,7 +71,6 @@ export default function App() {
       let job = started;
       while (job.status === 'running') {
         if (!mountedRef.current) return;
-        setPhase(job.message || (job.phase === 'planning' ? 'Planning changes' : 'Thinking'));
         await new Promise(resolve => window.setTimeout(resolve, 900));
         job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
       }
@@ -90,7 +87,6 @@ export default function App() {
     } finally {
       if (mountedRef.current) {
         setPending(false);
-        setPhase('');
         textareaRef.current?.focus();
       }
     }
@@ -106,28 +102,24 @@ export default function App() {
   return (
     <main className="chat-app">
       <header className="chat-header">
-        <div className="chat-brand"><BrainCircuit size={23} strokeWidth={1.7} /><span>SYNTRA</span></div>
+        <span className="chat-brand">SYNTRA</span>
       </header>
 
       <section className={'chat-thread ' + (messages.length === 0 ? 'chat-thread-empty' : '')} aria-live="polite">
         {messages.length === 0 ? (
           <div className="chat-welcome">
-            <div className="welcome-mark"><BrainCircuit size={29} strokeWidth={1.5} /></div>
-            <h1>What are we working on?</h1>
-            <p>Ask a question or tell SYNTRA what to build.</p>
+            <h1>How can I help?</h1>
           </div>
         ) : (
           <div className="chat-messages">
             {messages.map((message, index) => (
               <article className={'chat-message ' + message.role} key={index}>
-                {message.role === 'assistant' && <div className="assistant-mark"><BrainCircuit size={17} /></div>}
                 <div className="chat-bubble"><MessageContent content={message.content} /></div>
               </article>
             ))}
             {pending && (
               <article className="chat-message assistant pending-message">
-                <div className="assistant-mark"><BrainCircuit size={17} /></div>
-                <div className="pending-content"><LoaderCircle size={15} className="thinking-spinner" /><span>{phase || 'Thinking'}</span></div>
+                <div className="pending-content"><LoaderCircle size={15} className="thinking-spinner" /><span>Thinking…</span></div>
               </article>
             )}
           </div>
@@ -156,7 +148,6 @@ export default function App() {
             {pending ? <LoaderCircle size={18} className="thinking-spinner" /> : <Send size={17} />}
           </button>
         </form>
-        <div className="composer-hint">Enter to send · Shift + Enter for a new line</div>
       </div>
     </main>
   );
