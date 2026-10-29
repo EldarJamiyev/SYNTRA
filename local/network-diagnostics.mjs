@@ -206,7 +206,7 @@ async function runTcp(task) {
         : ["ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"].includes(code) ? "timeout" : "failed";
       finish(status, (code ? code + ": " : "") + error.message);
     });
-    socket.connect(task.port, task.host);
+    // net.createConnection() already initiates the connection; do not call connect() again.
   });
 }
 
