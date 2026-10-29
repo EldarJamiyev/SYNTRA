@@ -4,11 +4,13 @@ import test from 'node:test';
 
 const appPath = new URL('../src/App.tsx', import.meta.url);
 const indexPath = new URL('../index.html', import.meta.url);
+const serverPath = new URL('../local/server.mjs', import.meta.url);
 
 test('the frontend stays a simple chat rather than a model dashboard', async () => {
-  const [app, html] = await Promise.all([
+  const [app, html, server] = await Promise.all([
     fs.readFile(appPath, 'utf8'),
     fs.readFile(indexPath, 'utf8'),
+    fs.readFile(serverPath, 'utf8'),
   ]);
   const frontend = app + '\n' + html;
   assert.match(app, /placeholder="Message SYNTRA"/);
@@ -23,8 +25,8 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /setInput\(content\)/);
   assert.match(app, /within 15 seconds/);
   assert.match(app, /streamingReply/);
-  assert.match(app, /phase: "streaming"/);
-  assert.match(app, /onToken: \(_delta, fullText\)/);
+  assert.match(server, /phase: "streaming"/);
+  assert.match(server, /onToken: \(_delta, fullText\)/);
   assert.match(app, /noopener noreferrer/);
   assert.match(html, /<title>SYNTRA Chat<\/title>/);
   for (const label of [
