@@ -11,7 +11,10 @@ import torch
 from .config import ModelConfig
 
 SAFETY_FRACTION = 0.70
+CHECKPOINT_LOAD_FRACTION = 0.40
+INFERENCE_SAFETY_FRACTION = 0.70
 WORKSPACE_RESERVE_BYTES = 256 * 1024 * 1024
+INFERENCE_RESERVE_BYTES = 128 * 1024 * 1024
 
 
 def estimate_training_memory_bytes(config: ModelConfig, batch_size: int) -> int:
@@ -118,3 +121,85 @@ def validate_training_memory_budget(
             "This is a conservative estimate, not a guarantee against every out-of-memory error."
         )
     return estimate
+
+def validate_checkpoint_load_budget(
+    checkpoint_path: str | Path,
+    available_bytes: int | None = None,
+) -> int:
+    """Reject a checkpoint file that could consume most of currently free system RAM."""
+    target = Path(checkpoint_path).expanduser()
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        raise ValueError("Cannot inspect checkpoint file size before loading: " + str(exc)) from exc
+    if size <= 0:
+        raise ValueError("The selected checkpoint file is empty.")
+
+    available = _system_available_memory_bytes() if available_bytes is None else int(available_bytes)
+    if available is not None and available > 0:
+        budget = int(available * CHECKPOINT_LOAD_FRACTION)
+        if size > budget:
+            size_gib = size / (1024 ** 3)
+            available_gib = available / (1024 ** 3)
+            budget_gib = budget / (1024 ** 3)
+            raise ValueError(
+                f"Checkpoint file is {size_gib:.2f} GiB, above the 40% checkpoint-load budget "
+                f"({budget_gib:.2f} GiB of {available_gib:.2f} GiB currently available RAM). "
+                "Close memory-heavy applications or use a smaller local checkpoint before loading it."
+            )
+    return size
+
+
+def estimate_inference_memory_bytes(
+    config: ModelConfig,
+    batch_size: int = 1,
+    sequence_length: int | None = None,
+) -> int:
+    """Estimate model weights, activations and conservative attention workspace for inference."""
+    config.validate()
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive.")
+    length = config.seq_len if sequence_length is None else sequence_length
+    if not isinstance(length, int) or length < 1 or length > config.seq_len:
+        raise ValueError("sequence_length must be between 1 and the configured context length.")
+
+    embd = config.n_embd
+    parameter_count = (
+        config.vocab_size * embd
+        + config.seq_len * embd
+        + config.n_layer * (12 * embd * embd + 13 * embd)
+        + 2 * embd
+    )
+    weights = parameter_count * 4
+    activations = batch_size * length * embd * config.n_layer * 6 * 4
+    attention_workspace = batch_size * config.n_head * length * length * config.n_layer * 4
+    return int((weights + activations + attention_workspace) * 1.20 + INFERENCE_RESERVE_BYTES)
+
+
+def validate_inference_memory_budget(
+    config: ModelConfig,
+    batch_size: int,
+    sequence_length: int,
+    device: Any,
+    available_bytes: int | None = None,
+) -> int:
+    """Reject clearly oversized inference settings before allocating the live model."""
+    estimate = estimate_inference_memory_bytes(config, batch_size, sequence_length)
+    available = available_memory_bytes(device) if available_bytes is None else int(available_bytes)
+    if available is None or available <= 0:
+        return estimate
+
+    safe_budget = int(available * INFERENCE_SAFETY_FRACTION)
+    if estimate > safe_budget:
+        estimate_gib = estimate / (1024 ** 3)
+        available_gib = available / (1024 ** 3)
+        budget_gib = safe_budget / (1024 ** 3)
+        raise ValueError(
+            f"Estimated inference working set is about {estimate_gib:.1f} GiB, above "
+            f"the 70% safety budget ({budget_gib:.1f} GiB of {available_gib:.1f} GiB "
+            f"available memory on {torch.device(device)}). Reduce --seq-len, --layers, or "
+            "--embedding, or close other applications. This is conservative; actual memory "
+            "use depends on the selected PyTorch attention backend."
+        )
+    return estimate
+

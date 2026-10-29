@@ -13,7 +13,7 @@ import torch
 from .config import ModelConfig
 from .data import MAX_CORPUS_TOKENS, load_corpus
 from .model import BOS_ID, EOS_ID, SyntraTransformer
-from .resources import validate_training_memory_budget
+from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
 from .tokenizer import ByteBPETokenizer
 
 ProgressCallback = Callable[[dict], None]
@@ -124,7 +124,9 @@ def train(
     saved = None
     corpus = None
     if resume and checkpoint_path.exists():
-        # Load checkpoint tensors on CPU first so the memory preflight can run before
+        # Bound the on-disk checkpoint before deserializing its tensor and optimizer state.
+        validate_checkpoint_load_budget(checkpoint_path)
+        # Load checkpoint tensors on CPU first so the training memory preflight can run before
         # copying model and optimizer state onto a potentially constrained device.
         saved = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         if saved.get("format") != "syntra-transformer-v1":

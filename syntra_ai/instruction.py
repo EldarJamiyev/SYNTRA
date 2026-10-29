@@ -8,7 +8,7 @@ import torch
 
 from .config import ModelConfig
 from .model import BOS_ID, EOS_ID, SyntraTransformer
-from .resources import validate_training_memory_budget
+from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
 from .runtime import checkpoint_path
 from .tokenizer import ByteBPETokenizer
 from .training import _atomic_checkpoint, choose_device
@@ -138,6 +138,7 @@ def finetune(
     if not checkpoint_path_value.is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
+    validate_checkpoint_load_budget(checkpoint_path_value)
     # Read checkpoint tensors on CPU first; run the same resource guard used by
     # pretraining before moving weights, gradients, and optimizer state to an accelerator.
     saved = torch.load(checkpoint_path_value, map_location="cpu", weights_only=True)

@@ -146,6 +146,34 @@ class TransformerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "512 KiB field limit"):
                 load_instruction_examples(huge_field, seq_len=32, tokenizer=tokenizer)
 
+    def test_checkpoint_file_budget_rejects_oversized_loads(self):
+        from syntra_ai.resources import validate_checkpoint_load_budget
+
+        with tempfile.TemporaryDirectory(prefix="syntra-checkpoint-budget-") as temp:
+            checkpoint = Path(temp) / "fixture.pt"
+            checkpoint.write_bytes(b"x" * 1000)
+            self.assertEqual(validate_checkpoint_load_budget(checkpoint, available_bytes=5000), 1000)
+            with self.assertRaisesRegex(ValueError, "checkpoint-load budget"):
+                validate_checkpoint_load_budget(checkpoint, available_bytes=1000)
+
+    def test_inference_memory_budget_scales_with_context_and_rejects_oversized_settings(self):
+        from syntra_ai.resources import (
+            estimate_inference_memory_bytes,
+            validate_inference_memory_budget,
+        )
+
+        small = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        short_estimate = estimate_inference_memory_bytes(small, batch_size=1, sequence_length=8)
+        long_estimate = estimate_inference_memory_bytes(small, batch_size=1, sequence_length=32)
+        self.assertGreater(long_estimate, short_estimate)
+        self.assertEqual(
+            validate_inference_memory_budget(small, 1, 32, "cpu", available_bytes=2 * 1024 ** 3),
+            long_estimate,
+        )
+        large = ModelConfig(seq_len=8192, n_layer=12, n_head=12, n_embd=768, dropout=0.0)
+        with self.assertRaisesRegex(ValueError, "safety budget"):
+            validate_inference_memory_budget(large, 1, 8192, "cpu", available_bytes=8 * 1024 ** 3)
+
     def test_instruction_finetuning_rejects_oversized_config_before_model_allocation(self):
         from syntra_ai.instruction import finetune
 

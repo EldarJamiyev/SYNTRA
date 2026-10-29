@@ -11,6 +11,7 @@ from .model import BOS_ID, SyntraTransformer
 from .tokenizer import ByteBPETokenizer
 from .training import _batch, _encode_documents, _estimate_loss, choose_device
 from .data import MAX_CORPUS_TOKENS, load_corpus
+from .resources import validate_checkpoint_load_budget, validate_inference_memory_budget
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "data" / "checkpoints" / "syntra.pt"
@@ -24,6 +25,7 @@ def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelC
     target = Path(path).expanduser().resolve() if path else checkpoint_path()
     if not target.is_file():
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
+    validate_checkpoint_load_budget(target)
     saved = torch.load(target, map_location="cpu", weights_only=True)
     if saved.get("format") != "syntra-transformer-v1":
         raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
@@ -69,6 +71,9 @@ def status() -> dict:
 def load_model(path: str | Path | None = None, device_name: str = "auto"):
     target, saved, config, tokenizer = _read_checkpoint(path)
     device = choose_device(device_name)
+    validate_inference_memory_budget(
+        config, batch_size=1, sequence_length=config.seq_len, device=device
+    )
     model = SyntraTransformer(config).to(device)
     model.load_state_dict(saved["model_state"])
     model.eval()
