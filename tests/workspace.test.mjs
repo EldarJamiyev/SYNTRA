@@ -104,6 +104,36 @@ test("workspace state refuses symbolic links that could redirect audit files out
   }
 });
 
+
+test("workspace proposal and audit subpaths cannot be redirected by symlinks", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-nested-state-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-nested-outside-"));
+  try {
+    await fs.mkdir(path.join(root, ".syntra"), { recursive: true });
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "network.ts"), "export const network = 'local';\n");
+    await fs.symlink(outside, path.join(root, ".syntra", "proposals"), process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(
+      () => proposeFileChange(root, "src/network.ts", "export const network = 'changed';\n"),
+      /\\.syntra\\/proposals state directory must not be a symbolic link/
+    );
+    assert.deepEqual(await fs.readdir(outside), []);
+
+    await fs.unlink(path.join(root, ".syntra", "proposals"));
+    const outsideAudit = path.join(outside, "outside-audit.jsonl");
+    await fs.writeFile(outsideAudit, "keep unchanged\n", "utf8");
+    await fs.symlink(outsideAudit, path.join(root, ".syntra", "actions.jsonl"), "file");
+    await assert.rejects(
+      () => createProjectPlan(root, "Build a tested local network diagnostics tool."),
+      /actions\\.jsonl audit log must be a regular file/
+    );
+    assert.equal(await fs.readFile(outsideAudit, "utf8"), "keep unchanged\n");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
 test("single-file apply rejects proposal files whose saved content no longer matches its hash", async () => {
   const root = await createTempProject();
   try {

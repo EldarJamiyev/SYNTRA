@@ -333,6 +333,36 @@ function stateDirectory(root) {
   if (!isWithinRoot(root, realDirectory)) {
     throw new Error("The workspace .syntra state directory resolves outside the selected workspace.");
   }
+
+  for (const name of ["proposals", "backups", "plans"]) {
+    const nested = path.join(directory, name);
+    let nestedInfo;
+    try {
+      nestedInfo = fsSync.lstatSync(nested);
+    } catch (error) {
+      if (error && error.code === "ENOENT") continue;
+      throw error;
+    }
+    if (nestedInfo.isSymbolicLink()) {
+      throw new Error("The workspace .syntra/" + name + " state directory must not be a symbolic link.");
+    }
+    if (!nestedInfo.isDirectory()) {
+      throw new Error("The workspace .syntra/" + name + " state path exists but is not a directory.");
+    }
+    if (!isWithinRoot(root, fsSync.realpathSync(nested))) {
+      throw new Error("The workspace .syntra/" + name + " state directory resolves outside the selected workspace.");
+    }
+  }
+
+  const auditPath = path.join(directory, "actions.jsonl");
+  try {
+    const auditInfo = fsSync.lstatSync(auditPath);
+    if (auditInfo.isSymbolicLink() || !auditInfo.isFile()) {
+      throw new Error("The workspace .syntra/actions.jsonl audit log must be a regular file, not a symbolic link.");
+    }
+  } catch (error) {
+    if (error && error.code !== "ENOENT") throw error;
+  }
   return directory;
 }
 
