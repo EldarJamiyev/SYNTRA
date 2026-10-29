@@ -89,7 +89,10 @@ test("local generation uses only loopback Ollama and JSON mode for structured pa
   assert.equal(capturedUrl, "http://127.0.0.1:11434/api/chat");
   assert.equal(capturedBody.model, "qwen2.5-coder:14b");
   assert.equal(capturedBody.stream, false);
-  assert.equal(capturedBody.format, "json");
+  assert.equal(capturedBody.format.type, "object");
+  assert.deepEqual(capturedBody.format.required, ["summary", "edits"]);
+  assert.equal(capturedBody.messages[0].role, "system");
+  assert.equal(capturedBody.messages[1].role, "user");
   assert.equal(capturedBody.options.num_ctx, 8192);
   assert.equal(capturedBody.options.num_predict, 512);
   assert.equal(result.text, '{"summary":"Fixed","edits":[]}');
