@@ -129,8 +129,14 @@ class TransformerTests(unittest.TestCase):
                 load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_examples=MAX_INSTRUCTION_EXAMPLES + 1)
             with self.assertRaisesRegex(ValueError, "max_tokens must be between"):
                 load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_tokens=MAX_INSTRUCTION_TOKENS + 1)
+            overflow_dataset = root / "token-overflow.jsonl"
+            long_rows = [
+                {"prompt": "p" * 6000, "completion": "c" * 6000},
+                {"prompt": "p" * 6000, "completion": "c" * 6000},
+            ]
+            overflow_dataset.write_text("\n".join(json.dumps(row) for row in long_rows), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "safety cap"):
-                load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_tokens=1024)
+                load_instruction_examples(overflow_dataset, seq_len=16384, tokenizer=tokenizer, max_tokens=1024)
 
             huge_field = root / "huge-field.jsonl"
             huge_field.write_text(json.dumps({
@@ -140,11 +146,29 @@ class TransformerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "512 KiB field limit"):
                 load_instruction_examples(huge_field, seq_len=32, tokenizer=tokenizer)
 
-    def test_instruction_finetuning_uses_memory_preflight(self):
-        from syntra_ai.resources import validate_training_memory_budget
+    def test_instruction_finetuning_rejects_oversized_config_before_model_allocation(self):
         from syntra_ai.instruction import finetune
-        self.assertTrue(callable(validate_training_memory_budget))
-        # The end-to-end tiny model test below also exercises the guard with an actual checkpoint.
+
+        with tempfile.TemporaryDirectory(prefix="syntra-finetune-memory-") as temp:
+            root = Path(temp)
+            checkpoint = root / "oversized.pt"
+            config = ModelConfig(seq_len=8192, n_layer=12, n_head=12, n_embd=768, dropout=0.0)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": ByteBPETokenizer.empty().to_dict(),
+                "model_state": {},
+                "step": 0,
+            }, checkpoint)
+
+            with self.assertRaisesRegex(ValueError, "safety budget"):
+                finetune(
+                    dataset_path=root / "unused.jsonl",
+                    steps=1,
+                    batch_size=16,
+                    device_name="cpu",
+                    checkpoint=checkpoint,
+                )
 
     def test_data_loader_skips_credentials_directories(self):
         from syntra_ai.data import load_corpus

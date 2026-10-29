@@ -8,7 +8,7 @@ import torch
 
 from .config import ModelConfig
 from .model import BOS_ID, EOS_ID, SyntraTransformer
-from .resources import MAX_CORPUS_TOKENS, validate_training_memory_budget
+from .resources import validate_training_memory_budget
 from .runtime import checkpoint_path
 from .tokenizer import ByteBPETokenizer
 from .training import _atomic_checkpoint, choose_device
