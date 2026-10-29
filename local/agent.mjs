@@ -456,22 +456,23 @@ function truncateOutput(output) {
 }
 
 
-function packageScriptsChanged(changes) {
-  const change = changes.find(item => item.path === "package.json");
-  if (!change || typeof change.beforeContent !== "string") return false;
-  try {
-    const before = JSON.parse(change.beforeContent);
-    const after = JSON.parse(change.content);
-    const sortedScripts = value => {
-      const scripts = value && value.scripts && typeof value.scripts === "object" && !Array.isArray(value.scripts)
-        ? value.scripts : {};
-      return JSON.stringify(Object.fromEntries(Object.keys(scripts).sort().map(key => [key, scripts[key]])));
-    };
-    return sortedScripts(before) !== sortedScripts(after);
-  } catch {
-    // Never execute candidate-controlled checks if the package manifest was made invalid.
-    return true;
-  }
+const VERIFICATION_MANIFEST_NAMES = new Set([
+  "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock",
+  "requirements.txt", "requirements-dev.txt", "pyproject.toml", "pipfile", "pipfile.lock",
+  "poetry.lock", "uv.lock", "cargo.toml", "cargo.lock", "go.mod", "go.sum",
+  "gemfile", "gemfile.lock", "composer.json", "composer.lock", "pom.xml",
+  "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
+  "gradle.properties", "global.json"
+]);
+
+function verificationManifestChanges(changes) {
+  return changes.filter(change => {
+    const relative = String(change.path || "").replace(/\\/g, "/").toLowerCase();
+    const base = path.posix.basename(relative);
+    return VERIFICATION_MANIFEST_NAMES.has(base)
+      || /^requirements(?:[-_.][a-z0-9_.-]+)?\.txt$/.test(base)
+      || /\.(?:csproj|fsproj|vbproj|props|targets)$/i.test(base);
+  });
 }
 
 function verificationReviewReasons(changes) {
@@ -583,8 +584,10 @@ export async function runAgentTask({
         break;
       }
 
-      if (packageScriptsChanged(candidate.changes)) {
-        const note = "Automatic verification was blocked because the patch changes package.json scripts. Running candidate-controlled build/test scripts would make the checks self-modifying. Review the manifest diff, then type /apply only if you accept the script changes.";
+      const changedManifests = verificationManifestChanges(candidate.changes);
+      if (changedManifests.length) {
+        const manifestNames = changedManifests.map(change => change.path).join(", ");
+        const note = "Automatic verification was blocked because the patch changes dependency/build manifests or lockfiles (" + manifestNames + "). The sandbox has not reinstalled these dependencies, so its build/test results could be misleading. Review the manifest changes, then type /apply only if you accept them.";
         finalVerification = {
           status: "verification_blocked", passed: false, checks: [{
             task: "verification-script-integrity", passed: false, skipped: true, timedOut: false,

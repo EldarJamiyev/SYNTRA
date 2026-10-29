@@ -179,7 +179,7 @@ function compactAgentReply(result, applied) {
     lines.push("Changed files:");
     for (const item of applied) lines.push("- " + item.path);
   } else if (result.proposals?.length && result.verification?.status === "verification_blocked") {
-    lines.push("I did not run candidate checks because this patch changes package-manager scripts used to run those checks.");
+    lines.push("I did not run candidate checks because this patch changes dependency/build manifests or lockfiles. The sandbox does not reinstall changed dependencies.");
     for (const item of result.proposals) lines.push("- " + item.path);
     lines.push("The original project files remain unchanged. Review the script changes, then type /apply only if you accept them.");
   } else if (result.proposals?.length && result.verification?.status === "passed_review_required") {
