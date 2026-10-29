@@ -30,3 +30,24 @@ jobs:
       - run: python -m compileall -q syntra_ai tests/python scripts
       - run: python -m unittest discover -s tests/python -v
       - run: python scripts/run_syntra_module.py cli status
+
+  windows-launcher-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell launcher and verify one-click entry point
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD "scripts/start-syntra.ps1"), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          if (-not (Test-Path "Start-SYNTRA.bat")) { throw "Start-SYNTRA.bat is missing." }
+          $package = Get-Content "package.json" -Raw | ConvertFrom-Json
+          if ($package.scripts.'ai:cli' -ne "python scripts/run_syntra_module.py cli") { throw "The AI CLI launcher mapping is incorrect." }
+          if ($package.scripts.'ai:server' -ne "python scripts/run_syntra_module.py server") { throw "The AI server launcher mapping is incorrect." }
+          if ((Get-Content "requirements.txt" -Raw) -notmatch "numpy") { throw "NumPy is not listed in requirements.txt." }
+          Write-Host "PowerShell launcher syntax and one-click entry point are valid."
