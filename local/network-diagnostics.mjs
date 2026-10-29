@@ -192,18 +192,24 @@ async function runDns(task) {
   }
 }
 
-async function runTcp(task) {
+async function runTcp(task, { tcpConnectImpl = net.createConnection, tcpTimeoutMs = TCP_TIMEOUT_MS } = {}) {
   return new Promise(resolve => {
-    const socket = net.createConnection({ host: task.host, port: task.port });
+    const socket = tcpConnectImpl({ host: task.host, port: task.port });
     let settled = false;
+    let deadlineTimer;
     const finish = (status, message = "") => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadlineTimer);
       const remoteAddress = socket.remoteAddress || "";
       socket.destroy();
       resolve({ kind: "port", host: task.host, port: task.port, status, message, remoteAddress });
     };
-    socket.setTimeout(TCP_TIMEOUT_MS, () => finish("timeout", "TCP connection timed out after 3 seconds."));
+    deadlineTimer = setTimeout(
+      () => finish("timeout", "TCP connection timed out after " + Math.max(1, Math.round(tcpTimeoutMs / 1000)) + " seconds."),
+      tcpTimeoutMs
+    );
+    socket.setTimeout(tcpTimeoutMs, () => finish("timeout", "TCP connection timed out after " + Math.max(1, Math.round(tcpTimeoutMs / 1000)) + " seconds."));
     socket.once("connect", () => finish("open", "TCP connection established."));
     socket.once("error", error => {
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
@@ -211,7 +217,6 @@ async function runTcp(task) {
         : ["ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN"].includes(code) ? "timeout" : "failed";
       finish(status, (code ? code + ": " : "") + error.message);
     });
-    // net.createConnection() already initiates the connection; do not call connect() again.
   });
 }
 
@@ -258,7 +263,7 @@ async function runPing(task) {
   });
 }
 
-export async function runNetworkDiagnostic(task) {
+export async function runNetworkDiagnostic(task, options = {}) {
   if (!task || task.kind === "invalid") return { kind: "invalid", status: "invalid", message: task?.message || "Invalid network diagnostic request." };
   const host = cleanHost(task.host, true);
   if (!host) return { kind: "invalid", status: "invalid", message: "That host name or IP address is not valid." };
@@ -267,7 +272,7 @@ export async function runNetworkDiagnostic(task) {
   if (task.kind === "port") {
     const port = parsePort(String(task.port));
     if (!port) return { kind: "invalid", status: "invalid", message: "TCP port must be an integer from 1 to 65535." };
-    return runTcp({ kind: "port", host, port });
+    return runTcp({ kind: "port", host, port }, options);
   }
   return { kind: "invalid", status: "invalid", message: "Unknown diagnostic type." };
 }

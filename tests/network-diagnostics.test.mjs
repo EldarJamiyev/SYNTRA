@@ -48,6 +48,24 @@ test("DNS lookup of loopback is local and renders a clear result", async () => {
   assert.match(formatNetworkDiagnostic(result), /127\.0\.0\.1/);
 });
 
+test("TCP check enforces a wall-clock deadline when a connect never settles", async () => {
+  let destroyed = false;
+  const hangingSocket = {
+    remoteAddress: "",
+    setTimeout() {},
+    once() { return this; },
+    destroy() { destroyed = true; }
+  };
+  const startedAt = Date.now();
+  const result = await runNetworkDiagnostic(
+    { kind: "port", host: "blocked.example", port: 443 },
+    { tcpTimeoutMs: 25, tcpConnectImpl: () => hangingSocket }
+  );
+  assert.equal(result.status, "timeout");
+  assert.equal(destroyed, true);
+  assert.ok(Date.now() - startedAt < 500, "TCP probes must respect their wall-clock timeout");
+});
+
 test("TCP check can detect an open local port without touching an external host", async () => {
   const listener = net.createServer(socket => socket.end());
   await new Promise((resolve, reject) => {
