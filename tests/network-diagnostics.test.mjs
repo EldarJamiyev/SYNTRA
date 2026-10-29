@@ -10,9 +10,11 @@ import {
 test("network request parser recognizes a small set of explicit diagnostics", () => {
   assert.deepEqual(classifyNetworkDiagnostic("/ping example.com"), { kind: "ping", host: "example.com" });
   assert.deepEqual(classifyNetworkDiagnostic("Ping test for https://example.com/health"), { kind: "ping", host: "example.com" });
+  assert.deepEqual(classifyNetworkDiagnostic("Could you please ping example.com?"), { kind: "ping", host: "example.com" });
   assert.deepEqual(classifyNetworkDiagnostic("/dns 127.0.0.1"), { kind: "dns", host: "127.0.0.1" });
   assert.deepEqual(classifyNetworkDiagnostic("DNS lookup for example.com"), { kind: "dns", host: "example.com" });
   assert.deepEqual(classifyNetworkDiagnostic("Check port 443 on example.com"), { kind: "port", host: "example.com", port: 443 });
+  assert.deepEqual(classifyNetworkDiagnostic("Can you check port 443 on example.com?"), { kind: "port", host: "example.com", port: 443 });
   assert.deepEqual(classifyNetworkDiagnostic("Test-NetConnection example.com -Port 443"), { kind: "port", host: "example.com", port: 443 });
   assert.deepEqual(classifyNetworkDiagnostic("/port [::1]:443"), { kind: "port", host: "::1", port: 443 });
 });
@@ -25,6 +27,17 @@ test("network parser does not hijack ordinary chat or allow host/port injection"
   assert.equal(classifyNetworkDiagnostic("Check port 0 on example.com").kind, "invalid");
   assert.equal(classifyNetworkDiagnostic("/port example.com 70000").kind, "invalid");
   assert.equal(classifyNetworkDiagnostic("/ping").kind, "invalid");
+});
+
+
+test("ping output is fenced so host-provided text is displayed literally", () => {
+  const result = formatNetworkDiagnostic({
+    kind: "ping", host: "example.com", status: "reachable", exitCode: 0,
+    output: "reply contains **markdown-like** text", message: ""
+  });
+  const fence = String.fromCharCode(96).repeat(3);
+  assert.ok(result.includes(fence + "text"));
+  assert.ok(result.includes("reply contains **markdown-like** text"));
 });
 
 test("DNS lookup of loopback is local and renders a clear result", async () => {

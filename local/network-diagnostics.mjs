@@ -107,7 +107,12 @@ export function classifyNetworkDiagnostic(message) {
   const explicit = parseExplicit(text);
   if (explicit) return explicit;
 
-  let match = text.match(/^(?:(?:please|run)\s+)*ping(?:\s+(?:test|check))?(?:\s+(?:for|to))?\s+(\S+)$/i);
+  const natural = text
+    .replace(/^(?:(?:hey|please|can you|could you|would you|will you)\s+)+/i, "")
+    .replace(/[.!?]+$/g, "")
+    .trim();
+
+  let match = natural.match(/^(?:(?:run)\s+)*ping(?:\s+(?:test|check))?(?:\s+(?:for|to))?\s+(\S+)$/i);
   if (match) {
     const host = cleanHost(match[1]);
     return host ? { kind: "ping", host } : null;
@@ -119,30 +124,30 @@ export function classifyNetworkDiagnostic(message) {
     /^(?:what\s+is|what's)\s+the\s+ip(?:\s+address)?\s+(?:of|for)\s+(\S+)$/i
   ];
   for (const pattern of dnsPatterns) {
-    match = text.match(pattern);
+    match = natural.match(pattern);
     if (!match) continue;
     const host = cleanHost(match[1]);
     return host ? { kind: "dns", host } : null;
   }
 
-  match = text.match(/^(?:please\s+)?(?:check|test|probe)\s+(?:the\s+)?(?:tcp\s+)?port\s+(\d+)\s+(?:on|at|for)\s+(\S+)$/i);
+  match = natural.match(/^(?:(?:check|test|probe)\s+)(?:the\s+)?(?:tcp\s+)?port\s+(\d+)\s+(?:on|at|for)\s+(\S+)$/i);
   if (match) {
     const host = cleanHost(match[2]);
     const port = parsePort(match[1]);
     return host && port ? { kind: "port", host, port } : invalid("Use a valid host and TCP port from 1 to 65535.");
   }
 
-  match = text.match(/^(?:is|check if|test if)\s+(\S+)\s+(?:tcp\s+)?port\s+(\d+)\s+(?:open|reachable)\??$/i);
+  match = natural.match(/^(?:is|check if|test if)\s+(\S+)\s+(?:tcp\s+)?port\s+(\d+)\s+(?:open|reachable)\??$/i);
   if (match) {
     const host = cleanHost(match[1]);
     const port = parsePort(match[2]);
     return host && port ? { kind: "port", host, port } : invalid("Use a valid host and TCP port from 1 to 65535.");
   }
 
-  match = text.match(/^port ping\s+(\S+)$/i);
+  match = natural.match(/^port ping\s+(\S+)$/i);
   if (match) return parseHostPort(match[1]) || invalid("Use a host and port, for example: port ping example.com:443");
 
-  match = text.match(/^test-netconnection\s+(?:-computername\s+)?(\S+)\s+-port\s+(\d+)$/i);
+  match = natural.match(/^test-netconnection\s+(?:-computername\s+)?(\S+)\s+-port\s+(\d+)$/i);
   if (match) {
     const host = cleanHost(match[1]);
     const port = parsePort(match[2]);
@@ -281,7 +286,10 @@ export function formatNetworkDiagnostic(result) {
     lines.push("**Result:** " + (STATUS_LABELS[result.status] || result.status));
     if (result.exitCode !== null) lines.push("Exit code: " + result.exitCode);
     if (result.message) lines.push(result.message);
-    if (result.output) lines.push("", "Ping output:", result.output);
+    if (result.output) {
+      const fence = String.fromCharCode(96).repeat(3);
+      lines.push("", "Ping output:", fence + "text", result.output, fence);
+    }
   } else if (result.kind === "dns") {
     lines.push("**DNS lookup: " + result.host + "**");
     lines.push("**Result:** " + (STATUS_LABELS[result.status] || result.status));
