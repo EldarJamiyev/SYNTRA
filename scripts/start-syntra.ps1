@@ -122,7 +122,7 @@ try {
                 try {
                     $ramBytes = [double](Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
                     if ($ramBytes -gt 0) {
-                        $UsableOllamaModels = @($UsableOllamaModels | Where-Object { -not $_.size -or [double]$_.size -le ($ramBytes * 0.82) })
+                        $UsableOllamaModels = @($UsableOllamaModels | Where-Object { -not $_.size -or [double]$_.size -le ($ramBytes * 0.70) })
                     }
                 } catch {}
                 if ($UsableOllamaModels.Count -gt 0) { $UseOllama = $true }

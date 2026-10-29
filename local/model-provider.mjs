@@ -4,6 +4,9 @@ const OLLAMA_BASE = "http://127.0.0.1:11434";
 const DEFAULT_CONTEXT = 8192;
 const MAX_CONTEXT = 32768;
 const LOCAL_TIMEOUT_MS = 1200;
+// Reserve at least 30% of physical RAM for the OS, model runtime, context cache,
+// and other applications. Installed file size is only a conservative first-pass proxy.
+const MAX_MODEL_RAM_FRACTION = 0.70;
 
 function normalizeMode(value = process.env.SYNTRA_MODEL_PROVIDER || "auto") {
   const mode = String(value).trim().toLowerCase();
@@ -49,8 +52,8 @@ export function chooseLocalModel(models, requestedModel = "", totalMemoryBytes =
     .filter(item => modelNameOf(item) && !isCloudModel(modelNameOf(item)))
     .filter(item => {
       const size = Number(item.size || 0);
-      // Avoid selecting a weights file that is almost as large as all system RAM.
-      return !size || size <= totalMemoryBytes * 0.82;
+      // File size is not full runtime memory; keep room for KV cache and the OS.
+      return !size || size <= totalMemoryBytes * MAX_MODEL_RAM_FRACTION;
     });
   if (requestedModel.trim()) {
     return local.find(item => modelNameOf(item) === requestedModel.trim()) || null;
@@ -292,4 +295,4 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
   return null;
 }
 
-export const localModelInternals = { isCloudModel, modelNameOf, scoreModel, estimateTokens, contextLimit };
+export const localModelInternals = { isCloudModel, modelNameOf, scoreModel, estimateTokens, contextLimit, MAX_MODEL_RAM_FRACTION };

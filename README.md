@@ -26,7 +26,7 @@ For coding tasks, SYNTRA maps the project files and imports, asks the selected l
 
 ## Local model
 
-SYNTRA prefers an installed local Ollama model and does not call a hosted AI API. Its model selection excludes cloud-only models and rejects models whose stored weights are too large for the machine's memory budget. Model discovery is briefly cached between the status, token-count, and generation stages to avoid repeating the same probe. Inference speed and answer quality still depend on your hardware and the installed model.
+SYNTRA prefers an installed local Ollama model and does not call a hosted AI API. Its model selection excludes cloud-only models and rejects weights larger than 70% of physical RAM, leaving room for the OS and inference context/cache. That is a conservative file-size filter, not a guarantee that every remaining model will fit in practice. Model discovery is briefly cached between the status, token-count, and generation stages to avoid repeating the same probe. Inference speed and answer quality still depend on your hardware and the installed model.
 
 If Ollama is unavailable, SYNTRA can use its own local PyTorch runtime. The native model starts with randomly initialized weights: training it from scratch on a small local corpus does not make it comparable to Claude or other frontier models.
 

@@ -25,7 +25,7 @@ A passing check proves only that the project's discovered checks passed in the t
 
 ## Model and context handling
 
-Ollama discovery excludes cloud-tagged models and rejects weights files that exceed a memory threshold. Model detection is briefly cached between adjacent chat stages; injected/test fetch implementations bypass the cache for deterministic testing. The Ollama router uses an 8,192-token default context, configurable with SYNTRA_LOCAL_CONTEXT within the supported limits.
+Ollama discovery excludes cloud-tagged models and rejects weights files larger than 70% of physical RAM to preserve working memory for the OS and inference context/cache. Stored weight size is a heuristic, not a guarantee of runtime fit. Model detection is briefly cached between adjacent chat stages; injected/test fetch implementations bypass the cache for deterministic testing. The Ollama router uses an 8,192-token default context, configurable with SYNTRA_LOCAL_CONTEXT within the supported limits.
 
 The native Transformer has its own tokenizer, context configuration, training loop, checkpointing, and inference implementation. Its weights start randomly initialized. Training it from scratch on a small project is useful for runtime research, but does not confer reliable general knowledge or frontier-model coding ability.
 

@@ -24,6 +24,19 @@ test("model selection prefers local coding models and excludes cloud-only or ove
   assert.equal(chooseLocalModel(models, "", 8 * GB)?.name, "llama3.2:latest");
 });
 
+test("model selection leaves memory headroom and applies the same limit to explicit model requests", () => {
+  const models = [
+    { name: "qwen3-coder:30b", size: 19 * GB },
+    { name: "giant-coder:latest", size: 23 * GB },
+    { name: "llama3.2:latest", size: 4 * GB }
+  ];
+  assert.equal(chooseLocalModel(models, "", 32 * GB)?.name, "qwen3-coder:30b");
+  assert.equal(chooseLocalModel(models, "giant-coder:latest", 32 * GB), null,
+    "an explicit preference must never bypass the memory safety threshold");
+  assert.equal(chooseLocalModel([{ name: "exact-limit:latest", size: 22.4 * GB }], "", 32 * GB)?.name, "exact-limit:latest");
+  assert.equal(chooseLocalModel([{ name: "just-over-limit:latest", size: 22.41 * GB }], "", 32 * GB), null);
+});
+
 test("native mode never probes Ollama; auto mode safely falls back if it is offline", async () => {
   let calls = 0;
   const failingFetch = async () => {
