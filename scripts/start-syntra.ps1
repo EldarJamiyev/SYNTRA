@@ -8,10 +8,12 @@ function Write-Step([string]$Message) {
     Write-Host "==> $Message" -ForegroundColor Cyan
 }
 
-function Test-Endpoint([string]$Uri) {
+function Test-Endpoint([string]$Uri, [string]$ExpectedContent = "") {
     try {
         $response = Invoke-WebRequest -Uri $Uri -TimeoutSec 2 -UseBasicParsing
-        return ($response.StatusCode -eq 200)
+        if ($response.StatusCode -ne 200) { return $false }
+        if ($ExpectedContent -and -not ([string]$response.Content).Contains($ExpectedContent)) { return $false }
+        return $true
     } catch {
         return $false
     }
@@ -26,8 +28,8 @@ function Wait-Endpoint([string]$Uri, [int]$TimeoutSeconds = 45) {
     throw "Service did not become ready at $Uri. Check its open service window for the actual error."
 }
 
-function Ensure-Service([int]$Port, [string]$HealthUrl, [string]$NpmScript) {
-    if (Test-Endpoint $HealthUrl) {
+function Ensure-Service([int]$Port, [string]$HealthUrl, [string]$NpmScript, [string]$ExpectedContent = "") {
+    if (Test-Endpoint $HealthUrl $ExpectedContent) {
         Write-Host "Already running: $NpmScript ($HealthUrl)" -ForegroundColor Green
         return
     }
@@ -39,7 +41,28 @@ function Ensure-Service([int]$Port, [string]$HealthUrl, [string]$NpmScript) {
         $listeners = @()
     }
     if ($listeners.Count -gt 0) {
-        throw "Port $Port is already in use, but SYNTRA did not respond at $HealthUrl. Close the other app using port $Port, then double-click Start-SYNTRA.bat again."
+        $restartedStaleVite = $false
+        foreach ($listener in $listeners) {
+            try {
+                $processInfo = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$listener.OwningProcess) -ErrorAction Stop
+                $commandLine = [string]$processInfo.CommandLine
+                if ($commandLine -and $commandLine.Contains($Root) -and $commandLine -match '(?i)\\vite\\|vite\.js') {
+                    Write-Host "Replacing the old SYNTRA frontend process so the current chat UI loads..." -ForegroundColor Yellow
+                    Stop-Process -Id ([int]$listener.OwningProcess) -Force -ErrorAction Stop
+                    $restartedStaleVite = $true
+                }
+            } catch {}
+        }
+        if ($restartedStaleVite) {
+            $releaseDeadline = (Get-Date).AddSeconds(8)
+            do {
+                Start-Sleep -Milliseconds 350
+                $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+            } while ($listeners.Count -gt 0 -and (Get-Date) -lt $releaseDeadline)
+        }
+        if ($listeners.Count -gt 0) {
+            throw "Port $Port is already in use by a process that does not match the current SYNTRA app. Close the other application or server on port $Port, then double-click Start-SYNTRA.bat again."
+        }
     }
 
     Write-Host "Starting $NpmScript ..."
@@ -249,7 +272,7 @@ try {
         Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
     }
     Ensure-Service 3001 "http://127.0.0.1:3001/local-api/health" "server"
-    Ensure-Service 3000 "http://127.0.0.1:3000/" "dev"
+    Ensure-Service 3000 "http://127.0.0.1:3000/" "dev" "SYNTRA Chat"
 
     Write-Step "Opening SYNTRA"
     Start-Process "http://127.0.0.1:3000"

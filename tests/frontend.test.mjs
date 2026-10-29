@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import test from 'node:test';
+
+const appPath = new URL('../src/App.tsx', import.meta.url);
+const indexPath = new URL('../index.html', import.meta.url);
+
+test('the frontend stays a simple chat rather than a model dashboard', async () => {
+  const [app, html] = await Promise.all([
+    fs.readFile(appPath, 'utf8'),
+    fs.readFile(indexPath, 'utf8'),
+  ]);
+  const frontend = app + '\n' + html;
+  assert.match(app, /placeholder="Message SYNTRA"/);
+  assert.match(app, /How can I help\?/);
+  assert.match(app, /aria-label="Send message"/);
+  assert.match(html, /<title>SYNTRA Chat<\/title>/);
+  for (const label of [
+    'Studio Playground',
+    'Coding Intelligence',
+    'Build. Train. Generate.',
+    'MODEL CHECKPOINT',
+    'INFERENCE DEVICE',
+    'TRAINING STEP',
+    'CLI Commands',
+    'Data & Training',
+    'Workspace',
+  ]) {
+    assert.equal(frontend.toLowerCase().includes(label.toLowerCase()), false, `legacy dashboard label leaked into frontend: ${label}`);
+  }
+});

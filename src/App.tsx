@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { BrainCircuit, LoaderCircle, Send } from 'lucide-react';
+import { ArrowUp, LoaderCircle } from 'lucide-react';
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type ChatJob = {
@@ -18,7 +18,7 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   const result = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(result.error || 'SYNTRA local service request failed.');
+  if (!response.ok) throw new Error(result.error || 'The local chat service returned an error.');
   return result;
 }
 
@@ -36,6 +36,7 @@ function MessageContent({ content }: { content: string }) {
     </div>
   );
 }
+
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -48,6 +49,7 @@ export default function App() {
 
   useEffect(() => {
     mountedRef.current = true;
+    textareaRef.current?.focus();
     return () => { mountedRef.current = false; };
   }, []);
 
@@ -59,13 +61,13 @@ export default function App() {
     event?.preventDefault();
     const content = input.trim();
     if (!content || pending) return;
+
     const history = messages.slice(-12);
-    const nextMessages: Message[] = [...messages, { role: 'user', content }];
-    setMessages(nextMessages);
+    setMessages(current => [...current, { role: 'user', content }]);
     setInput('');
     setError('');
     setPending(true);
-    setPhase('Connecting');
+    setPhase('Thinking');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     try {
@@ -73,18 +75,14 @@ export default function App() {
       let job = started;
       while (job.status === 'running') {
         if (!mountedRef.current) return;
-        setPhase(job.message || (job.phase === 'planning' ? 'Planning changes' : 'Thinking'));
-        await new Promise(resolve => window.setTimeout(resolve, 900));
+        setPhase(job.message || 'Thinking');
+        await new Promise(resolve => window.setTimeout(resolve, 800));
         job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
       }
       if (!mountedRef.current) return;
-      if (job.status === 'failed') {
-        setError(job.error || job.reply || 'The local request failed.');
-      }
-      setMessages(current => [...current, {
-        role: 'assistant',
-        content: job.reply || job.error || 'No response was returned.',
-      }]);
+      const answer = job.reply || job.error || 'No response was returned.';
+      setMessages(current => [...current, { role: 'assistant', content: answer }]);
+      if (job.status === 'failed') setError(job.error || job.reply || 'The local request failed.');
     } catch (cause) {
       if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -106,28 +104,27 @@ export default function App() {
   return (
     <main className="chat-app">
       <header className="chat-header">
-        <div className="chat-brand"><BrainCircuit size={23} strokeWidth={1.7} /><span>SYNTRA</span></div>
+        <span className="chat-brand">SYNTRA</span>
       </header>
 
       <section className={'chat-thread ' + (messages.length === 0 ? 'chat-thread-empty' : '')} aria-live="polite">
         {messages.length === 0 ? (
           <div className="chat-welcome">
-            <div className="welcome-mark"><BrainCircuit size={29} strokeWidth={1.5} /></div>
-            <h1>What are we working on?</h1>
-            <p>Ask a question or tell SYNTRA what to build.</p>
+            <h1>How can I help?</h1>
           </div>
         ) : (
           <div className="chat-messages">
             {messages.map((message, index) => (
               <article className={'chat-message ' + message.role} key={index}>
-                {message.role === 'assistant' && <div className="assistant-mark"><BrainCircuit size={17} /></div>}
                 <div className="chat-bubble"><MessageContent content={message.content} /></div>
               </article>
             ))}
             {pending && (
-              <article className="chat-message assistant pending-message">
-                <div className="assistant-mark"><BrainCircuit size={17} /></div>
-                <div className="pending-content"><LoaderCircle size={15} className="thinking-spinner" /><span>{phase || 'Thinking'}</span></div>
+              <article className="chat-message assistant pending-message" role="status">
+                <div className="pending-content">
+                  <LoaderCircle size={15} className="thinking-spinner" />
+                  <span>{phase || 'Thinking'}</span>
+                </div>
               </article>
             )}
           </div>
@@ -153,10 +150,9 @@ export default function App() {
             disabled={pending}
           />
           <button className="send-button" type="submit" aria-label="Send message" disabled={pending || !input.trim()}>
-            {pending ? <LoaderCircle size={18} className="thinking-spinner" /> : <Send size={17} />}
+            {pending ? <LoaderCircle size={18} className="thinking-spinner" /> : <ArrowUp size={18} strokeWidth={2.4} />}
           </button>
         </form>
-        <div className="composer-hint">Enter to send · Shift + Enter for a new line</div>
       </div>
     </main>
   );
