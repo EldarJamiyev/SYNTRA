@@ -1,24 +1,31 @@
-const ACTION = /^(?:hey[, ]*)?(?:please\s+)?(?:(?:can|could|would) you\s+)?(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit)\b/i;
-
-const SOFTWARE_TARGET = /\b(?:app(?:lication)?|website|web\s+app|webpage|web\s+page|frontend|front[- ]end|backend|back[- ]end|ui|ux|interface|layout|component|module|function|class|feature|bug|error|test(?:s| suite)?|build|compile|lint|typecheck|api|endpoint|route|server|client|script|package|dependency|dependencies|npm|vite|react|typescript|javascript|python|css|html|sql|database|query|schema|authentication|login|button|form|page|screen|responsive|accessibility|performance|chat\s+(?:ui|interface|frontend|front[- ]end|app)|code|source|repository|repo|codebase|project files|project code|unit test|integration test|stack trace|exception|design system|dark mode|theme|navigation|routing)\b/i;
-
+const ACTION = /^(?:hey[, ]*)?(?:please\s+)?(?:(?:can|could|would|will) you(?:\s+please)?\s+)?(?:please\s+)?(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit)\b/i;
 const ACTION_ANYWHERE = /\b(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit)\b/i;
-const PROJECT_CONTEXT = /\b(?:this|the|current|my)\s+(?:codebase|repository|repo|project files|source code|app|application|website|frontend|front[- ]end|backend|back[- ]end|chat interface|chat frontend|project)\b|\b(?:in|inside|within)\s+(?:this|the|current|my)\s+(?:project|repository|repo|codebase)\b/i;
+
+const SOFTWARE_TARGET = /\b(?:app|website|web\s+app(?:lication)?|web\s+application|desktop\s+application|mobile\s+application|webpage|web\s+page|frontend|front[- ]end|backend|back[- ]end|ui|ux|interface|layout|component|module|function|class|feature|bug|error|test(?:s| suite)?|build|compile|lint|typecheck|api|endpoint|route|server|client|script|package|dependency|dependencies|npm|vite|react|typescript|javascript|python|css|html|sql|database|query|schema|authentication|login|button|form|page|screen|responsive|accessibility|performance|chat\s+(?:ui|interface|frontend|front[- ]end|app)|code|source|repository|repo|codebase|project files|project code|unit test|integration test|stack trace|exception|design system|dark mode|theme|navigation|routing)\b/i;
+const EXPLICIT_REPO_CONTEXT = /\b(?:this|the|current|my)\s+(?:codebase|repository|repo|project files|source code)\b|\b(?:in|inside|within)\s+(?:this|the|current|my)\s+(?:project files|repository|repo|codebase|source code)\b/i;
+const CONVERSATIONAL_OUTPUT = /^(?:hey[, ]*)?(?:please\s+)?(?:(?:can|could|would) you(?:\s+please)?\s+)?(?:please\s+)?(?:write|create|draft|compose|prepare|generate)\s+(?:(?:me|us)\s+)?(?:an?\s+)?(?:email|letter|poem|story|song|essay|article|blog post|social post|text message|message|proposal|job application|cover letter|resume|résumé|cv|joke|speech|recipe)\b/i;
 
 /**
- * Distinguish conversational requests from commands that should modify a code workspace.
- * Broad verbs alone are intentionally insufficient: "write a poem" and "make me laugh"
- * must remain normal chat, not trigger the repository-editing agent.
+ * Route explicit software-change commands to the repository agent without hijacking
+ * ordinary conversation. A broad verb such as "write", "create", or "make" is never
+ * enough by itself; prose requests such as emails and poems remain normal chat.
  */
 export function isCodingTask(message) {
   if (typeof message !== "string") return false;
   const text = message.trim();
   if (!text || text.length > 12000) return false;
 
-  if (PROJECT_CONTEXT.test(text) && ACTION_ANYWHERE.test(text)) return true;
+  if (CONVERSATIONAL_OUTPUT.test(text)) return false;
+  if (EXPLICIT_REPO_CONTEXT.test(text) && ACTION_ANYWHERE.test(text)) return true;
 
   const command = text.match(ACTION);
-  if (!command) return false;
+  if (!command) {
+    return /^(?:can|could|would) you\b/i.test(text)
+      && ACTION_ANYWHERE.test(text)
+      && SOFTWARE_TARGET.test(text.slice(0, 240));
+  }
+
   const targetWindow = text.slice(command[0].length, command[0].length + 240);
-  return SOFTWARE_TARGET.test(targetWindow);
+  const taskObject = targetWindow.split(/\b(?:about|regarding|concerning|describing|explaining|discussing)\b/i)[0];
+  return SOFTWARE_TARGET.test(taskObject);
 }

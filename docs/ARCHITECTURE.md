@@ -1,28 +1,38 @@
 # SYNTRA Architecture
 
-SYNTRA has three local processes:
+SYNTRA uses a small local stack rather than a cloud AI service.
 
-1. The React/Vite UI provides a single chat conversation and one composer.
-2. The Node loopback service exposes chat, selects the active local workspace, orchestrates the repository agent, and manages hash-checked proposal application.
-3. The Python loopback service runs the native PyTorch Transformer, checkpoint-matched BPE tokenizer, training, instruction fine-tuning, inference, and fresh sampled next-token evaluation.
+## Runtime components
 
-## Coding request lifecycle
+1. **React/Vite frontend** — one conversation view and one composer. Assistant Markdown is rendered without enabling raw HTML; links are protocol-checked before rendering.
+2. **Node loopback service** — validates requests, owns chat jobs, keeps the active workspace, routes ordinary messages to chat, and coordinates repository edits.
+3. **Local model backend** — if a suitable local Ollama model is installed, prompts are sent to that loopback Ollama service. Otherwise the router falls back to SYNTRA's local Python/PyTorch service. The native path is a from-scratch research model, not a pretrained frontier assistant.
 
-1. Classify obvious implementation/fix/refactor requests.
-2. Inventory source files and build a lightweight import graph from local import statements.
-3. Rank files by task terms, paths and dependency neighbours. Allocate a prompt-token budget using the active checkpoint's tokenizer; remove low-ranked files when necessary.
-4. Ask the local model for a constrained JSON patch with exact search anchors and replacements.
-5. Reject malformed JSON, ambiguous anchors, duplicate paths, path traversal, sensitive paths and oversized edits.
-6. Apply the candidate only to a temporary copy. Run discovered build/test/lint/type-check commands with a timeout and capture output.
-7. On failed verification, feed the failure to the next attempt (maximum three attempts).
-8. If all discovered checks pass, stage and apply hash-checked proposals with backups and audit records. If checks fail or cannot be run, leave the proposals unapplied unless the user types `/apply`.
+The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:3000; the workspace API is proxied to 127.0.0.1:3001; the native AI service normally uses 127.0.0.1:3002; Ollama listens on 127.0.0.1:11434.
 
-Original project files are not modified while the agent is planning or testing. A stale file hash blocks a proposal from applying.
+## Chat request lifecycle
 
-## Model and tokenizer
+1. The Node service checks whether the request is a clear software-change command. Broad verbs alone are insufficient: “write a poem” and “write an email” stay on the conversation path.
+2. For normal chat, it builds a bounded prompt from the latest message and recent conversation turns, counts tokens through the selected backend, trims excess history when required, and generates a local reply.
+3. If the user explicitly asks to modify software, SYNTRA inspects the selected workspace, builds a local import graph, and ranks relevant source files.
+4. The model is asked for a constrained JSON patch with exact search anchors and replacements.
+5. The agent rejects malformed JSON, duplicate edits, ambiguous anchors, path traversal, sensitive file paths, and oversized changes.
+6. Candidate edits are applied only to a temporary project copy. Available build, test, lint, and type-check scripts run with bounded timeouts.
+7. Failed checks are supplied as feedback for a bounded repair attempt. The original source is not modified during planning or verification.
+8. If every discovered check passes, SYNTRA rechecks source hashes and applies the change with a backup and audit record. If verification fails or is unavailable, the proposal remains unapplied unless the user explicitly types /apply.
 
-SYNTRA uses a decoder-only Transformer. Its byte-BPE merges are learned from the explicitly selected local corpus and are stored with the model/optimizer checkpoint. The tokenizer is not a hosted or pretrained vocabulary. The default context is 4,096 BPE tokens and the configured maximum is 16,384; greater context increases compute and memory requirements.
+A passing check proves only that the project's discovered checks passed in the temporary copy; it does not prove the absence of defects.
 
-## Reliability boundary
+## Model and context handling
 
-The agent loop supplies deterministic tooling and verification around probabilistic model output. It does not make the model Claude-class. The model starts with random weights and only has the knowledge, instruction-following and planning ability produced by actual training. A successful test run proves only that the configured tests passed in the temporary candidate copy.
+Ollama discovery excludes cloud-tagged models and rejects weights files that exceed a memory threshold. Model detection is briefly cached between adjacent chat stages; injected/test fetch implementations bypass the cache for deterministic testing. The Ollama router uses an 8,192-token default context, configurable with SYNTRA_LOCAL_CONTEXT within the supported limits.
+
+The native Transformer has its own tokenizer, context configuration, training loop, checkpointing, and inference implementation. Its weights start randomly initialized. Training it from scratch on a small project is useful for runtime research, but does not confer reliable general knowledge or frontier-model coding ability.
+
+## Reliability and security boundaries
+
+- File access is rooted in a selected absolute workspace, with path traversal and symlink path components blocked.
+- Likely credential files and secret paths are excluded from workspace read/edit operations.
+- Agent patches are restricted to recognized text/source/configuration files and validated against exact file hashes.
+- Candidate checks execute in a temporary project copy. Build/test scripts are project code and should still be reviewed when working in an untrusted repository.
+- The services are intended for local use, not direct internet exposure. A static hosted copy cannot access the user's local model or workspace agent by itself.

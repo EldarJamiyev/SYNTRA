@@ -14,12 +14,17 @@ test("routes explicit software changes to the coding agent", () => {
     "Please modify this repository",
     "Create a new component for the message composer",
     "Test the endpoint and fix the failing unit test",
+    "Could you please build a React app?",
+    "Can you help me fix the API endpoint?",
   ]) assert.equal(isCodingTask(message), true, message);
 });
 
 test("keeps ordinary writing, questions, and conversational requests in chat", () => {
   for (const message of [
     "Write an email to my manager",
+    "Write a job application for a support role",
+    "Write an email about fixing this app",
+    "Create a poem about a broken website",
     "Write a poem about the sea",
     "Create a packing list for my trip",
     "Make me laugh",

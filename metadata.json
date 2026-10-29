@@ -1,12 +1,15 @@
 {
-  "name": "SYNTRA Studio",
-  "description": "Local-first coding-model research and software application-building workspace. No external AI provider is used.",
+  "name": "SYNTRA",
+  "description": "Minimal local AI chat with a repository-aware coding agent. Runs against local model services.",
   "permissions": [],
   "capabilities": [
-    "LOCAL_PROJECT_INSPECTION",
-    "REVIEWABLE_FILE_PROPOSALS",
+    "LOCAL_CHAT",
+    "LOCAL_MODEL_ROUTING",
+    "MARKDOWN_RESPONSE_RENDERING",
+    "REPOSITORY_IMPORT_GRAPH",
+    "HASH_VALIDATED_PATCHES",
+    "SANDBOX_BUILD_TEST_EXECUTION",
     "EXPLICIT_APPLY_WITH_BACKUP",
-    "ALLOWLISTED_BUILD_TEST_EXECUTION",
     "FROM_SCRATCH_MODEL_RESEARCH"
   ]
 }

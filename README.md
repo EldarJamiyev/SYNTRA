@@ -1,27 +1,35 @@
 # SYNTRA — Simple local AI chat
 
-SYNTRA provides a minimal chat interface backed by a local model and a repository-aware coding agent. The frontend intentionally contains only a small title, the conversation, a message field, and a send control.
+SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It shows the conversation, a message field, and one send control—without a dashboard full of toggles.
 
 ## Windows launch
 
-Requirements: Node.js 20+ and Git. Python 3.11+ is required for the native model fallback. A compatible locally installed model in Ollama is preferred automatically.
+Requirements: Node.js 20+ and Git. Python 3.11+ is required only for the native model fallback. A compatible local model in Ollama is preferred automatically.
 
-In PowerShell, update the existing repository once:
+In your existing SYNTRA repository folder, run:
 
 ~~~powershell
 git pull
 ~~~
 
-Then double-click **Start-SYNTRA.bat**. It opens the chat at http://127.0.0.1:3000. Keep the service windows open. On future runs, double-click the same file again.
+Then double-click **Start-SYNTRA.bat**. Open http://127.0.0.1:3000 and keep the service windows open. On future runs, double-click the same file again.
 
-If an old app is already occupying port 3000, the launcher checks for the expected SYNTRA Chat page signature and reports the conflict instead of treating any random page as SYNTRA.
+The launcher checks the page signature, detects stale app processes on the chat port, and installs newly required frontend dependencies instead of blindly accepting an unrelated page.
+
+## Chat and coding behavior
+
+Normal requests such as writing an email, explaining a concept, or brainstorming stay in chat. Explicit software tasks—such as fixing an API endpoint, updating a component, or changing the project UI—are routed to the repository agent.
+
+Assistant replies support Markdown, GitHub-flavored tables and lists, inline code, fenced code blocks, and safe links. Raw HTML is not rendered, and external links open with appropriate isolation.
+
+For coding tasks, SYNTRA maps the project files and imports, asks the selected local model for a structured patch, validates exact source anchors and paths, and runs available project checks in a temporary copy. Changes are applied only when discovered checks pass; unverified proposals remain unapplied until explicitly requested. The agent keeps backups and audit records under .syntra.
 
 ## Local model
 
-The runtime prefers a suitable pretrained coding model installed in local Ollama. Prompts are sent only to the Ollama service at 127.0.0.1:11434, or to SYNTRA's own local PyTorch runtime as fallback. No hosted model API is used. You can install a local model using Ollama, for example `ollama pull qwen3-coder:30b`; this requires local storage and enough memory, and inference speed depends on hardware.
+SYNTRA prefers an installed local Ollama model and does not call a hosted AI API. Its model selection excludes cloud-only models and rejects models whose stored weights are too large for the machine's memory budget. Model discovery is briefly cached between the status, token-count, and generation stages to avoid repeating the same probe. Inference speed and answer quality still depend on your hardware and the installed model.
 
-SYNTRA's coding agent understands the project tree, proposes structured file changes, validates paths and exact source anchors, and runs available checks in a temporary copy before applying verified changes.
+If Ollama is unavailable, SYNTRA can use its own local PyTorch runtime. The native model starts with randomly initialized weights: training it from scratch on a small local corpus does not make it comparable to Claude or other frontier models.
 
-## Limitation
+## Important boundary
 
-The native PyTorch Transformer starts without pretrained weights. Training it from scratch on this repository does not give it frontier-model capability. SYNTRA's quality depends on the local model selected and the checks available for each project.
+This app is designed to run locally at http://127.0.0.1:3000; the Node service binds to loopback and is not a hosted AI endpoint. A static GitHub Pages copy cannot execute your local model or workspace agent. Use the local launcher for real chat and code changes.
