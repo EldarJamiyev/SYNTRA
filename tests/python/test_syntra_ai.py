@@ -92,6 +92,14 @@ class TransformerTests(unittest.TestCase):
             self.assertIn("optimizer_state", saved,
                           "a stale inference companion must fall back to the full checkpoint")
 
+            companion.write_bytes(b"not a valid torch checkpoint")
+            corrupt_mtime = checkpoint.stat().st_mtime_ns + 4_000_000_000
+            os.utime(companion, ns=(corrupt_mtime, corrupt_mtime))
+            _, recovered, _, _ = _read_checkpoint(checkpoint)
+            self.assertEqual(recovered["step"], 3)
+            self.assertIn("optimizer_state", recovered,
+                          "a corrupted inference companion must fall back to the full checkpoint")
+
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):
         from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
 
