@@ -12,6 +12,7 @@ import {
   inspectWorkspace,
   proposeFileChange,
   readWorkspaceFile,
+  runProjectCheck,
   searchWorkspace
 } from "../local/workspace.mjs";
 
@@ -237,6 +238,44 @@ test("check selection uses the matching native test runner, not Node for arbitra
     const goCheck = await chooseCheck(root, "test", null);
     assert.equal(goCheck.executable, "go");
     assert.deepEqual(goCheck.args, ["test", "./..."]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("Python checks prefer an existing workspace virtual environment", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-python-venv-"));
+  try {
+    await fs.writeFile(path.join(root, "requirements.txt"), "numpy>=1.24\n");
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "tests", "test_sample.py"), "import unittest\n");
+    const parts = process.platform === "win32"
+      ? [".venv", "Scripts", "python.exe"]
+      : [".venv", "bin", "python"];
+    const expectedPython = path.join(root, ...parts);
+    await fs.mkdir(path.dirname(expectedPython), { recursive: true });
+    await fs.writeFile(expectedPython, "venv interpreter placeholder\n");
+    const check = await chooseCheck(root, "test", null);
+    assert.equal(check.executable, expectedPython);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a timed-out project check terminates its process tree and returns a timeout result", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-check-timeout-"));
+  try {
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
+      name: "timeout-fixture",
+      scripts: { test: 'node -e "setTimeout(() => {}, 30000)"' }
+    }, null, 2));
+    const started = Date.now();
+    const result = await runProjectCheck(root, "test", { timeoutMs: 1000 });
+    assert.equal(result.timedOut, true);
+    assert.equal(result.passed, false);
+    assert.ok(Date.now() - started < 8000, "timeout should not leave descendants holding output pipes open");
+    assert.match(result.command, /npm run test/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

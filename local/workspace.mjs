@@ -716,6 +716,43 @@ function executableCheck(kind, executable, args, label) {
   return { kind, executable, args, command: [executable, ...args].join(" "), script: null, label };
 }
 
+function pythonExecutable(root) {
+  const candidates = process.platform === "win32"
+    ? [[".venv", "Scripts", "python.exe"], ["venv", "Scripts", "python.exe"], ["env", "Scripts", "python.exe"]]
+    : [[".venv", "bin", "python"], ["venv", "bin", "python"], ["env", "bin", "python"]];
+  for (const parts of candidates) {
+    const candidate = path.join(root, ...parts);
+    try {
+      if (fsSync.statSync(candidate).isFile()) return candidate;
+    } catch {}
+  }
+  return process.platform === "win32" ? "python" : "python3";
+}
+
+function terminateProcessTree(child, force = false) {
+  if (!child || child.exitCode !== null || !child.pid) return;
+  if (process.platform === "win32") {
+    try {
+      const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], {
+        windowsHide: true, stdio: "ignore"
+      });
+      killer.once("error", () => {
+        try { child.kill(force ? "SIGKILL" : "SIGTERM"); } catch {}
+      });
+      killer.unref();
+    } catch {
+      try { child.kill(force ? "SIGKILL" : "SIGTERM"); } catch {}
+    }
+    return;
+  }
+  try {
+    // All verification commands are placed in their own process group below.
+    process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+  } catch {
+    try { child.kill(force ? "SIGKILL" : "SIGTERM"); } catch {}
+  }
+}
+
 export async function chooseCheck(root, task, packageJson) {
   const scripts = packageJson && packageJson.scripts && typeof packageJson.scripts === "object"
     ? packageJson.scripts : {};
@@ -760,13 +797,14 @@ export async function chooseCheck(root, task, packageJson) {
     const isPythonProject = ["pyproject.toml", "requirements.txt", "requirements-dev.txt", "pytest.ini", "setup.py"].some(exists);
     const isPythonTestProject = isPythonProject && pythonFiles.length > 0;
     if (isPythonTestProject) {
+      const interpreter = pythonExecutable(root);
       if (await hasPytestConfiguration(root, sourceFiles)) {
-        testRunners.push(executableCheck("python-pytest", process.platform === "win32" ? "python" : "python3", ["-m", "pytest"], "Python/pytest"));
+        testRunners.push(executableCheck("python-pytest", interpreter, ["-m", "pytest"], "Python/pytest"));
       } else {
         const startDirectory = commonPythonTestDirectory(pythonFiles);
         testRunners.push(executableCheck(
           "python-unittest",
-          process.platform === "win32" ? "python" : "python3",
+          interpreter,
           ["-m", "unittest", "discover", "-s", startDirectory, "-v"],
           "Python/unittest"
         ));
@@ -821,14 +859,19 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
   return await new Promise((resolve, reject) => {
     let child;
     try {
+      const spawnOptions = {
+        cwd: root,
+        windowsHide: true,
+        detached: process.platform !== "win32"
+      };
       if (selected.kind === "npm-script" && process.platform === "win32") {
-        child = spawn("cmd.exe", ["/d", "/s", "/c", selected.command], { cwd: root, windowsHide: true });
+        child = spawn("cmd.exe", ["/d", "/s", "/c", selected.command], spawnOptions);
       } else if (selected.kind === "npm-script") {
-        child = spawn("npm", ["run", selected.script], { cwd: root, windowsHide: true });
+        child = spawn("npm", ["run", selected.script], spawnOptions);
       } else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") {
-        child = spawn(selected.executable, selected.args, { cwd: root, windowsHide: true });
+        child = spawn(selected.executable, selected.args, spawnOptions);
       } else if (selected.kind === "node-test" || selected.kind === "command") {
-        child = spawn(selected.executable, selected.args, { cwd: root, windowsHide: true });
+        child = spawn(selected.executable, selected.args, spawnOptions);
       } else {
         reject(new Error("Unsupported verification runner: " + String(selected.kind)));
         return;
@@ -847,16 +890,20 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
     };
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
+    let forceKillTimer;
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      terminateProcessTree(child, false);
+      forceKillTimer = setTimeout(() => terminateProcessTree(child, true), 1500);
     }, timeoutMs);
     child.on("error", error => {
       clearTimeout(timer);
+      clearTimeout(forceKillTimer);
       reject(error);
     });
     child.on("close", code => {
       clearTimeout(timer);
+      clearTimeout(forceKillTimer);
       const result = {
         root, task, command: selected.command, exitCode: code,
         passed: code === 0 && !timedOut, timedOut,
