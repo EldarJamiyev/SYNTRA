@@ -115,7 +115,11 @@ export default function App() {
 
   useEffect(() => {
     if (!shouldFollowRef.current) return;
-    bottomRef.current?.scrollIntoView({ behavior: pending ? 'auto' : 'smooth', block: 'end' });
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    bottomRef.current?.scrollIntoView({
+      behavior: pending || reduceMotion ? 'auto' : 'smooth',
+      block: 'end',
+    });
   }, [messages, pending, phase, streamingReply]);
 
   useEffect(() => {
@@ -228,7 +232,8 @@ export default function App() {
         ref={threadRef}
         onScroll={handleThreadScroll}
         className={'chat-thread ' + (messages.length === 0 ? 'chat-thread-empty' : '')}
-        aria-live="polite"
+        aria-label="Conversation"
+        aria-live="off"
       >
         {messages.length === 0 ? (
           <div className="chat-welcome">
@@ -237,7 +242,12 @@ export default function App() {
         ) : (
           <div className="chat-messages">
             {messages.map((message, index) => (
-              <article className={'chat-message ' + message.role} key={index}>
+              <article
+                className={'chat-message ' + message.role}
+                key={index}
+                aria-label={message.role === 'user' ? 'Your message' : 'SYNTRA response'}
+                aria-live={message.role === 'assistant' ? 'polite' : 'off'}
+              >
                 <div className="chat-bubble">
                     {message.role === 'assistant'
                       ? <MessageContent content={message.content} />
@@ -246,7 +256,7 @@ export default function App() {
               </article>
             ))}
             {pending && streamingReply && (
-              <article className="chat-message assistant streaming-message">
+              <article className="chat-message assistant streaming-message" aria-live="off">
                 <div className="chat-bubble"><MessageContent content={streamingReply} /></div>
               </article>
             )}

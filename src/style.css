@@ -15,7 +15,7 @@ body { background: var(--chat-bg); }
 button, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
-.chat-app { height: 100dvh; min-height: 420px; background: var(--chat-bg); display: flex; flex-direction: column; }
+.chat-app { height: 100dvh; min-height: 0; background: var(--chat-bg); display: flex; flex-direction: column; }
 .chat-header { height: 54px; flex: 0 0 54px; padding: 0 24px; display: flex; align-items: center; }
 .chat-brand { color: #f1f1f1; font-size: 15px; font-weight: 650; letter-spacing: .2px; }
 .chat-thread { width: 100%; max-width: 790px; flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 auto; padding: 22px 24px 28px; scrollbar-width: thin; scrollbar-color: #444 transparent; }
@@ -69,5 +69,10 @@ button:disabled { cursor: not-allowed; }
   .chat-thread { padding: 18px 15px 24px; }
   .chat-composer-wrap { padding-left: 12px; padding-right: 12px; }
   .chat-message.user .chat-bubble { max-width: 92%; }
+  .chat-composer textarea { font-size: 16px; }
   .chat-messages { gap: 22px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-spinner { animation: none; }
+  .chat-composer { transition: none; }
 }

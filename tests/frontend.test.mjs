@@ -31,6 +31,12 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /job\.partialReply/);
   assert.match(app, /within 15 seconds/);
   assert.match(app, /streamingReply/);
+  assert.match(app, /aria-label="Conversation"/);
+  assert.match(app, /aria-live="off"/);
+  assert.match(app, /SYNTRA response/);
+  assert.match(app, /prefers-reduced-motion: reduce/);
+  assert.match(css, /\.chat-app \{[^}]*min-height: 0/s);
+  assert.match(css, /\.chat-composer textarea \{ font-size: 16px; \}/);
   assert.match(app, /shouldFollowRef\.current/);
   assert.match(app, /onScroll=\{handleThreadScroll\}/);
   assert.match(app, /distanceFromBottom < 120/);
