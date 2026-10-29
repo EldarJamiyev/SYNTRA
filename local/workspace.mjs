@@ -519,55 +519,13 @@ export async function listProposals(inputRoot) {
 }
 
 export async function applyFileProposal(inputRoot, proposalId, confirmation) {
-  const root = await resolveWorkspace(inputRoot);
-  if (confirmation !== true) {
-    throw new Error("File changes require explicit confirmation: set confirm=true after reviewing the proposal.");
-  }
-  if (typeof proposalId !== "string" || !/^[a-f0-9-]{36}$/i.test(proposalId)) {
-    throw new Error("Invalid proposal identifier.");
-  }
-  const proposalPath = path.join(stateDirectory(root), "proposals", proposalId + ".json");
-  if (!(await assertRegularStateFile(proposalPath, "Saved proposal"))) {
-    throw new Error("Proposal does not exist: " + proposalId);
-  }
-  const proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
-  if (!proposal || path.resolve(String(proposal.root || "")) !== root) throw new Error("Proposal belongs to a different workspace.");
-  if (typeof proposal.content !== "string"
-    || Buffer.byteLength(proposal.content, "utf8") > MAX_TEXT_BYTES
-    || typeof proposal.afterHash !== "string"
-    || sha256(proposal.content) !== proposal.afterHash) {
-    throw new Error("The saved proposal failed its content-integrity check; nothing was applied.");
-  }
-  const resolved = await resolveFile(root, proposal.path, { allowMissing: true });
-  const actualBefore = resolved.stat ? await fs.readFile(resolved.target, "utf8") : null;
-  const actualHash = actualBefore === null ? null : sha256(actualBefore);
-  if (actualHash !== proposal.beforeHash) {
-    throw new Error("The target file changed after the proposal was created. Recreate the proposal against the latest file.");
-  }
-
-  if (actualBefore !== null) {
-    const backupRoot = path.join(stateDirectory(root), "backups", new Date().toISOString().replace(/[:.]/g, "-"));
-    const backupPath = path.resolve(backupRoot, proposal.path.split("/").join(path.sep));
-    if (!isWithinRoot(path.join(root, ".syntra"), backupPath)) throw new Error("Backup path validation failed.");
-    await writeFileAtomic(backupPath, actualBefore);
-  }
-  await writeFileAtomic(resolved.target, proposal.content);
-  await appendAudit(root, {
-    action: "apply_file_proposal",
-    proposalId,
-    path: proposal.path,
-    beforeHash: actualHash,
-    afterHash: proposal.afterHash,
-    backupCreated: actualBefore !== null
-  });
+  const transaction = await applyFileProposals(inputRoot, [proposalId], confirmation);
   return {
-    applied: true, proposalId, path: proposal.path,
-    beforeHash: actualHash,
-    afterHash: sha256(await fs.readFile(resolved.target, "utf8")),
-    backupCreated: actualBefore !== null
+    ...transaction.applied[0],
+    transactionId: transaction.transactionId,
+    backupDirectory: transaction.backupDirectory
   };
 }
-
 
 
 /**
@@ -658,7 +616,7 @@ export async function applyFileProposals(inputRoot, proposalIds, confirmation) {
     }
 
     await appendAudit(root, {
-      action: "apply_file_proposals_transaction",
+      action: staged.length === 1 ? "apply_file_proposal" : "apply_file_proposals_transaction",
       transactionId,
       proposalIds: staged.map(item => item.id),
       files: staged.map(item => ({
