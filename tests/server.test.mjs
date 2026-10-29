@@ -163,7 +163,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     }
     assert.equal(helpStatus?.status, "completed");
     assert.match(helpStatus?.reply || "", /SYNTRA help/);
-    assert.match(helpStatus?.reply || "", /\\/dns example\\.com/);
+    assert.ok((helpStatus?.reply || "").includes("/dns example.com"));
 
     const unknownRoute = await fetch(base + "/not-a-route");
     assert.equal(unknownRoute.status, 404);
