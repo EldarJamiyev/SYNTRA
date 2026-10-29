@@ -1,48 +1,43 @@
-# SYNTRA — Local AI Chat and Coding Agent
+# SYNTRA — Local AI Software Engineering Agent
 
-SYNTRA is a local-first chat interface backed by a native PyTorch Transformer and a repository-aware coding-agent runtime. The browser UI is intentionally simple: one conversation and one message box. The service does not call OpenAI, Anthropic, Ollama, or another hosted model API, and the repository does not ship pretrained weights.
+SYNTRA combines a minimal chat interface, repository-aware patch generation, local project tools, and automated verification. It uses no hosted model API. In automatic mode it prefers a suitable model already installed in local Ollama; otherwise it can use the native PyTorch model trained on your source tree.
 
 ## One-click Windows launch
 
-Requirements: **Node.js 20+**, **Python 3.11+**, and Git. Install Node.js from https://nodejs.org/ and Python from https://www.python.org/downloads/ (enable **Add Python to PATH** during setup).
+Requirements: **Node.js 20+** and Git. Python 3.11+ is required only when using SYNTRA's native from-scratch fallback. Install Node.js from https://nodejs.org/. Install Python from https://www.python.org/downloads/ if you do not have a local Ollama model.
 
-From the existing SYNTRA repository folder, open PowerShell and run this once to receive the latest launcher:
+From your existing repository folder, run this once in PowerShell:
 
 ~~~powershell
 git pull
 ~~~
 
-Then **double-click Start-SYNTRA.bat** in the root of the repository. It automatically:
+Then double-click **Start-SYNTRA.bat**. The launcher checks dependencies, detects and starts the local Ollama service if needed, and chooses the best installed local model that fits its memory-safety limit. If a suitable Ollama model is installed, it skips native training. Otherwise it repairs the local Python environment, trains a native checkpoint if required, starts the services, and opens http://127.0.0.1:3000.
 
-1. Checks Node.js and Python versions.
-2. Installs web dependencies if needed and creates/repairs the local .venv with CPU PyTorch and NumPy.
-3. Trains the local checkpoint on first launch if one does not exist; if that first training was interrupted, it resumes from the last saved checkpoint.
-4. Starts the AI, workspace, and web services, then opens the chat at http://127.0.0.1:3000.
+Keep the service windows open. On future launches, double-click the same file again.
 
-Keep the opened service windows running while using SYNTRA. Next time, double-click Start-SYNTRA.bat again; setup and training are skipped when already complete. If a port is occupied by a service that is not SYNTRA, the launcher stops and identifies the port rather than silently opening duplicate services.
+## Stronger local coding model
 
-## What the system actually does
+SYNTRA automatically prefers installed coding-capable local models (for example Qwen3-Coder, Devstral, Qwen2.5-Coder, and similar models), avoids cloud-only model tags, and never sends prompts to a remote model endpoint. The actual selected model depends on which weights are installed and available RAM.
 
-- A decoder-only causal Transformer trains from random initialization and saves a local checkpoint with a corpus-trained byte-pair (BPE) tokenizer.
-- The coding agent can inspect a repository, map imports, retrieve relevant files, prepare structured patches, run available checks in a temporary copy, and retry a bounded number of times.
-- Changes are applied only after supported checks pass. Otherwise, proposals remain unapplied unless you explicitly type /apply.
-- Type /workspace C:\path\to\project in chat to switch the project. By default, SYNTRA uses its own repository folder.
-- The evaluate command measures sampled next-token loss. This is not a code-correctness benchmark.
-
-## Manual commands
-
-From PowerShell in the repository folder:
+For a stronger local coding model on a machine with 32 GB RAM, open a terminal and install Qwen3-Coder 30B:
 
 ~~~powershell
-npm install
-npm run ai:install
-npm run ai:cli -- status
-npm run build
-npm test
+ollama pull qwen3-coder:30b
 ~~~
 
-The local launcher is scripts/start-syntra.ps1; Start-SYNTRA.bat is the double-click entry point.
+The model is about 19 GB in the Ollama library; the first pull requires internet and disk space. Subsequent inference is local. Review the model license and available memory before installing; another smaller coding model may be more responsive on your PC. Official model page: https://ollama.com/library/qwen3-coder
 
-## Important capability limit
+You can pin an installed model through the Windows environment variable SYNTRA_LOCAL_MODEL. To disable local Ollama selection and force native mode, set SYNTRA_MODEL_PROVIDER=native. To require a local Ollama model, set SYNTRA_MODEL_PROVIDER=ollama. The default is auto.
 
-SYNTRA starts without pretrained weights. First-run training learns from the source files selected in this repository; that is enough to create a runnable local checkpoint, but it does **not** give the model the broad knowledge or instruction-following ability of Claude or ChatGPT. This launcher fixes setup and startup friction; it does not manufacture intelligence absent from the weights. More capable use requires substantial high-quality, properly licensed training data, instruction tuning, and task-level benchmarks.
+## What the agent does
+
+- Builds a local source-file inventory and import graph, then ranks project files relevant to your request.
+- Requests structured JSON edits from the selected model, validating path boundaries, exact anchors, sensitive-file restrictions, and source hashes.
+- Applies proposed changes in a temporary project copy and runs discovered build, test, lint, or typecheck commands.
+- Feeds failures into bounded repair attempts; it applies verified proposals only after discovered checks pass. Unverified proposals remain staged until you explicitly type /apply.
+- Change the workspace by typing /workspace followed by an absolute folder path.
+
+## Honest capability limits
+
+SYNTRA can be stronger than a plain chat session on a particular codebase when its local model, repository retrieval, test suite, and repair loop work well together. It is **not guaranteed to outperform Claude**, and no launcher or agent scaffolding can make a small randomly initialized model equivalent to a frontier model. Evaluate real tasks using clean test suites and held-out benchmarks, not training loss or marketing claims.

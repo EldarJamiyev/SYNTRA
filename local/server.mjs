@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
 import { runAgentTask } from "./agent.mjs";
+import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import {
   applyFileProposal,
   createProjectPlan,
@@ -60,6 +61,16 @@ async function parseBody(request) {
 }
 
 async function aiRequest(method, route, body, timeoutMs = undefined) {
+  const modelRoute = (method === "GET" && route === "/model/status")
+    || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
+  if (modelRoute) {
+    const provider = await detectLocalModel();
+    if (provider) {
+      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs });
+      if (localResult) return localResult;
+    }
+  }
+
   let response;
   try {
     response = await fetch(AI_BASE + route, {
@@ -69,7 +80,7 @@ async function aiRequest(method, route, body, timeoutMs = undefined) {
       signal: AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
     });
   } catch {
-    throw new Error("SYNTRA AI service is offline. Install requirements.txt and run npm run ai:server.");
+    throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server', or install and run a local Ollama model for stronger local inference.");
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || "SYNTRA AI request failed with HTTP " + response.status);
@@ -153,8 +164,8 @@ function updateChat(jobId, value) {
 }
 
 function isCodingTask(message) {
-  return /^(?:please\s+)?(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace)\b/i.test(message.trim())
-    || /\b(?:in this codebase|in the (?:current )?repo(?:sitory)?|in the project files|edit the project|modify the codebase|fix this bug|implement this feature|add this feature)\b/i.test(message);
+  return /^(?:please\s+)?(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign)\b/i.test(message.trim())
+    || /\b(?:in this codebase|in the (?:current )?repo(?:sitory)?|in the project files|edit the project|modify the codebase|fix this bug|implement this feature|add this feature|improve this application|make this application better)\b/i.test(message);
 }
 
 async function applyProposals(root, proposals) {

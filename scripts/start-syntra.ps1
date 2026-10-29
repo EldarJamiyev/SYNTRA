@@ -66,22 +66,76 @@ try {
         throw "SYNTRA needs Node.js 20 or newer. Installed version: $nodeVersionText"
     }
 
-    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-        throw "Python is missing. Install Python 3.11 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
+    $UseOllama = $false
+    $UsableOllamaModels = @()
+    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "auto" }
+    if (@("auto", "native", "ollama") -notcontains $providerMode) {
+        throw "SYNTRA_MODEL_PROVIDER must be auto, native, or ollama."
     }
-    $pythonVersionText = (& python --version 2>&1 | Out-String).Trim()
-    $pythonMatch = [regex]::Match($pythonVersionText, 'Python\s+(\d+)\.(\d+)')
-    if ($LASTEXITCODE -ne 0 -or -not $pythonMatch.Success) {
-        throw "Could not read the Python version. Install Python 3.11 or newer."
+
+    if ($providerMode -ne "native") {
+        $ollamaExe = Get-Command ollama -ErrorAction SilentlyContinue
+        $ollamaTagsUrl = "http://127.0.0.1:11434/api/tags"
+        $ollamaReady = Test-Endpoint $ollamaTagsUrl
+        if (-not $ollamaReady -and $ollamaExe) {
+            Write-Host "Starting the installed local Ollama service..."
+            try { Start-Process -FilePath $ollamaExe.Source -ArgumentList @("serve") -WindowStyle Hidden | Out-Null } catch {}
+            $ollamaDeadline = (Get-Date).AddSeconds(12)
+            do {
+                Start-Sleep -Seconds 1
+                $ollamaReady = Test-Endpoint $ollamaTagsUrl
+            } while (-not $ollamaReady -and (Get-Date) -lt $ollamaDeadline)
+        }
+
+        if ($ollamaReady) {
+            try {
+                $ollamaCatalog = Invoke-RestMethod -Uri $ollamaTagsUrl -TimeoutSec 3
+                $UsableOllamaModels = @($ollamaCatalog.models | Where-Object {
+                    $_.name -and $_.name -notmatch '(?i)(?:^|[:._-])cloud(?:$|[:._-])'
+                })
+                if ($env:SYNTRA_LOCAL_MODEL) {
+                    $UsableOllamaModels = @($UsableOllamaModels | Where-Object { $_.name -eq $env:SYNTRA_LOCAL_MODEL })
+                }
+                try {
+                    $ramBytes = [double](Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
+                    if ($ramBytes -gt 0) {
+                        $UsableOllamaModels = @($UsableOllamaModels | Where-Object { -not $_.size -or [double]$_.size -le ($ramBytes * 0.82) })
+                    }
+                } catch {}
+                if ($UsableOllamaModels.Count -gt 0) { $UseOllama = $true }
+            } catch {
+                Write-Warning "Ollama answered, but its local model list could not be read: $($_.Exception.Message)"
+            }
+        }
+        if ($providerMode -eq "ollama" -and -not $UseOllama) {
+            throw "SYNTRA is set to use Ollama, but no suitable local model is ready. Start Ollama and install a model such as qwen3-coder:30b, or set SYNTRA_MODEL_PROVIDER=auto."
+        }
     }
-    $pythonMajor = [int]$pythonMatch.Groups[1].Value
-    $pythonMinor = [int]$pythonMatch.Groups[2].Value
-    if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 11)) {
-        throw "SYNTRA needs Python 3.11 or newer. Installed version: $pythonVersionText"
+
+    $pythonVersionText = $null
+    if (-not $UseOllama) {
+        if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+            throw "Python is missing. Install Python 3.11 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
+        }
+        $pythonVersionText = (& python --version 2>&1 | Out-String).Trim()
+        $pythonMatch = [regex]::Match($pythonVersionText, 'Python\s+(\d+)\.(\d+)')
+        if ($LASTEXITCODE -ne 0 -or -not $pythonMatch.Success) {
+            throw "Could not read the Python version. Install Python 3.11 or newer."
+        }
+        $pythonMajor = [int]$pythonMatch.Groups[1].Value
+        $pythonMinor = [int]$pythonMatch.Groups[2].Value
+        if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 11)) {
+            throw "SYNTRA needs Python 3.11 or newer. Installed version: $pythonVersionText"
+        }
     }
 
     Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
-    Write-Host "$pythonVersionText" -ForegroundColor Green
+    if ($UseOllama) {
+        Write-Host "A local Ollama model is ready. SYNTRA will use local pretrained weights and skip random-from-scratch training." -ForegroundColor Green
+        Write-Host ("Installed local model(s): " + (($UsableOllamaModels | ForEach-Object { $_.name }) -join ", "))
+    } else {
+        Write-Host "$pythonVersionText" -ForegroundColor Green
+    }
 
     Write-Step "Preparing the web application"
     if (-not (Test-Path (Join-Path $Root "node_modules\vite\bin\vite.js")) -or -not (Test-Path (Join-Path $Root "node_modules\react\package.json"))) {
@@ -91,7 +145,8 @@ try {
         Write-Host "JavaScript dependencies are already installed." -ForegroundColor Green
     }
 
-    Write-Step "Preparing the isolated local AI environment"
+    if (-not $UseOllama) {
+    Write-Step "Preparing the isolated native AI environment"
     $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
     $pythonReady = $false
     if (Test-Path $VenvPython) {
@@ -184,8 +239,15 @@ try {
         throw "SYNTRA could not validate the model checkpoint after setup."
     }
 
+    } else {
+        Write-Step "Using the selected local pretrained model"
+        Write-Host "No Python model training is required in local Ollama mode." -ForegroundColor Green
+    }
+
     Write-Step "Starting the local services"
-    Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
+    if (-not $UseOllama) {
+        Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
+    }
     Ensure-Service 3001 "http://127.0.0.1:3001/local-api/health" "server"
     Ensure-Service 3000 "http://127.0.0.1:3000/" "dev"
 

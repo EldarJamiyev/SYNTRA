@@ -46,6 +46,7 @@ jobs:
             exit 1
           }
           if (-not (Test-Path "Start-SYNTRA.bat")) { throw "Start-SYNTRA.bat is missing." }
+          if (-not (Test-Path "local/model-provider.mjs")) { throw "Local model routing module is missing." }
           $package = Get-Content "package.json" -Raw | ConvertFrom-Json
           if ($package.scripts.'ai:cli' -ne "python scripts/run_syntra_module.py cli") { throw "The AI CLI launcher mapping is incorrect." }
           if ($package.scripts.'ai:server' -ne "python scripts/run_syntra_module.py server") { throw "The AI server launcher mapping is incorrect." }

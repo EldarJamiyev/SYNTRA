@@ -29,7 +29,7 @@ const MAX_CANDIDATE_ENTRIES = 100_000;
 const MAX_ITERATIONS = 5;
 const CHECK_TIMEOUT_MS = 120_000;
 const MODEL_PROMPT = [
-  "You are SYNTRA's local software patch generator.",
+  "You are SYNTRA's repository-aware software engineering agent.",
   "Act only on the supplied task, repository map, source excerpts, plan, and tool observations.",
   "Return exactly one JSON object; do not use markdown fences or explanations outside JSON.",
   "Schema: {\"summary\":\"...\",\"edits\":[{\"path\":\"relative/path\",\"find\":\"exact existing text\",\"replace\":\"replacement text\",\"reason\":\"...\"}]}",
@@ -455,7 +455,7 @@ export async function runAgentTask({
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 3));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000);
-  if (!modelStatus.checkpoint_exists) throw new Error("No trained local checkpoint exists. Train or fine-tune SYNTRA before requesting an agent patch.");
+  if (!modelStatus.checkpoint_exists) throw new Error("No usable local model is available. Start a local Ollama model or train SYNTRA's native model before requesting an agent patch.");
   const contextWindow = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 4096);
   const contextBudget = Math.max(128, Math.floor(contextWindow * 0.68));
   const outputBudget = Math.max(128, Math.min(1024, Math.floor(contextWindow * 0.22)));
@@ -492,7 +492,7 @@ export async function runAgentTask({
       }
 
       plan.steps.find(step => step.id === "patch").status = "running";
-      onProgress({ phase: "generating-patch", iteration, message: "Requesting structured, exact-anchor patch JSON from the local checkpoint." });
+      onProgress({ phase: "generating-patch", iteration, message: "Requesting structured, exact-anchor patch JSON from the selected local model." });
       let generated;
       try {
         generated = await modelJson(modelRequest, "/model/generate", {
@@ -501,7 +501,7 @@ export async function runAgentTask({
           device: "auto"
         }, 300000);
       } catch (error) {
-        feedback = "The local model call failed: " + (error instanceof Error ? error.message : String(error));
+        feedback = "The selected model call failed: " + (error instanceof Error ? error.message : String(error));
         attempts.push({ iteration, status: "generation_failed", feedback });
         continue;
       }
@@ -627,7 +627,7 @@ export async function runAgentTask({
       })) || [],
       proposals, verification: finalVerification, attempts,
       notices: [
-        "Patch text came from the selected local checkpoint; a schema-valid patch is not automatically a correct patch.",
+        "Patch text came from the selected selected local model; a schema-valid patch is not automatically a correct patch.",
         "Original project files were not modified by this agent run. Changes are staged as hash-bound proposals for explicit review and apply.",
         finalVerification.status === "passed"
           ? "All discovered checks passed in a temporary copy. Review source changes and outputs before applying."
