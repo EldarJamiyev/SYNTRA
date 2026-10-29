@@ -22,7 +22,7 @@ Normal requests such as writing an email, explaining a concept, or brainstorming
 
 Assistant replies support Markdown, GitHub-flavored tables and lists, inline code, fenced code blocks, and safe links. Local Ollama replies stream into the conversation while the model generates; the native research model displays its response when generation completes. User prompts are rendered as literal text so HTML-like snippets are not silently removed. Raw assistant HTML is not rendered, and external links open with appropriate isolation.
 
-For coding tasks, SYNTRA maps the project files and imports, asks the selected local model for a structured patch, validates exact source anchors and paths, and runs available project checks in a temporary copy. Changes are applied only when discovered checks pass; unverified proposals remain unapplied until explicitly requested. The agent keeps backups and audit records under .syntra.
+For coding tasks, SYNTRA maps the project files (including recognised CI/configuration folders such as .github and .devcontainer) and imports, asks the selected local model for a structured patch, validates exact source anchors and paths, and runs available project checks in a temporary copy. Changes are applied only when discovered checks pass; unverified proposals remain unapplied until explicitly requested. The agent keeps backups and audit records under .syntra.
 
 ## Local model
 

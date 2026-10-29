@@ -15,6 +15,10 @@ async function createProject() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-agent-test-"));
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   await fs.mkdir(path.join(root, "tests"), { recursive: true });
+  await fs.mkdir(path.join(root, ".github", "workflows"), { recursive: true });
+  await fs.mkdir(path.join(root, ".syntra"), { recursive: true });
+  await fs.writeFile(path.join(root, ".github", "workflows", "checks.yml"), "name: checks\n");
+  await fs.writeFile(path.join(root, ".syntra", "private.json"), "{}\n");
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
     name: "agent-fixture",
     version: "1.0.0",
@@ -95,8 +99,12 @@ test("repository graph links local imports and agent repairs a failed test in a 
     const graph = await buildRepositoryGraph(root);
     const valueNode = graph.nodes.find(node => node.path === "src/value.js");
     const testNode = graph.nodes.find(node => node.path === "tests/value.test.js");
+    const workflowNode = graph.nodes.find(node => node.path === ".github/workflows/checks.yml");
     assert.ok(valueNode);
     assert.ok(testNode);
+    assert.ok(workflowNode, "the repository graph should include project CI configuration in .github");
+    assert.equal(graph.nodes.some(node => node.path.startsWith(".syntra/")), false,
+      "SYNTRA's private audit/proposal state must remain excluded");
     assert.ok(testNode.imports.includes("src/value.js"), "the graph should resolve relative imports");
 
     const result = await runAgentTask({

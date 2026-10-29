@@ -17,6 +17,9 @@ const SKIP_DIRS = new Set([
   ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "obj", "secrets",
   "credentials", "private_keys", "certificates"
 ]);
+const INCLUDED_HIDDEN_DIRS = new Set([
+  ".github", ".gitlab", ".circleci", ".husky", ".storybook", ".changeset", ".devcontainer"
+]);
 const SECRET_NAMES = new Set([
   ".env", ".env.local", ".env.production", ".npmrc", ".pypirc", "credentials",
   "credentials.json", "secrets.json", "id_rsa", "id_ed25519", "known_hosts"
@@ -121,7 +124,11 @@ async function walkSourceFiles(root) {
       const relative = path.relative(root, absolute).split(path.sep).join("/");
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name.toLowerCase()) && !entry.name.startsWith(".")) await visit(absolute, depth + 1);
+        const directoryName = entry.name.toLowerCase();
+        if (!SKIP_DIRS.has(directoryName)
+          && (!directoryName.startsWith(".") || INCLUDED_HIDDEN_DIRS.has(directoryName))) {
+          await visit(absolute, depth + 1);
+        }
         continue;
       }
       if (!entry.isFile()) continue;
