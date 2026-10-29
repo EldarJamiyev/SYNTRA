@@ -115,19 +115,47 @@ test("workspace proposal and audit subpaths cannot be redirected by symlinks", a
     await fs.symlink(outside, path.join(root, ".syntra", "proposals"), process.platform === "win32" ? "junction" : "dir");
     await assert.rejects(
       () => proposeFileChange(root, "src/network.ts", "export const network = 'changed';\n"),
-      /\\.syntra\\/proposals state directory must not be a symbolic link/
+      error => error instanceof Error && error.message.includes(".syntra/proposals state directory must not be a symbolic link")
     );
     assert.deepEqual(await fs.readdir(outside), []);
 
     await fs.unlink(path.join(root, ".syntra", "proposals"));
-    const outsideAudit = path.join(outside, "outside-audit.jsonl");
-    await fs.writeFile(outsideAudit, "keep unchanged\n", "utf8");
-    await fs.symlink(outsideAudit, path.join(root, ".syntra", "actions.jsonl"), "file");
+    if (process.platform !== "win32") {
+      const outsideAudit = path.join(outside, "outside-audit.jsonl");
+      await fs.writeFile(outsideAudit, "keep unchanged\n", "utf8");
+      await fs.symlink(outsideAudit, path.join(root, ".syntra", "actions.jsonl"), "file");
+      await assert.rejects(
+        () => createProjectPlan(root, "Build a tested local network diagnostics tool."),
+        error => error instanceof Error && error.message.includes("actions.jsonl audit log must be a regular file")
+      );
+      assert.equal(await fs.readFile(outsideAudit, "utf8"), "keep unchanged\n");
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+
+test("individual saved proposal symlinks are rejected before reading external state", { skip: process.platform === "win32" }, async () => {
+  const root = await createTempProject();
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-outside-proposal-"));
+  try {
+    const proposal = await proposeFileChange(root, "src/network.ts", "export const network = 'changed';\n");
+    const savedPath = path.join(root, ".syntra", "proposals", proposal.id + ".json");
+    const savedContents = await fs.readFile(savedPath, "utf8");
+    const externalPath = path.join(outside, "external-proposal.json");
+    await fs.writeFile(externalPath, savedContents, "utf8");
+    await fs.unlink(savedPath);
+    await fs.symlink(externalPath, savedPath, "file");
+
     await assert.rejects(
-      () => createProjectPlan(root, "Build a tested local network diagnostics tool."),
-      /actions\\.jsonl audit log must be a regular file/
+      () => applyFileProposal(root, proposal.id, true),
+      error => error instanceof Error && error.message.includes("Saved proposal must be a regular file, not a symbolic link")
     );
-    assert.equal(await fs.readFile(outsideAudit, "utf8"), "keep unchanged\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "network.ts"), "utf8"),
+      "export function resolveGateway(host: string) { return host; }\n");
+    assert.deepEqual(await fs.readdir(outside), ["external-proposal.json"]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });

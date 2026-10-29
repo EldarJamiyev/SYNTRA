@@ -366,6 +366,20 @@ function stateDirectory(root) {
   return directory;
 }
 
+async function assertRegularStateFile(target, label) {
+  let info;
+  try {
+    info = await fs.lstat(target);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return false;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error(label + " must be a regular file, not a symbolic link.");
+  }
+  return true;
+}
+
 async function writeFileAtomic(target, content) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temporary = target + "." + process.pid + "." + crypto.randomBytes(4).toString("hex") + ".tmp";
@@ -490,7 +504,9 @@ export async function listProposals(inputRoot) {
   for (const entry of entries) {
     if (!entry.isFile() || !/^[a-f0-9-]+\.json$/i.test(entry.name)) continue;
     try {
-      const proposal = JSON.parse(await fs.readFile(path.join(directory, entry.name), "utf8"));
+      const proposalPath = path.join(directory, entry.name);
+      if (!(await assertRegularStateFile(proposalPath, "Saved proposal"))) continue;
+      const proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
       proposals.push({
         id: proposal.id, createdAt: proposal.createdAt, path: proposal.path,
         existedBefore: proposal.existedBefore, beforeHash: proposal.beforeHash,
@@ -511,6 +527,9 @@ export async function applyFileProposal(inputRoot, proposalId, confirmation) {
     throw new Error("Invalid proposal identifier.");
   }
   const proposalPath = path.join(stateDirectory(root), "proposals", proposalId + ".json");
+  if (!(await assertRegularStateFile(proposalPath, "Saved proposal"))) {
+    throw new Error("Proposal does not exist: " + proposalId);
+  }
   const proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
   if (!proposal || path.resolve(String(proposal.root || "")) !== root) throw new Error("Proposal belongs to a different workspace.");
   if (typeof proposal.content !== "string"
@@ -578,8 +597,12 @@ export async function applyFileProposals(inputRoot, proposalIds, confirmation) {
     const proposalPath = path.join(stateDirectory(root), "proposals", id + ".json");
     let proposal;
     try {
+      if (!(await assertRegularStateFile(proposalPath, "Saved proposal"))) {
+        throw new Error("Proposal is missing.");
+      }
       proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("must be a regular file, not a symbolic link")) throw error;
       throw new Error("Proposal " + id + " is missing or unreadable; no files were changed.");
     }
     if (!proposal || path.resolve(String(proposal.root || "")) !== root) {
