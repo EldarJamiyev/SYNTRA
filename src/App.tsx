@@ -140,7 +140,7 @@ export default function App() {
 
     shouldFollowRef.current = true;
     const history = messages.slice(-12);
-    setMessages(current => [...current, { role: 'user', content }].slice(-MAX_VISIBLE_MESSAGES));
+    setMessages(current => [...current, { role: 'user' as const, content }].slice(-MAX_VISIBLE_MESSAGES));
     setInput('');
     setError('');
     setPending(true);
@@ -173,7 +173,7 @@ export default function App() {
           const restored = last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
           if (!interrupted) return restored;
           return [...restored, {
-            role: 'assistant',
+            role: 'assistant' as const,
             content: interrupted + '\n\n---\n\n*Response interrupted before completion; this may be incomplete.*',
           }].slice(-MAX_VISIBLE_MESSAGES);
         });
@@ -183,7 +183,7 @@ export default function App() {
       }
       const answer = job.reply || 'No response was returned.';
       setStreamingReply('');
-      setMessages(current => [...current, { role: 'assistant', content: answer }].slice(-MAX_VISIBLE_MESSAGES));
+      setMessages(current => [...current, { role: 'assistant' as const, content: answer }].slice(-MAX_VISIBLE_MESSAGES));
     } catch (cause) {
       if (mountedRef.current) {
         setStreamingReply('');

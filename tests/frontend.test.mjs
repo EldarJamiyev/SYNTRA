@@ -37,6 +37,8 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /loadMessages\(\)/);
   assert.match(app, /saveMessages\(messages\)/);
   assert.match(app, /MAX_VISIBLE_MESSAGES = 60/);
+  assert.match(app, /role: 'user' as const/);
+  assert.match(app, /role: 'assistant' as const/);
   assert.match(app, /Save the user's prompt immediately too/);
   assert.match(app, /slice\(-MAX_VISIBLE_MESSAGES\)/);
   assert.match(historyModule, /MAX_TOTAL_CHARS/);
