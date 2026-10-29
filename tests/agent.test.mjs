@@ -107,7 +107,7 @@ test("agent blocks verification when a patch rewrites package scripts or depende
     assert.equal(result.verification.checks[0].skipped, true);
     assert.equal(result.status, "proposals_ready_unverified");
     assert.equal(result.proposals[0].path, "package.json");
-    assert.match(result.verification.note, /does not reinstall these dependencies/);
+    assert.match(result.verification.note, /dependency\/build manifests or lockfiles/);
     assert.equal(await fs.readFile(path.join(root, "package.json"), "utf8"), originalManifest,
       "the original manifest must remain untouched before explicit review/apply");
   } finally {

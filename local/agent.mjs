@@ -8,7 +8,7 @@ import {
 
 const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi",
-  ".html", ".css", ".scss", ".sql", ".json", ".md", ".yaml", ".yml", ".toml",
+  ".html", ".css", ".scss", ".sql", ".json", ".md", ".txt", ".yaml", ".yml", ".toml",
   ".csproj", ".fsproj", ".vbproj", ".sln", ".props", ".targets",
   ".sh", ".ps1", ".go", ".rs", ".java", ".cs", ".vue", ".svelte", ".astro"
 ]);
