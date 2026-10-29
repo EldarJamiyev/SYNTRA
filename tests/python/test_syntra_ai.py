@@ -28,6 +28,40 @@ class TransformerTests(unittest.TestCase):
         loss.backward()
         self.assertIsNotNone(model.token_embedding.weight.grad)
 
+    def test_cached_incremental_logits_match_full_forward(self):
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=32, n_layer=2, n_head=2, n_embd=32, dropout=0.0)
+        model = SyntraTransformer(config)
+        model.eval()
+        tokens = torch.tensor([[BOS_ID, 100, 101, 102, 103, 104, 105]], dtype=torch.long)
+        with torch.no_grad():
+            full_logits, _ = model(tokens)
+            _, _, cache = model(tokens[:, :-1], use_cache=True)
+            incremental_logits, _, updated_cache = model(
+                tokens[:, -1:], past_key_values=cache, use_cache=True
+            )
+        torch.testing.assert_close(
+            incremental_logits[:, -1, :],
+            full_logits[:, -1, :],
+            rtol=1e-4,
+            atol=1e-4,
+        )
+        self.assertEqual(len(updated_cache), config.n_layer)
+        self.assertEqual(updated_cache[0][0].shape[-2], tokens.shape[1])
+        self.assertEqual(updated_cache[0][1].shape[-2], tokens.shape[1])
+
+    def test_cached_generation_recomputes_context_at_window_saturation(self):
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=8, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        model = SyntraTransformer(config)
+        prompt = torch.tensor([[BOS_ID, 70, 71, 72, 73, 74]], dtype=torch.long)
+        generated = model.generate(prompt, max_new_tokens=10, temperature=1.0, top_k=1)
+        self.assertGreaterEqual(generated.shape[1], prompt.shape[1] + 1)
+        self.assertLessEqual(generated.shape[1], prompt.shape[1] + 10)
+        self.assertEqual(generated[0, :prompt.shape[1]].tolist(), prompt[0].tolist())
+
     def test_model_generation_uses_actual_neural_forward(self):
         from syntra_ai.model import BOS_ID, SyntraTransformer
         config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
