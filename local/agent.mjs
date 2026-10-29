@@ -9,6 +9,7 @@ import {
 const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi",
   ".html", ".css", ".scss", ".sql", ".json", ".md", ".yaml", ".yml", ".toml",
+  ".csproj", ".fsproj", ".vbproj", ".sln", ".props", ".targets",
   ".sh", ".ps1", ".go", ".rs", ".java", ".cs", ".vue", ".svelte", ".astro"
 ]);
 const SKIP_DIRS = new Set([
@@ -484,9 +485,10 @@ function verificationReviewReasons(changes) {
       || /\.(?:test|spec)\.[^.]+$/i.test(base)) {
       reasons.push("Patch changes test/spec source (" + relative + "); review the test diff before applying.");
     }
-    if (/^(?:\.github\/workflows\/|\.gitlab-ci\.yml$|\.circleci\/|azure-pipelines(?:\.[^/]+)?$|jenkinsfile$)/i.test(relative)
+    if (/^(?:\.github\/workflows\/|\.gitlab-ci\.yml$|\.gitlab\/|\.circleci\/|\.husky\/|\.devcontainer\/|\.changeset\/|azure-pipelines(?:\.[^/]+)?$|jenkinsfile$)/i.test(relative)
       || /(^|\/)(?:vite|vitest|jest|playwright|cypress|webpack|rollup|eslint|prettier|biome|babel|tsconfig)(?:\.config)?\.[^/]+$/i.test(relative)
-      || /^(?:pytest\.ini|tox\.ini|noxfile\.py|pyproject\.toml|Makefile|justfile)$/i.test(base)) {
+      || /^(?:pytest\.ini|tox\.ini|noxfile\.py|pyproject\.toml|Makefile|justfile|dockerfile|\.dockerignore|compose(?:\.[^/]+)?\.ya?ml|docker-compose(?:\.[^/]+)?\.ya?ml)$/i.test(base)
+      || /\.(?:csproj|fsproj|vbproj|sln|props|targets)$/i.test(base)) {
       reasons.push("Patch changes build/test/CI configuration (" + relative + "); review the verification setup before applying.");
     }
   }

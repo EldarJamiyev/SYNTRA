@@ -162,6 +162,31 @@ test("Python projects select unittest or pytest only when Python tests exist", a
   }
 });
 
+
+test("dotnet projects are discovered and need an actual test project for test verification", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-dotnet-runner-"));
+  try {
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "app.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n");
+    await fs.writeFile(path.join(root, "tests", "sample.cs"), "public class Sample {}\n");
+    const appOnly = await chooseCheck(root, "test", null).catch(error => error);
+    assert.equal(appOnly instanceof Error, true);
+    assert.match(appOnly.message, /No supported test runner and matching test files/);
+
+    await fs.writeFile(path.join(root, "tests", "Sample.Tests.csproj"),
+      "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><PackageReference Include=\"Microsoft.NET.Test.Sdk\" Version=\"17.0.0\" /></ItemGroup></Project>\n");
+    const testProject = await chooseCheck(root, "test", null);
+    assert.equal(testProject.executable, "dotnet");
+    assert.deepEqual(testProject.args, ["test", "tests/Sample.Tests.csproj"]);
+
+    const inventory = await inspectWorkspace(root);
+    assert.equal(inventory.manifests.dotnetProject, true);
+    assert.ok(inventory.frameworks.includes(".NET"));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("empty tests folders cannot be reported as a passing test suite", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-no-tests-"));
   try {

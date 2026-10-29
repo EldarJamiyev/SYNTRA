@@ -13,7 +13,8 @@ const TEXT_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi",
   ".java", ".kt", ".go", ".rs", ".c", ".h", ".cpp", ".hpp", ".cs", ".php",
   ".rb", ".swift", ".html", ".css", ".scss", ".sass", ".less", ".sql", ".json",
-  ".md", ".mdx", ".txt", ".xml", ".yaml", ".yml", ".toml", ".ini", ".sh",
+  ".md", ".mdx", ".txt", ".xml", ".yaml", ".yml", ".toml", ".ini", ".csproj",
+  ".fsproj", ".vbproj", ".sln", ".props", ".targets", ".sh",
   ".ps1", ".bat", ".cmd", ".dockerfile", ".graphql", ".gql", ".vue", ".svelte",
   ".astro", ".env.example", ".gitignore", ".editorconfig"
 ]);
@@ -696,9 +697,13 @@ export async function chooseCheck(root, task, packageJson) {
   const hasCargo = exists("Cargo.toml");
   const hasGo = exists("go.mod");
   const dotnetSolution = topFiles.some(name => name.toLowerCase().endsWith(".sln"));
-  const dotnetProjects = topFiles.filter(name => name.toLowerCase().endsWith(".csproj"));
-  const sourceFiles = (task === "test" || !hasCargo && !hasGo && !dotnetSolution && dotnetProjects.length === 0)
+  const topDotnetProjects = topFiles.filter(name => name.toLowerCase().endsWith(".csproj"));
+  const sourceFiles = (task === "test" || (!hasCargo && !hasGo && !dotnetSolution && topDotnetProjects.length === 0))
     ? await walkFiles(root) : [];
+  const dotnetProjects = [...new Set([
+    ...topDotnetProjects,
+    ...sourceFiles.filter(file => file.relative.toLowerCase().endsWith(".csproj")).map(file => file.relative)
+  ])];
   const pythonFiles = pythonTestFiles(sourceFiles);
   const jsFiles = nodeTestFiles(sourceFiles);
 
@@ -731,10 +736,24 @@ export async function chooseCheck(root, task, packageJson) {
     }
     if (hasCargo) testRunners.push(executableCheck("command", "cargo", ["test"], "Rust/Cargo"));
     if (hasGo) testRunners.push(executableCheck("command", "go", ["test", "./..."], "Go"));
-    if (dotnetSolution) testRunners.push(executableCheck("command", "dotnet", ["test"], ".NET solution"));
-    else {
-      const testProject = dotnetProjects.find(name => /(?:\.tests?|\.(?:test|spec))\.csproj$/i.test(name));
-      if (testProject) testRunners.push(executableCheck("command", "dotnet", ["test", testProject], ".NET test project"));
+    const dotnetTestProjects = [];
+    for (const projectPath of dotnetProjects) {
+      const looksLikeTestProject = /(?:\.tests?|\.(?:test|spec))\.csproj$/i.test(path.posix.basename(projectPath));
+      let containsTestSdk = false;
+      if (!looksLikeTestProject) {
+        try {
+          const projectText = await fs.readFile(path.join(root, projectPath.split("/").join(path.sep)), "utf8");
+          containsTestSdk = /Microsoft\.NET\.Test\.Sdk|\bxunit\b|\bnunit\b|\bmstest\b/i.test(projectText);
+        } catch {}
+      }
+      if (looksLikeTestProject || containsTestSdk) dotnetTestProjects.push(projectPath);
+    }
+    if (dotnetSolution && dotnetTestProjects.length > 0) {
+      testRunners.push(executableCheck("command", "dotnet", ["test"], ".NET solution"));
+    } else if (!dotnetSolution) {
+      for (const testProject of dotnetTestProjects) {
+        testRunners.push(executableCheck("command", "dotnet", ["test", testProject], ".NET test project"));
+      }
     }
     if (jsFiles.length > 0) testRunners.push(executableCheck("node-test", "node", ["--test"], "Node.js"));
 
