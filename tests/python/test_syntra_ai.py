@@ -52,6 +52,37 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModelConfig(seq_len=16385).validate()
 
+    def test_corpus_loader_rejects_unbounded_resource_requests(self):
+        from syntra_ai.data import MAX_CORPUS_FILE_BYTES, MAX_CORPUS_FILES, MAX_CORPUS_TOKENS, load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-data-limits-") as temp:
+            root = Path(temp)
+            (root / "safe.py").write_text("def safe(): return 1\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "max_tokens must be between"):
+                load_corpus([root], max_tokens=MAX_CORPUS_TOKENS + 1)
+            with self.assertRaisesRegex(ValueError, "max_files must be between"):
+                load_corpus([root], max_files=MAX_CORPUS_FILES + 1)
+            with self.assertRaisesRegex(ValueError, "max_file_bytes must be between"):
+                load_corpus([root], max_file_bytes=MAX_CORPUS_FILE_BYTES + 1)
+
+    def test_corpus_loader_skips_generated_checkpoint_and_run_directories(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-generated-data-") as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            (root / "data" / "checkpoints").mkdir(parents=True)
+            (root / "wandb" / "run-1").mkdir(parents=True)
+            (root / "src" / "safe.py").write_text("def safe(): return 1\n", encoding="utf-8")
+            (root / "data" / "checkpoints" / "syntra.pt.json").write_text('{"checkpoint":"metadata"}', encoding="utf-8")
+            (root / "wandb" / "run-1" / "config.yaml").write_text("api_key: should-not-train", encoding="utf-8")
+
+            corpus = load_corpus([root], max_tokens=1024)
+            joined_paths = "\\n".join(corpus.files).lower()
+            self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
+            self.assertNotIn("checkpoints", joined_paths)
+            self.assertNotIn("wandb", joined_paths)
+
     def test_data_loader_skips_credentials_directories(self):
         from syntra_ai.data import load_corpus
 

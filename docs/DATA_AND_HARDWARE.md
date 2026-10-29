@@ -1,6 +1,6 @@
 # Data and Hardware Notes
 
-SYNTRA's model initializes randomly. Its weights and tokenizer are not downloaded from a third-party model provider. The local corpus loader has file/type/size limits and excludes common generated directories and likely credential files. These are careful heuristics, not a guarantee that every secret-like file or secret embedded in ordinary source code can be recognized; only train on content permitted for this use.
+SYNTRA's model initializes randomly. Its weights and tokenizer are not downloaded from a third-party model provider. The local corpus loader enforces a hard 10-million-token ceiling, caps individual text files at 1 MiB and file count at 10,000, and excludes common generated/checkpoint/run directories and likely credential files. These are careful heuristics, not a guarantee that every secret-like file or secret embedded in ordinary source code can be recognized; only train on content permitted for this use.
 
 The default tokenizer uses a corpus-trained byte-pair merge table, saved inside each checkpoint. Its vocabulary size can be configured from 258 to 8,192 IDs. Default model context is 4,096 BPE tokens, with supported values up to 16,384. A longer window uses more memory/compute and does not by itself improve reasoning.
 

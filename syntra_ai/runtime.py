@@ -10,7 +10,7 @@ from .config import ModelConfig
 from .model import BOS_ID, SyntraTransformer
 from .tokenizer import ByteBPETokenizer
 from .training import _batch, _encode_documents, _estimate_loss, choose_device
-from .data import load_corpus
+from .data import MAX_CORPUS_TOKENS, load_corpus
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "data" / "checkpoints" / "syntra.pt"
@@ -147,6 +147,8 @@ def evaluate(
     """
     if batches < 1 or batches > 1000:
         raise ValueError("batches must be between 1 and 1,000.")
+    if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
+        raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     model, saved, device = load_model(path=checkpoint, device_name=device_name)
     config = ModelConfig.from_dict(saved["config"])
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))

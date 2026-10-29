@@ -6,6 +6,10 @@ import os
 
 from .model import BOS_ID, EOS_ID
 
+MAX_CORPUS_FILES = 10_000
+MAX_CORPUS_FILE_BYTES = 1024 * 1024
+MAX_CORPUS_TOKENS = 10_000_000
+
 TEXT_SUFFIXES = {
     ".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
     ".html", ".css", ".scss", ".sql", ".json", ".md", ".mdx", ".txt", ".xml",
@@ -16,7 +20,8 @@ TEXT_SUFFIXES = {
 IGNORED_DIRS = {
     ".git", ".syntra", ".venv", "venv", "env", "node_modules", "__pycache__",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build", "coverage",
-    ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "obj"
+    ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "obj",
+    "checkpoints", "runs", "wandb", "mlruns", "lightning_logs", "tensorboard", "logs"
 }
 SENSITIVE_DIRS = {
     "secrets", "credentials", "private_keys", "certificates", ".ssh", ".aws", ".azure"
@@ -69,8 +74,12 @@ def load_corpus(
     skipped = 0
     documents: list[str] = []
     seen: set[str] = set()
-    if max_files < 1 or max_tokens < 1024:
-        raise ValueError("max_files must be positive and max_tokens must be at least 1024.")
+    if max_files < 1 or max_files > MAX_CORPUS_FILES:
+        raise ValueError(f"max_files must be between 1 and {MAX_CORPUS_FILES:,}.")
+    if max_file_bytes < 1 or max_file_bytes > MAX_CORPUS_FILE_BYTES:
+        raise ValueError(f"max_file_bytes must be between 1 and {MAX_CORPUS_FILE_BYTES:,}.")
+    if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
+        raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     for raw_root in roots:
         root = Path(raw_root).expanduser()
         if not root.is_absolute():

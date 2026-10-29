@@ -11,7 +11,7 @@ import tempfile
 import torch
 
 from .config import ModelConfig
-from .data import load_corpus
+from .data import MAX_CORPUS_TOKENS, load_corpus
 from .model import BOS_ID, EOS_ID, SyntraTransformer
 from .tokenizer import ByteBPETokenizer
 
@@ -110,8 +110,8 @@ def train(
         raise ValueError("batch_size must be between 1 and 128.")
     if not 1e-6 <= learning_rate <= 1e-2:
         raise ValueError("learning_rate must be between 1e-6 and 1e-2.")
-    if max_tokens < 1024:
-        raise ValueError("max_tokens must be at least 1,024.")
+    if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
+        raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     requested_config = config
     checkpoint_path = Path(checkpoint).expanduser().resolve()
     device = choose_device(device_name)
