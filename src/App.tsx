@@ -88,6 +88,7 @@ export default function App() {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const [phase, setPhase] = useState('');
+  const [streamingReply, setStreamingReply] = useState('');
   const [error, setError] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -101,7 +102,7 @@ export default function App() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, pending, phase]);
+  }, [messages, pending, phase, streamingReply]);
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -114,6 +115,7 @@ export default function App() {
     setError('');
     setPending(true);
     setPhase('Thinking');
+    setStreamingReply('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     let requestStarted = false;
@@ -124,11 +126,13 @@ export default function App() {
       while (job.status === 'running') {
         if (!mountedRef.current) return;
         setPhase(job.message || 'Thinking');
+        if (job.reply && job.status === 'running') setStreamingReply(job.reply);
         await new Promise(resolve => window.setTimeout(resolve, 800));
         job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
       }
       if (!mountedRef.current) return;
       if (job.status === 'failed') {
+        setStreamingReply('');
         setMessages(current => {
           const last = current[current.length - 1];
           return last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
@@ -138,9 +142,11 @@ export default function App() {
         return;
       }
       const answer = job.reply || 'No response was returned.';
+      setStreamingReply('');
       setMessages(current => [...current, { role: 'assistant', content: answer }]);
     } catch (cause) {
       if (mountedRef.current) {
+        setStreamingReply('');
         if (!requestStarted) {
           setMessages(current => {
             const last = current[current.length - 1];
@@ -187,11 +193,16 @@ export default function App() {
                 <div className="chat-bubble"><MessageContent content={message.content} /></div>
               </article>
             ))}
+            {pending && streamingReply && (
+              <article className="chat-message assistant streaming-message">
+                <div className="chat-bubble"><MessageContent content={streamingReply} /></div>
+              </article>
+            )}
             {pending && (
               <article className="chat-message assistant pending-message" role="status">
                 <div className="pending-content">
                   <LoaderCircle size={15} className="thinking-spinner" />
-                  <span>{phase || 'Thinking'}</span>
+                  <span>{streamingReply ? 'Responding' : phase || 'Thinking'}</span>
                 </div>
               </article>
             )}

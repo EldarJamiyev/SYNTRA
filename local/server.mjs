@@ -61,13 +61,14 @@ async function parseBody(request) {
   return value;
 }
 
-async function aiRequest(method, route, body, timeoutMs = undefined) {
+async function aiRequest(method, route, body, timeoutMs = undefined, options = {}) {
+  const onToken = typeof options?.onToken === "function" ? options.onToken : undefined;
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
   if (modelRoute) {
     const provider = await detectLocalModel();
     if (provider) {
-      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs });
+      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken });
       if (localResult) return localResult;
     }
   }
@@ -305,7 +306,13 @@ async function runChatTurn(jobId, message, history) {
       temperature: 0.7,
       top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
       device: "auto"
-    }, 300000);
+    }, 300000, {
+      onToken: (_delta, fullText) => updateChat(jobId, {
+        phase: "streaming",
+        message: "Responding",
+        reply: fullText
+      })
+    });
     const reply = String(generation.text || "").trim();
     finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more training is needed.", {
       contextTokensUsed: tokenInfo.token_count, trainedSteps: generation.trained_steps

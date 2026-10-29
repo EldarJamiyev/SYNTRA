@@ -187,21 +187,86 @@ function estimateTokens(text) {
   return Math.max(1, Math.ceil(Buffer.byteLength(text, "utf8") / 3));
 }
 
-async function ollamaFetch(provider, body, timeoutMs, fetchImpl) {
+async function readOllamaStream(response, onToken) {
+  if (!response.body || typeof response.body.getReader !== "function") {
+    throw new Error("The local model did not provide a readable token stream.");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let finalChunk = null;
+
+  function consumeLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let chunk;
+    try {
+      chunk = JSON.parse(trimmed);
+    } catch {
+      throw new Error("The local model returned malformed streaming data. Check the Ollama logs.");
+    }
+    if (chunk.error) throw new Error(String(chunk.error));
+    const delta = chunk.message?.content;
+    if (typeof delta === "string" && delta) {
+      content += delta;
+      onToken(delta, content);
+    }
+    if (chunk.done === true) finalChunk = chunk;
+  }
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let newline;
+      while ((newline = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        consumeLine(line);
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) consumeLine(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (!content) {
+    throw new Error("The local model returned no text. Try a different installed model or check its Ollama logs.");
+  }
+  return { content, finalChunk: finalChunk || {} };
+}
+
+async function ollamaFetch(provider, body, timeoutMs, fetchImpl, onToken) {
+  const streaming = typeof onToken === "function";
+  const requestBody = { ...body, stream: streaming };
   const response = await fetchImpl(provider.baseUrl + "/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(timeoutMs || 300000)
   });
-  const payload = await response.json().catch(() => ({}));
+
   if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
     throw new Error(payload.error || "Local Ollama inference failed with HTTP " + response.status + ".");
   }
-  const content = payload.message?.content;
-  if (typeof content !== "string") {
-    throw new Error("The local model returned no text. Try a different installed model or check its Ollama logs.");
+
+  let content;
+  let payload;
+  if (streaming) {
+    const streamed = await readOllamaStream(response, onToken);
+    content = streamed.content;
+    payload = streamed.finalChunk;
+  } else {
+    payload = await response.json().catch(() => ({}));
+    content = payload.message?.content;
+    if (typeof content !== "string") {
+      throw new Error("The local model returned no text. Try a different installed model or check its Ollama logs.");
+    }
   }
+
   return {
     text: content,
     generated_tokens: Number(payload.eval_count || estimateTokens(content)),
@@ -216,7 +281,8 @@ async function ollamaFetch(provider, body, timeoutMs, fetchImpl) {
 
 export async function handleLocalModelRequest(provider, method, route, body = {}, {
   fetchImpl = globalThis.fetch,
-  timeoutMs
+  timeoutMs,
+  onToken
 } = {}) {
   if (method === "GET" && route === "/model/status") return getProviderStatus(provider);
 
@@ -253,7 +319,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
         },
         { role: "user", content: prompt }
       ],
-      stream: false,
+      stream: typeof onToken === "function",
       keep_alive: "10m",
       options: {
         num_ctx: provider.contextTokens,
@@ -289,7 +355,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
         additionalProperties: false
       };
     }
-    return ollamaFetch(provider, requestBody, timeoutMs || 300000, fetchImpl);
+    return ollamaFetch(provider, requestBody, timeoutMs || 300000, fetchImpl, onToken);
   }
 
   return null;

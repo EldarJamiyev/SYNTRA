@@ -113,6 +113,51 @@ test("local generation uses only loopback Ollama and JSON mode for structured pa
   assert.equal(result.generated_tokens, 12);
 });
 
+test("local generation streams arbitrary NDJSON chunks and accumulates the complete answer", async () => {
+  let capturedBody = null;
+  const provider = {
+    provider: "ollama-local",
+    baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b",
+    modelSizeBytes: 9 * GB,
+    contextTokens: 8192,
+    tokenizer: "ollama-local-tokenizer"
+  };
+  const lines = [
+    JSON.stringify({ message: { role: "assistant", content: "Hello" }, done: false }),
+    JSON.stringify({ message: { role: "assistant", content: " there" }, done: false }),
+    JSON.stringify({ message: { role: "assistant", content: "!" }, done: false }),
+    JSON.stringify({ message: { role: "assistant", content: "" }, done: true, eval_count: 3, prompt_eval_count: 55 })
+  ].join("\n") + "\n";
+  const fetchImpl = async (_url, options) => {
+    capturedBody = JSON.parse(options.body);
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(lines);
+    const split = Math.floor(bytes.length / 2);
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, split));
+        controller.enqueue(bytes.slice(split));
+        controller.close();
+      }
+    });
+    return new Response(stream, { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+  };
+  const updates = [];
+  const result = await handleLocalModelRequest(provider, "POST", "/model/generate", {
+    prompt: "Say hello", max_new_tokens: 64
+  }, { fetchImpl, onToken: (delta, fullText) => updates.push({ delta, fullText }), timeoutMs: 1000 });
+  assert.equal(capturedBody.stream, true);
+  assert.equal(result.text, "Hello there!");
+  assert.equal(result.generated_tokens, 3);
+  assert.equal(result.prompt_tokens, 55);
+  assert.deepEqual(updates, [
+    { delta: "Hello", fullText: "Hello" },
+    { delta: " there", fullText: "Hello there" },
+    { delta: "!", fullText: "Hello there!" }
+  ]);
+});
+
 test("local token estimate is bounded and clearly marked as an estimate", async () => {
   const provider = {
     provider: "ollama-local",

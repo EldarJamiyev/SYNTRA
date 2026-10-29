@@ -22,6 +22,9 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /maxLength=\{12000\}/);
   assert.match(app, /setInput\(content\)/);
   assert.match(app, /within 15 seconds/);
+  assert.match(app, /streamingReply/);
+  assert.match(app, /phase: "streaming"/);
+  assert.match(app, /onToken: \(_delta, fullText\)/);
   assert.match(app, /noopener noreferrer/);
   assert.match(html, /<title>SYNTRA Chat<\/title>/);
   for (const label of [
