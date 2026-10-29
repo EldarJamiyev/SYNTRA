@@ -18,6 +18,9 @@ The launcher checks the page signature, detects stale app processes on the chat 
 
 ## Chat and coding behavior
 
+The chat can also run bounded local network checks without a trained model: `ping example.com`, `DNS lookup for example.com`, and `check port 443 on example.com`. Slash forms (`/ping`, `/dns`, `/port`) are available for explicit requests. Ping is limited to four packets, TCP checks to one host/port, and targets are validated before any system utility or socket is called. These checks run locally and do not use a hosted service.
+
+
 Normal requests such as writing an email, explaining a concept, or brainstorming stay in chat. Explicit software tasks—such as fixing an API endpoint, updating a component, or changing the project UI—are routed to the repository agent.
 
 Assistant replies support Markdown, GitHub-flavored tables and lists, inline code, fenced code blocks, and safe links. Local Ollama replies stream into the conversation while the model generates; the native research model displays its response when generation completes. User prompts are rendered as literal text so HTML-like snippets are not silently removed. Raw assistant HTML is not rendered, and external links open with appropriate isolation.

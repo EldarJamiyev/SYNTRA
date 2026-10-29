@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { runAgentTask } from "./agent.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
+import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   applyFileProposal,
   applyFileProposals,
@@ -234,6 +235,22 @@ async function runChatTurn(jobId, message, history) {
       return;
     }
 
+    const diagnostic = classifyNetworkDiagnostic(message);
+    if (diagnostic) {
+      if (diagnostic.kind === "invalid") {
+        finishChat(jobId, formatNetworkDiagnostic(diagnostic), { diagnostic: "invalid" });
+        return;
+      }
+      updateChat(jobId, { phase: "diagnostics", message: "Running a local network check" });
+      const result = await runNetworkDiagnostic(diagnostic);
+      finishChat(jobId, formatNetworkDiagnostic(result), {
+        diagnostic: result.kind,
+        diagnosticStatus: result.status,
+        diagnosticTarget: result.host + (result.port ? ":" + result.port : "")
+      });
+      return;
+    }
+
     const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000);
     if (!modelStatus.checkpoint_exists) {
       finishChat(jobId,
@@ -355,7 +372,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
