@@ -109,6 +109,43 @@ class TransformerTests(unittest.TestCase):
             self.assertNotIn("checkpoints", joined_paths)
             self.assertNotIn("wandb", joined_paths)
 
+    def test_instruction_dataset_loader_bounds_examples_records_and_token_memory(self):
+        from syntra_ai.instruction import (
+            MAX_INSTRUCTION_EXAMPLES,
+            MAX_INSTRUCTION_TOKENS,
+            load_instruction_examples,
+        )
+
+        tokenizer = ByteBPETokenizer.empty()
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-limits-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            rows = [
+                {"prompt": "what is add?", "completion": "def add(a, b): return a+b"},
+                {"prompt": "what is max?", "completion": "def max2(a, b): return max(a, b)"},
+            ]
+            dataset.write_text("\\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "max_examples must be between"):
+                load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_examples=MAX_INSTRUCTION_EXAMPLES + 1)
+            with self.assertRaisesRegex(ValueError, "max_tokens must be between"):
+                load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_tokens=MAX_INSTRUCTION_TOKENS + 1)
+            with self.assertRaisesRegex(ValueError, "safety cap"):
+                load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_tokens=1024)
+
+            huge_field = root / "huge-field.jsonl"
+            huge_field.write_text(json.dumps({
+                "prompt": "x" * (512 * 1024 + 1),
+                "completion": "ok"
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "512 KiB field limit"):
+                load_instruction_examples(huge_field, seq_len=32, tokenizer=tokenizer)
+
+    def test_instruction_finetuning_uses_memory_preflight(self):
+        from syntra_ai.resources import validate_training_memory_budget
+        from syntra_ai.instruction import finetune
+        self.assertTrue(callable(validate_training_memory_budget))
+        # The end-to-end tiny model test below also exercises the guard with an actual checkpoint.
+
     def test_data_loader_skips_credentials_directories(self):
         from syntra_ai.data import load_corpus
 

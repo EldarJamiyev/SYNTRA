@@ -6,29 +6,48 @@ import json
 
 import torch
 
+from .config import ModelConfig
 from .model import BOS_ID, EOS_ID, SyntraTransformer
+from .resources import MAX_CORPUS_TOKENS, validate_training_memory_budget
 from .runtime import checkpoint_path
 from .tokenizer import ByteBPETokenizer
 from .training import _atomic_checkpoint, choose_device
+
+
+MAX_INSTRUCTION_EXAMPLES = 10_000
+MAX_INSTRUCTION_TOKENS = 3_000_000
+MAX_INSTRUCTION_FILE_BYTES = 100 * 1024 * 1024
+MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
+MAX_INSTRUCTION_FIELD_BYTES = 512 * 1024
 
 
 def load_instruction_examples(
     dataset_path: str | Path,
     seq_len: int,
     tokenizer: ByteBPETokenizer | None = None,
-    max_examples: int = 100_000,
+    max_examples: int = MAX_INSTRUCTION_EXAMPLES,
+    max_tokens: int = MAX_INSTRUCTION_TOKENS,
 ) -> list[dict]:
     path = Path(dataset_path).expanduser().resolve()
     if not path.is_file():
         raise ValueError("Instruction dataset must be an existing local JSONL file.")
-    if path.stat().st_size > 100 * 1024 * 1024:
-        raise ValueError("Instruction JSONL is limited to 100 MB.")
+    if path.stat().st_size > MAX_INSTRUCTION_FILE_BYTES:
+        raise ValueError(f"Instruction JSONL is limited to {MAX_INSTRUCTION_FILE_BYTES // (1024 * 1024)} MiB.")
+    if not isinstance(seq_len, int) or seq_len < 16 or seq_len > 16384:
+        raise ValueError("Instruction context must be between 16 and 16,384 tokens.")
+    if not isinstance(max_examples, int) or max_examples < 2 or max_examples > MAX_INSTRUCTION_EXAMPLES:
+        raise ValueError(f"max_examples must be between 2 and {MAX_INSTRUCTION_EXAMPLES:,}.")
+    if not isinstance(max_tokens, int) or max_tokens < 1024 or max_tokens > MAX_INSTRUCTION_TOKENS:
+        raise ValueError(f"max_tokens must be between 1,024 and {MAX_INSTRUCTION_TOKENS:,}.")
     tokenizer = tokenizer or ByteBPETokenizer.empty()
     examples = []
+    total_tokens = 0
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
+            if len(line.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES:
+                raise ValueError(f"Instruction record on line {line_number} exceeds the 1 MiB record limit.")
             try:
                 item = json.loads(line)
             except json.JSONDecodeError as exc:
@@ -38,6 +57,9 @@ def load_instruction_examples(
             prompt_text, completion_text = item["prompt"], item["completion"]
             if not prompt_text.strip() or not completion_text.strip():
                 continue
+            if (len(prompt_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES
+                or len(completion_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES):
+                raise ValueError(f"Prompt/completion on line {line_number} exceeds the 512 KiB field limit.")
             prompt = tokenizer.encode(prompt_text)
             completion = tokenizer.encode(completion_text)
             completion = completion[:max(8, seq_len // 2)]
@@ -49,6 +71,12 @@ def load_instruction_examples(
             # labels 0..len(prompt)-1 target the prompt; completion and EOS remain supervised.
             for position in range(min(len(prompt), len(labels))):
                 labels[position] = -100
+            example_tokens = len(input_ids) + len(labels)
+            if total_tokens + example_tokens > max_tokens:
+                raise ValueError(
+                    f"Instruction dataset exceeds the {max_tokens:,}-token safety cap at line {line_number}. "
+                    "Reduce max_examples or shorten the prompt/completion examples."
+                )
             examples.append({
                 "input_ids": input_ids,
                 "labels": labels,
@@ -56,6 +84,7 @@ def load_instruction_examples(
                 "completion_tokens": len(completion),
                 "line": line_number,
             })
+            total_tokens += example_tokens
             if len(examples) >= max_examples:
                 break
     if len(examples) < 2:
@@ -109,11 +138,14 @@ def finetune(
     if not checkpoint_path_value.is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
-    saved = torch.load(checkpoint_path_value, map_location=device, weights_only=True)
+    # Read checkpoint tensors on CPU first; run the same resource guard used by
+    # pretraining before moving weights, gradients, and optimizer state to an accelerator.
+    saved = torch.load(checkpoint_path_value, map_location="cpu", weights_only=True)
     if saved.get("format") != "syntra-transformer-v1":
         raise ValueError("Selected checkpoint is not a SYNTRA Transformer checkpoint.")
-    from .config import ModelConfig
     config = ModelConfig.from_dict(saved["config"])
+    config.validate()
+    validate_training_memory_budget(config, batch_size, device)
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
     if tokenizer.vocab_size != config.vocab_size:
         raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
