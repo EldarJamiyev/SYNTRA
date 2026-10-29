@@ -52,15 +52,28 @@ class TransformerTests(unittest.TestCase):
         self.assertEqual(updated_cache[0][1].shape[-2], tokens.shape[1])
 
     def test_cached_generation_recomputes_context_at_window_saturation(self):
-        from syntra_ai.model import BOS_ID, SyntraTransformer
+        from syntra_ai.model import BOS_ID, EOS_ID, SyntraTransformer
 
-        config = ModelConfig(vocab_size=258, seq_len=8, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        torch.manual_seed(2026)
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
         model = SyntraTransformer(config)
-        prompt = torch.tensor([[BOS_ID, 70, 71, 72, 73, 74]], dtype=torch.long)
+        with torch.no_grad():
+            model.token_embedding.weight[EOS_ID].zero_()
+        prompt = torch.tensor([[BOS_ID, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80]], dtype=torch.long)
+        original_forward = model.forward
+        input_lengths = []
+
+        def record_forward(tokens, *args, **kwargs):
+            input_lengths.append(tokens.shape[1])
+            return original_forward(tokens, *args, **kwargs)
+
+        model.forward = record_forward
         generated = model.generate(prompt, max_new_tokens=10, temperature=1.0, top_k=1)
         self.assertGreaterEqual(generated.shape[1], prompt.shape[1] + 1)
         self.assertLessEqual(generated.shape[1], prompt.shape[1] + 10)
         self.assertEqual(generated[0, :prompt.shape[1]].tolist(), prompt[0].tolist())
+        self.assertIn(1, input_lengths, "incremental generation should pass one new token into the cache")
+        self.assertIn(config.seq_len, input_lengths, "generation should rebuild the rolling window at context saturation")
 
     def test_model_generation_uses_actual_neural_forward(self):
         from syntra_ai.model import BOS_ID, SyntraTransformer
