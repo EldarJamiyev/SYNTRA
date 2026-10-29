@@ -31,7 +31,7 @@ The native Transformer has its own tokenizer, context configuration, training lo
 
 ## Reliability and security boundaries
 
-- File access is rooted in a selected absolute workspace, with path traversal and symlink path components blocked.
+- File access is rooted in a selected absolute workspace, with path traversal and symlink path components blocked. The reserved .syntra state directory must be a real directory inside that workspace, never a symlink to an external path.
 - Likely credential files and secret paths are excluded from workspace read/edit operations.
 - Agent patches are restricted to recognized text/source/configuration files and validated against exact file hashes. Multi-file apply preflights every proposal, saves backups together, rechecks each source immediately before writing, and attempts a guarded rollback if a later write fails.
 - Candidate checks execute in a temporary project copy. Build/test scripts are project code and should still be reviewed when working in an untrusted repository.

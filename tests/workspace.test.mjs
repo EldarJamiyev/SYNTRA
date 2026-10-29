@@ -81,6 +81,47 @@ test("confirmed proposal applies and keeps a backup", async () => {
 });
 
 
+
+test("workspace state refuses symbolic links that could redirect audit files outside the project", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-state-link-"));
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-outside-state-"));
+  try {
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "inside.ts"), "export const safe = true;\n");
+    await fs.symlink(outside, path.join(root, ".syntra"), process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(
+      () => proposeFileChange(root, "src/inside.ts", "export const safe = false;\n"),
+      /must not be a symbolic link/
+    );
+    await assert.rejects(
+      () => createProjectPlan(root, "Build a useful and tested local diagnostics interface."),
+      /must not be a symbolic link/
+    );
+    assert.deepEqual(await fs.readdir(outside), [], "no audit, proposal, or plan files may be written through the link");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("single-file apply rejects proposal files whose saved content no longer matches its hash", async () => {
+  const root = await createTempProject();
+  try {
+    const proposal = await proposeFileChange(root, "src/network.ts", "export const version = 9;\n");
+    const savedPath = path.join(root, ".syntra", "proposals", proposal.id + ".json");
+    const saved = JSON.parse(await fs.readFile(savedPath, "utf8"));
+    saved.content = "export const version = 999;\n";
+    await fs.writeFile(savedPath, JSON.stringify(saved), "utf8");
+    await assert.rejects(
+      () => applyFileProposal(root, proposal.id, true),
+      /content-integrity check/
+    );
+    assert.match((await readWorkspaceFile(root, "src/network.ts")).content, /return host/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("multi-file proposal transaction applies together and creates a transaction backup", async () => {
   const root = await createTempProject();
   const originalNetwork = await fs.readFile(path.join(root, "src", "network.ts"), "utf8");

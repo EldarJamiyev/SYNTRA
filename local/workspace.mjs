@@ -315,7 +315,25 @@ export async function searchWorkspace(inputRoot, query, limit = 20) {
 }
 
 function stateDirectory(root) {
-  return path.join(root, ".syntra");
+  const directory = path.join(root, ".syntra");
+  let info;
+  try {
+    info = fsSync.lstatSync(directory);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return directory;
+    throw error;
+  }
+  if (info.isSymbolicLink()) {
+    throw new Error("The workspace .syntra state directory must not be a symbolic link; refusing to read or write state outside the workspace.");
+  }
+  if (!info.isDirectory()) {
+    throw new Error("The workspace .syntra state path exists but is not a directory.");
+  }
+  const realDirectory = fsSync.realpathSync(directory);
+  if (!isWithinRoot(root, realDirectory)) {
+    throw new Error("The workspace .syntra state directory resolves outside the selected workspace.");
+  }
+  return directory;
 }
 
 async function writeFileAtomic(target, content) {
@@ -397,6 +415,9 @@ export async function proposeFileChange(inputRoot, relativePath, newContent, exp
     throw new Error("Proposed file content must be text no larger than 512 KB.");
   }
   const resolved = await resolveFile(root, relativePath, { allowMissing: true });
+  if (resolved.stat && resolved.stat.size > MAX_TEXT_BYTES) {
+    throw new Error("The existing target file exceeds the 512 KB proposal limit.");
+  }
   const before = resolved.stat ? await fs.readFile(resolved.target, "utf8") : null;
   const beforeHash = before === null ? null : sha256(before);
   if (expectedBaseHash !== undefined && beforeHash !== expectedBaseHash) {
@@ -461,7 +482,13 @@ export async function applyFileProposal(inputRoot, proposalId, confirmation) {
   }
   const proposalPath = path.join(stateDirectory(root), "proposals", proposalId + ".json");
   const proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
-  if (path.resolve(proposal.root) !== root) throw new Error("Proposal belongs to a different workspace.");
+  if (!proposal || path.resolve(String(proposal.root || "")) !== root) throw new Error("Proposal belongs to a different workspace.");
+  if (typeof proposal.content !== "string"
+    || Buffer.byteLength(proposal.content, "utf8") > MAX_TEXT_BYTES
+    || typeof proposal.afterHash !== "string"
+    || sha256(proposal.content) !== proposal.afterHash) {
+    throw new Error("The saved proposal failed its content-integrity check; nothing was applied.");
+  }
   const resolved = await resolveFile(root, proposal.path, { allowMissing: true });
   const actualBefore = resolved.stat ? await fs.readFile(resolved.target, "utf8") : null;
   const actualHash = actualBefore === null ? null : sha256(actualBefore);
