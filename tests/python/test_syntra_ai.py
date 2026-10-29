@@ -37,19 +37,23 @@ class TransformerTests(unittest.TestCase):
         tokens = torch.tensor([[BOS_ID, 100, 101, 102, 103, 104, 105]], dtype=torch.long)
         with torch.no_grad():
             full_logits, _ = model(tokens)
-            _, _, cache = model(tokens[:, :-1], use_cache=True)
-            incremental_logits, _, updated_cache = model(
-                tokens[:, -1:], past_key_values=cache, use_cache=True
-            )
-        torch.testing.assert_close(
-            incremental_logits[:, -1, :],
-            full_logits[:, -1, :],
-            rtol=1e-4,
-            atol=1e-4,
-        )
-        self.assertEqual(len(updated_cache), config.n_layer)
-        self.assertEqual(updated_cache[0][0].shape[-2], tokens.shape[1])
-        self.assertEqual(updated_cache[0][1].shape[-2], tokens.shape[1])
+            prefix_length = 3
+            _, _, cache = model(tokens[:, :prefix_length], use_cache=True)
+            for position in range(prefix_length, tokens.shape[1]):
+                incremental_logits, _, cache = model(
+                    tokens[:, position:position + 1],
+                    past_key_values=cache,
+                    use_cache=True,
+                )
+                torch.testing.assert_close(
+                    incremental_logits[:, -1, :],
+                    full_logits[:, position, :],
+                    rtol=1e-4,
+                    atol=1e-4,
+                )
+        self.assertEqual(len(cache), config.n_layer)
+        self.assertEqual(cache[0][0].shape[-2], tokens.shape[1])
+        self.assertEqual(cache[0][1].shape[-2], tokens.shape[1])
 
     def test_cached_generation_recomputes_context_at_window_saturation(self):
         from syntra_ai.model import BOS_ID, EOS_ID, SyntraTransformer
