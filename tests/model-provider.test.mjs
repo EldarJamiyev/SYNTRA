@@ -114,3 +114,28 @@ test("local token estimate is bounded and clearly marked as an estimate", async 
   assert.equal(result.is_estimate, true);
   assert.equal(result.provider, "ollama-local");
 });
+
+
+test("default model discovery caches short-lived misses to avoid repeated Ollama probes", async () => {
+  const originalFetch = globalThis.fetch;
+  const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
+  let calls = 0;
+  globalThis.fetch = async url => {
+    calls += 1;
+    assert.equal(url, "http://127.0.0.1:11434/api/tags");
+    return new Response(JSON.stringify({ models: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" }
+    });
+  };
+  try {
+    delete process.env.SYNTRA_MODEL_PROVIDER;
+    const options = { requestedModel: "syntra-cache-regression-test" };
+    assert.equal(await detectLocalModel(options), null);
+    assert.equal(await detectLocalModel(options), null);
+    assert.equal(calls, 1, "a repeated miss inside the short cache window should not probe Ollama twice");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
+    else process.env.SYNTRA_MODEL_PROVIDER = previousMode;
+  }
+});

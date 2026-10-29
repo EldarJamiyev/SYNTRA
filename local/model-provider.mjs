@@ -68,7 +68,7 @@ function contextLimit(value = process.env.SYNTRA_LOCAL_CONTEXT) {
   return Math.max(1024, Math.min(MAX_CONTEXT, Math.floor(parsed)));
 }
 
-export async function detectLocalModel({
+async function detectLocalModelUncached({
   fetchImpl = globalThis.fetch,
   mode: modeValue,
   requestedModel = process.env.SYNTRA_LOCAL_MODEL || "",
@@ -113,6 +113,49 @@ export async function detectLocalModel({
     contextTokens: contextLimit(),
     tokenizer: "ollama-local-tokenizer"
   };
+}
+
+
+const MODEL_DETECTION_CACHE = new Map();
+const MODEL_DETECTION_IN_FLIGHT = new Map();
+const MODEL_CACHE_HIT_TTL_MS = 12_000;
+const MODEL_CACHE_MISS_TTL_MS = 2_500;
+
+/**
+ * Cache the default loopback probe briefly. SYNTRA calls model status, tokenization,
+ * and generation in sequence; probing /api/tags before each route adds avoidable delay
+ * when Ollama is absent. Injected fetch implementations deliberately bypass this cache
+ * so tests and diagnostic callers get deterministic, isolated probes.
+ */
+export async function detectLocalModel(options = {}) {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const mode = normalizeMode(options.mode);
+  if (mode === "native") return null;
+  if (fetchImpl !== globalThis.fetch) {
+    return detectLocalModelUncached({ ...options, fetchImpl, mode });
+  }
+
+  const requestedModel = options.requestedModel ?? process.env.SYNTRA_LOCAL_MODEL ?? "";
+  const totalMemoryBytes = options.totalMemoryBytes ?? os.totalmem();
+  const timeoutMs = options.timeoutMs ?? LOCAL_TIMEOUT_MS;
+  const key = [mode, requestedModel, totalMemoryBytes, timeoutMs].join("|");
+  const cached = MODEL_DETECTION_CACHE.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const existing = MODEL_DETECTION_IN_FLIGHT.get(key);
+  if (existing) return existing;
+
+  const probe = detectLocalModelUncached({
+    ...options, fetchImpl, mode, requestedModel, totalMemoryBytes, timeoutMs
+  }).then(provider => {
+    const ttl = provider ? MODEL_CACHE_HIT_TTL_MS : MODEL_CACHE_MISS_TTL_MS;
+    MODEL_DETECTION_CACHE.set(key, { value: provider, expiresAt: Date.now() + ttl });
+    return provider;
+  }).finally(() => {
+    MODEL_DETECTION_IN_FLIGHT.delete(key);
+  });
+  MODEL_DETECTION_IN_FLIGHT.set(key, probe);
+  return probe;
 }
 
 export function getProviderStatus(provider) {
