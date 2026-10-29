@@ -81,6 +81,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(health.status, "ok");
     assert.equal(health.host, "127.0.0.1");
     assert.ok(health.capabilities.includes("local-chat"));
+    assert.ok(health.capabilities.includes("local-network-diagnostics"));
 
     const deniedOrigin = await fetch(base + "/local-api/chat", {
       method: "POST",
@@ -113,6 +114,32 @@ test("local API health, origin protections, and chat validation work over HTTP",
     });
     assert.equal(invalidMessage.status, 400);
     assert.match((await invalidMessage.json()).error, /Message must contain/);
+
+    const diagnosticResponse = await fetch(base + "/local-api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ message: "/dns 127.0.0.1" })
+    });
+    assert.equal(diagnosticResponse.status, 200);
+    const diagnosticJob = await diagnosticResponse.json();
+    assert.ok(diagnosticJob.jobId);
+
+    let diagnosticStatus = null;
+    const diagnosticDeadline = Date.now() + 5_000;
+    while (Date.now() < diagnosticDeadline) {
+      const statusResponse = await fetch(base + "/local-api/chat/status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+        body: JSON.stringify({ jobId: diagnosticJob.jobId })
+      });
+      assert.equal(statusResponse.status, 200);
+      diagnosticStatus = await statusResponse.json();
+      if (diagnosticStatus.status !== "running") break;
+      await delay(40);
+    }
+    assert.equal(diagnosticStatus?.status, "completed");
+    assert.equal(diagnosticStatus?.diagnosticStatus, "resolved");
+    assert.match(diagnosticStatus?.reply || "", /DNS lookup: 127\.0\.0\.1/);
 
     const unknownRoute = await fetch(base + "/not-a-route");
     assert.equal(unknownRoute.status, 404);
