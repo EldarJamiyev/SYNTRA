@@ -7,6 +7,7 @@ import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import {
   applyFileProposal,
+  applyFileProposals,
   createProjectPlan,
   inspectWorkspace,
   listProposals,
@@ -168,22 +169,8 @@ function updateChat(jobId, value) {
 
 
 async function applyProposals(root, proposals) {
-  const checked = [];
-  for (const proposal of proposals) {
-    let current;
-    try { current = await readWorkspaceFile(root, proposal.path); }
-    catch (error) {
-      if (error instanceof Error && error.message.startsWith("File does not exist:")) current = null;
-      else throw error;
-    }
-    if ((current ? current.sha256 : null) !== proposal.beforeHash) {
-      throw new Error("Refusing to apply " + proposal.path + ": the source changed after the proposal was staged.");
-    }
-    checked.push(proposal);
-  }
-  const applied = [];
-  for (const proposal of checked) applied.push(await applyFileProposal(root, proposal.id, true));
-  return applied;
+  const transaction = await applyFileProposals(root, proposals.map(proposal => proposal.id), true);
+  return transaction.applied;
 }
 
 function compactAgentReply(result, applied) {

@@ -484,6 +484,155 @@ export async function applyFileProposal(inputRoot, proposalId, confirmation) {
   };
 }
 
+
+
+/**
+ * Apply a reviewed set of proposals as one transaction. Every path and source hash is
+ * checked before the first write; all existing contents are backed up together; and
+ * a later write conflict triggers best-effort rollback without overwriting a concurrent
+ * edit made by someone else.
+ */
+export async function applyFileProposals(inputRoot, proposalIds, confirmation) {
+  const root = await resolveWorkspace(inputRoot);
+  if (confirmation !== true) {
+    throw new Error("File changes require explicit confirmation: set confirm=true after reviewing the proposals.");
+  }
+  if (!Array.isArray(proposalIds) || proposalIds.length < 1 || proposalIds.length > 6) {
+    throw new Error("A transaction must contain between 1 and 6 proposal IDs.");
+  }
+  if (proposalIds.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/i.test(id))) {
+    throw new Error("Every proposal identifier must be a valid UUID.");
+  }
+  if (new Set(proposalIds).size !== proposalIds.length) {
+    throw new Error("A proposal may appear only once in a transaction.");
+  }
+
+  const staged = [];
+  const seenPaths = new Set();
+  for (const id of proposalIds) {
+    const proposalPath = path.join(stateDirectory(root), "proposals", id + ".json");
+    let proposal;
+    try {
+      proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
+    } catch {
+      throw new Error("Proposal " + id + " is missing or unreadable; no files were changed.");
+    }
+    if (!proposal || path.resolve(String(proposal.root || "")) !== root) {
+      throw new Error("Proposal " + id + " belongs to a different workspace.");
+    }
+    if (typeof proposal.content !== "string"
+      || Buffer.byteLength(proposal.content, "utf8") > MAX_TEXT_BYTES
+      || typeof proposal.afterHash !== "string"
+      || sha256(proposal.content) !== proposal.afterHash) {
+      throw new Error("Proposal " + id + " failed its content-integrity check; no files were changed.");
+    }
+
+    const resolved = await resolveFile(root, proposal.path, { allowMissing: true });
+    if (seenPaths.has(resolved.relativePath)) {
+      throw new Error("A transaction cannot contain multiple proposals for the same file: " + resolved.relativePath);
+    }
+    seenPaths.add(resolved.relativePath);
+    const beforeContent = resolved.stat ? await fs.readFile(resolved.target, "utf8") : null;
+    const beforeHash = beforeContent === null ? null : sha256(beforeContent);
+    if (beforeHash !== proposal.beforeHash) {
+      throw new Error("Refusing to apply " + resolved.relativePath + ": the source changed after the proposal was staged. No files were changed.");
+    }
+    if (beforeHash === proposal.afterHash) {
+      throw new Error("Proposal " + id + " makes no content change; recreate it against the latest file.");
+    }
+    staged.push({ id, proposal, relativePath: resolved.relativePath, target: resolved.target, beforeContent, beforeHash });
+  }
+
+  const transactionId = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
+  const backupRoot = path.join(stateDirectory(root), "backups", transactionId);
+  // Stage every backup before touching any project file.
+  for (const item of staged) {
+    if (item.beforeContent === null) continue;
+    const backupPath = path.resolve(backupRoot, item.relativePath.split("/").join(path.sep));
+    if (!isWithinRoot(backupRoot, backupPath)) {
+      throw new Error("Backup path validation failed for " + item.relativePath + "; no files were changed.");
+    }
+    await writeFileAtomic(backupPath, item.beforeContent);
+  }
+
+  const applied = [];
+  try {
+    for (const item of staged) {
+      // Close the most obvious time-of-check/time-of-use gap before each write.
+      const currentTarget = await resolveFile(root, item.relativePath, { allowMissing: true });
+      const currentContent = currentTarget.stat ? await fs.readFile(currentTarget.target, "utf8") : null;
+      const currentHash = currentContent === null ? null : sha256(currentContent);
+      if (currentHash !== item.beforeHash) {
+        throw new Error("Refusing to apply " + item.relativePath + ": the source changed during this transaction.");
+      }
+      await writeFileAtomic(currentTarget.target, item.proposal.content);
+      applied.push({ ...item, target: currentTarget.target });
+    }
+
+    await appendAudit(root, {
+      action: "apply_file_proposals_transaction",
+      transactionId,
+      proposalIds: staged.map(item => item.id),
+      files: staged.map(item => ({
+        path: item.relativePath,
+        beforeHash: item.beforeHash,
+        afterHash: item.proposal.afterHash,
+        backupCreated: item.beforeContent !== null
+      }))
+    });
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const item of [...applied].reverse()) {
+      try {
+        const currentTarget = await resolveFile(root, item.relativePath, { allowMissing: true });
+        const currentContent = currentTarget.stat ? await fs.readFile(currentTarget.target, "utf8") : null;
+        const currentHash = currentContent === null ? null : sha256(currentContent);
+        // Do not overwrite a third-party edit that raced with the transaction.
+        if (currentHash !== item.proposal.afterHash) {
+          rollbackErrors.push(item.relativePath + " changed again during rollback; left untouched");
+          continue;
+        }
+        if (item.beforeContent === null) {
+          if (currentTarget.stat) await fs.rm(currentTarget.target);
+        } else {
+          await writeFileAtomic(currentTarget.target, item.beforeContent);
+        }
+      } catch (rollbackError) {
+        rollbackErrors.push(item.relativePath + ": " + (rollbackError instanceof Error ? rollbackError.message : String(rollbackError)));
+      }
+    }
+    await appendAudit(root, {
+      action: "rollback_file_proposals_transaction",
+      transactionId,
+      proposalIds: staged.map(item => item.id),
+      rolledBackPaths: applied.map(item => item.relativePath),
+      rollbackErrors
+    }).catch(() => {});
+
+    const message = error instanceof Error ? error.message : String(error);
+    if (rollbackErrors.length) {
+      throw new Error("Proposal transaction failed: " + message
+        + ". Automatic rollback was incomplete; inspect backups at " + path.relative(root, backupRoot).split(path.sep).join("/")
+        + ". Details: " + rollbackErrors.join("; "));
+    }
+    throw new Error("Proposal transaction failed and applied changes were rolled back: " + message
+      + ". Backups remain at " + path.relative(root, backupRoot).split(path.sep).join("/"));
+  }
+
+  return {
+    transactionId,
+    backupDirectory: path.relative(root, backupRoot).split(path.sep).join("/"),
+    applied: staged.map(item => ({
+      applied: true,
+      proposalId: item.id,
+      path: item.relativePath,
+      beforeHash: item.beforeHash,
+      afterHash: item.proposal.afterHash,
+      backupCreated: item.beforeContent !== null
+    }))
+  };
+}
+
 function chooseCheck(root, task, packageJson) {
   const scripts = packageJson && packageJson.scripts && typeof packageJson.scripts === "object"
     ? packageJson.scripts : {};

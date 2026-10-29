@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   applyFileProposal,
+  applyFileProposals,
   createProjectPlan,
   inspectWorkspace,
   proposeFileChange,
@@ -76,6 +77,46 @@ test("confirmed proposal applies and keeps a backup", async () => {
   const backupFiles = await fs.readdir(path.join(syntraDir, entries[0], "src"));
   assert.ok(backupFiles.includes("network.ts"));
   assert.equal(await fs.readFile(path.join(syntraDir, entries[0], "src", "network.ts"), "utf8"), original);
+});
+
+
+test("multi-file proposal transaction applies together and creates a transaction backup", async () => {
+  const root = await createTempProject();
+  const originalNetwork = await fs.readFile(path.join(root, "src", "network.ts"), "utf8");
+  await fs.writeFile(path.join(root, "src", "printer.ts"), "export const printer = 'offline';\n", "utf8");
+  const networkProposal = await proposeFileChange(root, "src/network.ts", "export const gateway = '10.0.0.1';\n");
+  const printerProposal = await proposeFileChange(root, "src/printer.ts", "export const printer = 'online';\n");
+  const transaction = await applyFileProposals(root, [networkProposal.id, printerProposal.id], true);
+  assert.equal(transaction.applied.length, 2);
+  assert.equal(transaction.applied.every(item => item.applied), true);
+  assert.equal(await fs.readFile(path.join(root, "src", "network.ts"), "utf8"), "export const gateway = '10.0.0.1';\n");
+  assert.equal(await fs.readFile(path.join(root, "src", "printer.ts"), "utf8"), "export const printer = 'online';\n");
+  assert.equal(await fs.readFile(path.join(root, transaction.backupDirectory, "src", "network.ts"), "utf8"), originalNetwork);
+  const audit = await fs.readFile(path.join(root, ".syntra", "actions.jsonl"), "utf8");
+  assert.match(audit, /apply_file_proposals_transaction/);
+});
+
+test("multi-file proposal transaction rejects stale member before modifying any file", async () => {
+  const root = await createTempProject();
+  const originalNetwork = await fs.readFile(path.join(root, "src", "network.ts"), "utf8");
+  await fs.writeFile(path.join(root, "src", "printer.ts"), "export const printer = 'offline';\n", "utf8");
+  const networkProposal = await proposeFileChange(root, "src/network.ts", "export const gateway = '10.0.0.1';\n");
+  const printerProposal = await proposeFileChange(root, "src/printer.ts", "export const printer = 'online';\n");
+  await fs.writeFile(path.join(root, "src", "printer.ts"), "external update\n", "utf8");
+  await assert.rejects(
+    () => applyFileProposals(root, [networkProposal.id, printerProposal.id], true),
+    /source changed after the proposal was staged/
+  );
+  assert.equal(await fs.readFile(path.join(root, "src", "network.ts"), "utf8"), originalNetwork,
+    "the valid first proposal must not be applied when a later proposal is stale");
+  assert.equal(await fs.readFile(path.join(root, "src", "printer.ts"), "utf8"), "external update\n");
+});
+
+test("multi-file transaction rejects duplicate IDs and requires explicit confirmation", async () => {
+  const root = await createTempProject();
+  const proposal = await proposeFileChange(root, "src/network.ts", "export const version = 4;\n");
+  await assert.rejects(() => applyFileProposals(root, [proposal.id], false), /explicit confirmation/);
+  await assert.rejects(() => applyFileProposals(root, [proposal.id, proposal.id], true), /only once/);
 });
 
 test("project plan creates staged workflow", async () => {
