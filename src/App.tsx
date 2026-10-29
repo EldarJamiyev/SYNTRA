@@ -5,6 +5,8 @@ import remarkGfm from 'remark-gfm';
 import { loadMessages, saveMessages } from './chat-history.js';
 
 type Message = { role: 'user' | 'assistant'; content: string };
+const MAX_VISIBLE_MESSAGES = 60;
+
 type ChatJob = {
   jobId: string;
   status: 'running' | 'completed' | 'failed';
@@ -117,10 +119,10 @@ export default function App() {
   }, [messages, pending, phase, streamingReply]);
 
   useEffect(() => {
-    // Avoid persisting a turn before it finishes; successful replies and clearly marked
-    // interrupted output are saved when pending becomes false.
-    if (!pending) saveMessages(messages);
-  }, [messages, pending]);
+    // Save the user's prompt immediately too, so a refresh during a long response
+    // doesn't silently erase the request. The storage module trims history safely.
+    saveMessages(messages);
+  }, [messages]);
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -138,7 +140,7 @@ export default function App() {
 
     shouldFollowRef.current = true;
     const history = messages.slice(-12);
-    setMessages(current => [...current, { role: 'user', content }]);
+    setMessages(current => [...current, { role: 'user', content }].slice(-MAX_VISIBLE_MESSAGES));
     setInput('');
     setError('');
     setPending(true);
@@ -173,7 +175,7 @@ export default function App() {
           return [...restored, {
             role: 'assistant',
             content: interrupted + '\n\n---\n\n*Response interrupted before completion; this may be incomplete.*',
-          }];
+          }].slice(-MAX_VISIBLE_MESSAGES);
         });
         setInput(content);
         setError(job.error || job.reply || 'The local request failed.');
@@ -181,7 +183,7 @@ export default function App() {
       }
       const answer = job.reply || 'No response was returned.';
       setStreamingReply('');
-      setMessages(current => [...current, { role: 'assistant', content: answer }]);
+      setMessages(current => [...current, { role: 'assistant', content: answer }].slice(-MAX_VISIBLE_MESSAGES));
     } catch (cause) {
       if (mountedRef.current) {
         setStreamingReply('');

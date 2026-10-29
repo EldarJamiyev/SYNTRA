@@ -36,6 +36,9 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /distanceFromBottom < 120/);
   assert.match(app, /loadMessages\(\)/);
   assert.match(app, /saveMessages\(messages\)/);
+  assert.match(app, /MAX_VISIBLE_MESSAGES = 60/);
+  assert.match(app, /Save the user's prompt immediately too/);
+  assert.match(app, /slice\(-MAX_VISIBLE_MESSAGES\)/);
   assert.match(historyModule, /MAX_TOTAL_CHARS/);
   assert.match(app, /message\.role === 'assistant'/);
   assert.match(app, /Response interrupted before completion/);

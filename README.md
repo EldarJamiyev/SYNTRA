@@ -1,6 +1,6 @@
 # SYNTRA — Simple local AI chat
 
-SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It shows the conversation, a message field, and one send control—without a dashboard full of toggles. Recent conversation history is saved in the browser on that device, with bounded storage and graceful fallback when browser storage is unavailable. Type /clear in the message field to erase the visible conversation and its saved history.
+SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It shows the conversation, a message field, and one send control—without a dashboard full of toggles. Recent conversation history is saved in the browser on that device, with bounded storage and graceful fallback when browser storage is unavailable. The visible conversation is capped at the latest 60 messages, and a prompt is saved immediately so a refresh during generation does not erase what you asked. Type /clear in the message field to erase the visible conversation and its saved history.
 
 ## Windows launch
 
