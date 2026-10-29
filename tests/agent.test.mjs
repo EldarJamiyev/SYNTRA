@@ -66,6 +66,54 @@ test("patch validation enforces a unique exact anchor and blocks secret paths", 
   }
 });
 
+test("agent blocks verification when a patch rewrites package scripts", async () => {
+  const root = await createProject();
+  let generated = 0;
+  const modelRequest = async (_method, route) => {
+    if (route === "/model/status") {
+      return { checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE", config: { seq_len: 4096, vocab_size: 258 } };
+    }
+    if (route === "/model/tokenize") return { token_count: 100 };
+    if (route === "/model/generate") {
+      generated += 1;
+      return {
+        text: JSON.stringify({
+          summary: "Replace the existing test command with a no-op.",
+          edits: [{
+            path: "package.json",
+            find: '"test": "node --test"',
+            replace: '"test": "node -e \\"process.exit(0)\\""',
+            reason: "Regression fixture: attempt to bypass the original test command."
+          }]
+        }),
+        generated_tokens: 40,
+        trained_steps: null
+      };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const originalManifest = await fs.readFile(path.join(root, "package.json"), "utf8");
+    const result = await runAgentTask({
+      root,
+      goal: "Change the test script to bypass the failing project test.",
+      maxIterations: 3,
+      runChecks: true,
+      modelRequest
+    });
+    assert.equal(generated, 1, "the agent must block before running a candidate-controlled test command");
+    assert.equal(result.verification.status, "verification_blocked");
+    assert.equal(result.verification.passed, false);
+    assert.equal(result.verification.checks[0].skipped, true);
+    assert.equal(result.status, "proposals_ready_unverified");
+    assert.equal(result.proposals[0].path, "package.json");
+    assert.equal(await fs.readFile(path.join(root, "package.json"), "utf8"), originalManifest,
+      "the original manifest must remain untouched before explicit review/apply");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("repository graph links local imports and agent repairs a failed test in a sandbox", async () => {
   const root = await createProject();
   let generateCount = 0;

@@ -191,6 +191,14 @@ function compactAgentReply(result, applied) {
   if (applied.length) {
     lines.push("Changed files:");
     for (const item of applied) lines.push("- " + item.path);
+  } else if (result.proposals?.length && result.verification?.status === "verification_blocked") {
+    lines.push("I did not run candidate checks because this patch changes package-manager scripts used to run those checks.");
+    for (const item of result.proposals) lines.push("- " + item.path);
+    lines.push("The original project files remain unchanged. Review the script changes, then type /apply only if you accept them.");
+  } else if (result.proposals?.length && result.verification?.status === "passed_review_required") {
+    lines.push("The checks passed in the temporary copy, but I did not auto-apply this patch because it changes tests or verification configuration.");
+    for (const item of result.proposals) lines.push("- " + item.path);
+    lines.push("The original project files remain unchanged. Review those diffs, then type /apply to apply the proposals.");
   } else if (result.proposals?.length) {
     lines.push("I prepared proposed changes, but did not apply them because verification did not pass or no checks were available.");
     for (const item of result.proposals) lines.push("- " + item.path);
@@ -200,7 +208,7 @@ function compactAgentReply(result, applied) {
   }
   lines.push("", "Verification: " + String(result.verification?.status || "not run").replaceAll("_", " "));
   for (const check of result.verification?.checks || []) {
-    lines.push("- " + check.task + ": " + (check.passed ? "passed" : check.timedOut ? "timed out" : "failed"));
+    lines.push("- " + check.task + ": " + (check.passed ? "passed" : check.skipped ? "skipped" : check.timedOut ? "timed out" : "failed"));
     if (!check.passed && check.output) lines.push(check.output.slice(-1600));
   }
   if (result.attempts?.length) lines.push("", "Repair attempts: " + result.attempts.length + ".");

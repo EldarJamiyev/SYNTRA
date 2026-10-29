@@ -453,6 +453,43 @@ function truncateOutput(output) {
   return value.length > 8000 ? value.slice(-8000) : value;
 }
 
+
+function packageScriptsChanged(changes) {
+  const change = changes.find(item => item.path === "package.json");
+  if (!change || typeof change.beforeContent !== "string") return false;
+  try {
+    const before = JSON.parse(change.beforeContent);
+    const after = JSON.parse(change.content);
+    const sortedScripts = value => {
+      const scripts = value && value.scripts && typeof value.scripts === "object" && !Array.isArray(value.scripts)
+        ? value.scripts : {};
+      return JSON.stringify(Object.fromEntries(Object.keys(scripts).sort().map(key => [key, scripts[key]])));
+    };
+    return sortedScripts(before) !== sortedScripts(after);
+  } catch {
+    // Never execute candidate-controlled checks if the package manifest was made invalid.
+    return true;
+  }
+}
+
+function verificationReviewReasons(changes) {
+  const reasons = [];
+  for (const change of changes) {
+    const relative = String(change.path || "").replace(/\\/g, "/");
+    const base = path.posix.basename(relative).toLowerCase();
+    if (/(^|\/)(?:test|tests|__tests__|spec|specs)(\/|$)/i.test(relative)
+      || /\.(?:test|spec)\.[^.]+$/i.test(base)) {
+      reasons.push("Patch changes test/spec source (" + relative + "); review the test diff before applying.");
+    }
+    if (/^(?:\.github\/workflows\/|\.gitlab-ci\.yml$|\.circleci\/|azure-pipelines(?:\.[^/]+)?$|jenkinsfile$)/i.test(relative)
+      || /(^|\/)(?:vite|vitest|jest|playwright|cypress|webpack|rollup|eslint|prettier|biome|babel|tsconfig)(?:\.config)?\.[^/]+$/i.test(relative)
+      || /^(?:pytest\.ini|tox\.ini|noxfile\.py|pyproject\.toml|Makefile|justfile)$/i.test(base)) {
+      reasons.push("Patch changes build/test/CI configuration (" + relative + "); review the verification setup before applying.");
+    }
+  }
+  return [...new Set(reasons)];
+}
+
 export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
   onProgress = () => {}
@@ -544,6 +581,20 @@ export async function runAgentTask({
         break;
       }
 
+      if (packageScriptsChanged(candidate.changes)) {
+        const note = "Automatic verification was blocked because the patch changes package.json scripts. Running candidate-controlled build/test scripts would make the checks self-modifying. Review the manifest diff, then type /apply only if you accept the script changes.";
+        finalVerification = {
+          status: "verification_blocked", passed: false, checks: [{
+            task: "verification-script-integrity", passed: false, skipped: true, timedOut: false,
+            output: note
+          }], note
+        };
+        feedback = note;
+        attempts[attempts.length - 1].status = "verification_blocked";
+        onProgress({ phase: "verification-blocked", iteration, message: note });
+        break;
+      }
+
       if (!snapshot) {
         onProgress({ phase: "sandbox-prepare", iteration, message: "Creating a temporary project copy for safe build/test runs." });
         try { snapshot = await copySandbox(root); }
@@ -584,14 +635,27 @@ export async function runAgentTask({
         if (checks.at(-1)?.passed !== true) break;
       }
       const allPassed = tasks.length > 0 && checks.length === tasks.length && checks.every(item => item.passed);
+      const reviewReasons = verificationReviewReasons(candidate.changes);
+      const verificationStatus = allPassed
+        ? reviewReasons.length ? "passed_review_required" : "passed"
+        : tasks.length ? "failed" : "no_checks_configured";
       finalVerification = {
-        status: allPassed ? "passed" : tasks.length ? "failed" : "no_checks_configured",
+        status: verificationStatus,
         passed: allPassed, checks,
-        sandbox: { filesCopied: snapshot.filesCopied, bytesCopied: snapshot.bytesCopied }
+        sandbox: { filesCopied: snapshot.filesCopied, bytesCopied: snapshot.bytesCopied },
+        ...(reviewReasons.length ? { reviewRequiredReasons: reviewReasons } : {})
       };
-      attempts[attempts.length - 1].status = allPassed ? "verification_passed" : "verification_failed";
+      attempts[attempts.length - 1].status = allPassed
+        ? reviewReasons.length ? "verification_passed_review_required" : "verification_passed"
+        : "verification_failed";
       if (allPassed) {
-        onProgress({ phase: "verification-passed", iteration, message: "Every discovered check passed in the temporary copy." });
+        onProgress({
+          phase: reviewReasons.length ? "verification-review-required" : "verification-passed",
+          iteration,
+          message: reviewReasons.length
+            ? "Checks passed, but this patch changes tests or verification configuration and requires review before application."
+            : "Every discovered check passed in the temporary copy."
+        });
         break;
       }
       if (tasks.length === 0) {
@@ -614,7 +678,10 @@ export async function runAgentTask({
 
     onProgress({ phase: finalChanges ? "completed" : "generation-failed", iteration: attempts.length, message: finalChanges ? "Agent loop finished; review staged proposals." : "Agent did not produce a schema-valid patch." });
     return {
-      status: !finalChanges ? "generation_failed" : finalVerification.status === "passed" ? "verified_proposals_ready" : "proposals_ready_unverified",
+      status: !finalChanges ? "generation_failed"
+        : finalVerification.status === "passed" ? "verified_proposals_ready"
+          : finalVerification.status === "passed_review_required" ? "verified_proposals_review_required"
+            : "proposals_ready_unverified",
       root, goal, plan,
       repository: {
         name: inventory.name, fileCount: inventory.fileCount,
@@ -638,7 +705,9 @@ export async function runAgentTask({
         "Original project files were not modified by this agent run. Changes are staged as hash-bound proposals for explicit review and apply.",
         finalVerification.status === "passed"
           ? "All discovered checks passed in a temporary copy. Review source changes and outputs before applying."
-          : "Changes were not verified successfully. Review the failure details; do not treat these proposals as production-ready."
+          : finalVerification.status === "passed_review_required"
+            ? "All discovered checks passed, but this patch touches test or verification configuration. Review it before applying."
+            : "Changes were not verified successfully. Review the failure details; do not treat these proposals as production-ready."
       ]
     };
   } finally {

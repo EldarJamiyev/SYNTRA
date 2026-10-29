@@ -19,7 +19,7 @@ The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:300
 5. The agent rejects malformed JSON, duplicate edits, ambiguous anchors, path traversal, sensitive file paths, and oversized changes.
 6. Candidate edits are applied only to a temporary project copy. Available build, test, lint, and type-check scripts run with bounded timeouts.
 7. Failed checks are supplied as feedback for a bounded repair attempt. The original source is not modified during planning or verification.
-8. If every discovered check passes, SYNTRA rechecks source hashes and applies the change with a backup and audit record. If verification fails or is unavailable, the proposal remains unapplied unless the user explicitly types /apply.
+8. If every discovered check passes and the patch does not modify tests or verification configuration, SYNTRA rechecks source hashes and applies the change with a backup and audit record. Package-manager script changes block execution of candidate checks; changes to test or verification configuration require review even when checks pass. In those cases, proposals remain unapplied unless the user explicitly types /apply.
 
 A passing check proves only that the project's discovered checks passed in the temporary copy; it does not prove the absence of defects.
 
