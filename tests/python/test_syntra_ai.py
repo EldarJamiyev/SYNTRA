@@ -240,6 +240,15 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             self.assertTrue(checkpoint.is_file())
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
+            from syntra_ai.training import inference_checkpoint_path, select_inference_checkpoint
+            inference_checkpoint = inference_checkpoint_path(checkpoint)
+            self.assertTrue(inference_checkpoint.is_file())
+            self.assertEqual(select_inference_checkpoint(checkpoint), inference_checkpoint)
+            full_saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
+            inference_saved = torch.load(inference_checkpoint, map_location="cpu", weights_only=True)
+            self.assertIn("optimizer_state", full_saved)
+            self.assertNotIn("optimizer_state", inference_saved)
+            self.assertLess(inference_checkpoint.stat().st_size, checkpoint.stat().st_size)
 
             dataset = root / "instructions.jsonl"
             records = [
@@ -259,6 +268,9 @@ class TransformerTests(unittest.TestCase):
             tuned = finetune(dataset, steps=1, batch_size=1, learning_rate=1e-4,
                              device_name="cpu", checkpoint=checkpoint)
             self.assertEqual(tuned["status"], "completed")
+            inference_saved = torch.load(inference_checkpoint, map_location="cpu", weights_only=True)
+            self.assertEqual(inference_saved["step"], tuned["step"])
+            self.assertNotIn("optimizer_state", inference_saved)
             from syntra_ai.runtime import evaluate
             fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000, checkpoint=checkpoint)
             self.assertTrue(fresh_evaluation["evaluation_performed"])
@@ -266,6 +278,7 @@ class TransformerTests(unittest.TestCase):
             model, saved, device = load_model(checkpoint, "cpu")
             self.assertEqual(saved["training_mode"], "supervised-instruction-finetuning")
             self.assertEqual(saved["step"], 2)
+            self.assertNotIn("optimizer_state", saved)
             context = torch.tensor([[BOS_ID, *b"def add"]], dtype=torch.long, device=device)
             generated = model.generate(context, max_new_tokens=2, temperature=1.0, top_k=2)
             self.assertGreaterEqual(generated.shape[1], context.shape[1] + 1)

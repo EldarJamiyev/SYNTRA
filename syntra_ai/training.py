@@ -69,6 +69,43 @@ def _atomic_checkpoint(path: Path, payload: dict) -> None:
             os.unlink(temporary)
 
 
+INFERENCE_CHECKPOINT_FIELDS = (
+    "format", "config", "tokenizer", "model_state", "step", "created_by",
+    "device_at_training", "corpus_files", "corpus_tokens", "train_loss",
+    "validation_loss", "training_mode", "instruction_examples"
+)
+
+
+def inference_checkpoint_path(checkpoint: str | Path) -> Path:
+    target = Path(checkpoint).expanduser().resolve()
+    return target.with_name(target.stem + ".inference" + target.suffix)
+
+
+def select_inference_checkpoint(checkpoint: str | Path) -> Path:
+    """Use the lightweight companion only if it was written after the full checkpoint."""
+    target = Path(checkpoint).expanduser().resolve()
+    companion = inference_checkpoint_path(target)
+    try:
+        if companion.is_file() and companion.stat().st_mtime_ns >= target.stat().st_mtime_ns:
+            return companion
+    except OSError:
+        pass
+    return target
+
+
+def _save_inference_checkpoint(checkpoint: str | Path, payload: dict) -> Path:
+    target = Path(checkpoint).expanduser().resolve()
+    companion = inference_checkpoint_path(target)
+    inference_payload = {
+        key: payload[key]
+        for key in INFERENCE_CHECKPOINT_FIELDS
+        if key in payload
+    }
+    inference_payload["source_checkpoint_mtime_ns"] = target.stat().st_mtime_ns
+    _atomic_checkpoint(companion, inference_payload)
+    return companion
+
+
 def _encode_documents(documents: list[str], tokenizer: ByteBPETokenizer, max_tokens: int) -> list[int]:
     tokens: list[int] = []
     for document in documents:
@@ -239,6 +276,7 @@ def train(
                 "training_mode": "causal-source-pretraining",
             }
             _atomic_checkpoint(checkpoint_path, payload)
+            _save_inference_checkpoint(checkpoint_path, payload)
             metadata = {
                 "checkpoint": str(checkpoint_path),
                 "step": step,

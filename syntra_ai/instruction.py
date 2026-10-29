@@ -11,7 +11,9 @@ from .model import BOS_ID, EOS_ID, SyntraTransformer
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
 from .runtime import checkpoint_path
 from .tokenizer import ByteBPETokenizer
-from .training import _atomic_checkpoint, choose_device
+from .training import (
+    _atomic_checkpoint, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
+)
 
 
 MAX_INSTRUCTION_EXAMPLES = 10_000
@@ -138,10 +140,11 @@ def finetune(
     if not checkpoint_path_value.is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
-    validate_checkpoint_load_budget(checkpoint_path_value)
-    # Read checkpoint tensors on CPU first; run the same resource guard used by
-    # pretraining before moving weights, gradients, and optimizer state to an accelerator.
-    saved = torch.load(checkpoint_path_value, map_location="cpu", weights_only=True)
+    load_target = select_inference_checkpoint(checkpoint_path_value)
+    validate_checkpoint_load_budget(load_target)
+    # Read model-only checkpoint tensors on CPU first; run the resource guard before
+    # moving weights, gradients, and optimizer state to an accelerator.
+    saved = torch.load(load_target, map_location="cpu", weights_only=True)
     if saved.get("format") != "syntra-transformer-v1":
         raise ValueError("Selected checkpoint is not a SYNTRA Transformer checkpoint.")
     config = ModelConfig.from_dict(saved["config"])
@@ -211,6 +214,7 @@ def finetune(
                 "validation_loss": last_val_loss,
             }
             _atomic_checkpoint(checkpoint_path_value, payload)
+            _save_inference_checkpoint(checkpoint_path_value, payload)
             metadata_path = checkpoint_path_value.with_suffix(checkpoint_path_value.suffix + ".json")
             metadata = {
                 "checkpoint": str(checkpoint_path_value), "step": step, "config": config.to_dict(),
