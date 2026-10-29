@@ -52,6 +52,45 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModelConfig(seq_len=16385).validate()
 
+    def test_inference_loader_falls_back_when_companion_is_stale(self):
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import _read_checkpoint
+        from syntra_ai.training import inference_checkpoint_path
+
+        with tempfile.TemporaryDirectory(prefix="syntra-stale-inference-") as temp:
+            root = Path(temp)
+            checkpoint = root / "fixture.pt"
+            config = ModelConfig(vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+            tokenizer = ByteBPETokenizer.empty()
+            model = SyntraTransformer(config)
+            full_payload = {
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
+                "model_state": model.state_dict(),
+                "optimizer_state": {"sentinel": torch.tensor([1])},
+                "step": 3,
+                "training_mode": "causal-source-pretraining",
+            }
+            torch.save(full_payload, checkpoint)
+
+            companion = inference_checkpoint_path(checkpoint)
+            light_payload = {key: full_payload[key] for key in (
+                "format", "config", "tokenizer", "model_state", "step", "training_mode"
+            )}
+            light_payload["source_checkpoint_mtime_ns"] = -1
+            torch.save(light_payload, companion)
+            source_mtime = checkpoint.stat().st_mtime_ns
+            future_mtime = source_mtime + 2_000_000_000
+            os.utime(companion, ns=(future_mtime, future_mtime))
+
+            target, saved, loaded_config, loaded_tokenizer = _read_checkpoint(checkpoint)
+            self.assertEqual(target, checkpoint.resolve())
+            self.assertEqual(loaded_config, config)
+            self.assertEqual(loaded_tokenizer, tokenizer)
+            self.assertIn("optimizer_state", saved,
+                          "a stale inference companion must fall back to the full checkpoint")
+
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):
         from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
 

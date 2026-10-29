@@ -28,14 +28,36 @@ def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelC
     if not target.is_file():
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
     load_target = select_inference_checkpoint(target)
-    validate_checkpoint_load_budget(load_target)
-    saved = torch.load(load_target, map_location="cpu", weights_only=True)
-    if saved.get("format") != "syntra-transformer-v1":
-        raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
-    config = ModelConfig.from_dict(saved["config"])
-    tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
-    if tokenizer.vocab_size != config.vocab_size:
-        raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
+
+    def load_validated(source: Path) -> tuple[dict, ModelConfig, ByteBPETokenizer]:
+        validate_checkpoint_load_budget(source)
+        payload = torch.load(source, map_location="cpu", weights_only=True)
+        if payload.get("format") != "syntra-transformer-v1":
+            raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
+        config = ModelConfig.from_dict(payload["config"])
+        tokenizer = ByteBPETokenizer.from_dict(payload.get("tokenizer"))
+        if tokenizer.vocab_size != config.vocab_size:
+            raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
+        return payload, config, tokenizer
+
+    try:
+        saved, config, tokenizer = load_validated(load_target)
+    except MemoryError:
+        raise
+    except Exception:
+        if load_target == target:
+            raise
+        # A missing, stale or damaged lightweight companion must never make the
+        # original resumable checkpoint unusable.
+        saved, config, tokenizer = load_validated(target)
+
+    if load_target != target:
+        try:
+            source_mtime = target.stat().st_mtime_ns
+        except OSError:
+            source_mtime = -1
+        if saved.get("source_checkpoint_mtime_ns") != source_mtime:
+            saved, config, tokenizer = load_validated(target)
     return target, saved, config, tokenizer
 
 
