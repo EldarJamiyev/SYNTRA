@@ -27,6 +27,8 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /AbortSignal\.timeout\(15_000\)/);
   assert.match(app, /maxLength=\{12000\}/);
   assert.match(app, /setInput\(content\)/);
+  assert.match(app, /content\.toLowerCase\(\) === '\/clear'/);
+  assert.match(app, /job\.partialReply/);
   assert.match(app, /within 15 seconds/);
   assert.match(app, /streamingReply/);
   assert.match(app, /loadMessages\(\)/);
@@ -37,6 +39,8 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(css, /\.user-message-text \{[^}]*white-space: pre-wrap/s);
   assert.match(server, /phase: "streaming"/);
   assert.match(server, /onToken: \(_delta, fullText\)/);
+  assert.match(server, /partialReply, updatedAt/);
+  assert.match(server, /new task must never inherit proposals/);
   assert.match(app, /noopener noreferrer/);
   assert.match(html, /<title>SYNTRA Chat<\/title>/);
   for (const label of [

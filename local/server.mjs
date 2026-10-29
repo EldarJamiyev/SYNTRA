@@ -157,7 +157,11 @@ function failChat(jobId, error) {
   const job = chatJobs.get(jobId);
   if (!job) return;
   const message = error instanceof Error ? error.message : String(error);
-  Object.assign(job, { status: "failed", phase: "failed", reply: message, error: message, updatedAt: new Date().toISOString() });
+  const partialReply = typeof job.reply === "string" ? job.reply : "";
+  Object.assign(job, {
+    status: "failed", phase: "failed", reply: message, error: message,
+    partialReply, updatedAt: new Date().toISOString()
+  });
   if (activeChatJobId === jobId) activeChatJobId = null;
 }
 
@@ -242,6 +246,8 @@ async function runChatTurn(jobId, message, history) {
     }
 
     if (isCodingTask(message)) {
+      // A new task must never inherit proposals from an earlier failed task.
+      pendingProposals = { root: null, proposals: [] };
       updateChat(jobId, { phase: "planning", message: "Reading the project and planning a code change" });
       const result = await runAgentTask({
         root: activeWorkspace, goal: message, maxIterations: 3, runChecks: true,

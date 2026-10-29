@@ -12,6 +12,7 @@ type ChatJob = {
   message?: string;
   reply?: string;
   error?: string | null;
+  partialReply?: string;
 };
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
@@ -116,6 +117,15 @@ export default function App() {
     const content = input.trim();
     if (!content || pending) return;
 
+    if (content.toLowerCase() === '/clear') {
+      setMessages([]);
+      setInput('');
+      setError('');
+      setStreamingReply('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      return;
+    }
+
     const history = messages.slice(-12);
     setMessages(current => [...current, { role: 'user', content }]);
     setInput('');
@@ -144,13 +154,14 @@ export default function App() {
       if (!mountedRef.current) return;
       if (job.status === 'failed') {
         setStreamingReply('');
+        const interrupted = partialReply || job.partialReply || '';
         setMessages(current => {
           const last = current[current.length - 1];
           const restored = last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
-          if (!partialReply) return restored;
+          if (!interrupted) return restored;
           return [...restored, {
             role: 'assistant',
-            content: partialReply + '\n\n---\n\n*Response interrupted before completion; this may be incomplete.*',
+            content: interrupted + '\n\n---\n\n*Response interrupted before completion; this may be incomplete.*',
           }];
         });
         setInput(content);

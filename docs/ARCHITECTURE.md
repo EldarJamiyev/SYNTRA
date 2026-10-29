@@ -4,7 +4,7 @@ SYNTRA uses a small local stack rather than a cloud AI service.
 
 ## Runtime components
 
-1. **React/Vite frontend** — one conversation view and one composer. Recent conversation is stored locally in bounded browser storage, and storage failures do not block chat. Assistant Markdown is rendered without enabling raw HTML; links are protocol-checked before rendering.
+1. **React/Vite frontend** — one conversation view and one composer. Recent conversation is stored locally in bounded browser storage, /clear erases the conversation, and storage failures do not block chat. Assistant Markdown is rendered without enabling raw HTML; links are protocol-checked before rendering.
 2. **Node loopback service** — validates requests, owns chat jobs, keeps the active workspace, routes ordinary messages to chat, and coordinates repository edits.
 3. **Local model backend** — if a suitable local Ollama model is installed, prompts are sent to that loopback Ollama service. Otherwise the router falls back to SYNTRA's local Python/PyTorch service. The native path is a from-scratch research model, not a pretrained frontier assistant.
 
