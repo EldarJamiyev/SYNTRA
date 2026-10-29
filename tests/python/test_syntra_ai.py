@@ -52,6 +52,32 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModelConfig(seq_len=16385).validate()
 
+    def test_training_memory_estimate_rejects_unsafe_context_settings(self):
+        from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
+
+        small = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        estimate = estimate_training_memory_bytes(small, batch_size=1)
+        self.assertGreater(estimate, 0)
+        self.assertLess(estimate, 1024 ** 3)
+        self.assertEqual(
+            validate_training_memory_budget(small, batch_size=1, device="cpu", available_bytes=2 * 1024 ** 3),
+            estimate,
+        )
+
+        large = ModelConfig(seq_len=8192, n_layer=12, n_head=12, n_embd=768, dropout=0.0)
+        with self.assertRaisesRegex(ValueError, "safety budget"):
+            validate_training_memory_budget(large, batch_size=16, device="cpu", available_bytes=8 * 1024 ** 3)
+
+    def test_training_memory_preflight_does_not_assume_memory_when_unavailable(self):
+        from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
+
+        config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        expected = estimate_training_memory_bytes(config, batch_size=1)
+        self.assertEqual(
+            validate_training_memory_budget(config, batch_size=1, device="cpu", available_bytes=None),
+            expected,
+        )
+
     def test_corpus_loader_rejects_unbounded_resource_requests(self):
         from syntra_ai.data import MAX_CORPUS_FILE_BYTES, MAX_CORPUS_FILES, MAX_CORPUS_TOKENS, load_corpus
 

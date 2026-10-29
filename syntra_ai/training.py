@@ -13,6 +13,7 @@ import torch
 from .config import ModelConfig
 from .data import MAX_CORPUS_TOKENS, load_corpus
 from .model import BOS_ID, EOS_ID, SyntraTransformer
+from .resources import validate_training_memory_budget
 from .tokenizer import ByteBPETokenizer
 
 ProgressCallback = Callable[[dict], None]
@@ -123,13 +124,17 @@ def train(
     saved = None
     corpus = None
     if resume and checkpoint_path.exists():
-        saved = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        # Load checkpoint tensors on CPU first so the memory preflight can run before
+        # copying model and optimizer state onto a potentially constrained device.
+        saved = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         if saved.get("format") != "syntra-transformer-v1":
             raise ValueError("Resume checkpoint is not a supported SYNTRA Transformer checkpoint.")
         stored_config = ModelConfig.from_dict(saved["config"])
         if requested_config is not None and not _same_architecture(requested_config, stored_config):
             raise ValueError("Resume architecture differs from the saved checkpoint configuration.")
         config = stored_config
+        config.validate()
+        validate_training_memory_budget(config, batch_size, device)
         corpus = load_corpus(roots, max_tokens=max_tokens)
         tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
         if tokenizer.vocab_size != config.vocab_size:
@@ -140,6 +145,7 @@ def train(
     else:
         config = requested_config or ModelConfig()
         config.validate()
+        validate_training_memory_budget(config, batch_size, device)
         corpus = load_corpus(roots, max_tokens=max_tokens)
         tokenizer = ByteBPETokenizer.train(corpus.documents, vocab_size=config.vocab_size)
         config = replace(config, vocab_size=tokenizer.vocab_size)
