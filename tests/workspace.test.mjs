@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   applyFileProposal,
   applyFileProposals,
+  chooseCheck,
   createProjectPlan,
   inspectWorkspace,
   proposeFileChange,
@@ -117,6 +118,58 @@ test("multi-file transaction rejects duplicate IDs and requires explicit confirm
   const proposal = await proposeFileChange(root, "src/network.ts", "export const version = 4;\n");
   await assert.rejects(() => applyFileProposals(root, [proposal.id], false), /explicit confirmation/);
   await assert.rejects(() => applyFileProposals(root, [proposal.id, proposal.id], true), /only once/);
+});
+
+
+test("check selection uses the matching native test runner, not Node for arbitrary tests directories", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-runner-"));
+  try {
+    await fs.writeFile(path.join(root, "Cargo.toml"), '[package]\nname = "fixture"\nversion = "0.1.0"\n');
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "tests", "integration.rs"), '#[test]\nfn works() {}\n');
+    const rustCheck = await chooseCheck(root, "test", null);
+    assert.equal(rustCheck.kind, "command");
+    assert.equal(rustCheck.executable, "cargo");
+    assert.deepEqual(rustCheck.args, ["test"]);
+
+    await fs.rm(path.join(root, "Cargo.toml"));
+    await fs.writeFile(path.join(root, "go.mod"), "module example.com/fixture\n\ngo 1.22\n");
+    await fs.writeFile(path.join(root, "tests", "integration_test.go"), "package fixture\n");
+    const goCheck = await chooseCheck(root, "test", null);
+    assert.equal(goCheck.executable, "go");
+    assert.deepEqual(goCheck.args, ["test", "./..."]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Python projects select unittest or pytest only when Python tests exist", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-python-runner-"));
+  try {
+    await fs.writeFile(path.join(root, "requirements.txt"), "numpy>=1.24\n");
+    await fs.mkdir(path.join(root, "tests", "unit"), { recursive: true });
+    await fs.writeFile(path.join(root, "tests", "unit", "test_sample.py"), "import unittest\n");
+    const unit = await chooseCheck(root, "test", null);
+    assert.equal(unit.kind, "python-unittest");
+    assert.deepEqual(unit.args, ["-m", "unittest", "discover", "-s", "tests/unit", "-v"]);
+
+    await fs.writeFile(path.join(root, "pytest.ini"), "[pytest]\ntestpaths = tests\n");
+    const pytest = await chooseCheck(root, "test", null);
+    assert.equal(pytest.kind, "python-pytest");
+    assert.deepEqual(pytest.args, ["-m", "pytest"]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("empty tests folders cannot be reported as a passing test suite", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-no-tests-"));
+  try {
+    await fs.mkdir(path.join(root, "tests"));
+    await assert.rejects(() => chooseCheck(root, "test", null), /No supported test runner and matching test files/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("project plan creates staged workflow", async () => {

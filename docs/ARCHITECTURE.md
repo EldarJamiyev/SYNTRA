@@ -17,7 +17,7 @@ The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:300
 3. If the user explicitly asks to modify software, SYNTRA inspects the selected workspace, builds a local import graph (including recognised hidden project-config folders such as .github and .devcontainer), and ranks relevant source files.
 4. The model is asked for a constrained JSON patch with exact search anchors and replacements.
 5. The agent rejects malformed JSON, duplicate edits, ambiguous anchors, path traversal, sensitive file paths, and oversized changes.
-6. Candidate edits are applied only to a temporary project copy. Available build, test, lint, and type-check scripts run with bounded timeouts.
+6. Candidate edits are applied only to a temporary project copy. Available build, test, lint, and type-check scripts run with bounded timeouts. Inferred native test commands are selected from project manifests and matching test files; an empty test directory or a mismatched runner is not accepted as a passing test suite.
 7. Failed checks are supplied as feedback for a bounded repair attempt. The original source is not modified during planning or verification.
 8. If every discovered check passes and the patch does not modify tests or verification configuration, SYNTRA rechecks source hashes and applies the change with a backup and audit record. Package-manager script changes block execution of candidate checks; changes to test or verification configuration require review even when checks pass. In those cases, proposals remain unapplied unless the user explicitly types /apply.
 

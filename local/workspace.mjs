@@ -207,6 +207,9 @@ export async function inspectWorkspace(inputRoot) {
   const pyprojectExists = await exists("pyproject.toml");
   const requirementsExists = await exists("requirements.txt");
   const cargoExists = await exists("Cargo.toml");
+  const goModExists = await exists("go.mod");
+  const rootEntries = await fs.readdir(root).catch(() => []);
+  const dotnetSolutionExists = rootEntries.some(name => name.toLowerCase().endsWith(".sln"));
   const csproj = files.find(file => file.relative.toLowerCase().endsWith(".csproj"));
   const readme = files.find(file => /^readme([.]|$)/i.test(path.basename(file.relative)));
   let readmeExcerpt = "";
@@ -230,10 +233,12 @@ export async function inspectWorkspace(inputRoot) {
   }
   if (pyprojectExists || requirementsExists) frameworkHints.push("Python");
   if (cargoExists) frameworkHints.push("Rust/Cargo");
-  if (csproj) frameworkHints.push(".NET");
+  if (goModExists) frameworkHints.push("Go");
+  if (csproj || dotnetSolutionExists) frameworkHints.push(".NET");
   const packageManager = packageJson
     ? (await exists("pnpm-lock.yaml") ? "pnpm" : await exists("yarn.lock") ? "yarn" : "npm")
-    : pyprojectExists || requirementsExists ? "Python" : cargoExists ? "Cargo" : "Unknown";
+    : pyprojectExists || requirementsExists ? "Python"
+      : cargoExists ? "Cargo" : goModExists ? "Go" : (csproj || dotnetSolutionExists) ? ".NET" : "Unknown";
 
   return {
     root,
@@ -249,7 +254,9 @@ export async function inspectWorkspace(inputRoot) {
       pyprojectToml: pyprojectExists,
       requirementsTxt: requirementsExists,
       cargoToml: cargoExists,
-      dotnetProject: Boolean(csproj)
+      goMod: goModExists,
+      dotnetProject: Boolean(csproj),
+      dotnetSolution: dotnetSolutionExists
     },
     readmeExcerpt,
     files: files.slice(0, 250).map(file => ({
@@ -633,7 +640,44 @@ export async function applyFileProposals(inputRoot, proposalIds, confirmation) {
   };
 }
 
-function chooseCheck(root, task, packageJson) {
+function pythonTestFiles(files) {
+  return files.filter(file => file.extension.toLowerCase() === ".py"
+    && (/^test_.+\.py$/i.test(path.posix.basename(file.relative))
+      || /.+_test\.py$/i.test(path.posix.basename(file.relative))));
+}
+
+function nodeTestFiles(files) {
+  return files.filter(file => [".js", ".mjs", ".cjs"].includes(file.extension.toLowerCase())
+    && (/(^|\/)(?:test|tests|__tests__|__specs__)\//i.test(file.relative)
+      || /\.(?:test|spec)\.(?:js|mjs|cjs)$/i.test(file.relative)));
+}
+
+function commonPythonTestDirectory(files) {
+  const counts = new Map();
+  for (const file of files) {
+    const parent = path.posix.dirname(file.relative);
+    counts.set(parent, (counts.get(parent) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0]?.[0] || ".";
+}
+
+async function hasPytestConfiguration(root, files) {
+  if (["pytest.ini", "tox.ini", "setup.cfg"].some(name => fsSync.existsSync(path.join(root, name)))) return true;
+  const indicators = files.filter(file => ["pyproject.toml", "requirements.txt", "requirements-dev.txt"].includes(path.posix.basename(file.relative).toLowerCase()));
+  for (const file of indicators) {
+    try {
+      const content = await fs.readFile(path.join(root, file.relative.split("/").join(path.sep)), "utf8");
+      if (/\[tool\.pytest|(?:^|\s)pytest(?:\s|[<=>;\[]|$)/im.test(content)) return true;
+    } catch {}
+  }
+  return false;
+}
+
+function executableCheck(kind, executable, args, label) {
+  return { kind, executable, args, command: [executable, ...args].join(" "), script: null, label };
+}
+
+export async function chooseCheck(root, task, packageJson) {
   const scripts = packageJson && packageJson.scripts && typeof packageJson.scripts === "object"
     ? packageJson.scripts : {};
   const aliases = {
@@ -646,20 +690,71 @@ function chooseCheck(root, task, packageJson) {
   if (!allowed) throw new Error("Check task must be one of: build, test, lint, typecheck.");
   const packageScript = allowed.find(name => typeof scripts[name] === "string" && scripts[name].trim());
   if (packageScript) return { kind: "npm-script", command: "npm run " + packageScript, script: packageScript };
-  if (task === "test") {
-    const exists = name => fsSync.existsSync(path.join(root, name));
-    const hasPythonProject = ["pyproject.toml", "pytest.ini", "requirements.txt"].some(exists);
-    if (hasPythonProject) return { kind: "python-pytest", command: "python -m pytest", script: null };
-    const hasTests = ["test", "tests", "__tests__"].some(exists);
-    if (hasTests) return { kind: "node-test", command: "node --test", script: null };
+
+  const exists = name => fsSync.existsSync(path.join(root, name));
+  const topFiles = await fs.readdir(root).catch(() => []);
+  const hasCargo = exists("Cargo.toml");
+  const hasGo = exists("go.mod");
+  const dotnetSolution = topFiles.some(name => name.toLowerCase().endsWith(".sln"));
+  const dotnetProjects = topFiles.filter(name => name.toLowerCase().endsWith(".csproj"));
+  const sourceFiles = (task === "test" || !hasCargo && !hasGo && !dotnetSolution && dotnetProjects.length === 0)
+    ? await walkFiles(root) : [];
+  const pythonFiles = pythonTestFiles(sourceFiles);
+  const jsFiles = nodeTestFiles(sourceFiles);
+
+  if (task === "build") {
+    const builders = [];
+    if (hasCargo) builders.push(executableCheck("command", "cargo", ["build"], "Rust/Cargo"));
+    if (hasGo) builders.push(executableCheck("command", "go", ["build", "./..."], "Go"));
+    if (dotnetSolution) builders.push(executableCheck("command", "dotnet", ["build"], ".NET solution"));
+    else if (dotnetProjects.length === 1) builders.push(executableCheck("command", "dotnet", ["build", dotnetProjects[0]], ".NET project"));
+    if (builders.length === 1) return builders[0];
+    if (builders.length > 1) throw new Error("Multiple build systems were detected. Add an explicit build script to package.json so SYNTRA can run the intended build.");
   }
+
+  if (task === "test") {
+    const testRunners = [];
+    const isPythonProject = ["pyproject.toml", "requirements.txt", "requirements-dev.txt", "pytest.ini", "setup.py"].some(exists);
+    const isPythonTestProject = isPythonProject && pythonFiles.length > 0;
+    if (isPythonTestProject) {
+      if (await hasPytestConfiguration(root, sourceFiles)) {
+        testRunners.push(executableCheck("python-pytest", process.platform === "win32" ? "python" : "python3", ["-m", "pytest"], "Python/pytest"));
+      } else {
+        const startDirectory = commonPythonTestDirectory(pythonFiles);
+        testRunners.push(executableCheck(
+          "python-unittest",
+          process.platform === "win32" ? "python" : "python3",
+          ["-m", "unittest", "discover", "-s", startDirectory, "-v"],
+          "Python/unittest"
+        ));
+      }
+    }
+    if (hasCargo) testRunners.push(executableCheck("command", "cargo", ["test"], "Rust/Cargo"));
+    if (hasGo) testRunners.push(executableCheck("command", "go", ["test", "./..."], "Go"));
+    if (dotnetSolution) testRunners.push(executableCheck("command", "dotnet", ["test"], ".NET solution"));
+    else {
+      const testProject = dotnetProjects.find(name => /(?:\.tests?|\.(?:test|spec))\.csproj$/i.test(name));
+      if (testProject) testRunners.push(executableCheck("command", "dotnet", ["test", testProject], ".NET test project"));
+    }
+    if (jsFiles.length > 0) testRunners.push(executableCheck("node-test", "node", ["--test"], "Node.js"));
+
+    if (testRunners.length === 1) return testRunners[0];
+    if (testRunners.length > 1) {
+      throw new Error("Multiple test ecosystems were detected without a configured test script. Add a package.json test script or specify one test runner to avoid reporting a partial test pass as full verification.");
+    }
+    if (isPythonProject && pythonFiles.length === 0) {
+      throw new Error("A Python project was detected, but no test_*.py or *_test.py files were found. SYNTRA cannot call this a verified test pass.");
+    }
+    throw new Error("No supported test runner and matching test files were found. Add an explicit test script or test configuration; an empty tests directory is not verification.");
+  }
+
   throw new Error("No supported " + task + " command was found in the project manifest.");
 }
 
 export async function runProjectCheck(inputRoot, task, options = {}) {
   const root = await resolveWorkspace(inputRoot);
   const packageJson = await readJsonIfPresent(root, "package.json");
-  const selected = chooseCheck(root, task, packageJson);
+  const selected = await chooseCheck(root, task, packageJson);
   const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
   const outputParts = [];
   let outputSize = 0;
@@ -673,10 +768,13 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
         child = spawn("cmd.exe", ["/d", "/s", "/c", selected.command], { cwd: root, windowsHide: true });
       } else if (selected.kind === "npm-script") {
         child = spawn("npm", ["run", selected.script], { cwd: root, windowsHide: true });
-      } else if (selected.kind === "python-pytest") {
-        child = spawn(process.platform === "win32" ? "python" : "python3", ["-m", "pytest"], { cwd: root, windowsHide: true });
+      } else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") {
+        child = spawn(selected.executable, selected.args, { cwd: root, windowsHide: true });
+      } else if (selected.kind === "node-test" || selected.kind === "command") {
+        child = spawn(selected.executable, selected.args, { cwd: root, windowsHide: true });
       } else {
-        child = spawn("node", ["--test"], { cwd: root, windowsHide: true });
+        reject(new Error("Unsupported verification runner: " + String(selected.kind)));
+        return;
       }
     } catch (error) {
       reject(error);

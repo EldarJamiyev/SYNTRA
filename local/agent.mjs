@@ -285,8 +285,10 @@ function rankGraph(graph, goal, requestedPath = "") {
 function createPlan(goal, inventory, ranked, graph) {
   const likelyFiles = ranked.slice(0, 8).map(item => item.path);
   const checks = [];
-  if (inventory.scripts?.build) checks.push("build");
-  if (inventory.scripts?.test || inventory.manifests?.pyprojectToml || inventory.manifests?.requirementsTxt) checks.push("test");
+  const nativeBuild = inventory.manifests?.cargoToml || inventory.manifests?.goMod || inventory.manifests?.dotnetProject || inventory.manifests?.dotnetSolution;
+  if (inventory.scripts?.build || nativeBuild) checks.push("build");
+  if (inventory.scripts?.test || inventory.manifests?.pyprojectToml || inventory.manifests?.requirementsTxt
+    || inventory.manifests?.cargoToml || inventory.manifests?.goMod || inventory.manifests?.dotnetProject || inventory.manifests?.dotnetSolution) checks.push("test");
   if (inventory.scripts?.lint) checks.push("lint");
   if (inventory.scripts?.typecheck || inventory.scripts?.check) checks.push("typecheck");
   return {
@@ -617,8 +619,11 @@ export async function runAgentTask({
       const scripts = inventory.scripts || {};
       const hasTestsDirectory = await fs.stat(path.join(root, "tests")).then(stat => stat.isDirectory()).catch(() => false);
       const tasks = [];
-      if (scripts.build) tasks.push("build");
-      if (scripts.test || inventory.manifests?.pyprojectToml || inventory.manifests?.requirementsTxt || hasTestsDirectory) tasks.push("test");
+      const nativeBuild = inventory.manifests?.cargoToml || inventory.manifests?.goMod || inventory.manifests?.dotnetProject || inventory.manifests?.dotnetSolution;
+      if (scripts.build || nativeBuild) tasks.push("build");
+      if (scripts.test || inventory.manifests?.pyprojectToml || inventory.manifests?.requirementsTxt
+        || inventory.manifests?.cargoToml || inventory.manifests?.goMod || inventory.manifests?.dotnetProject
+        || inventory.manifests?.dotnetSolution || hasTestsDirectory) tasks.push("test");
       if (scripts.lint) tasks.push("lint");
       if (scripts.typecheck || scripts.check) tasks.push("typecheck");
       for (const task of tasks) {
