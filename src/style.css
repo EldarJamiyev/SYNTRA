@@ -28,10 +28,28 @@ button:disabled { cursor: not-allowed; }
 .chat-message.assistant { justify-content: flex-start; }
 .chat-bubble { max-width: min(100%, 680px); min-width: 0; color: #e5e5e5; font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
 .chat-message.user .chat-bubble { max-width: min(88%, 610px); padding: 10px 16px; border-radius: 22px; background: #303030; color: #eeeeee; }
-.message-content { white-space: pre-wrap; overflow-wrap: anywhere; }
-.message-text { display: inline; }
-.message-code { max-width: 100%; white-space: pre; overflow: auto; background: #171717; border: 1px solid #3c3c3c; color: #dedede; border-radius: 12px; padding: 14px 16px; margin: 12px 0; font: 12px/1.7 Consolas, "Cascadia Code", monospace; }
-.message-code code { font: inherit; }
+.message-content { min-width: 0; overflow-wrap: anywhere; line-height: 1.75; }
+.message-content > :first-child { margin-top: 0; }
+.message-content > :last-child { margin-bottom: 0; }
+.message-content p { margin: 0 0 .78em; }
+.message-content h1, .message-content h2, .message-content h3, .message-content h4, .message-content h5, .message-content h6 { margin: 1em 0 .4em; color: #f0f0f0; font-weight: 620; line-height: 1.35; }
+.message-content h1 { font-size: 1.35em; }
+.message-content h2 { font-size: 1.2em; }
+.message-content h3, .message-content h4, .message-content h5, .message-content h6 { font-size: 1.06em; }
+.message-content ul, .message-content ol { margin: .35em 0 .85em; padding-left: 1.55em; }
+.message-content li { padding-left: .14em; }
+.message-content li + li { margin-top: .22em; }
+.message-content a { color: #9bbcff; text-decoration: underline; text-decoration-color: #718cb8; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.message-content blockquote { margin: .9em 0; padding: .1em 0 .1em 1em; color: #c5c5c5; border-left: 3px solid #555; }
+.message-content hr { border: 0; border-top: 1px solid #414141; margin: 1em 0; }
+.message-inline-code { border: 1px solid #454545; border-radius: 5px; padding: .08em .36em; background: #303030; color: #f1c7a5; font: .88em/1.6 Consolas, "Cascadia Code", monospace; overflow-wrap: anywhere; }
+.message-code { max-width: 100%; white-space: pre; overflow: auto; background: #171717; border: 1px solid #3c3c3c; color: #dedede; border-radius: 12px; padding: 14px 16px; margin: .85em 0; font: 12px/1.7 Consolas, "Cascadia Code", monospace; }
+.message-code code { display: block; min-width: max-content; font: inherit; color: inherit; background: transparent; border: 0; padding: 0; }
+.message-table-wrap { max-width: 100%; overflow-x: auto; margin: .8em 0; border: 1px solid #414141; border-radius: 9px; }
+.message-table-wrap table { width: 100%; border-collapse: collapse; font-size: .92em; }
+.message-table-wrap th, .message-table-wrap td { padding: 8px 10px; border-bottom: 1px solid #414141; text-align: left; vertical-align: top; }
+.message-table-wrap th { color: #f2f2f2; background: #2d2d2d; font-weight: 600; }
+.message-table-wrap tr:last-child td { border-bottom: 0; }
 .pending-content { min-height: 27px; display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
 .thinking-spinner { animation: spin .9s linear infinite; }
 .chat-composer-wrap { width: 100%; max-width: 790px; margin: 0 auto; flex: 0 0 auto; padding: 0 24px max(18px, env(safe-area-inset-bottom)); }

@@ -1,5 +1,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { ArrowUp, LoaderCircle } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type ChatJob = {
@@ -17,22 +19,65 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const result = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(result.error || 'The local chat service returned an error.');
+
+  const raw = await response.text();
+  let result: (T & { error?: string }) | undefined;
+  try {
+    result = JSON.parse(raw) as T & { error?: string };
+  } catch {
+    const status = response.ok ? 'returned an invalid response' : 'failed with HTTP ' + response.status;
+    throw new Error("SYNTRA's local service " + status + '. Check that Start-SYNTRA.bat has finished launching, then refresh and try again.');
+  }
+
+  if (!response.ok) throw new Error(result?.error || 'The local chat service returned an error.');
+  if (!result || typeof result !== 'object') {
+    throw new Error('SYNTRA returned an unexpected response. Restart the local service and try again.');
+  }
   return result;
 }
 
+function safeMarkdownHref(href?: string) {
+  if (!href) return null;
+  if (/^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i.test(href)) return href;
+  return null;
+}
+
 function MessageContent({ content }: { content: string }) {
-  const parts = content.split(String.fromCharCode(96, 96, 96));
   return (
     <div className="message-content">
-      {parts.map((part, index) => {
-        if (index % 2 === 1) {
-          const code = part.replace(/^[a-zA-Z0-9_+.-]*\n/, '');
-          return <pre className="message-code" key={index}><code>{code}</code></pre>;
-        }
-        return part ? <span className="message-text" key={index}>{part}</span> : null;
-      })}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        components={{
+          a({ href, children }) {
+            const safeHref = safeMarkdownHref(href);
+            if (!safeHref) return <span>{children}</span>;
+            const external = /^https?:\/\//i.test(safeHref);
+            return (
+              <a
+                href={safeHref}
+                {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+              >
+                {children}
+              </a>
+            );
+          },
+          code({ className, children }) {
+            const isBlock = Boolean(className) || String(children).includes('\n');
+            return isBlock
+              ? <code className={className}>{children}</code>
+              : <code className="message-inline-code">{children}</code>;
+          },
+          pre({ children }) {
+            return <pre className="message-code">{children}</pre>;
+          },
+          table({ children }) {
+            return <div className="message-table-wrap"><table>{children}</table></div>;
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

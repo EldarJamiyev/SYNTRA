@@ -53,6 +53,6 @@ jobs:
           $package = Get-Content "package.json" -Raw | ConvertFrom-Json
           if ($package.scripts.'ai:cli' -ne "python scripts/run_syntra_module.py cli") { throw "The AI CLI launcher mapping is incorrect." }
           if ($package.scripts.'ai:server' -ne "python scripts/run_syntra_module.py server") { throw "The AI server launcher mapping is incorrect." }
-          if (-not $package.dependencies.react -or -not $package.dependencies.'react-dom' -or -not $package.devDependencies.typescript -or -not $package.devDependencies.vite) { throw "Required frontend dependencies are missing from package.json." }
+          if (-not $package.dependencies.react -or -not $package.dependencies.'react-dom' -or -not $package.dependencies.'react-markdown' -or -not $package.dependencies.'remark-gfm' -or -not $package.devDependencies.typescript -or -not $package.devDependencies.vite) { throw "Required frontend dependencies are missing from package.json." }
           if ((Get-Content "requirements.txt" -Raw) -notmatch "numpy") { throw "NumPy is not listed in requirements.txt." }
           Write-Host "PowerShell launcher syntax and one-click entry point are valid."

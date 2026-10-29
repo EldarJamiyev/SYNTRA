@@ -161,7 +161,7 @@ try {
     }
 
     Write-Step "Preparing the web application"
-    if (-not (Test-Path (Join-Path $Root "node_modules\vite\bin\vite.js")) -or -not (Test-Path (Join-Path $Root "node_modules\react\package.json"))) {
+    if (-not (Test-Path (Join-Path $Root "node_modules\vite\bin\vite.js")) -or -not (Test-Path (Join-Path $Root "node_modules\react\package.json")) -or -not (Test-Path (Join-Path $Root "node_modules\react-markdown\package.json")) -or -not (Test-Path (Join-Path $Root "node_modules\remark-gfm\package.json"))) {
         npm install
         if ($LASTEXITCODE -ne 0) { throw "npm install failed. Fix the npm error shown above and run Start-SYNTRA.bat again." }
     } else {

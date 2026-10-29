@@ -14,6 +14,11 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /placeholder="Message SYNTRA"/);
   assert.match(app, /How can I help\?/);
   assert.match(app, /aria-label="Send message"/);
+  assert.match(app, /from 'react-markdown'/);
+  assert.match(app, /from 'remark-gfm'/);
+  assert.match(app, /skipHtml/);
+  assert.match(app, /SYNTRA's local service/);
+  assert.match(app, /noopener noreferrer/);
   assert.match(html, /<title>SYNTRA Chat<\/title>/);
   for (const label of [
     'Studio Playground',

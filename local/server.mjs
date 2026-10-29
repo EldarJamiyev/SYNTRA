@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
 import { runAgentTask } from "./agent.mjs";
+import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import {
   applyFileProposal,
@@ -163,10 +164,7 @@ function updateChat(jobId, value) {
   if (job) Object.assign(job, value, { updatedAt: new Date().toISOString() });
 }
 
-function isCodingTask(message) {
-  return /^(?:please\s+)?(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign)\b/i.test(message.trim())
-    || /\b(?:in this codebase|in the (?:current )?repo(?:sitory)?|in the project files|edit the project|modify the codebase|fix this bug|implement this feature|add this feature|improve this application|make this application better)\b/i.test(message);
-}
+
 
 async function applyProposals(root, proposals) {
   const checked = [];
