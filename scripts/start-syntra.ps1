@@ -18,10 +18,13 @@ if (Test-Path $VenvPython) {
 } else {
     $Python = (Get-Command python).Source
 }
-$TorchReady = & $Python -c "import torch; print(torch.__version__)" 2>$null
-if (-not $TorchReady) {
-    Write-Warning "PyTorch is not installed in the selected Python environment."
-    Write-Warning "Run 'npm run ai:install' to create .venv and install CPU-only PyTorch, then restart SYNTRA."
+
+# Inspect installed package metadata without importing torch. Importing torch can
+# write a NumPy warning to stderr, which older PowerShell treats as a terminating error.
+$RuntimeCheck = & $Python -c "import importlib.util; print('ready' if importlib.util.find_spec('torch') and importlib.util.find_spec('numpy') else 'missing')"
+if ($LASTEXITCODE -ne 0 -or "$RuntimeCheck".Trim() -ne "ready") {
+    Write-Warning "SYNTRA's local Python dependencies are missing."
+    Write-Warning "Run 'npm run ai:install' and then start SYNTRA again."
 } else {
     $PythonDirectory = Split-Path -Parent $Python
     $env:PATH = $PythonDirectory + ";" + $env:PATH
@@ -39,4 +42,4 @@ Start-Process powershell -ArgumentList @(
 Write-Host "SYNTRA services launched." -ForegroundColor Green
 Write-Host "GUI: http://127.0.0.1:3000"
 Write-Host "Local workspace API: http://127.0.0.1:3001/local-api/health"
-Write-Host "Native AI API: http://127.0.0.1:3002/health (when PyTorch is installed)"
+Write-Host "Native AI API: http://127.0.0.1:3002/health (when PyTorch and NumPy are installed)"

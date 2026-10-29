@@ -12,19 +12,7 @@
     "cli": "node bin/syntra.mjs",
     "test": "node --test",
     "ai:install": "python scripts/setup_syntra_env.py",
-    "ai:server": "python scripts/run_syntra_module.py syntra_ai.server",
-    "ai:cli": "python scripts/run_syntra_module.py syntra_ai.cli"
-  },
-  "dependencies": {
-    "lucide-react": "^0.468.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "~5.7.2",
-    "vite": "^6.0.0"
+    "ai:server": "python scripts/run_syntra_module.py server",
+    "ai:cli": "python scripts/run_syntra_module.py cli"
   }
 }
