@@ -50,6 +50,7 @@ button:disabled { cursor: not-allowed; }
 .message-table-wrap th, .message-table-wrap td { padding: 8px 10px; border-bottom: 1px solid #414141; text-align: left; vertical-align: top; }
 .message-table-wrap th { color: #f2f2f2; background: #2d2d2d; font-weight: 600; }
 .message-table-wrap tr:last-child td { border-bottom: 0; }
+.user-message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .pending-content { min-height: 27px; display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 13px; }
 .thinking-spinner { animation: spin .9s linear infinite; }
 .chat-composer-wrap { width: 100%; max-width: 790px; margin: 0 auto; flex: 0 0 auto; padding: 0 24px max(18px, env(safe-area-inset-bottom)); }

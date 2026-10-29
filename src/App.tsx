@@ -119,6 +119,7 @@ export default function App() {
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
     let requestStarted = false;
+    let partialReply = '';
     try {
       const started = await postJson<ChatJob>('/local-api/chat', { message: content, history });
       requestStarted = true;
@@ -126,7 +127,10 @@ export default function App() {
       while (job.status === 'running') {
         if (!mountedRef.current) return;
         setPhase(job.message || 'Thinking');
-        if (job.reply && job.status === 'running') setStreamingReply(job.reply);
+        if (job.reply && job.status === 'running') {
+          partialReply = job.reply;
+          setStreamingReply(partialReply);
+        }
         await new Promise(resolve => window.setTimeout(resolve, 800));
         job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
       }
@@ -135,7 +139,12 @@ export default function App() {
         setStreamingReply('');
         setMessages(current => {
           const last = current[current.length - 1];
-          return last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
+          const restored = last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
+          if (!partialReply) return restored;
+          return [...restored, {
+            role: 'assistant',
+            content: partialReply + '\n\n---\n\n*Response interrupted before completion; this may be incomplete.*',
+          }];
         });
         setInput(content);
         setError(job.error || job.reply || 'The local request failed.');
@@ -147,13 +156,16 @@ export default function App() {
     } catch (cause) {
       if (mountedRef.current) {
         setStreamingReply('');
-        if (!requestStarted) {
-          setMessages(current => {
-            const last = current[current.length - 1];
-            return last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
-          });
-          setInput(content);
-        }
+        setMessages(current => {
+          const last = current[current.length - 1];
+          const restored = last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
+          if (!partialReply) return restored;
+          return [...restored, {
+            role: 'assistant',
+            content: partialReply + '\n\n---\n\n*Response interrupted before completion; this may be incomplete.*',
+          }];
+        });
+        setInput(content);
         const detail = cause instanceof Error && cause.name === 'TimeoutError'
           ? "SYNTRA's local service did not respond within 15 seconds. Check the service windows and try again."
           : cause instanceof Error ? cause.message : String(cause);
@@ -190,7 +202,11 @@ export default function App() {
           <div className="chat-messages">
             {messages.map((message, index) => (
               <article className={'chat-message ' + message.role} key={index}>
-                <div className="chat-bubble"><MessageContent content={message.content} /></div>
+                <div className="chat-bubble">
+                    {message.role === 'assistant'
+                      ? <MessageContent content={message.content} />
+                      : <div className="user-message-text">{message.content}</div>}
+                  </div>
               </article>
             ))}
             {pending && streamingReply && (

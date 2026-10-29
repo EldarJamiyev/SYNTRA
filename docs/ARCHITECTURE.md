@@ -13,7 +13,7 @@ The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:300
 ## Chat request lifecycle
 
 1. The Node service checks whether the request is a clear software-change command. Broad verbs alone are insufficient: “write a poem” and “write an email” stay on the conversation path.
-2. For normal chat, it builds a bounded prompt from the latest message and recent conversation turns, counts tokens through the selected backend, trims excess history when required, and generates a local reply.
+2. For normal chat, it builds a bounded prompt from the latest message and recent conversation turns, counts tokens through the selected backend, trims excess history when required, and generates a local reply. Ollama NDJSON token chunks update the active chat job, and the UI polls those partial updates; the native research backend is currently non-streaming.
 3. If the user explicitly asks to modify software, SYNTRA inspects the selected workspace, builds a local import graph, and ranks relevant source files.
 4. The model is asked for a constrained JSON patch with exact search anchors and replacements.
 5. The agent rejects malformed JSON, duplicate edits, ambiguous anchors, path traversal, sensitive file paths, and oversized changes.
