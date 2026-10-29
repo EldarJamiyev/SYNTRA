@@ -6,13 +6,15 @@ const appPath = new URL('../src/App.tsx', import.meta.url);
 const indexPath = new URL('../index.html', import.meta.url);
 const serverPath = new URL('../local/server.mjs', import.meta.url);
 const stylePath = new URL('../src/style.css', import.meta.url);
+const historyModulePath = new URL('../src/chat-history.js', import.meta.url);
 
 test('the frontend stays a simple chat rather than a model dashboard', async () => {
-  const [app, html, server, css] = await Promise.all([
+  const [app, html, server, css, historyModule] = await Promise.all([
     fs.readFile(appPath, 'utf8'),
     fs.readFile(indexPath, 'utf8'),
     fs.readFile(serverPath, 'utf8'),
     fs.readFile(stylePath, 'utf8'),
+    fs.readFile(historyModulePath, 'utf8'),
   ]);
   const frontend = app + '\n' + html;
   assert.match(app, /placeholder="Message SYNTRA"/);
@@ -27,6 +29,9 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /setInput\(content\)/);
   assert.match(app, /within 15 seconds/);
   assert.match(app, /streamingReply/);
+  assert.match(app, /loadMessages\(\)/);
+  assert.match(app, /saveMessages\(messages\)/);
+  assert.match(historyModule, /MAX_TOTAL_CHARS/);
   assert.match(app, /message\.role === 'assistant'/);
   assert.match(app, /Response interrupted before completion/);
   assert.match(css, /\.user-message-text \{[^}]*white-space: pre-wrap/s);

@@ -1,6 +1,6 @@
 # SYNTRA — Simple local AI chat
 
-SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It shows the conversation, a message field, and one send control—without a dashboard full of toggles.
+SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It shows the conversation, a message field, and one send control—without a dashboard full of toggles. Recent conversation history is saved in the browser on that device, with bounded storage and graceful fallback when browser storage is unavailable.
 
 ## Windows launch
 

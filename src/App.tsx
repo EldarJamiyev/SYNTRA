@@ -2,6 +2,7 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { ArrowUp, LoaderCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { loadMessages, saveMessages } from './chat-history.js';
 
 type Message = { role: 'user' | 'assistant'; content: string };
 type ChatJob = {
@@ -84,7 +85,7 @@ function MessageContent({ content }: { content: string }) {
 }
 
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => loadMessages());
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const [phase, setPhase] = useState('');
@@ -103,6 +104,12 @@ export default function App() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, pending, phase, streamingReply]);
+
+  useEffect(() => {
+    // Avoid persisting a turn before it finishes; successful replies and clearly marked
+    // interrupted output are saved when pending becomes false.
+    if (!pending) saveMessages(messages);
+  }, [messages, pending]);
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault();
