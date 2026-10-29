@@ -93,7 +93,9 @@ export default function App() {
   const [streamingReply, setStreamingReply] = useState('');
   const [error, setError] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const threadRef = useRef<HTMLElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const shouldFollowRef = useRef(true);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -102,8 +104,16 @@ export default function App() {
     return () => { mountedRef.current = false; };
   }, []);
 
+  const handleThreadScroll = () => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    const distanceFromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
+    shouldFollowRef.current = distanceFromBottom < 120;
+  };
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (!shouldFollowRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: pending ? 'auto' : 'smooth', block: 'end' });
   }, [messages, pending, phase, streamingReply]);
 
   useEffect(() => {
@@ -126,6 +136,7 @@ export default function App() {
       return;
     }
 
+    shouldFollowRef.current = true;
     const history = messages.slice(-12);
     setMessages(current => [...current, { role: 'user', content }]);
     setInput('');
@@ -211,7 +222,12 @@ export default function App() {
         <span className="chat-brand">SYNTRA</span>
       </header>
 
-      <section className={'chat-thread ' + (messages.length === 0 ? 'chat-thread-empty' : '')} aria-live="polite">
+      <section
+        ref={threadRef}
+        onScroll={handleThreadScroll}
+        className={'chat-thread ' + (messages.length === 0 ? 'chat-thread-empty' : '')}
+        aria-live="polite"
+      >
         {messages.length === 0 ? (
           <div className="chat-welcome">
             <h1>How can I help?</h1>

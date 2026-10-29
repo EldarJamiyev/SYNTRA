@@ -31,6 +31,9 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /job\.partialReply/);
   assert.match(app, /within 15 seconds/);
   assert.match(app, /streamingReply/);
+  assert.match(app, /shouldFollowRef\.current/);
+  assert.match(app, /onScroll=\{handleThreadScroll\}/);
+  assert.match(app, /distanceFromBottom < 120/);
   assert.match(app, /loadMessages\(\)/);
   assert.match(app, /saveMessages\(messages\)/);
   assert.match(historyModule, /MAX_TOTAL_CHARS/);
