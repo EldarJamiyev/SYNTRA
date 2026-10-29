@@ -47,8 +47,8 @@ jobs:
           }
           if (-not (Test-Path "Start-SYNTRA.bat")) { throw "Start-SYNTRA.bat is missing." }
           if (-not (Test-Path "tests/frontend.test.mjs")) { throw "Minimal chat frontend regression test is missing." }
-          node --test tests/frontend.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw "Minimal chat frontend test failed." }
+          node --test
+          if ($LASTEXITCODE -ne 0) { throw "Node.js regression suite failed on Windows." }
           if (-not (Test-Path "local/model-provider.mjs")) { throw "Local model routing module is missing." }
           $package = Get-Content "package.json" -Raw | ConvertFrom-Json
           if ($package.scripts.'ai:cli' -ne "python scripts/run_syntra_module.py cli") { throw "The AI CLI launcher mapping is incorrect." }
