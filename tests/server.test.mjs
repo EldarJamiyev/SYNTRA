@@ -92,6 +92,13 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.ok(health.capabilities.includes("local-chat"));
     assert.ok(health.capabilities.includes("local-network-diagnostics"));
     assert.ok(health.capabilities.includes("persistent-proposal-review"));
+    const apiRootResponse = await fetch(base + "/");
+    assert.equal(apiRootResponse.status, 200);
+    const apiRoot = await apiRootResponse.json();
+    assert.equal(apiRoot.service, "SYNTRA local API");
+    assert.match(apiRoot.message, /Open the SYNTRA frontend/);
+    assert.equal(apiRoot.frontend, "http://127.0.0.1:3000/");
+
 
     const workspaceStatusResponse = await fetch(base + "/local-api/workspace/status");
     assert.equal(workspaceStatusResponse.status, 200);
