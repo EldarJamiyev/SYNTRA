@@ -149,6 +149,43 @@ test("local model read-only tool plans use a schema restricted to search and fil
   assert.equal(result.text, '{"calls":[{"tool":"workspace.search","input":{"query":"router"}}]}');
 });
 
+test("local model implementation slice plans use a bounded strict JSON schema", async () => {
+  let capturedBody = null;
+  const provider = {
+    provider: "ollama-local",
+    baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b",
+    modelSizeBytes: 9 * GB,
+    contextTokens: 8192,
+    tokenizer: "ollama-local-tokenizer"
+  };
+  const fetchImpl = async (_url, options) => {
+    capturedBody = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      message: {
+        role: "assistant",
+        content: '{"slices":[{"goal":"Update the API response mapping.","acceptance":"The API regression tests pass."}]}'
+      },
+      prompt_eval_count: 100, eval_count: 20
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const result = await handleLocalModelRequest(provider, "POST", "/model/generate", {
+    prompt: "SYNTRA_IMPLEMENTATION_SLICE_PLAN\nReturn one bounded slice plan.",
+    max_new_tokens: 384, temperature: 0.1, top_k: 20
+  }, { fetchImpl, timeoutMs: 1000 });
+  assert.equal(capturedBody.format.type, "object");
+  assert.deepEqual(capturedBody.format.required, ["slices"]);
+  assert.equal(capturedBody.format.properties.slices.minItems, 1);
+  assert.equal(capturedBody.format.properties.slices.maxItems, 3);
+  assert.deepEqual(
+    Object.keys(capturedBody.format.properties.slices.items.properties).sort(),
+    ["acceptance", "goal"]
+  );
+  assert.equal(capturedBody.messages[0].role, "system");
+  assert.match(capturedBody.messages[0].content, /implementation planner/);
+  assert.equal(result.text, '{"slices":[{"goal":"Update the API response mapping.","acceptance":"The API regression tests pass."}]}');
+});
+
 test("local generation streams arbitrary NDJSON chunks and accumulates the complete answer", async () => {
   let capturedBody = null;
   const provider = {

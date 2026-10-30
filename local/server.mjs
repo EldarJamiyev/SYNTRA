@@ -583,6 +583,7 @@ async function runChatTurn(jobId, message, history, signal) {
         root: activeWorkspace,
         goal: taskGoal,
         maxIterations: 3,
+        maxSlices: 3,
         runChecks: true,
         signal,
         resumePatch: resumeRecord?.recoveryPatch || null,
@@ -633,7 +634,13 @@ async function runChatTurn(jobId, message, history, signal) {
       await updateAgentRun(activeWorkspace, agentRunId, {
         status: "completed",
         phase: "completed",
-        message: applied.length ? "Verified changes were applied." : "Agent task finished; review any staged proposals.",
+        message: applied.length
+          ? "Verified changes were applied."
+          : result.verification?.status === "slice_incomplete"
+            ? "Agent stopped with an incomplete implementation slice; review the unverified cumulative proposals."
+            : result.verification?.passed
+              ? "Agent task finished; review any staged proposals."
+              : "Agent task finished with unverified proposals; inspect the verification details before applying.",
         planSteps: result.plan?.steps || [],
         attempts: result.attempts || [],
         toolCalls: result.toolCalls || [],
@@ -766,7 +773,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,

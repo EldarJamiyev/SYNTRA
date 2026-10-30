@@ -8,6 +8,7 @@ import {
   buildRepositoryGraph,
   parsePatchOutput,
   runAgentTask,
+  validateImplementationSlicePlan,
   validateReadOnlyToolPlan,
   validateStructuredPatch
 } from "../local/agent.mjs";
@@ -23,13 +24,209 @@ async function createProject() {
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
     name: "agent-fixture",
     version: "1.0.0",
-    scripts: { test: "node --test" }
+    scripts: { test: "node tests/value-check.mjs" }
   }, null, 2));
   await fs.writeFile(path.join(root, "src", "value.js"), "module.exports = { value: 1 };\n");
+  await fs.writeFile(path.join(root, "tests", "value-check.mjs"),
+    'import assert from "node:assert/strict";\\n' +
+    'import { createRequire } from "node:module";\\n' +
+    'const require = createRequire(import.meta.url);\\n' +
+    'assert.equal(require("../src/value.js").value, 2, "the candidate must export value 2");\\n');
   await fs.writeFile(path.join(root, "tests", "value.test.js"),
     'const test = require("node:test");\nconst assert = require("node:assert/strict");\nconst value = require("../src/value.js");\ntest("value is two", () => assert.equal(value.value, 2));\n');
   return root;
 }
+
+test("implementation slice plan validation is bounded, unique, and requires measurable acceptance", () => {
+  const slices = validateImplementationSlicePlan({
+    slices: [
+      { goal: "Update the service response mapping.", acceptance: "The existing service tests pass." },
+      { goal: "Add a response metadata helper.", acceptance: "The new helper is exported and tested." }
+    ]
+  }, "Update the service response and metadata helper.", 3);
+  assert.equal(slices.length, 2);
+  assert.equal(slices[0].id, "slice-1");
+  assert.equal(slices[1].status, "pending");
+  assert.throws(() => validateImplementationSlicePlan({
+    slices: [
+      { goal: "Update the service response mapping.", acceptance: "The tests pass." },
+      { goal: "Add the metadata helper module.", acceptance: "The helper is exported and tested." }
+    ]
+  }, "Complete a bigger service update.", 1), /between one and 1 slices/);
+  assert.throws(() => validateImplementationSlicePlan({
+    slices: [
+      { goal: "Update the service response mapping.", acceptance: "The tests pass." },
+      { goal: "Update the service response mapping.", acceptance: "The tests pass." }
+    ]
+  }, "Complete a bigger service update.", 3), /unique/);
+  assert.throws(() => validateImplementationSlicePlan({
+    slices: [{ goal: "tiny", acceptance: "ok" }]
+  }, "Complete a bigger service update.", 3), /bounded goal and measurable acceptance/);
+});
+
+test("agent implements and verifies multiple slices against one cumulative candidate", async () => {
+  const root = await createProject();
+  const generatedPrompts = [];
+  const recoveryCheckpoints = [];
+  let patchCalls = 0;
+  const modelRequest = async (method, route, body) => {
+    if (method === "GET" && route === "/model/status") {
+      return {
+        checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      generatedPrompts.push(body.prompt);
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        return {
+          text: JSON.stringify({
+            slices: [
+              { goal: "Update the exported value from one to two.", acceptance: "The existing value test passes." },
+              { goal: "Add a small exported description helper.", acceptance: "The helper file is present and the full test suite still passes." }
+            ]
+          }),
+          generated_tokens: 55, trained_steps: null
+        };
+      }
+      patchCalls += 1;
+      if (patchCalls === 1) {
+        assert.ok(body.prompt.includes("Implementation slice 1 of 2"));
+        return {
+          text: JSON.stringify({
+            summary: "Update the exported value.",
+            edits: [{
+              path: "src/value.js",
+              find: "value: 1",
+              replace: "value: 2",
+              reason: "Complete the first verified implementation slice."
+            }]
+          }),
+          generated_tokens: 35, trained_steps: null
+        };
+      }
+      assert.ok(body.prompt.includes("Implementation slice 2 of 2"));
+      assert.ok(body.prompt.includes("Implementation slice 2 of 2"));
+      assert.ok(body.prompt.includes("module.exports = { value: 2 }"),
+        "slice two must receive source context from the verified first slice");
+      return {
+        text: JSON.stringify({
+          summary: "Add an exported description helper.",
+          edits: [{
+            path: "src/description.js",
+            find: "",
+            replace: "module.exports = { description: 'SYNTRA' };\n",
+            reason: "Complete the second implementation slice."
+          }]
+        }),
+        generated_tokens: 40, trained_steps: null
+      };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Update the exported value and add a description helper.",
+      maxIterations: 2,
+      maxSlices: 2,
+      runChecks: true,
+      modelRequest,
+      onProgress: update => {
+        if (Object.prototype.hasOwnProperty.call(update, "recoveryPatch")) recoveryCheckpoints.push(update.recoveryPatch);
+      }
+    });
+    assert.equal(patchCalls, 2);
+    assert.ok(recoveryCheckpoints.length > 0);
+    assert.ok(recoveryCheckpoints.every(value => value === null),
+      "multi-slice runs must restart from the overall goal instead of persisting a candidate-relative patch");
+    assert.equal(generatedPrompts.filter(prompt => prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")).length, 1);
+    assert.equal(result.implementationSlices.length, 2);
+    assert.ok(result.implementationSlices.every(slice => slice.status === "completed"));
+    assert.equal(result.verification.status, "passed");
+    assert.equal(result.verification.passed, true);
+    assert.equal(result.proposals.length, 2);
+    assert.deepEqual(result.changedFiles.map(file => file.path).sort(), ["src/description.js", "src/value.js"]);
+    assert.ok(result.observations.some(item =>
+      item.kind === "candidate-reinspection" && item.stage === "slice-2" && item.status === "observed"
+    ));
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
+    const applied = await import("../local/workspace.mjs").then(module =>
+      module.applyFileProposals(root, result.proposals.map(proposal => proposal.id), true)
+    );
+    assert.equal(applied.applied.length, 2);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "description.js"), "utf8"), "module.exports = { description: 'SYNTRA' };\n");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete later slice cannot inherit an earlier passing verification status", async () => {
+  const root = await createProject();
+  let patchCalls = 0;
+  const modelRequest = async (method, route, body) => {
+    if (method === "GET" && route === "/model/status") {
+      return {
+        checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        return {
+          text: JSON.stringify({
+            slices: [
+              { goal: "Update the exported value from one to two.", acceptance: "The existing value test passes." },
+              { goal: "Add a description helper module.", acceptance: "The helper exists and the full suite passes." }
+            ]
+          }),
+          generated_tokens: 40, trained_steps: null
+        };
+      }
+      patchCalls += 1;
+      if (patchCalls === 1) {
+        return {
+          text: JSON.stringify({
+            summary: "Update exported value.",
+            edits: [{
+              path: "src/value.js", find: "value: 1", replace: "value: 2",
+              reason: "First slice implementation."
+            }]
+          }),
+          generated_tokens: 30, trained_steps: null
+        };
+      }
+      return { text: '{"summary":"unfinished"', generated_tokens: 4, trained_steps: null };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Update the exported value and add a description helper.",
+      maxIterations: 1,
+      maxSlices: 2,
+      runChecks: true,
+      modelRequest
+    });
+    assert.equal(patchCalls, 2);
+    assert.equal(result.implementationSlices[0].status, "completed");
+    assert.equal(result.implementationSlices[1].status, "blocked");
+    assert.equal(result.verification.status, "slice_incomplete");
+    assert.equal(result.verification.passed, false);
+    assert.deepEqual(result.verification.incompleteSlices, ["slice-2"]);
+    assert.equal(result.status, "proposals_ready_unverified");
+    assert.equal(result.proposals.length, 1);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("model-selected context plans allow only bounded search and safe listed-file reads", () => {
   const valid = validateReadOnlyToolPlan({

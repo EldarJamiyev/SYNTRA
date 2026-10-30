@@ -363,6 +363,94 @@ function isPlainToolInput(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
+export function validateImplementationSlicePlan(payload, taskGoal, maxSlices = 3) {
+  const requestedMaximum = Number(maxSlices);
+  const maximum = Math.max(1, Math.min(3, Number.isFinite(requestedMaximum) ? requestedMaximum : 3));
+  if (!isPlainToolInput(payload) || Object.keys(payload).some(key => key !== "slices")
+    || !Array.isArray(payload.slices) || payload.slices.length < 1 || payload.slices.length > maximum) {
+    throw new Error("Implementation plan must contain between one and " + maximum + " slices.");
+  }
+  const slices = [];
+  const seen = new Set();
+  for (const item of payload.slices) {
+    if (!isPlainToolInput(item) || Object.keys(item).some(key => !["goal", "acceptance"].includes(key))
+      || typeof item.goal !== "string" || item.goal.trim().length < 8 || item.goal.length > 1200
+      || typeof item.acceptance !== "string" || item.acceptance.trim().length < 8 || item.acceptance.length > 400) {
+      throw new Error("Each implementation slice requires a bounded goal and measurable acceptance criterion.");
+    }
+    const sliceGoal = item.goal.trim();
+    const key = sliceGoal.toLowerCase();
+    if (seen.has(key)) throw new Error("Implementation slice goals must be unique.");
+    seen.add(key);
+    slices.push({
+      id: "slice-" + (slices.length + 1),
+      goal: sliceGoal,
+      acceptance: item.acceptance.trim(),
+      status: "pending"
+    });
+  }
+  if (slices.length > 1 && slices.some(item => item.goal.toLowerCase() === String(taskGoal).trim().toLowerCase())) {
+    throw new Error("A multi-slice plan must define focused sub-goals instead of repeating the complete task.");
+  }
+  return slices;
+}
+
+function makeImplementationSlicePlanPrompt(goal, inventory, ranked) {
+  const context = ranked.slice(0, 8).map(item => ({
+    path: item.path, language: item.language, imports: item.imports.slice(0, 5),
+    importedBy: item.importedBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 360)
+  }));
+  return [
+    "SYNTRA_IMPLEMENTATION_SLICE_PLAN",
+    "Break the requested software task into one to three ordered, independently verifiable implementation slices.",
+    "Prefer the smallest useful number of slices. Use one slice when the task is already atomic.",
+    "Each slice must deliver a concrete part of the requested outcome and have a testable acceptance criterion.",
+    "Later slices may build on earlier verified slices. Do not invent unrelated work, documentation-only padding, or work outside the user request.",
+    "Return only JSON with shape {slices:[{goal:string,acceptance:string}]}. Keep each goal under 1200 characters and each acceptance criterion under 400 characters.",
+    "\nTASK:\n" + goal,
+    "\nPROJECT:\n" + JSON.stringify({
+      name: inventory.name, frameworks: inventory.frameworks, scripts: inventory.scripts,
+      context
+    })
+  ].join("\n");
+}
+
+async function planImplementationSlices({
+  goal, inventory, ranked, modelRequest, contextBudget, maxSlices, signal
+}) {
+  const prompt = makeImplementationSlicePlanPrompt(goal, inventory, ranked);
+  const tokens = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+  if (Number(tokens.token_count) > Math.min(contextBudget, 1600)) {
+    throw new Error("Implementation slice plan exceeds the bounded planning context.");
+  }
+  const generated = await modelJson(modelRequest, "/model/generate", {
+    prompt, max_new_tokens: 384, temperature: 0.1, top_k: 20, device: "auto"
+  }, 120000, signal);
+  return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
+}
+
+async function collectFinalCandidateChanges(changedPaths, originalByPath, expectedContents) {
+  const changes = [];
+  for (const relative of [...changedPaths].sort()) {
+    const original = originalByPath.get(relative);
+    const content = expectedContents.get(relative);
+    if (!original || typeof content !== "string") {
+      throw new Error("Missing original-file baseline or intended candidate content for: " + relative);
+    }
+    if (original.beforeContent === content) continue;
+    changes.push({
+      path: relative,
+      beforeContent: original.beforeContent,
+      beforeHash: original.beforeHash,
+      existedBefore: original.existedBefore,
+      content,
+      reason: original.reason || "Updated in a verified implementation slice.",
+      matches: original.existedBefore ? 1 : 0
+    });
+  }
+  return changes;
+}
+
 export function validateReadOnlyToolPlan(payload, availablePaths = []) {
   if (!isPlainToolInput(payload) || Object.keys(payload).some(key => key !== "calls")) {
     throw new Error("Read-only tool plan must contain only a calls array.");
@@ -605,18 +693,6 @@ async function copySandbox(root) {
   }
 }
 
-async function resetSandboxFiles(sandboxRoot, previous, originalChanges) {
-  for (const relative of previous) {
-    const original = originalChanges.get(relative);
-    const target = path.resolve(sandboxRoot, relative.split("/").join(path.sep));
-    if (!within(sandboxRoot, target)) throw new Error("Sandbox patch path escaped the temporary workspace.");
-    if (!original || !original.existedBefore) await fs.rm(target, { force: true }).catch(() => {});
-    else {
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, original.beforeContent, "utf8");
-    }
-  }
-}
 
 async function writeCandidateChanges(sandboxRoot, changes) {
   for (const change of changes) {
@@ -729,7 +805,7 @@ export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
   onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1,
   resumeBaseHashes = null, previousAttempts = [], previousToolCalls = [],
-  modelToolSelection = false
+  modelToolSelection = false, maxSlices = 1
 }) {
   const root = await resolveWorkspace(inputRoot);
   const emitProgress = async update => {
@@ -758,7 +834,7 @@ export async function runAgentTask({
     root, auditRoot: root, name: "workspace.inspect", input: {}, signal
   });
   if (!inspectionRun.ok) throw new Error(inspectionRun.error || "The workspace inspection tool failed.");
-  const inventory = inspectionRun.output;
+  let inventory = inspectionRun.output;
   const toolCalls = [
     ...(Array.isArray(previousToolCalls) ? previousToolCalls.slice(-56) : []),
     toolCallSummary(inspectionRun)
@@ -799,8 +875,40 @@ export async function runAgentTask({
     message: "Workspace and read-only Git observations recorded. Building the local import graph.",
     toolCalls, observations
   });
-  const graph = await buildRepositoryGraph(root);
-  const ranked = rankGraph(graph, goal, requestedPath);
+  let graph = await buildRepositoryGraph(root);
+  let ranked = rankGraph(graph, goal, requestedPath);
+  maxSlices = Math.max(1, Math.min(3, Number(maxSlices) || 1));
+  let implementationSlices = [{
+    id: "slice-1", goal: goal.trim(),
+    acceptance: "The requested task behavior is implemented and supported by relevant project checks.",
+    status: "pending"
+  }];
+  if (maxSlices > 1 && runChecks && !resumePatch) {
+    await emitProgress({
+      phase: "slice-planning", iteration: 0,
+      message: "Planning independently verifiable implementation slices."
+    });
+    try {
+      implementationSlices = await planImplementationSlices({
+        goal, inventory, ranked, modelRequest, contextBudget, maxSlices, signal
+      });
+      observations.push({
+        kind: "implementation-slice-plan", stage: "planning", status: "accepted",
+        detail: "Planned " + implementationSlices.length + " independently verifiable implementation slice(s)."
+      });
+    } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") throw error;
+      implementationSlices = [{
+        id: "slice-1", goal: goal.trim(),
+        acceptance: "The requested task behavior is implemented and supported by relevant project checks.",
+        status: "pending"
+      }];
+      observations.push({
+        kind: "implementation-slice-plan", stage: "planning", status: "fallback_single_slice",
+        detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+      });
+    }
+  }
   let modelSelectedContext = "";
   if (modelToolSelection && !resumePatch) {
     try {
@@ -821,6 +929,14 @@ export async function runAgentTask({
     }
   }
   const plan = createPlan(goal, inventory, ranked, graph, repositoryState);
+  for (const slice of implementationSlices) {
+    plan.steps.push({
+      id: slice.id,
+      title: slice.goal.slice(0, 90),
+      status: "pending",
+      detail: "Acceptance: " + slice.acceptance
+    });
+  }
   await emitProgress({
     phase: "plan-created",
     iteration: 0,
@@ -839,7 +955,6 @@ export async function runAgentTask({
   let finalChanges = null;
   let finalVerification = { status: "not_run", checks: [], passed: false };
   let snapshot = null;
-  let previouslyTouched = [];
   const originalByPath = new Map();
   const proposals = [];
   if (!ranked.length) throw new Error("No readable source/configuration files were found for repository context.");
@@ -847,300 +962,534 @@ export async function runAgentTask({
   try {
     let savedPatch = resumePatch && typeof resumePatch === "object" ? resumePatch : null;
     const firstIteration = Math.max(1, Math.min(MAX_ITERATIONS, Number(resumeIteration) || 1));
-    for (let iteration = firstIteration; iteration <= maxIterations; iteration += 1) {
-      throwIfAborted(signal);
-      const resumingSavedPatch = Boolean(savedPatch);
-      await emitProgress({ phase: "planning", iteration, message: "Ranking dependencies and allocating a token budget for relevant source files." });
-      let selected = ranked.slice(0, 12);
-      let prompt = makePatchPrompt(goal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext);
-      let tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
-      while (tokenInfo.token_count > contextBudget && selected.length > 1) {
-        selected = selected.slice(0, -1);
-        prompt = makePatchPrompt(goal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext);
-        tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
-      }
-      if (tokenInfo.token_count > contextBudget) {
-        feedback = "Context budget exceeded: need " + tokenInfo.token_count + " tokens but only " + contextBudget + " are available. Shorten the plan and focus on one file.";
-        attempts.push({ iteration, status: "context_too_large", promptTokens: tokenInfo.token_count, contextBudget, feedback });
-        continue;
-      }
+    let iteration = firstIteration - 1;
+    let activePatchRoot = root;
+    let stopAfterSlice = false;
+    const touchedPaths = new Set();
+    const expectedCandidateContents = new Map();
+    const sliceSummaries = [];
 
-      plan.steps.find(step => step.id === "patch").status = "running";
-      await emitProgress({ phase: "generating-patch", iteration, message: "Requesting structured, exact-anchor patch JSON from the selected local model." });
-      let generated;
-      if (savedPatch) {
-        generated = { text: JSON.stringify(savedPatch), generated_tokens: 0, trained_steps: null };
-        savedPatch = null;
-      } else {
+    for (let sliceIndex = 0; sliceIndex < implementationSlices.length && !stopAfterSlice; sliceIndex += 1) {
+      const slice = implementationSlices[sliceIndex];
+      const sliceStep = plan.steps.find(step => step.id === slice.id);
+      const sliceGoal = implementationSlices.length === 1
+        ? goal
+        : [
+          "Overall user request: " + goal,
+          "Implementation slice " + (sliceIndex + 1) + " of " + implementationSlices.length + ": " + slice.goal,
+          "Acceptance criterion: " + slice.acceptance,
+          "Implement only this slice. Earlier completed slices are already present in the candidate workspace. Do not repeat their changes or add unrelated work."
+        ].join("\n");
+      let slicePassed = false;
+      slice.status = "running";
+      if (sliceStep) sliceStep.status = "running";
+      await emitProgress({
+        phase: "slice-started", iteration: Math.max(0, iteration),
+        message: "Starting implementation slice " + (sliceIndex + 1) + " of " + implementationSlices.length + ": " + slice.goal,
+        planSteps: plan.steps, observations, toolCalls,
+        checkpoint: { stage: "slice_started", iteration: Math.max(0, iteration) }
+      });
+
+      for (let sliceAttempt = 1; sliceAttempt <= maxIterations; sliceAttempt += 1) {
+        iteration += 1;
+        throwIfAborted(signal);
+        const resumingSavedPatch = Boolean(savedPatch);
+        await emitProgress({
+          phase: "planning", iteration,
+          message: "Inspecting the current candidate and allocating context for implementation slice " +
+            (sliceIndex + 1) + ", attempt " + sliceAttempt + "."
+        });
+        let selected = ranked.slice(0, 12);
+        let prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext);
+        let tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+        while (tokenInfo.token_count > contextBudget && selected.length > 1) {
+          selected = selected.slice(0, -1);
+          prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext);
+          tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+        }
+        if (tokenInfo.token_count > contextBudget) {
+          feedback = "Context budget exceeded: need " + tokenInfo.token_count + " tokens but only " + contextBudget + " are available. Shorten this slice and focus on one file.";
+          attempts.push({ iteration, sliceId: slice.id, status: "context_too_large", promptTokens: tokenInfo.token_count, contextBudget, feedback });
+          continue;
+        }
+
+        plan.steps.find(step => step.id === "patch").status = "running";
+        await emitProgress({
+          phase: "generating-patch", iteration,
+          message: "Requesting a focused structured patch for " + slice.id + "."
+        });
+        let generated;
+        if (savedPatch) {
+          generated = { text: JSON.stringify(savedPatch), generated_tokens: 0, trained_steps: null };
+          savedPatch = null;
+        } else {
+          try {
+            generated = await modelJson(modelRequest, "/model/generate", {
+              prompt, max_new_tokens: outputBudget, temperature: 0.15,
+              top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
+              device: "auto"
+            }, 300000, signal);
+          } catch (error) {
+            if (signal?.aborted || error?.name === "AbortError") throw error;
+            feedback = "The selected model call failed: " + (error instanceof Error ? error.message : String(error));
+            attempts.push({ iteration, sliceId: slice.id, status: "generation_failed", feedback });
+            await emitProgress({
+              phase: "generation-failed", iteration, message: feedback,
+              attempts, checkpoint: { stage: "generation_failed", iteration }
+            });
+            continue;
+          }
+        }
+
+        let candidate;
+        let patchPayload;
         try {
-          generated = await modelJson(modelRequest, "/model/generate", {
-            prompt, max_new_tokens: outputBudget, temperature: 0.15,
-            top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
-            device: "auto"
-          }, 300000, signal);
+          patchPayload = extractJsonObject(generated.text);
+          candidate = await validatePatch(activePatchRoot, patchPayload,
+            resumingSavedPatch ? resumeBaseHashes : null);
         } catch (error) {
           if (signal?.aborted || error?.name === "AbortError") throw error;
-          feedback = "The selected model call failed: " + (error instanceof Error ? error.message : String(error));
-          attempts.push({ iteration, status: "generation_failed", feedback });
+          if (resumingSavedPatch) {
+            throw new Error("The saved patch checkpoint can no longer be resumed safely because its original file anchors or hashes changed. Start a new coding task after reviewing workspace state. " +
+              (error instanceof Error ? error.message : String(error)));
+          }
+          feedback = "Patch validation failed: " + (error instanceof Error ? error.message : String(error)) +
+            "\nRequired schema: {summary:string, edits:[{path:string, find:string, replace:string, reason:string}]}. The next output must be valid JSON, not source continuation.";
+          attempts.push({
+            iteration, sliceId: slice.id, status: "invalid_patch", promptTokens: tokenInfo.token_count,
+            outputTokens: generated.generated_tokens, modelStep: generated.trained_steps, feedback
+          });
           await emitProgress({
-            phase: "generation-failed", iteration, message: feedback,
-            attempts, checkpoint: { stage: "generation_failed", iteration }
+            phase: "patch-invalid", iteration, message: feedback,
+            attempts, checkpoint: { stage: "patch_invalid", iteration }
           });
           continue;
         }
-      }
 
-      let candidate;
-      let patchPayload;
-      try {
-        patchPayload = extractJsonObject(generated.text);
-        candidate = await validatePatch(root, patchPayload, resumingSavedPatch ? resumeBaseHashes : null);
-      } catch (error) {
-        if (signal?.aborted || error?.name === "AbortError") throw error;
-        if (resumingSavedPatch) {
-          throw new Error("The saved patch checkpoint can no longer be resumed safely because its original file anchors or hashes changed. Start a new coding task after reviewing workspace state. " +
-            (error instanceof Error ? error.message : String(error)));
-        }
-        feedback = "Patch validation failed: " + (error instanceof Error ? error.message : String(error)) +
-          "\nRequired schema: {summary:string, edits:[{path:string, find:string, replace:string, reason:string}]}. The next output must be valid JSON, not source continuation.";
         attempts.push({
-          iteration, status: "invalid_patch", promptTokens: tokenInfo.token_count,
-          outputTokens: generated.generated_tokens, modelStep: generated.trained_steps, feedback
+          iteration, sliceId: slice.id,
+          status: runChecks ? "patch_validated" : "patch_validated_not_run",
+          summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path),
+          promptTokens: tokenInfo.token_count, outputTokens: generated.generated_tokens,
+          modelStep: generated.trained_steps
         });
+        plan.steps.find(step => step.id === "patch").status = "completed";
         await emitProgress({
-          phase: "patch-invalid", iteration, message: feedback,
-          attempts, checkpoint: { stage: "patch_invalid", iteration }
+          phase: "patch-validated",
+          iteration,
+          message: resumingSavedPatch
+            ? "Restored the saved patch checkpoint and revalidated every original source-file hash and exact anchor."
+            : "Patch schema, candidate paths, file hashes and exact anchors validated for " + slice.id + ".",
+          recoveryPatch: implementationSlices.length > 1 ? null : patchPayload,
+          checkpoint: { stage: "patch_validated", iteration },
+          planSteps: plan.steps,
+          toolCalls,
+          attempts,
+          observations,
+          changedFiles: candidate.changes.map(change => ({
+            path: change.path, existedBefore: change.existedBefore,
+            baseHash: change.beforeHash, afterHash: sha256(change.content), reason: change.reason
+          }))
         });
-        continue;
-      }
 
-      attempts.push({
-        iteration, status: runChecks ? "patch_validated" : "patch_validated_not_run",
-        summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path),
-        promptTokens: tokenInfo.token_count, outputTokens: generated.generated_tokens,
-        modelStep: generated.trained_steps
-      });
-      plan.steps.find(step => step.id === "patch").status = "completed";
-      await emitProgress({
-        phase: "patch-validated",
-        iteration,
-        message: resumingSavedPatch
-          ? "Restored the saved patch checkpoint and revalidated every original source-file hash and exact anchor."
-          : "Patch schema, paths, file hashes and exact anchors validated.",
-        recoveryPatch: patchPayload,
-        checkpoint: { stage: "patch_validated", iteration },
-        planSteps: plan.steps,
-        toolCalls,
-        attempts,
-        observations,
-        changedFiles: candidate.changes.map(change => ({
-          path: change.path, existedBefore: change.existedBefore,
-          baseHash: change.beforeHash, afterHash: sha256(change.content), reason: change.reason
-        }))
-      });
-      finalChanges = candidate;
-      if (!runChecks) {
-        finalVerification = {
-          status: "not_run", passed: false, checks: [],
-          note: "User did not authorize build/test execution in the temporary candidate workspace."
-        };
-        break;
-      }
+        let candidateWritten = false;
+        for (const change of candidate.changes) {
+          if (!originalByPath.has(change.path)) {
+            let original = null;
+            try { original = await readWorkspaceFile(activePatchRoot, change.path); }
+            catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              if (!message.startsWith("File does not exist:")) throw error;
+            }
+            originalByPath.set(change.path, {
+              beforeContent: original?.content ?? null,
+              beforeHash: original?.sha256 ?? null,
+              existedBefore: Boolean(original),
+              reason: change.reason
+            });
+          } else {
+            originalByPath.get(change.path).reason = change.reason || originalByPath.get(change.path).reason;
+          }
+          touchedPaths.add(change.path);
+          expectedCandidateContents.set(change.path, change.content);
+        }
+        finalChanges = candidate;
 
-      const changedManifests = verificationManifestChanges(candidate.changes);
-      if (changedManifests.length) {
-        const manifestNames = changedManifests.map(change => change.path).join(", ");
-        const note = "Automatic verification was blocked because the patch changes dependency/build manifests or lockfiles (" + manifestNames + "). The sandbox has not reinstalled these dependencies, so its build/test results could be misleading. Review the manifest changes, then type /apply only if you accept them.";
-        finalVerification = {
-          status: "verification_blocked", passed: false, checks: [{
-            task: "verification-script-integrity", passed: false, skipped: true, timedOut: false,
-            output: note
-          }], note
-        };
-        feedback = note;
-        attempts[attempts.length - 1].status = "verification_blocked";
-        await emitProgress({ phase: "verification-blocked", iteration, message: note });
-        break;
-      }
-
-      if (!snapshot) {
-        await emitProgress({ phase: "sandbox-prepare", iteration, message: "Creating a temporary project copy for safe build/test runs." });
-        try { snapshot = await copySandbox(root); }
-        catch (error) {
+        if (!runChecks) {
           finalVerification = {
-            status: "sandbox_unavailable", passed: false, checks: [],
-            note: "Could not create an isolated project copy: " + (error instanceof Error ? error.message : String(error))
+            status: "not_run", passed: false, checks: [],
+            note: "User did not authorize build/test execution in the temporary candidate workspace."
           };
-          feedback = finalVerification.note;
-          attempts[attempts.length - 1].status = "sandbox_unavailable";
+          stopAfterSlice = true;
           break;
         }
-      }
-      for (const change of candidate.changes) if (!originalByPath.has(change.path)) originalByPath.set(change.path, change);
-      await resetSandboxFiles(snapshot.root, previouslyTouched, originalByPath);
-      await writeCandidateChanges(snapshot.root, candidate.changes);
-      previouslyTouched = candidate.changes.map(change => change.path);
 
-      const checks = [];
-      const discoveryRun = await executeWorkspaceTool({
-        root: snapshot.root, auditRoot: root,
-        name: "workspace.checks.discover", input: {}, signal
-      });
-      toolCalls.push(toolCallSummary(discoveryRun));
-      const discoveredChecks = discoveryRun.ok && Array.isArray(discoveryRun.output?.checks)
-        ? discoveryRun.output.checks : [];
-      const unavailableChecks = discoveryRun.ok && Array.isArray(discoveryRun.output?.unavailable)
-        ? discoveryRun.output.unavailable : [];
-      const tasks = discoveredChecks.map(check => check.task);
-      const runnerSummary = discoveredChecks.map(check => check.task + " (" + check.label + ")");
-      observations.push({
-        kind: "workspace.checks.discover",
-        stage: "attempt-" + iteration,
-        status: discoveryRun.ok ? "observed" : "failed",
-        detail: discoveryRun.ok
-          ? "Supported: " + (runnerSummary.join(", ") || "none") + "; unavailable: " +
-            (unavailableChecks.map(item => item.task).join(", ") || "none")
-          : String(discoveryRun.error || "Check discovery failed.").slice(0, 400)
-      });
-      plan.plannedChecks = tasks;
-      const verifyStep = plan.steps.find(step => step.id === "verify");
-      if (verifyStep) {
-        verifyStep.status = tasks.length ? "running" : "not_available";
-        verifyStep.detail = tasks.length
-          ? "Discovered executable runners: " + runnerSummary.join(", ") + "."
-          : "No supported check runner was discovered in the candidate workspace.";
-      }
-      await emitProgress({
-        phase: "check-discovery",
-        iteration,
-        message: tasks.length
-          ? "Discovered executable verification tools from the candidate workspace: " + tasks.join(", ") + "."
-          : "No supported verification runner was discovered; this candidate will remain unverified.",
-        planSteps: plan.steps, toolCalls, observations,
-        checkpoint: { stage: "checks_discovered", iteration }
-      });
-      for (const task of tasks) {
-        await emitProgress({ phase: "verification", iteration, message: "Running " + task + " in the temporary project copy." });
-        try {
-          const toolRun = await executeWorkspaceTool({
-            root: snapshot.root,
-            auditRoot: root,
-            name: "workspace.check",
-            input: { task, timeoutMs: CHECK_TIMEOUT_MS },
-            approval: true,
-            signal
+        const changedManifests = verificationManifestChanges(candidate.changes);
+        if (changedManifests.length) {
+          const manifestNames = changedManifests.map(change => change.path).join(", ");
+          const note = "Automatic verification was blocked because the patch changes dependency/build manifests or lockfiles (" + manifestNames + "). The sandbox has not reinstalled these dependencies, so its build/test results could be misleading. Review the manifest changes, then type /apply only if you accept them.";
+          finalVerification = {
+            status: "verification_blocked", passed: false, checks: [{
+              task: "verification-script-integrity", passed: false, skipped: true, timedOut: false,
+              output: note
+            }], note
+          };
+          feedback = note;
+          attempts[attempts.length - 1].status = "verification_blocked";
+          if (snapshot) {
+            await writeCandidateChanges(snapshot.root, candidate.changes);
+            candidateWritten = true;
+            activePatchRoot = snapshot.root;
+          }
+          await emitProgress({
+            phase: "verification-blocked", iteration, message: note,
+            planSteps: plan.steps, observations, toolCalls, attempts
           });
-          toolCalls.push({
-            runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
-            permission: toolRun.permission, durationMs: toolRun.durationMs,
-            auditRecorded: toolRun.auditRecorded
-          });
-          if (!toolRun.ok) throw new Error(toolRun.error || "The workspace check tool failed.");
-          const result = toolRun.output;
-          checks.push({
-            task, passed: result.passed, timedOut: result.timedOut, exitCode: result.exitCode,
-            durationMs: result.durationMs, command: result.command, output: truncateOutput(result.output)
-          });
-        } catch (error) {
-          checks.push({ task, passed: false, error: error instanceof Error ? error.message : String(error), output: "" });
+          break;
         }
-        if (checks.at(-1)?.passed !== true) break;
-      }
-      const integrityFailures = [];
-      for (const change of candidate.changes) {
-        const readRun = await executeWorkspaceTool({
-          root: snapshot.root, auditRoot: root, name: "workspace.read",
-          input: { path: change.path }, signal
+
+        if (!snapshot) {
+          await emitProgress({
+            phase: "sandbox-prepare", iteration,
+            message: "Creating one persistent candidate workspace for independently verified implementation slices."
+          });
+          try { snapshot = await copySandbox(root); }
+          catch (error) {
+            finalVerification = {
+              status: "sandbox_unavailable", passed: false, checks: [],
+              note: "Could not create an isolated project copy: " + (error instanceof Error ? error.message : String(error))
+            };
+            feedback = finalVerification.note;
+            attempts[attempts.length - 1].status = "sandbox_unavailable";
+            break;
+          }
+        }
+        if (!candidateWritten) {
+          await writeCandidateChanges(snapshot.root, candidate.changes);
+          candidateWritten = true;
+        }
+        activePatchRoot = snapshot.root;
+
+        const checks = [];
+        const discoveryRun = await executeWorkspaceTool({
+          root: snapshot.root, auditRoot: root,
+          name: "workspace.checks.discover", input: {}, signal
         });
-        toolCalls.push(toolCallSummary(readRun));
-        const observedHash = readRun.ok ? readRun.output.sha256 : null;
-        const expectedHash = sha256(change.content);
-        const matches = readRun.ok && observedHash === expectedHash;
+        toolCalls.push(toolCallSummary(discoveryRun));
+        const discoveredChecks = discoveryRun.ok && Array.isArray(discoveryRun.output?.checks)
+          ? discoveryRun.output.checks : [];
+        const unavailableChecks = discoveryRun.ok && Array.isArray(discoveryRun.output?.unavailable)
+          ? discoveryRun.output.unavailable : [];
+        const tasks = discoveredChecks.map(check => check.task);
+        const runnerSummary = discoveredChecks.map(check => check.task + " (" + check.label + ")");
         observations.push({
-          kind: "candidate-file-integrity",
-          stage: "attempt-" + iteration,
-          path: change.path,
-          status: matches ? "matched" : "mismatch",
-          expectedHash,
-          observedHash,
-          detail: matches
-            ? "Changed candidate file still matches the validated patch after project checks."
-            : String(readRun.error || "Candidate file content changed while checks were running.").slice(0, 400)
+          kind: "workspace.checks.discover",
+          stage: slice.id + "-attempt-" + sliceAttempt,
+          status: discoveryRun.ok ? "observed" : "failed",
+          detail: discoveryRun.ok
+            ? "Supported: " + (runnerSummary.join(", ") || "none") + "; unavailable: " +
+              (unavailableChecks.map(item => item.task).join(", ") || "none")
+            : String(discoveryRun.error || "Check discovery failed.").slice(0, 400)
         });
-        if (!matches) integrityFailures.push(change.path);
-      }
-      if (integrityFailures.length) {
-        checks.push({
-          task: "candidate-integrity",
-          passed: false,
-          error: "Project checks modified or removed candidate source files: " + integrityFailures.join(", "),
-          output: "Candidate source integrity did not match the validated patch after checks."
-        });
-      }
-      const allPassed = tasks.length > 0 && checks.length === tasks.length
-        && checks.every(item => item.passed) && integrityFailures.length === 0;
-      const reviewReasons = verificationReviewReasons(candidate.changes);
-      const verificationStatus = allPassed
-        ? reviewReasons.length ? "passed_review_required" : "passed"
-        : !discoveryRun.ok ? "discovery_failed"
-          : tasks.length ? "failed" : "no_checks_configured";
-      finalVerification = {
-        status: verificationStatus,
-        passed: allPassed, checks,
-        sandbox: { filesCopied: snapshot.filesCopied, bytesCopied: snapshot.bytesCopied },
-        ...(reviewReasons.length ? { reviewRequiredReasons: reviewReasons } : {})
-      };
-      attempts[attempts.length - 1].status = allPassed
-        ? reviewReasons.length ? "verification_passed_review_required" : "verification_passed"
-        : "verification_failed";
-      plan.steps.find(step => step.id === "verify").status = allPassed
-        ? "completed" : tasks.length || !discoveryRun.ok ? "blocked" : "not_available";
-      await emitProgress({
-        phase: "verification-result",
-        iteration,
-        message: allPassed
-          ? "Every discovered check passed and changed candidate files retained their validated hashes."
-          : "Verification or candidate-integrity failure checkpointed for a bounded repair attempt.",
-        verification: finalVerification,
-        planSteps: plan.steps,
-        attempts,
-        observations,
-        toolCalls,
-        checkpoint: { stage: allPassed ? "verification_passed" : "verification_failed", iteration }
-      });
-      if (allPassed) {
+        plan.plannedChecks = tasks;
+        const verifyStep = plan.steps.find(step => step.id === "verify");
+        if (verifyStep) {
+          verifyStep.status = tasks.length ? "running" : "not_available";
+          verifyStep.detail = tasks.length
+            ? "Discovered executable runners: " + runnerSummary.join(", ") + "."
+            : "No supported check runner was discovered in the candidate workspace.";
+        }
         await emitProgress({
-          phase: reviewReasons.length ? "verification-review-required" : "verification-passed",
+          phase: "check-discovery",
           iteration,
-          message: reviewReasons.length
-            ? "Checks passed, but this patch changes tests or verification configuration and requires review before application."
-            : "Every discovered check passed in the temporary copy."
+          message: tasks.length
+            ? "Discovered executable verification tools for " + slice.id + ": " + tasks.join(", ") + "."
+            : "No supported verification runner was discovered; this slice will remain unverified.",
+          planSteps: plan.steps, toolCalls, observations,
+          checkpoint: { stage: "checks_discovered", iteration }
         });
-        break;
-      }
-      if (tasks.length === 0) {
-        feedback = discoveryRun.ok
-          ? "No supported build/test/lint/typecheck runner was discovered in the candidate workspace. " +
-            unavailableChecks.map(item => item.task + ": " + item.reason).join(" | ")
-          : "SYNTRA could not discover supported check runners in the candidate workspace: " +
-            String(discoveryRun.error || discoveryRun.message || "Unknown discovery error.");
+        for (const task of tasks) {
+          await emitProgress({
+            phase: "verification", iteration,
+            message: "Running " + task + " for " + slice.id + " in the persistent candidate workspace."
+          });
+          try {
+            const toolRun = await executeWorkspaceTool({
+              root: snapshot.root,
+              auditRoot: root,
+              name: "workspace.check",
+              input: { task, timeoutMs: CHECK_TIMEOUT_MS },
+              approval: true,
+              signal
+            });
+            toolCalls.push(toolCallSummary(toolRun));
+            if (!toolRun.ok) throw new Error(toolRun.error || "The workspace check tool failed.");
+            const result = toolRun.output;
+            checks.push({
+              task, passed: result.passed, timedOut: result.timedOut, exitCode: result.exitCode,
+              durationMs: result.durationMs, command: result.command, output: truncateOutput(result.output)
+            });
+          } catch (error) {
+            checks.push({ task, passed: false, error: error instanceof Error ? error.message : String(error), output: "" });
+          }
+          if (checks.at(-1)?.passed !== true) break;
+        }
+
+        const integrityFailures = [];
+        for (const [changedPath, expectedContent] of expectedCandidateContents) {
+          const readRun = await executeWorkspaceTool({
+            root: snapshot.root, auditRoot: root, name: "workspace.read",
+            input: { path: changedPath }, signal
+          });
+          toolCalls.push(toolCallSummary(readRun));
+          const observedHash = readRun.ok ? readRun.output.sha256 : null;
+          const expectedHash = sha256(expectedContent);
+          const matches = readRun.ok && observedHash === expectedHash;
+          observations.push({
+            kind: "candidate-file-integrity",
+            stage: slice.id + "-attempt-" + sliceAttempt,
+            path: changedPath,
+            status: matches ? "matched" : "mismatch",
+            expectedHash,
+            observedHash,
+            detail: matches
+              ? "Candidate file matches the cumulative intended contents after project checks."
+              : String(readRun.error || "Candidate file content changed while checks were running.").slice(0, 400)
+          });
+          if (!matches) integrityFailures.push(changedPath);
+        }
+        if (integrityFailures.length) {
+          checks.push({
+            task: "candidate-integrity",
+            passed: false,
+            error: "Project checks modified or removed candidate source files: " + integrityFailures.join(", "),
+            output: "Candidate source integrity did not match the intended cumulative patch."
+          });
+        }
+        const allPassed = tasks.length > 0 && checks.length === tasks.length
+          && checks.every(item => item.passed) && integrityFailures.length === 0;
+        const reviewReasons = verificationReviewReasons(candidate.changes);
+        const verificationStatus = allPassed
+          ? reviewReasons.length ? "passed_review_required" : "passed"
+          : !discoveryRun.ok ? "discovery_failed"
+            : tasks.length ? "failed" : "no_checks_configured";
+        finalVerification = {
+          status: verificationStatus,
+          passed: allPassed, checks,
+          sandbox: { filesCopied: snapshot.filesCopied, bytesCopied: snapshot.bytesCopied },
+          ...(reviewReasons.length ? { reviewRequiredReasons: reviewReasons } : {})
+        };
+        attempts[attempts.length - 1].status = allPassed
+          ? reviewReasons.length ? "verification_passed_review_required" : "verification_passed"
+          : "verification_failed";
+        if (allPassed) {
+          slicePassed = true;
+          slice.status = "completed";
+          if (sliceStep) sliceStep.status = "completed";
+          sliceSummaries.push(slice.goal + " — " + slice.acceptance);
+        } else {
+          slice.status = integrityFailures.length ? "blocked_integrity" : "blocked";
+          if (sliceStep) sliceStep.status = "blocked";
+        }
+        plan.steps.find(step => step.id === "verify").status = allPassed
+          ? "completed" : tasks.length || !discoveryRun.ok ? "blocked" : "not_available";
         await emitProgress({
-          phase: "verification-unavailable", iteration, message: feedback,
-          observations, toolCalls,
-          checkpoint: { stage: discoveryRun.ok ? "verification_unavailable" : "check_discovery_failed", iteration }
+          phase: "verification-result",
+          iteration,
+          message: allPassed
+            ? "All discovered checks passed and every changed file in the cumulative candidate retained its intended hash for " + slice.id + "."
+            : "Verification failed for " + slice.id + "; the result is checkpointed before any repair attempt.",
+          verification: finalVerification,
+          planSteps: plan.steps,
+          attempts,
+          observations,
+          toolCalls,
+          checkpoint: { stage: allPassed ? "slice_verified" : "verification_failed", iteration }
         });
+
+        if (allPassed) {
+          await emitProgress({
+            phase: reviewReasons.length ? "verification-review-required" : "verification-passed",
+            iteration,
+            message: "Implementation slice " + (sliceIndex + 1) + " of " + implementationSlices.length +
+              " passed its checks in the persistent candidate workspace."
+          });
+          break;
+        }
+        if (integrityFailures.length) {
+          feedback = "Candidate integrity failed after project checks. Stop implementation because project scripts modified candidate source: " + integrityFailures.join(", ");
+          break;
+        }
+        if (tasks.length === 0) {
+          feedback = discoveryRun.ok
+            ? "No supported build/test/lint/typecheck runner was discovered in the candidate workspace. " +
+              unavailableChecks.map(item => item.task + ": " + item.reason).join(" | ")
+            : "SYNTRA could not discover supported check runners in the candidate workspace: " +
+              String(discoveryRun.error || discoveryRun.message || "Unknown discovery error.");
+          await emitProgress({
+            phase: "verification-unavailable", iteration, message: feedback,
+            observations, toolCalls,
+            checkpoint: { stage: discoveryRun.ok ? "verification_unavailable" : "check_discovery_failed", iteration }
+          });
+          break;
+        }
+
+        feedback = "Candidate verification failed for implementation slice '" + slice.goal + "'. Correct these results in the current candidate workspace; preserve earlier verified slices and do not claim success:\n" +
+          checks.map(check => "[" + check.task + "] passed=" + check.passed + ", timedOut=" + (check.timedOut || false) +
+            ", exitCode=" + (check.exitCode ?? "unknown") + "\n" + (check.error || "") + "\n" + (check.output || "")).join("\n\n");
+
+        await emitProgress({
+          phase: "repair", iteration,
+          message: "A check failed. Re-inspecting the candidate before the bounded repair attempt."
+        });
+        const refreshedInspection = await executeWorkspaceTool({
+          root: snapshot.root, auditRoot: root, name: "workspace.inspect", input: {}, signal
+        });
+        toolCalls.push(toolCallSummary(refreshedInspection));
+        if (!refreshedInspection.ok) {
+          feedback += "\nCandidate re-inspection failed: " + String(refreshedInspection.error || "unknown error");
+          break;
+        }
+        inventory = refreshedInspection.output;
+        graph = await buildRepositoryGraph(snapshot.root);
+        ranked = rankGraph(graph, sliceGoal, requestedPath);
+        activePatchRoot = snapshot.root;
+        modelSelectedContext = "";
+        if (modelToolSelection) {
+          try {
+            modelSelectedContext = await runModelSelectedReadOnlyTools({
+              root: snapshot.root, goal: sliceGoal, ranked, modelRequest,
+              contextBudget, signal, toolCalls, observations
+            });
+          } catch (error) {
+            if (signal?.aborted || error?.name === "AbortError") throw error;
+            observations.push({
+              kind: "model-readonly-tool-plan", stage: slice.id + "-repair-context",
+              status: "unavailable",
+              detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+            });
+          }
+        }
+        observations.push({
+          kind: "candidate-reinspection", stage: slice.id + "-repair",
+          status: "observed",
+          detail: "Rebuilt the workspace inventory, import graph, and ranked context from the current candidate after a failed verification."
+        });
+        await emitProgress({
+          phase: "candidate-reinspected", iteration,
+          message: "Candidate inspection and relevant context have been refreshed for the repair attempt.",
+          planSteps: plan.steps, observations, toolCalls,
+          selectedContext: ranked.slice(0, 12).map(({ path: filePath, score, sha256: hash }) => ({
+            path: filePath, score: Number(score.toFixed(2)), sha256: hash
+          }))
+        });
+      }
+
+      if (!slicePassed) {
+        const patchStep = plan.steps.find(step => step.id === "patch");
+        if (patchStep && patchStep.status === "running") patchStep.status = "blocked";
+        if (sliceStep && slice.status === "running") sliceStep.status = "blocked";
+        slice.status = slice.status === "running" ? "blocked" : slice.status;
+        stopAfterSlice = true;
         break;
       }
-      await emitProgress({ phase: "repair", iteration, message: "A check failed; the failure output will be fed into the next bounded repair attempt." });
-      feedback = "Candidate verification failed. Address these results; do not assert success:\n" +
-        checks.map(check => "[" + check.task + "] passed=" + check.passed + ", timedOut=" + (check.timedOut || false) +
-          ", exitCode=" + (check.exitCode ?? "unknown") + "\n" + (check.error || "") + "\n" + (check.output || "")).join("\n\n");
+
+      if (sliceIndex < implementationSlices.length - 1) {
+        const nextSlice = implementationSlices[sliceIndex + 1];
+        await emitProgress({
+          phase: "slice-reinspection", iteration,
+          message: "Re-inspecting the verified candidate before starting " + nextSlice.id + "."
+        });
+        const refreshedInspection = await executeWorkspaceTool({
+          root: snapshot.root, auditRoot: root, name: "workspace.inspect", input: {}, signal
+        });
+        toolCalls.push(toolCallSummary(refreshedInspection));
+        if (!refreshedInspection.ok) {
+          nextSlice.status = "blocked";
+          feedback = "The candidate could not be re-inspected between implementation slices: " +
+            String(refreshedInspection.error || "unknown error");
+          observations.push({
+            kind: "candidate-reinspection", stage: nextSlice.id,
+            status: "failed", detail: feedback.slice(0, 400)
+          });
+          stopAfterSlice = true;
+          break;
+        }
+        inventory = refreshedInspection.output;
+        activePatchRoot = snapshot.root;
+        graph = await buildRepositoryGraph(snapshot.root);
+        ranked = rankGraph(graph, nextSlice.goal, requestedPath);
+        modelSelectedContext = "";
+        if (modelToolSelection) {
+          try {
+            modelSelectedContext = await runModelSelectedReadOnlyTools({
+              root: snapshot.root, goal: nextSlice.goal, ranked, modelRequest,
+              contextBudget, signal, toolCalls, observations
+            });
+          } catch (error) {
+            if (signal?.aborted || error?.name === "AbortError") throw error;
+            observations.push({
+              kind: "model-readonly-tool-plan", stage: nextSlice.id + "-context",
+              status: "unavailable",
+              detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+            });
+          }
+        }
+        observations.push({
+          kind: "candidate-reinspection", stage: nextSlice.id,
+          status: "observed",
+          detail: "Refreshed inventory and import graph from the previous verified candidate slice."
+        });
+        await emitProgress({
+          phase: "candidate-reinspected", iteration,
+          message: "Previous slice verified. Updated workspace context is ready for " + nextSlice.id + ".",
+          planSteps: plan.steps, observations, toolCalls,
+          selectedContext: ranked.slice(0, 12).map(({ path: filePath, score, sha256: hash }) => ({
+            path: filePath, score: Number(score.toFixed(2)), sha256: hash
+          })),
+          checkpoint: { stage: "slice_reinspected", iteration }
+        });
+      }
     }
 
+    if (snapshot && touchedPaths.size) {
+      const aggregated = await collectFinalCandidateChanges(touchedPaths, originalByPath, expectedCandidateContents);
+      if (aggregated.length) {
+        finalChanges = {
+          summary: sliceSummaries.length
+            ? sliceSummaries.join("; ")
+            : finalChanges?.summary || "Cumulative implementation candidate",
+          changes: aggregated
+        };
+      }
+    }
+    const incompleteSlices = implementationSlices.length > 1
+      ? implementationSlices.filter(slice => slice.status !== "completed")
+      : [];
+    if (incompleteSlices.length && finalChanges) {
+      finalVerification = {
+        ...finalVerification,
+        status: "slice_incomplete",
+        passed: false,
+        incompleteSlices: incompleteSlices.map(slice => slice.id),
+        note: "The task stopped before every planned implementation slice was independently verified. Completed slices remain in the review proposal, but the cumulative task is not verified."
+      };
+      plan.steps.find(step => step.id === "verify").status = "slice_incomplete";
+    } else if (finalChanges && finalVerification.passed) {
+      const finalReviewReasons = verificationReviewReasons(finalChanges.changes);
+      if (finalReviewReasons.length) {
+        finalVerification = {
+          ...finalVerification,
+          status: "passed_review_required",
+          reviewRequiredReasons: finalReviewReasons
+        };
+      }
+    }
     if (finalChanges) {
       await emitProgress({
-        phase: "staging-proposals", iteration: attempts.length,
-        message: "Staging hash-bound proposals without modifying project files.",
+        phase: "staging-proposals",
+        iteration: attempts.length,
+        message: "Staging the final cumulative hash-bound proposals without modifying project files.",
         verification: finalVerification, attempts, observations, toolCalls,
         checkpoint: { stage: "staging_proposals", iteration: attempts.length }
       });
@@ -1149,40 +1498,47 @@ export async function runAgentTask({
         const toolRun = await executeWorkspaceTool({
           root, auditRoot: root, name: "workspace.proposals.stage",
           input: {
-            path: change.path, content: change.content,
+            path: change.path,
+            content: change.content,
             ...(typeof change.beforeHash === "string" ? { expectedBaseHash: change.beforeHash } : {})
           },
           signal
         });
-        toolCalls.push({
-          runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
-          permission: toolRun.permission, durationMs: toolRun.durationMs,
-          auditRecorded: toolRun.auditRecorded
-        });
+        toolCalls.push(toolCallSummary(toolRun));
         if (!toolRun.ok) throw new Error(toolRun.error || "The proposal staging tool failed.");
         proposals.push(toolRun.output);
         await emitProgress({
           phase: "proposal-staged",
           iteration: attempts.length,
-          message: "Staged proposal for " + change.path + ".",
+          message: "Staged cumulative proposal for " + change.path + ".",
           proposalIds: proposals.map(proposal => proposal.id),
           planSteps: plan.steps,
-          toolCalls,
+          toolCalls, observations,
           checkpoint: { stage: "proposal_staging", iteration: attempts.length }
         });
       }
-      plan.steps.find(step => step.id === "verify").status = finalVerification.status === "passed" ? "completed" : finalVerification.status;
+      const verifyStep = plan.steps.find(step => step.id === "verify");
+      if (verifyStep && finalVerification.status !== "slice_incomplete") {
+        verifyStep.status = finalVerification.passed ? "completed" : finalVerification.status;
+      }
       plan.steps.find(step => step.id === "review").status = "completed";
     }
 
     await emitProgress({
       phase: finalChanges ? "completed" : "generation-failed",
       iteration: attempts.length,
-      message: finalChanges ? "Agent loop finished; review staged proposals." : "Agent did not produce a schema-valid patch.",
+      message: !finalChanges
+        ? "Agent did not produce a schema-valid patch."
+        : incompleteSlices.length
+          ? "Agent stopped with an incomplete implementation slice; review the cumulative proposal and failure evidence."
+          : "Agent loop finished; review staged proposals.",
       planSteps: plan.steps,
       proposalIds: proposals.map(proposal => proposal.id),
       toolCalls, attempts, observations, verification: finalVerification,
-      checkpoint: { stage: finalChanges ? "proposals_staged" : "generation_failed", iteration: attempts.length },
+      checkpoint: {
+        stage: !finalChanges ? "generation_failed" : incompleteSlices.length ? "proposals_staged_partial" : "proposals_staged",
+        iteration: attempts.length
+      },
       recoveryPatch: null
     });
     return {
@@ -1212,6 +1568,9 @@ export async function runAgentTask({
         };
       }) || [],
       proposals, verification: finalVerification, attempts,
+      implementationSlices: implementationSlices.map(({ id, goal: sliceGoal, acceptance, status }) => ({
+        id, goal: sliceGoal, acceptance, status
+      })),
       toolCalls, observations,
       notices: [
         "Patch text came from the selected selected local model; a schema-valid patch is not automatically a correct patch.",
