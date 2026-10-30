@@ -129,11 +129,13 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Expand the incremental index with bounded local import edges, documentation references, and heuristic test ownership.
 - [x] Add bounded symbol search to model-selected read-only retrieval so the agent can retrieve declarations instead of relying only on full-text matches.
 - [x] Test JS/TS and Python import resolution, Go module-local package imports, Rust module declarations, documentation link resolution, test-owner inference, and hash validation of graph relationships.
-- Maintain task summaries and user-approved project notes.
-- Keep memory local and workspace-scoped, with controls to inspect, edit, and delete it.
-- Exclude credentials, private keys, ignored build artifacts, and user-configured paths.
+- [x] Store explicitly user-authored project notes locally and bind each store to its resolved workspace root.
+- [x] Provide controls to list, search, add, edit, and delete saved notes; note changes and deletion require explicit approval.
+- [x] Keep note contents out of tool audit events and limit agent retrieval to bounded, read-only search.
+- [x] Enforce note-count, file-size, title, body, and tag limits; reject known credential patterns and refuse symlink or invalid stores.
+- [ ] Add configurable path exclusions and stronger secret scanning. Current credential detection is best-effort and is not a substitute for a secret manager.
 
-**Acceptance:** Context selection is explainable, reproducible, workspace-scoped, and covered by tests for secret exclusion and stale-index invalidation.
+**Acceptance:** Context selection is explainable, reproducible, workspace-scoped, and covered by tests for stale-index invalidation, explicit memory approval, audit redaction, workspace isolation, and best-effort secret detection.
 
 ### Phase 6 — Model quality, evaluation, and release hardening
 
