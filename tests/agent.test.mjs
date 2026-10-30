@@ -159,6 +159,9 @@ test("agent implements and verifies multiple slices against one cumulative candi
     assert.ok(result.implementationSlices.every(slice => slice.status === "completed"));
     assert.equal(result.verification.status, "passed");
     assert.equal(result.verification.passed, true);
+    assert.equal(result.modelUsage.generationCalls, 3);
+    assert.equal(result.modelUsage.completedGenerationCalls, 3);
+    assert.equal(result.modelUsage.outputTokens, 130);
     assert.equal(result.proposals.length, 2);
     assert.deepEqual(result.changedFiles.map(file => file.path).sort(), ["src/description.js", "src/value.js"]);
     assert.ok(result.observations.some(item =>
@@ -560,6 +563,8 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       modelRequest
     });
     assert.equal(generated.length, 2, "one safe tool-plan generation should precede patch generation");
+    assert.equal(result.modelUsage.generationCalls, 2);
+    assert.equal(result.modelUsage.outputTokens, 65);
     assert.equal(result.proposals.length, 1);
     assert.equal(result.proposals[0].path, "src/value.js");
     assert.deepEqual(result.toolCalls.map(call => call.name), [
