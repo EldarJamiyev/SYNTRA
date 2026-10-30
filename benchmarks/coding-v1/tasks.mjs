@@ -66,7 +66,7 @@ export function validateBenchmarkManifest(input = CODING_BENCHMARK_TASKS) {
     }
     seen.add(task.id);
     for (const [relative, content] of Object.entries(task.files)) {
-      if (relative.startsWith("/") || relative.includes("\\\\") || relative.split("/").some(part => !part || part === "." || part === "..")
+      if (relative.startsWith("/") || relative.includes("\\") || relative.split("/").some(part => !part || part === "." || part === "..")
         || typeof content !== "string" || Buffer.byteLength(content, "utf8") > 128 * 1024) {
         throw new Error("Benchmark fixture files must be bounded UTF-8 files beneath their temporary workspace.");
       }
