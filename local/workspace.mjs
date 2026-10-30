@@ -506,6 +506,21 @@ function summarizeAgentVerification(value) {
   };
 }
 
+async function pruneAgentRunRecords(root) {
+  const directory = await agentRunDirectory(root);
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const records = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/i.test(entry.name)) continue;
+    const target = path.join(directory, entry.name);
+    if (!(await assertRegularStateFile(target, "Agent run record"))) continue;
+    const stat = await fs.stat(target);
+    records.push({ path: target, modifiedAt: stat.mtimeMs });
+  }
+  records.sort((a, b) => b.modifiedAt - a.modifiedAt);
+  for (const record of records.slice(MAX_AGENT_RUNS)) await fs.rm(record.path);
+}
+
 export async function createAgentRun(inputRoot, goal) {
   const root = await resolveWorkspace(inputRoot);
   if (typeof goal !== "string" || !goal.trim() || goal.length > 5000) {
@@ -537,6 +552,7 @@ export async function createAgentRun(inputRoot, goal) {
     error: null
   };
   await writeAgentRunRecord(root, run);
+  await pruneAgentRunRecords(root);
   await appendAudit(root, { action: "agent_run_created", runId: run.id, goalLength: run.goal.length });
   return run;
 }
@@ -546,7 +562,7 @@ export async function getAgentRun(inputRoot, runId) {
   return await readAgentRunRecord(root, runId);
 }
 
-export async function updateAgentRun(inputRoot, runId, patch = {}) {
+async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
   const root = await resolveWorkspace(inputRoot);
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Agent run update must be an object.");
   const run = await readAgentRunRecord(root, runId);
@@ -636,6 +652,27 @@ export async function updateAgentRun(inputRoot, runId, patch = {}) {
 
   await writeAgentRunRecord(root, next);
   return next;
+}
+
+const agentRunUpdateQueues = new Map();
+
+async function withAgentRunUpdateQueue(key, action) {
+  const previous = agentRunUpdateQueues.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(action);
+  agentRunUpdateQueues.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (agentRunUpdateQueues.get(key) === current) agentRunUpdateQueues.delete(key);
+  }
+}
+
+export async function updateAgentRun(inputRoot, runId, patch = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!validAgentRunId(runId)) throw new Error("A valid agent run ID is required.");
+  return withAgentRunUpdateQueue(root + "::" + runId, () =>
+    updateAgentRunUnlocked(root, runId, patch)
+  );
 }
 
 export async function listAgentRuns(inputRoot, limit = 20) {
