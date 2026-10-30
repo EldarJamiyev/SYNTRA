@@ -967,7 +967,6 @@ export async function runAgentTask({
   let finalChanges = null;
   let finalVerification = { status: "not_run", checks: [], passed: false };
   let snapshot = null;
-  let previouslyTouched = [];
   const originalByPath = new Map();
   const proposals = [];
   if (!ranked.length) throw new Error("No readable source/configuration files were found for repository context.");
