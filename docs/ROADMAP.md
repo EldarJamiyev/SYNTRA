@@ -25,7 +25,7 @@ The repository already contains:
 - Candidate verification in a temporary project copy, bounded repair attempts, and hash-checked proposal application with backups and an audit log.
 - Local ping, DNS, and single-port TCP diagnostics.
 
-Known limitations are deliberate and must remain visible: there is no general-purpose terminal tool in the chat, no multi-agent execution system, and no evidence that the from-scratch native model performs at a Claude-class level. Sessions remain browser-local to one device; active-workspace labeling and restoring pending proposals after a service restart are not implemented yet.
+Known limitations are deliberate and must remain visible: there is no general-purpose terminal tool in the chat, no multi-agent execution system, and no evidence that the from-scratch native model performs at a Claude-class level. Conversation history and the selected workspace path are browser-local to one device; workspace proposal records are stored in each project's `.syntra` directory and can be recovered by the local service after a restart.
 
 ## Delivery phases
 
