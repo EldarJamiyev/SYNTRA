@@ -1476,7 +1476,17 @@ export async function runAgentTask({
         };
       }
     }
-    if (finalChanges && finalVerification.passed) {
+    const incompleteSlices = implementationSlices.filter(slice => slice.status !== "completed");
+    if (incompleteSlices.length && finalChanges) {
+      finalVerification = {
+        ...finalVerification,
+        status: "slice_incomplete",
+        passed: false,
+        incompleteSlices: incompleteSlices.map(slice => slice.id),
+        note: "The task stopped before every planned implementation slice was independently verified. Completed slices remain in the review proposal, but the cumulative task is not verified."
+      };
+      plan.steps.find(step => step.id === "verify").status = "slice_incomplete";
+    } else if (finalChanges && finalVerification.passed) {
       const finalReviewReasons = verificationReviewReasons(finalChanges.changes);
       if (finalReviewReasons.length) {
         finalVerification = {
@@ -1486,15 +1496,23 @@ export async function runAgentTask({
         };
       }
     }
+    if (finalChanges) plan.steps.find(step => step.id === "review").status = "completed";
 
     await emitProgress({
       phase: finalChanges ? "completed" : "generation-failed",
       iteration: attempts.length,
-      message: finalChanges ? "Agent loop finished; review staged proposals." : "Agent did not produce a schema-valid patch.",
+      message: !finalChanges
+        ? "Agent did not produce a schema-valid patch."
+        : incompleteSlices.length
+          ? "Agent stopped with an incomplete implementation slice; review the cumulative proposal and failure evidence."
+          : "Agent loop finished; review staged proposals.",
       planSteps: plan.steps,
       proposalIds: proposals.map(proposal => proposal.id),
       toolCalls, attempts, observations, verification: finalVerification,
-      checkpoint: { stage: finalChanges ? "proposals_staged" : "generation_failed", iteration: attempts.length },
+      checkpoint: {
+        stage: !finalChanges ? "generation_failed" : incompleteSlices.length ? "proposals_staged_partial" : "proposals_staged",
+        iteration: attempts.length
+      },
       recoveryPatch: null
     });
     return {
@@ -1524,6 +1542,9 @@ export async function runAgentTask({
         };
       }) || [],
       proposals, verification: finalVerification, attempts,
+      implementationSlices: implementationSlices.map(({ id, goal: sliceGoal, acceptance, status }) => ({
+        id, goal: sliceGoal, acceptance, status
+      })),
       toolCalls, observations,
       notices: [
         "Patch text came from the selected selected local model; a schema-valid patch is not automatically a correct patch.",
