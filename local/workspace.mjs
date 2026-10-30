@@ -1318,6 +1318,30 @@ export async function chooseCheck(root, task, packageJson) {
   throw new Error("No supported " + task + " command was found in the project manifest.");
 }
 
+export async function discoverProjectChecks(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const packageJson = await readJsonIfPresent(root, "package.json");
+  const checks = [];
+  const unavailable = [];
+  for (const task of ["build", "test", "lint", "typecheck"]) {
+    try {
+      const runner = await chooseCheck(root, task, packageJson);
+      checks.push({
+        task,
+        kind: String(runner.kind || "unknown").slice(0, 40),
+        label: String(runner.label || (runner.script ? "package.json " + runner.script : runner.command || task)).slice(0, 120),
+        command: String(runner.command || "").slice(0, 500)
+      });
+    } catch (error) {
+      unavailable.push({
+        task,
+        reason: (error instanceof Error ? error.message : String(error)).slice(0, 400)
+      });
+    }
+  }
+  return { root, checks, unavailable };
+}
+
 export async function runProjectCheck(inputRoot, task, options = {}) {
   const root = await resolveWorkspace(inputRoot);
   const packageJson = await readJsonIfPresent(root, "package.json");
