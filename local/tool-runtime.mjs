@@ -359,6 +359,12 @@ async function runGit(root, args) {
   return String(result.stdout || "").slice(0, 28000).trimEnd();
 }
 
+async function isAgentPathExcluded(root, relativePath) {
+  const normalized = String(relativePath || "").replaceAll("\\", "/");
+  if (normalized === ".syntra" || normalized.startsWith(".syntra/")) return true;
+  return isWorkspacePathExcluded(root, normalized);
+}
+
 async function readFilteredGitStatus(root) {
   const raw = await runGit(root, ["status", "--porcelain=v1", "--branch", "-z"]);
   const records = raw.split("\0");
@@ -375,8 +381,8 @@ async function readFilteredGitStatus(root) {
     const currentPath = record.slice(3);
     const isRenameOrCopy = /[RC]/.test(status);
     const sourcePath = isRenameOrCopy ? records[index + 1] : "";
-    const excluded = await isWorkspacePathExcluded(root, currentPath)
-      || Boolean(sourcePath && await isWorkspacePathExcluded(root, sourcePath));
+    const excluded = await isAgentPathExcluded(root, currentPath)
+      || Boolean(sourcePath && await isAgentPathExcluded(root, sourcePath));
     if (!excluded) visible.push(status + " " + currentPath);
     if (isRenameOrCopy && sourcePath) index += 1;
   }
@@ -404,7 +410,7 @@ async function readFilteredGitDiffSummary(root, args) {
     if (!inlinePath && paths.length) index += paths.length;
     let excluded = false;
     for (const relativePath of paths) {
-      if (await isWorkspacePathExcluded(root, relativePath)) {
+      if (await isAgentPathExcluded(root, relativePath)) {
         excluded = true;
         break;
       }
