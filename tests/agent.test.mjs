@@ -59,6 +59,7 @@ test("implementation slice plan validation is bounded, unique, and requires meas
 test("agent implements and verifies multiple slices against one cumulative candidate", async () => {
   const root = await createProject();
   const generatedPrompts = [];
+  const recoveryCheckpoints = [];
   let patchCalls = 0;
   const modelRequest = async (method, route, body) => {
     if (method === "GET" && route === "/model/status") {
@@ -123,9 +124,15 @@ test("agent implements and verifies multiple slices against one cumulative candi
       maxIterations: 2,
       maxSlices: 2,
       runChecks: true,
-      modelRequest
+      modelRequest,
+      onProgress: update => {
+        if (Object.prototype.hasOwnProperty.call(update, "recoveryPatch")) recoveryCheckpoints.push(update.recoveryPatch);
+      }
     });
     assert.equal(patchCalls, 2);
+    assert.ok(recoveryCheckpoints.length > 0);
+    assert.ok(recoveryCheckpoints.every(value => value === null),
+      "multi-slice runs must restart from the overall goal instead of persisting a candidate-relative patch");
     assert.equal(generatedPrompts.filter(prompt => prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")).length, 1);
     assert.equal(result.implementationSlices.length, 2);
     assert.ok(result.implementationSlices.every(slice => slice.status === "completed"));
