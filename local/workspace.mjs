@@ -334,7 +334,7 @@ function stateDirectory(root) {
     throw new Error("The workspace .syntra state directory resolves outside the selected workspace.");
   }
 
-  for (const name of ["proposals", "backups", "plans"]) {
+  for (const name of ["proposals", "backups", "plans", "runs"]) {
     const nested = path.join(directory, name);
     let nestedInfo;
     try {
@@ -407,7 +407,7 @@ export async function recordWorkspaceToolEvent(inputRoot, event) {
   const tool = typeof event.tool === "string" && /^[a-z][a-z0-9._-]{2,80}$/.test(event.tool) ? event.tool : null;
   const permission = ["read_only", "local_state_write", "execute", "source_write", "destructive_state_write"].includes(event.permission)
     ? event.permission : null;
-  const status = ["started", "completed", "failed", "approval_required"].includes(event.status) ? event.status : null;
+  const status = ["started", "completed", "failed", "cancelled", "approval_required"].includes(event.status) ? event.status : null;
   if (!runId || !tool || !permission || !status || typeof event.approved !== "boolean") {
     throw new Error("Tool audit event metadata is invalid.");
   }
@@ -434,6 +434,332 @@ export async function recordWorkspaceToolEvent(inputRoot, event) {
     error: typeof event.error === "string" ? event.error.slice(0, 1000) : undefined
   });
   return { root, recorded: true, runId, status };
+}
+
+
+const MAX_AGENT_RUNS = 40;
+const MAX_AGENT_RUN_BYTES = 160 * 1024;
+const AGENT_RUN_STATUSES = new Set(["queued", "running", "completed", "failed", "cancelled", "interrupted"]);
+const AGENT_RUN_TRANSITIONS = {
+  queued: new Set(["running", "interrupted", "failed", "cancelled"]),
+  running: new Set(["running", "interrupted", "completed", "failed", "cancelled"]),
+  interrupted: new Set(["interrupted", "running"]),
+  completed: new Set(["completed"]),
+  failed: new Set(["failed"]),
+  cancelled: new Set(["cancelled"])
+};
+
+function validAgentRunId(value) {
+  return typeof value === "string"
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function agentRunDirectory(root) {
+  const directory = path.join(stateDirectory(root), "runs");
+  await fs.mkdir(directory, { recursive: true });
+  const stat = await fs.lstat(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error("The workspace .syntra/runs state directory must be a regular directory.");
+  }
+  const real = await fs.realpath(directory);
+  if (!isWithinRoot(root, real)) throw new Error("The workspace .syntra/runs directory resolves outside the workspace.");
+  return real;
+}
+
+async function readAgentRunRecord(root, runId) {
+  if (!validAgentRunId(runId)) throw new Error("A valid agent run ID is required.");
+  const directory = await agentRunDirectory(root);
+  const target = path.join(directory, runId + ".json");
+  if (!(await assertRegularStateFile(target, "Agent run record"))) return null;
+  const stat = await fs.stat(target);
+  if (stat.size > MAX_AGENT_RUN_BYTES) throw new Error("Agent run record exceeds the size limit.");
+  let run;
+  try { run = JSON.parse(await fs.readFile(target, "utf8")); }
+  catch { throw new Error("Agent run record is malformed and cannot be recovered."); }
+  if (!run || run.schemaVersion !== 1 || run.id !== runId || path.resolve(String(run.root || "")) !== root) {
+    throw new Error("Agent run record does not match this workspace.");
+  }
+  return run;
+}
+
+async function writeAgentRunRecord(root, run) {
+  const directory = await agentRunDirectory(root);
+  const target = path.join(directory, run.id + ".json");
+  if (await assertRegularStateFile(target, "Agent run record")) {
+    const stat = await fs.lstat(target);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Agent run record must be a regular file.");
+  }
+  const serialized = JSON.stringify(run, null, 2) + "\n";
+  if (Buffer.byteLength(serialized, "utf8") > MAX_AGENT_RUN_BYTES) {
+    throw new Error("Agent run checkpoint exceeds the 160 KB storage limit.");
+  }
+  await writeFileAtomic(target, serialized);
+}
+
+function summarizeAgentVerification(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    status: typeof value.status === "string" ? value.status.slice(0, 64) : "unknown",
+    passed: value.passed === true,
+    checks: Array.isArray(value.checks) ? value.checks.slice(0, 8).map(check => ({
+      task: String(check.task || "").slice(0, 40),
+      passed: check.passed === true,
+      exitCode: Number.isInteger(check.exitCode) ? check.exitCode : null,
+      timedOut: check.timedOut === true,
+      durationMs: Number.isFinite(check.durationMs) ? Math.max(0, Math.floor(check.durationMs)) : null
+    })) : [],
+    reviewRequiredReasons: Array.isArray(value.reviewRequiredReasons)
+      ? value.reviewRequiredReasons.slice(0, 8).map(item => String(item).slice(0, 300))
+      : []
+  };
+}
+
+async function pruneAgentRunRecords(root) {
+  const directory = await agentRunDirectory(root);
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const records = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/i.test(entry.name)) continue;
+    const target = path.join(directory, entry.name);
+    if (!(await assertRegularStateFile(target, "Agent run record"))) continue;
+    const stat = await fs.stat(target);
+    records.push({ path: target, modifiedAt: stat.mtimeMs });
+  }
+  records.sort((a, b) => b.modifiedAt - a.modifiedAt);
+  for (const record of records.slice(MAX_AGENT_RUNS)) await fs.rm(record.path);
+}
+
+export async function createAgentRun(inputRoot, goal) {
+  const root = await resolveWorkspace(inputRoot);
+  if (typeof goal !== "string" || !goal.trim() || goal.length > 5000) {
+    throw new Error("Agent run goal must contain 1-5,000 characters.");
+  }
+  const now = new Date().toISOString();
+  const run = {
+    schemaVersion: 1,
+    id: crypto.randomUUID(),
+    root,
+    goal: goal.trim(),
+    status: "running",
+    phase: "queued",
+    message: "Agent task queued.",
+    iteration: 0,
+    createdAt: now,
+    updatedAt: now,
+    cancelRequested: false,
+    model: null,
+    planSteps: [],
+    selectedContext: [],
+    attempts: [],
+    toolCalls: [],
+    verification: null,
+    changedFiles: [],
+    proposalIds: [],
+    checkpoint: { stage: "created", iteration: 0 },
+    recoveryPatch: null,
+    events: [{ at: now, phase: "queued", message: "Agent task created." }],
+    error: null
+  };
+  await writeAgentRunRecord(root, run);
+  await pruneAgentRunRecords(root);
+  await appendAudit(root, { action: "agent_run_created", runId: run.id, goalLength: run.goal.length });
+  return run;
+}
+
+export async function getAgentRun(inputRoot, runId) {
+  const root = await resolveWorkspace(inputRoot);
+  return await readAgentRunRecord(root, runId);
+}
+
+async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Agent run update must be an object.");
+  const run = await readAgentRunRecord(root, runId);
+  if (!run) throw new Error("Agent run was not found.");
+  const next = { ...run, updatedAt: new Date().toISOString() };
+
+  if (typeof patch.status === "string") {
+    if (!AGENT_RUN_STATUSES.has(patch.status)) throw new Error("Agent run status is invalid.");
+    if (!AGENT_RUN_TRANSITIONS[run.status]?.has(patch.status)) {
+      throw new Error("Agent run cannot transition from " + run.status + " to " + patch.status + ".");
+    }
+    next.status = patch.status;
+  }
+  if (patch.model && typeof patch.model === "object" && !Array.isArray(patch.model)) {
+    next.model = {
+      provider: String(patch.model.provider || "unknown").slice(0, 80),
+      name: String(patch.model.name || "unknown").slice(0, 120),
+      contextWindowTokens: Number.isFinite(patch.model.contextWindowTokens)
+        ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextWindowTokens))) : 0,
+      contextBudgetTokens: Number.isFinite(patch.model.contextBudgetTokens)
+        ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextBudgetTokens))) : 0,
+      outputBudgetTokens: Number.isFinite(patch.model.outputBudgetTokens)
+        ? Math.max(0, Math.min(100_000, Math.floor(patch.model.outputBudgetTokens))) : 0
+    };
+  }
+  if (typeof patch.phase === "string") next.phase = patch.phase.slice(0, 64);
+  if (typeof patch.message === "string") next.message = patch.message.replace(/[\r\n]+/g, " ").slice(0, 500);
+  if (Number.isInteger(patch.iteration)) next.iteration = Math.max(0, Math.min(20, patch.iteration));
+  if (typeof patch.cancelRequested === "boolean") next.cancelRequested = patch.cancelRequested;
+  if (typeof patch.error === "string" || patch.error === null) next.error = patch.error ? patch.error.slice(0, 1200) : null;
+  if (Array.isArray(patch.planSteps)) next.planSteps = patch.planSteps.slice(0, 12).map(step => ({
+    id: String(step.id || "").slice(0, 40),
+    title: String(step.title || "").slice(0, 120),
+    status: String(step.status || "pending").slice(0, 40),
+    detail: String(step.detail || "").slice(0, 400)
+  }));
+  if (Array.isArray(patch.selectedContext)) next.selectedContext = patch.selectedContext.slice(0, 20).map(item => ({
+    path: String(item.path || "").slice(0, 1024),
+    score: Number.isFinite(item.score) ? Number(item.score) : 0,
+    sha256: typeof item.sha256 === "string" ? item.sha256.slice(0, 64) : ""
+  }));
+  if (Array.isArray(patch.attempts)) next.attempts = patch.attempts.slice(-12).map(item => ({
+    iteration: Number.isInteger(item.iteration) ? item.iteration : 0,
+    status: String(item.status || "unknown").slice(0, 64),
+    promptTokens: Number.isFinite(item.promptTokens) ? item.promptTokens : null,
+    outputTokens: Number.isFinite(item.outputTokens) ? item.outputTokens : null,
+    changedFiles: Array.isArray(item.changedFiles) ? item.changedFiles.slice(0, 8).map(value => String(value).slice(0, 1024)) : []
+  }));
+  if (Array.isArray(patch.toolCalls)) next.toolCalls = patch.toolCalls.slice(-60).map(item => ({
+    runId: String(item.runId || "").slice(0, 64),
+    name: String(item.name || "").slice(0, 80),
+    status: String(item.status || "").slice(0, 32),
+    permission: String(item.permission || "").slice(0, 40),
+    durationMs: Number.isFinite(item.durationMs) ? Math.max(0, Math.floor(item.durationMs)) : 0,
+    auditRecorded: item.auditRecorded !== false
+  }));
+  if (patch.verification !== undefined) next.verification = summarizeAgentVerification(patch.verification);
+  if (Array.isArray(patch.changedFiles)) next.changedFiles = patch.changedFiles.slice(0, 12).map(item => ({
+    path: String(item.path || "").slice(0, 1024),
+    existedBefore: item.existedBefore === true,
+    baseHash: typeof item.baseHash === "string" ? item.baseHash.slice(0, 64) : null,
+    afterHash: typeof item.afterHash === "string" ? item.afterHash.slice(0, 64) : "",
+    reason: String(item.reason || "").slice(0, 500)
+  }));
+  if (Array.isArray(patch.proposalIds)) next.proposalIds = patch.proposalIds.slice(0, 24).filter(validAgentRunId);
+  if (patch.checkpoint && typeof patch.checkpoint === "object" && !Array.isArray(patch.checkpoint)) {
+    next.checkpoint = {
+      stage: String(patch.checkpoint.stage || next.checkpoint?.stage || "unknown").slice(0, 64),
+      iteration: Number.isInteger(patch.checkpoint.iteration)
+        ? Math.max(0, Math.min(20, patch.checkpoint.iteration))
+        : next.iteration
+    };
+  }
+  if (patch.recoveryPatch === null) {
+    next.recoveryPatch = null;
+  } else if (patch.recoveryPatch && typeof patch.recoveryPatch === "object" && !Array.isArray(patch.recoveryPatch)) {
+    let incomingPatchBytes;
+    try {
+      incomingPatchBytes = Buffer.byteLength(JSON.stringify(patch.recoveryPatch), "utf8");
+    } catch {
+      throw new Error("The saved patch checkpoint must be serializable JSON.");
+    }
+    if (!Number.isFinite(incomingPatchBytes) || incomingPatchBytes > 100 * 1024) {
+      throw new Error("The saved patch checkpoint exceeds the 100 KB input limit.");
+    }
+    const recoveryPatch = {
+      summary: String(patch.recoveryPatch.summary || "").slice(0, 1000),
+      edits: Array.isArray(patch.recoveryPatch.edits) ? patch.recoveryPatch.edits.slice(0, 6).map(edit => ({
+        path: String(edit.path || "").slice(0, 1024),
+        find: typeof edit.find === "string" ? edit.find.slice(0, 30_000) : "",
+        replace: typeof edit.replace === "string" ? edit.replace.slice(0, 30_000) : "",
+        reason: String(edit.reason || "").slice(0, 500)
+      })) : []
+    };
+    if (!recoveryPatch.edits.length || recoveryPatch.edits.some(edit => !edit.path || (!edit.find && !edit.replace))) {
+      throw new Error("The saved patch checkpoint is incomplete.");
+    }
+    if (Buffer.byteLength(JSON.stringify(recoveryPatch), "utf8") > 100 * 1024) {
+      throw new Error("The saved patch checkpoint exceeds the 100 KB limit.");
+    }
+    next.recoveryPatch = recoveryPatch;
+  }
+  if (patch.event && typeof patch.event === "object" && !Array.isArray(patch.event)) {
+    next.events = [...(Array.isArray(next.events) ? next.events : []), {
+      at: new Date().toISOString(),
+      phase: String(patch.event.phase || next.phase).slice(0, 64),
+      message: String(patch.event.message || "").replace(/[\r\n]+/g, " ").slice(0, 500),
+      iteration: Number.isInteger(patch.event.iteration) ? Math.max(0, patch.event.iteration) : next.iteration
+    }].slice(-80);
+  }
+
+  await writeAgentRunRecord(root, next);
+  return next;
+}
+
+const agentRunUpdateQueues = new Map();
+
+async function withAgentRunUpdateQueue(key, action) {
+  const previous = agentRunUpdateQueues.get(key) || Promise.resolve();
+  const current = previous.catch(() => {}).then(action);
+  agentRunUpdateQueues.set(key, current);
+  try {
+    return await current;
+  } finally {
+    if (agentRunUpdateQueues.get(key) === current) agentRunUpdateQueues.delete(key);
+  }
+}
+
+export async function updateAgentRun(inputRoot, runId, patch = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!validAgentRunId(runId)) throw new Error("A valid agent run ID is required.");
+  return withAgentRunUpdateQueue(root + "::" + runId, () =>
+    updateAgentRunUnlocked(root, runId, patch)
+  );
+}
+
+export async function listAgentRuns(inputRoot, limit = 20) {
+  const root = await resolveWorkspace(inputRoot);
+  const directory = await agentRunDirectory(root);
+  const boundedLimit = Math.max(1, Math.min(40, Math.floor(Number(limit) || 20)));
+  const entries = await fs.readdir(directory, { withFileTypes: true });
+  const runs = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/i.test(entry.name)) continue;
+    const runId = entry.name.slice(0, -5);
+    try {
+      const run = await readAgentRunRecord(root, runId);
+      if (run) runs.push(run);
+    } catch {
+      // One damaged record must not hide other recoverable task history.
+    }
+  }
+  runs.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  return runs.slice(0, boundedLimit);
+}
+
+export async function recoverInterruptedAgentRuns(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const runs = await listAgentRuns(root, MAX_AGENT_RUNS);
+  const recovered = [];
+  for (const run of runs) {
+    if (run.status !== "running" && run.status !== "queued") continue;
+    const updated = await updateAgentRun(root, run.id, {
+      status: "interrupted",
+      phase: "interrupted",
+      message: "The local service stopped before this task completed. Inspect its checkpoint before retrying.",
+      event: { phase: "interrupted", message: "Recovered an unfinished run after a service restart." }
+    });
+    recovered.push(updated);
+    await appendAudit(root, { action: "agent_run_interrupted", runId: run.id, checkpoint: run.checkpoint?.stage || "unknown" });
+  }
+  return recovered;
+}
+
+export async function requestAgentRunCancellation(inputRoot, runId) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!validAgentRunId(runId)) throw new Error("A valid agent run ID is required.");
+  return withAgentRunUpdateQueue(root + "::" + runId, async () => {
+    const run = await readAgentRunRecord(root, runId);
+    if (!run) throw new Error("Agent run was not found.");
+    if (run.status !== "running" && run.status !== "queued") return run;
+    return updateAgentRunUnlocked(root, runId, {
+      cancelRequested: true,
+      phase: "cancelling",
+      message: "Cancellation requested.",
+      event: { phase: "cancelling", message: "User requested cancellation." }
+    });
+  });
 }
 
 export async function createProjectPlan(inputRoot, goal) {
@@ -997,6 +1323,11 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
   const packageJson = await readJsonIfPresent(root, "package.json");
   const selected = await chooseCheck(root, task, packageJson);
   const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
+  if (options.signal?.aborted) {
+    const error = new Error("Project check was cancelled before it started.");
+    error.name = "AbortError";
+    throw error;
+  }
   const outputParts = [];
   let outputSize = 0;
   let timedOut = false;
@@ -1037,19 +1368,38 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
     let forceKillTimer;
+    let aborted = false;
+    const signal = options.signal;
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearTimeout(forceKillTimer);
+      signal?.removeEventListener("abort", abortProcess);
+    };
+    const abortProcess = () => {
+      if (aborted) return;
+      aborted = true;
+      terminateProcessTree(child, false);
+      forceKillTimer = setTimeout(() => terminateProcessTree(child, true), 1500);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       terminateProcessTree(child, false);
       forceKillTimer = setTimeout(() => terminateProcessTree(child, true), 1500);
     }, timeoutMs);
+    if (signal?.aborted) abortProcess();
+    else signal?.addEventListener("abort", abortProcess, { once: true });
     child.on("error", error => {
-      clearTimeout(timer);
-      clearTimeout(forceKillTimer);
+      cleanup();
       reject(error);
     });
     child.on("close", code => {
-      clearTimeout(timer);
-      clearTimeout(forceKillTimer);
+      cleanup();
+      if (aborted) {
+        const error = new Error("Project check was cancelled.");
+        error.name = "AbortError";
+        reject(error);
+        return;
+      }
       const result = {
         root, task, command: selected.command, exitCode: code,
         passed: code === 0 && !timedOut, timedOut,

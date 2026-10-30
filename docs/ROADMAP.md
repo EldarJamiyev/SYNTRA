@@ -83,6 +83,18 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - Support cancellation, resumable checkpoints, and bounded retries.
 - Record model, context budget, selected files, tool calls, patch hashes, and verification results for each run.
 
+**Delivered durability slice (partial Phase 4 implementation):**
+
+- [x] Persist bounded per-workspace run records with task goal, plan, context hashes, attempts, tool-call summaries, verification state, proposal IDs, and event history.
+- [x] Record local model identity and context/output budgets for each run.
+- [x] Recover unfinished runs at local-service startup and when switching workspaces; keep ordinary run-history reads non-mutating.
+- [x] Stop active local inference and supported candidate-check processes, while protecting an in-progress transactional apply.
+- [x] Resume a validated patch only after rechecking its original file hashes and exact anchors; otherwise restart discovery/generation.
+- [x] Show recent runs in the workspace panel and refresh their state when the panel is reopened.
+- [x] Cover durable storage, invalid lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
+
+Still outstanding in this phase: model-selected tool choice, re-inspection after each meaningful implementation slice, multi-slice implementation/verification, and richer checkpoint recovery between individual tool operations. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
+
 **Acceptance:** A complex task can complete multiple verified slices, resume after interruption, and explain which evidence supports its final status. Retries are bounded and cannot bypass safety checks.
 
 ### Phase 5 — Project context and engineering memory

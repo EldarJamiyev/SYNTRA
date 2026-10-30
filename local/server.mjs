@@ -8,9 +8,15 @@ import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
+  createAgentRun,
+  getAgentRun,
+  listAgentRuns,
   listPendingProposals,
   readWorkspaceFile,
-  resolveWorkspace
+  recoverInterruptedAgentRuns,
+  requestAgentRunCancellation,
+  resolveWorkspace,
+  updateAgentRun
 } from "./workspace.mjs";
 
 const HOST = "127.0.0.1";
@@ -59,12 +65,13 @@ async function parseBody(request) {
 
 async function aiRequest(method, route, body, timeoutMs = undefined, options = {}) {
   const onToken = typeof options?.onToken === "function" ? options.onToken : undefined;
+  const signal = options?.signal;
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
   if (modelRoute) {
     const provider = await detectLocalModel();
     if (provider) {
-      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken });
+      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken, signal });
       if (localResult) return localResult;
     }
   }
@@ -75,9 +82,10 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
       method,
       headers: method === "GET" ? {} : { "Content-Type": "application/json" },
       body: method === "GET" ? undefined : JSON.stringify(body || {}),
-      signal: AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))]) : AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
     });
-  } catch {
+  } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError") throw error;
     throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server', or install and run a local Ollama model for stronger local inference.");
   }
   const payload = await response.json().catch(() => ({}));
@@ -165,13 +173,74 @@ function updateChat(jobId, value) {
   if (job) Object.assign(job, value, { updatedAt: new Date().toISOString() });
 }
 
+function cancelChatJob(jobId, reply = "Task cancelled. Any proposals already staged remain in the workspace; type /proposals to inspect them.") {
+  const job = chatJobs.get(jobId);
+  if (!job) return;
+  Object.assign(job, {
+    status: "cancelled",
+    phase: "cancelled",
+    message: "Task cancelled.",
+    reply,
+    error: null,
+    updatedAt: new Date().toISOString()
+  });
+  if (activeChatJobId === jobId) activeChatJobId = null;
+}
+
+function publicAgentRun(run) {
+  if (!run) return null;
+  const { recoveryPatch, ...visible } = run;
+  return { ...visible, recoveryAvailable: Boolean(recoveryPatch) };
+}
+
+async function listCurrentAgentRuns() {
+  const runs = await listAgentRuns(activeWorkspace, 12);
+  return { root: activeWorkspace, runs: runs.map(publicAgentRun) };
+}
+
+async function readCurrentAgentRun(body) {
+  const run = await getAgentRun(activeWorkspace, body.runId);
+  if (!run) throw new Error("Agent run was not found in the active workspace.");
+  return { run: publicAgentRun(run), recoveryPatch: run.recoveryPatch || null };
+}
+
+async function resumeAgentRun(body) {
+  const run = await getAgentRun(activeWorkspace, body.runId);
+  if (!run) throw new Error("Agent run was not found in the active workspace.");
+  if (run.status !== "interrupted") {
+    throw new Error("Only interrupted agent runs can be resumed. Current status: " + run.status + ".");
+  }
+  const saved = await listPendingProposals(activeWorkspace);
+  if (saved.pending.length || saved.stale.length) {
+    throw new Error("Resolve existing workspace proposals with /proposals and /apply or /discard before resuming this run.");
+  }
+  return startChat({ message: "/resume " + run.id, history: [] });
+}
+
+async function cancelChat(body) {
+  const job = chatJobs.get(typeof body.jobId === "string" ? body.jobId : "");
+  if (!job) throw new Error("Chat turn not found or expired.");
+  if (job.status !== "running") return { ok: false, status: job.status, message: "This task is no longer running." };
+  if (job.phase === "applying") {
+    return { ok: false, status: job.status, message: "A transactional file apply is in progress and cannot be interrupted safely." };
+  }
+  // Change the in-memory phase and abort synchronously before awaiting durable
+  // state writes. This closes the race with the agent entering transactional apply.
+  updateChat(job.jobId, { phase: "cancelling", message: "Stopping the current task safely." });
+  job.controller?.abort();
+  if (job.agentRunId) {
+    await requestAgentRunCancellation(job.workspace, job.agentRunId);
+  }
+  return { ok: true, status: "cancelling", agentRunId: job.agentRunId || null };
+}
 
 
-async function applyProposals(root, proposals) {
+
+async function applyProposals(root, proposals, signal) {
   const toolRun = await executeWorkspaceTool({
     root, auditRoot: root, name: "workspace.proposals.apply-many",
     input: { proposalIds: proposals.map(proposal => proposal.id) },
-    approval: true
+    approval: true, signal
   });
   if (!toolRun.ok) throw new Error(toolRun.error || toolRun.message || "The proposal apply tool failed.");
   return {
@@ -195,6 +264,7 @@ async function switchWorkspace(body) {
     throw new Error("Finish the current chat task before switching workspaces.");
   }
   activeWorkspace = await resolveWorkspace(body.root);
+  await recoverInterruptedAgentRuns(activeWorkspace);
   return readWorkspaceStatus(activeWorkspace);
 }
 
@@ -294,7 +364,8 @@ function compactAgentReply(result, applied) {
   return lines.join("\n");
 }
 
-async function runChatTurn(jobId, message, history) {
+async function runChatTurn(jobId, message, history, signal) {
+  let agentRunId = null;
   try {
     updateChat(jobId, { phase: "connecting", message: "Connecting to the local model" });
     const workspaceCommand = message.match(/^\/workspace(?:\s+(.+))?$/is);
@@ -455,7 +526,7 @@ async function runChatTurn(jobId, message, history) {
       return;
     }
 
-    const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000);
+    const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000, { signal });
     if (!modelStatus.checkpoint_exists) {
       finishChat(jobId,
         "The local AI backend is running, but there is no trained checkpoint yet. Train once from the repository folder, then return here:\n\n"
@@ -466,30 +537,122 @@ async function runChatTurn(jobId, message, history) {
       return;
     }
 
-    if (isCodingTask(message)) {
+    const resumeMatch = message.trim().match(/^\/resume\s+([0-9a-f-]{36})$/i);
+    let resumeRecord = null;
+    let taskGoal = message;
+    if (resumeMatch) {
+      resumeRecord = await getAgentRun(activeWorkspace, resumeMatch[1]);
+      if (!resumeRecord) throw new Error("Agent run was not found in the active workspace.");
+      if (resumeRecord.status !== "interrupted") {
+        throw new Error("Only interrupted agent runs can be resumed. Current status: " + resumeRecord.status + ".");
+      }
+      taskGoal = resumeRecord.goal;
+    }
+
+    if (isCodingTask(message) || resumeRecord) {
       const saved = await listPendingProposals(activeWorkspace);
       if (saved.pending.length || saved.stale.length) {
-        finishChat(jobId, "This workspace already has saved proposals. Type /proposals to inspect them, then use /apply or /discard before starting another code task.");
+        finishChat(jobId, "This workspace already has saved proposals. Type /proposals to inspect them, then use /apply or /discard before starting or resuming a code task.");
         return;
       }
-      updateChat(jobId, { phase: "planning", message: "Reading the project and planning a code change" });
-      const result = await runAgentTask({
-        root: activeWorkspace, goal: message, maxIterations: 3, runChecks: true,
-        modelRequest: aiRequest,
-        onProgress: update => updateChat(jobId, {
-          phase: update.phase || "working",
-          message: update.message || "Working on the requested change",
-          iteration: update.iteration || 0
-        })
+
+      if (resumeRecord) {
+        agentRunId = resumeRecord.id;
+        await updateAgentRun(activeWorkspace, agentRunId, {
+          status: "running",
+          phase: "resuming",
+          message: "Resuming from the last durable checkpoint.",
+          cancelRequested: false,
+          proposalIds: [],
+          event: { phase: "resuming", message: resumeRecord.recoveryPatch
+            ? "Restoring and revalidating the saved patch checkpoint."
+            : "Restarting task discovery because no validated patch checkpoint was saved." }
+        });
+      } else {
+        const createdRun = await createAgentRun(activeWorkspace, taskGoal);
+        agentRunId = createdRun.id;
+      }
+
+      updateChat(jobId, {
+        agentRunId,
+        phase: resumeRecord ? "resuming" : "planning",
+        message: resumeRecord ? "Restoring the saved agent checkpoint" : "Reading the project and planning a code change"
       });
+
+      const result = await runAgentTask({
+        root: activeWorkspace,
+        goal: taskGoal,
+        maxIterations: 3,
+        runChecks: true,
+        signal,
+        resumePatch: resumeRecord?.recoveryPatch || null,
+        resumeIteration: resumeRecord?.checkpoint?.iteration || 1,
+        resumeBaseHashes: resumeRecord?.recoveryPatch
+          ? Object.fromEntries((resumeRecord.changedFiles || []).map(change => [change.path, change.baseHash ?? null]))
+          : null,
+        previousAttempts: resumeRecord?.attempts || [],
+        previousToolCalls: resumeRecord?.toolCalls || [],
+        modelRequest: (method, route, body, timeoutMs, options = {}) =>
+          aiRequest(method, route, body, timeoutMs, { ...options, signal }),
+        onProgress: async update => {
+          const phase = update.phase || "working";
+          const messageText = update.message || "Working on the requested change";
+          const runPatch = {
+            phase,
+            iteration: update.iteration || 0,
+            message: messageText,
+            event: { phase, message: messageText, iteration: update.iteration || 0 }
+          };
+          for (const key of [
+            "planSteps", "selectedContext", "model", "attempts", "toolCalls",
+            "verification", "changedFiles", "proposalIds", "recoveryPatch"
+          ]) {
+            if (Object.prototype.hasOwnProperty.call(update, key)) runPatch[key] = update[key];
+          }
+          if (update.checkpoint) runPatch.checkpoint = update.checkpoint;
+          await updateAgentRun(activeWorkspace, agentRunId, runPatch);
+          updateChat(jobId, { agentRunId, phase, message: messageText, iteration: update.iteration || 0 });
+        }
+      });
+
       let applied = [];
       if (result.verification?.status === "passed" && result.proposals?.length) {
+        if (signal?.aborted) {
+          const cancelled = new Error("Agent run was cancelled before file application.");
+          cancelled.name = "AbortError";
+          throw cancelled;
+        }
         updateChat(jobId, { phase: "applying", message: "Checks passed in a temporary copy; applying hash-checked proposals" });
-        const transaction = await applyProposals(activeWorkspace, result.proposals);
+        const transaction = await applyProposals(activeWorkspace, result.proposals, signal);
         applied = transaction.applied;
         result.toolCalls.push(transaction.toolCall);
       }
+
+      const completedAt = new Date().toISOString();
+      await updateAgentRun(activeWorkspace, agentRunId, {
+        status: "completed",
+        phase: "completed",
+        message: applied.length ? "Verified changes were applied." : "Agent task finished; review any staged proposals.",
+        planSteps: result.plan?.steps || [],
+        attempts: result.attempts || [],
+        toolCalls: result.toolCalls || [],
+        verification: result.verification || null,
+        changedFiles: result.changedFiles || [],
+        proposalIds: (result.proposals || []).map(proposal => proposal.id),
+        recoveryPatch: null,
+        checkpoint: {
+          stage: applied.length ? "applied" : result.proposals?.length ? "proposals_ready" : "completed",
+          iteration: result.attempts?.length || 0
+        },
+        event: {
+          phase: "completed",
+          message: applied.length ? "Verified proposals were applied transactionally." : "Agent task completed.",
+          iteration: result.attempts?.length || 0
+        }
+      });
+
       finishChat(jobId, compactAgentReply(result, applied), {
+        agentRunId,
         verification: result.verification?.status || "not_run",
         changedFiles: result.changedFiles?.map(item => item.path) || []
       });
@@ -542,7 +705,27 @@ async function runChatTurn(jobId, message, history) {
       contextTokensUsed: tokenInfo.token_count, trainedSteps: generation.trained_steps
     });
   } catch (error) {
-    failChat(jobId, error);
+    const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
+    if (agentRunId) {
+      try {
+        await updateAgentRun(activeWorkspace, agentRunId, {
+          status: cancelled ? "cancelled" : "failed",
+          phase: cancelled ? "cancelled" : "failed",
+          message: cancelled
+            ? "Task cancelled at a safe checkpoint. Inspect any staged proposals before continuing."
+            : error instanceof Error ? error.message : String(error),
+          cancelRequested: cancelled,
+          error: cancelled ? null : (error instanceof Error ? error.message : String(error)),
+          event: {
+            phase: cancelled ? "cancelled" : "failed",
+            message: cancelled ? "The user cancelled this task." : "The task stopped after an error.",
+            iteration: 0
+          }
+        });
+      } catch {}
+    }
+    if (cancelled) cancelChatJob(jobId);
+    else failChat(jobId, error);
   }
 }
 
@@ -555,21 +738,24 @@ function startChat(body) {
     activeChatJobId = null;
   }
   const jobId = crypto.randomUUID();
+  const controller = new AbortController();
   const job = {
     jobId, status: "running", phase: "starting", message: "Starting local response",
-    reply: "", error: null, workspace: activeWorkspace, updatedAt: new Date().toISOString()
+    reply: "", error: null, workspace: activeWorkspace, controller,
+    updatedAt: new Date().toISOString()
   };
   chatJobs.set(jobId, job);
   activeChatJobId = jobId;
   pruneChatJobs();
-  void runChatTurn(jobId, message, Array.isArray(body.history) ? body.history : []);
+  void runChatTurn(jobId, message, Array.isArray(body.history) ? body.history : [], controller.signal);
   return { jobId, status: job.status, phase: job.phase };
 }
 
 function readChatStatus(body) {
   const job = chatJobs.get(typeof body.jobId === "string" ? body.jobId : "");
   if (!job) throw new Error("Chat turn not found or expired. Send your message again.");
-  return job;
+  const { controller, ...visible } = job;
+  return visible;
 }
 
 const routeHandlers = {
@@ -578,10 +764,14 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
+  "POST /local-api/chat/cancel": cancelChat,
+  "GET /local-api/agent/runs": listCurrentAgentRuns,
+  "POST /local-api/agent/runs/get": readCurrentAgentRun,
+  "POST /local-api/agent/runs/resume": resumeAgentRun,
   "GET /local-api/tools": async () => ({ tools: listWorkspaceTools() }),
   "POST /local-api/tools/execute": async body => executeWorkspaceTool({
     root: body.root || activeWorkspace,
@@ -659,6 +849,16 @@ const server = http.createServer(async (request, response) => {
     });
   }
 });
+
+try {
+  const recoveredRuns = await recoverInterruptedAgentRuns(activeWorkspace);
+  if (recoveredRuns.length) {
+    process.stdout.write("Recovered " + recoveredRuns.length + " interrupted agent run(s) for the active workspace.\n");
+  }
+} catch (error) {
+  process.stderr.write("SYNTRA could not recover prior agent runs: " +
+    (error instanceof Error ? error.message : String(error)) + "\n");
+}
 
 server.listen(PORT, HOST, () => {
   process.stdout.write("SYNTRA local workspace service listening on http://" + HOST + ":" + PORT + "\n");

@@ -238,14 +238,14 @@ async function readOllamaStream(response, onToken) {
   return { content, finalChunk: finalChunk || {} };
 }
 
-async function ollamaFetch(provider, body, timeoutMs, fetchImpl, onToken) {
+async function ollamaFetch(provider, body, timeoutMs, fetchImpl, onToken, signal) {
   const streaming = typeof onToken === "function";
   const requestBody = { ...body, stream: streaming };
   const response = await fetchImpl(provider.baseUrl + "/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
-    signal: AbortSignal.timeout(timeoutMs || 300000)
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || 300000)]) : AbortSignal.timeout(timeoutMs || 300000)
   });
 
   if (!response.ok) {
@@ -282,7 +282,8 @@ async function ollamaFetch(provider, body, timeoutMs, fetchImpl, onToken) {
 export async function handleLocalModelRequest(provider, method, route, body = {}, {
   fetchImpl = globalThis.fetch,
   timeoutMs,
-  onToken
+  onToken,
+  signal
 } = {}) {
   if (method === "GET" && route === "/model/status") return getProviderStatus(provider);
 
@@ -355,7 +356,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
         additionalProperties: false
       };
     }
-    return ollamaFetch(provider, requestBody, timeoutMs || 300000, fetchImpl, onToken);
+    return ollamaFetch(provider, requestBody, timeoutMs || 300000, fetchImpl, onToken, signal);
   }
 
   return null;

@@ -34,6 +34,18 @@ Unverified proposals are written under `.syntra/proposals` with the workspace ro
 
 The browser remembers the selected workspace path locally. That value is untrusted input and must pass workspace resolution before it can become active. The server remains loopback-only; switching projects does not expand its network exposure.
 
+## Durable agent runs and recovery
+
+Coding tasks are recorded in the active workspace under `.syntra/runs`. Each bounded JSON record stores the task goal, lifecycle state, plan steps, selected source files and hashes, local model/context metadata, attempts, tool-call summaries, verification results, changed-file hashes, proposal IDs, event history, and—only after validation—a bounded patch checkpoint. The run store retains at most 40 recent records per workspace; individual records are limited to 160 KB. The run directory is validated against symlink redirection.
+
+`GET /local-api/agent/runs` is read-only: refreshing the browser does not change the status of a live task. The local service marks unfinished runs as interrupted once during startup recovery, and also recovers runs when a different workspace is selected. Reopening the workspace panel refreshes the current run list, so a service restart can be reflected without a browser reload.
+
+The Stop action aborts the active model request and supported project-check process tree. Cancellation is rejected once a transactional proposal apply has begun; a cancellation arriving immediately before apply is checked before the transaction starts. Any proposals already staged remain in the workspace review queue and are not silently discarded.
+
+Resume is deliberately conservative. A run with a saved validated patch re-runs workspace inspection and validates the saved patch against the exact original file hashes and anchors before continuing through candidate checks and proposal staging. If the original source has changed, SYNTRA refuses to reuse that patch. If no validated patch checkpoint exists, SYNTRA restarts discovery and generation from the saved task goal rather than pretending to continue an in-flight model token stream. Existing pending or stale proposals must be resolved before resuming.
+
+This is durable task recovery, not full multi-step model orchestration: the current agent still follows a bounded deterministic workflow, does not expose arbitrary terminal execution, and does not yet let the model dynamically select tools or resume at arbitrary intermediate tool instructions. An interrupted run may therefore restart an earlier stage, and users should inspect the saved checkpoint and proposal queue before resuming.
+
 ## Permissioned tool runtime
 
 `local/tool-runtime.mjs` is the shared registry for local workspace operations. `GET /local-api/tools` returns the 12 tool definitions and their input schemas, permission classes, and approval requirements. `POST /local-api/tools/execute` validates calls against those definitions; unknown tools, undeclared fields, malformed IDs, out-of-range line windows, and invalid types are rejected.
@@ -60,4 +72,4 @@ The native Transformer has its own tokenizer, context configuration, training lo
 - Likely credential files and secret paths are excluded from workspace read/edit operations.
 - Agent patches are restricted to recognized text/source/configuration files and validated against exact file hashes. Multi-file apply preflights every proposal, saves backups together, rechecks each source immediately before writing, and attempts a guarded rollback if a later write fails.
 - Candidate checks execute in a temporary project copy. Build/test scripts are project code and should still be reviewed when working in an untrusted repository.
-- The services are intended for local use, not direct internet exposure. Automated Node tests launch an isolated loopback server on a temporary port to check request validation and origin rejection. A static hosted copy cannot access the user's local model or workspace agent by itself.
+- The services are intended for local use, not direct internet exposure. Run checkpoints, proposal state, and tool audit data remain inside the selected workspace's .syntra directory; deleting that directory removes the local recovery history. Automated Node tests launch an isolated loopback server on a temporary port to check request validation and origin rejection. A static hosted copy cannot access the user's local model or workspace agent by itself.
