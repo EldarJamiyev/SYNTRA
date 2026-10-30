@@ -433,24 +433,21 @@ async function planImplementationSlices({
   return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
 }
 
-async function collectFinalCandidateChanges(originalRoot, candidateRoot, changedPaths, originalByPath) {
+async function collectFinalCandidateChanges(originalRoot, changedPaths, originalByPath, expectedContents) {
   const changes = [];
   for (const relative of [...changedPaths].sort()) {
     const original = originalByPath.get(relative);
-    if (!original) throw new Error("Missing original-file baseline for candidate path: " + relative);
-    let current;
-    try { current = await readWorkspaceFile(candidateRoot, relative); }
-    catch (error) {
-      throw new Error("Final candidate file could not be read: " + relative + ". " +
-        (error instanceof Error ? error.message : String(error)));
+    const content = expectedContents.get(relative);
+    if (!original || typeof content !== "string") {
+      throw new Error("Missing original-file baseline or intended candidate content for: " + relative);
     }
-    if (original.beforeContent === current.content) continue;
+    if (original.beforeContent === content) continue;
     changes.push({
       path: relative,
       beforeContent: original.beforeContent,
       beforeHash: original.beforeHash,
       existedBefore: original.existedBefore,
-      content: current.content,
+      content,
       reason: original.reason || "Updated in a verified implementation slice.",
       matches: original.existedBefore ? 1 : 0
     });
