@@ -1,10 +1,25 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, LoaderCircle, Menu, MessageSquare, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, FolderOpen, LoaderCircle, Menu, MessageSquare, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createChatSession, loadSessionState, MAX_CHAT_SESSIONS, saveSessionState, titleFromMessages } from './chat-sessions.js';
 import type { ChatMessage } from './chat-history.js';
 import type { ChatSession, ChatSessionState } from './chat-sessions.js';
+import { loadWorkspacePath, saveWorkspacePath } from './workspace-settings.js';
+
+type WorkspaceProposal = {
+  id: string;
+  path: string;
+  createdAt?: string;
+  reason?: string;
+  summary?: { addedLines?: number; removedLines?: number; preview?: string };
+};
+
+type WorkspaceStatus = {
+  root: string;
+  pendingProposals: WorkspaceProposal[];
+  staleProposals: WorkspaceProposal[];
+};
 
 type Message = ChatMessage;
 const MAX_VISIBLE_MESSAGES = 60;
@@ -43,10 +58,36 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return result;
 }
 
+async function getJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(8_000),
+  });
+  const raw = await response.text();
+  let result: (T & { error?: string }) | undefined;
+  try {
+    result = JSON.parse(raw) as T & { error?: string };
+  } catch {
+    throw new Error(response.ok
+      ? "SYNTRA's local workspace service returned an invalid response."
+      : "SYNTRA's local workspace service failed with HTTP " + response.status + ".");
+  }
+  if (!response.ok) throw new Error(result?.error || "SYNTRA's local workspace service is unavailable.");
+  if (!result || typeof result !== 'object') throw new Error('SYNTRA returned an unexpected workspace response.');
+  return result;
+}
+
 function safeMarkdownHref(href?: string) {
   if (!href) return null;
   if (/^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i.test(href)) return href;
   return null;
+}
+
+function workspaceLabel(root: string) {
+  const trimmed = root.replace(/[\\/]+$/, '');
+  const parts = trimmed.split(/[\\/]/);
+  return parts[parts.length - 1] || root;
 }
 
 function sessionDateLabel(value: string) {
@@ -104,6 +145,12 @@ export default function App() {
   const [sessionState, setSessionState] = useState<ChatSessionState>(() => loadSessionState());
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sessionSearch, setSessionSearch] = useState('');
+  const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null);
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [workspacePath, setWorkspacePath] = useState(() => loadWorkspacePath() || '');
+  const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState('');
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [input, setInput] = useState('');
@@ -141,6 +188,40 @@ export default function App() {
     mountedRef.current = true;
     textareaRef.current?.focus();
     return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const initializeWorkspace = async () => {
+      try {
+        let status = await getJson<WorkspaceStatus>('/local-api/workspace/status');
+        const savedPath = loadWorkspacePath();
+        if (savedPath && savedPath !== status.root) {
+          try {
+            status = await postJson<WorkspaceStatus>('/local-api/workspace/switch', { root: savedPath });
+          } catch (cause) {
+            if (!cancelled) {
+              setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
+              setWorkspacePath(savedPath);
+            }
+          }
+        } else if (!savedPath) {
+          saveWorkspacePath(status.root);
+        }
+        if (!cancelled) {
+          setWorkspaceStatus(status);
+          if (!(savedPath && status.root !== savedPath)) setWorkspacePath(status.root);
+          setWorkspaceLoading(false);
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
+          setWorkspaceLoading(false);
+        }
+      }
+    };
+    void initializeWorkspace();
+    return () => { cancelled = true; };
   }, []);
 
   const startNewChat = () => {
@@ -214,6 +295,45 @@ export default function App() {
           || session.messages.some(message => message.content.toLowerCase().includes(query));
       })
     : sessions;
+
+  const refreshWorkspaceStatus = async () => {
+    const status = await getJson<WorkspaceStatus>('/local-api/workspace/status');
+    if (mountedRef.current) {
+      setWorkspaceStatus(status);
+      setWorkspacePath(status.root);
+      setWorkspaceError('');
+      saveWorkspacePath(status.root);
+    }
+  };
+
+  const submitWorkspaceSwitch = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (pending || workspaceSwitching) return;
+    const requestedPath = workspacePath.trim();
+    if (!requestedPath) {
+      setWorkspaceError('Enter an absolute project folder path.');
+      return;
+    }
+    setWorkspaceSwitching(true);
+    setWorkspaceError('');
+    try {
+      const status = await postJson<WorkspaceStatus>('/local-api/workspace/switch', { root: requestedPath });
+      setWorkspaceStatus(status);
+      setWorkspacePath(status.root);
+      saveWorkspacePath(status.root);
+      setWorkspaceOpen(false);
+    } catch (cause) {
+      setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setWorkspaceSwitching(false);
+    }
+  };
+
+  const reviewSavedProposals = () => {
+    setInput('/proposals');
+    setWorkspaceOpen(false);
+    textareaRef.current?.focus();
+  };
 
   const handleThreadScroll = () => {
     const thread = threadRef.current;
@@ -297,6 +417,11 @@ export default function App() {
       const answer = job.reply || 'No response was returned.';
       setStreamingReply('');
       setMessages(current => [...current, { role: 'assistant' as const, content: answer }].slice(-MAX_VISIBLE_MESSAGES));
+      try {
+        await refreshWorkspaceStatus();
+      } catch {
+        // A transient status refresh must not turn a completed chat answer into a failure.
+      }
     } catch (cause) {
       if (mountedRef.current) {
         setStreamingReply('');
@@ -345,6 +470,20 @@ export default function App() {
         </button>
         <span className="chat-brand">SYNTRA</span>
         <span className="header-session-title">{activeSession?.title || 'New chat'}</span>
+        <button
+          className="workspace-trigger"
+          type="button"
+          aria-label="Active workspace"
+          aria-expanded={workspaceOpen}
+          title={workspaceStatus?.root || 'Local project workspace'}
+          onClick={() => {
+            setWorkspacePath(workspaceStatus?.root || loadWorkspacePath() || workspacePath);
+            setWorkspaceOpen(open => !open);
+          }}
+        >
+          <FolderOpen size={15} strokeWidth={1.8} />
+          <span>{workspaceLoading ? 'Connecting…' : workspaceStatus ? workspaceLabel(workspaceStatus.root) : 'Workspace offline'}</span>
+        </button>
         <div className="chat-header-spacer" />
         <button
           className="header-icon-button new-chat-button"
@@ -357,6 +496,60 @@ export default function App() {
           <Plus size={19} strokeWidth={1.9} />
         </button>
       </header>
+
+      {workspaceOpen && (
+        <section className="workspace-popover" role="dialog" aria-label="Active workspace">
+          <div className="workspace-popover-header">
+            <div className="workspace-popover-title"><FolderOpen size={16} /> <span>Active workspace</span></div>
+            <button className="history-icon-button" type="button" aria-label="Close workspace panel" onClick={() => setWorkspaceOpen(false)}>
+              <X size={17} />
+            </button>
+          </div>
+          <div className="workspace-current-path" title={workspaceStatus?.root || ''}>
+            {workspaceStatus?.root || (workspaceLoading ? 'Connecting to the local service…' : 'Workspace unavailable')}
+          </div>
+          <form className="workspace-switch-form" onSubmit={submitWorkspaceSwitch}>
+            <label htmlFor="workspace-path">Project folder path</label>
+            <input
+              id="workspace-path"
+              value={workspacePath}
+              onChange={event => setWorkspacePath(event.target.value)}
+              placeholder="C:\\Projects\\MyProject"
+              maxLength={4096}
+              disabled={pending || workspaceSwitching}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <button type="submit" disabled={pending || workspaceSwitching || !workspacePath.trim()}>
+              {workspaceSwitching ? 'Switching…' : 'Switch folder'}
+            </button>
+          </form>
+          {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
+          {workspaceStatus && (workspaceStatus.pendingProposals.length > 0 || workspaceStatus.staleProposals.length > 0) && (
+            <div className="workspace-proposal-summary">
+              <div className="workspace-proposal-count">
+                {workspaceStatus.pendingProposals.length} pending
+                {workspaceStatus.staleProposals.length > 0 ? ' · ' + workspaceStatus.staleProposals.length + ' stale' : ''}
+              </div>
+              <div className="workspace-proposal-files">
+                {[...workspaceStatus.pendingProposals, ...workspaceStatus.staleProposals].slice(0, 5).map(proposal => (
+                  <div className="workspace-proposal-file" key={proposal.id}>
+                    <span>{proposal.path}</span>
+                    <span>{proposal.summary ? '+' + Number(proposal.summary.addedLines || 0) + ' / −' + Number(proposal.summary.removedLines || 0) : 'Stale'}</span>
+                  </div>
+                ))}
+                {workspaceStatus.pendingProposals.length + workspaceStatus.staleProposals.length > 5 && (
+                  <div className="workspace-proposal-more">And {workspaceStatus.pendingProposals.length + workspaceStatus.staleProposals.length - 5} more…</div>
+                )}
+              </div>
+              <button className="workspace-review-button" type="button" onClick={reviewSavedProposals}>
+                Review saved proposals in chat
+              </button>
+            </div>
+          )}
+          <div className="workspace-popover-footer">Project files and proposal records remain on this device.</div>
+        </section>
+      )}
 
       {historyOpen && (
         <>
@@ -494,9 +687,9 @@ export default function App() {
             aria-label="Message SYNTRA"
             maxLength={12000}
             rows={1}
-            disabled={pending}
+            disabled={pending || workspaceLoading}
           />
-          <button className="send-button" type="submit" aria-label="Send message" disabled={pending || !input.trim()}>
+          <button className="send-button" type="submit" aria-label="Send message" disabled={pending || workspaceLoading || !input.trim()}>
             {pending ? <LoaderCircle size={18} className="thinking-spinner" /> : <ArrowUp size={18} strokeWidth={2.4} />}
           </button>
         </form>
