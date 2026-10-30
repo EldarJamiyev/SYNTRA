@@ -91,7 +91,7 @@ function validateStore(root, value) {
       || !NOTE_ID_PATTERN.test(item.id || "")
       || ids.has(item.id)
       || !validTimestamp(item.createdAt) || !validTimestamp(item.updatedAt)
-      || !NOTE_CATEGORIES.has(item.category)
+      || !NOTE_CATEGORIES.has(item.category) || item.owner !== "user"
       || !Array.isArray(item.tags) || item.tags.length > MAX_TAGS) {
       throw new Error("The local project-memory file contains an invalid note. It was not overwritten.");
     }
