@@ -118,8 +118,16 @@ Still outstanding in this phase: model-selected execution/source-modification to
 
 **Objective:** Improve context quality without silently collecting sensitive data.
 
-- Add an incremental workspace index for symbols, imports, documentation, and test ownership.
-- Prefer targeted retrieval over sending entire repositories to a model.
+**Delivered initial Phase 5 slice (partial):**
+
+- [x] Build a workspace-local incremental declaration index for JavaScript/TypeScript, Python, Go, and Rust.
+- [x] Persist bounded symbol metadata and content hashes only; do not store source-file bodies.
+- [x] Reuse parsed declarations for unchanged file hashes, re-parse changed files, and prune deleted files.
+- [x] Validate indexed source hashes before returning symbol-search results; reject stale entries and symbolic-link index files.
+- [x] Add audited index status, refresh, and symbol-search tools, and allow the agent to select symbol search as a bounded read-only retrieval operation.
+
+- [ ] Expand the incremental index with import edges, documentation references, and test ownership.
+- [x] Add bounded symbol search to model-selected read-only retrieval so the agent can retrieve declarations instead of relying only on full-text matches.
 - Maintain task summaries and user-approved project notes.
 - Keep memory local and workspace-scoped, with controls to inspect, edit, and delete it.
 - Exclude credentials, private keys, ignored build artifacts, and user-configured paths.
