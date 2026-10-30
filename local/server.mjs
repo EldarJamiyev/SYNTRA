@@ -232,8 +232,9 @@ function formatProposalList(status) {
 async function executeToolOutput(options) {
   const result = await executeWorkspaceTool(options);
   if (!result.ok) throw new Error(result.error || result.message || "SYNTRA tool execution failed.");
-  if (!result.auditRecorded) throw new Error("The tool ran, but its completion audit record could not be persisted. Check .syntra/actions.jsonl.");
-  return result.output;
+  return result.auditRecorded
+    ? result.output
+    : { ...result.output, auditWarning: "The tool completed, but its final audit record could not be persisted. Check .syntra/actions.jsonl." };
 }
 
 function compactAgentReply(result, applied) {
