@@ -8,7 +8,6 @@ import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
-  discardFileProposals,
   listPendingProposals,
   readWorkspaceFile,
   resolveWorkspace
