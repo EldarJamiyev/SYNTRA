@@ -232,8 +232,8 @@ function resolveRustImport(source, specifier, pathSet) {
   if (specifier.startsWith("mod:")) {
     segments = [specifier.slice(4)];
   } else if (specifier.startsWith("crate::")) {
-    segments = specifier.slice(7).split("::");
-    if (segments.length > 1) segments = segments.slice(0, -1);
+    segments = ["src", ...specifier.slice(7).split("::")];
+    if (segments.length > 2) segments = segments.slice(0, -1);
   } else if (specifier.startsWith("self::")) {
     segments = [baseDir, ...specifier.slice(6).split("::")].filter(Boolean);
     if (segments.length > 1) segments = segments.slice(0, -1);
@@ -367,16 +367,16 @@ function validateLoadedIndex(root, value) {
   const byPath = new Map(files.map(file => [file.path, file]));
   for (const file of files) {
     const relations = [
-      ...file.imports.map(target => [target, "source"]),
-      ...file.importedBy.map(target => [target, "source"]),
+      ...file.imports.map(target => [target, ["source", "test"]]),
+      ...file.importedBy.map(target => [target, ["source", "test"]]),
       ...file.documentationReferences.map(target => [target, null]),
-      ...file.referencedByDocs.map(target => [target, "documentation"]),
-      ...file.testOwners.map(target => [target, "source"]),
-      ...file.ownedTests.map(target => [target, "test"])
+      ...file.referencedByDocs.map(target => [target, ["documentation"]]),
+      ...file.testOwners.map(target => [target, ["source"]]),
+      ...file.ownedTests.map(target => [target, ["test"]])
     ];
-    for (const [target, expectedRole] of relations) {
+    for (const [target, expectedRoles] of relations) {
       const linked = byPath.get(target);
-      if (!linked || (expectedRole && linked.role !== expectedRole)) return null;
+      if (!linked || (expectedRoles && !expectedRoles.includes(linked.role))) return null;
     }
     if (file.role !== "documentation" && file.docLinkTargets.length) return null;
     if (file.role === "documentation" && (file.symbols.length || file.importSpecifiers.length || file.imports.length)) return null;
@@ -483,7 +483,6 @@ export async function refreshWorkspaceIndex(inputRoot) {
   const previous = await readIndex(root);
   const candidates = await listWorkspaceIndexCandidates(root);
   const previousByPath = new Map((previous?.files || []).map(file => [file.path, file]));
-  const contentByPath = new Map();
   const nextFiles = [];
   const candidateFiles = candidates.files;
   const currentPaths = new Set(candidateFiles.map(file => file.path));
@@ -543,7 +542,6 @@ export async function refreshWorkspaceIndex(inputRoot) {
       truncated = true;
     }
     totalSymbols += symbols.length;
-    contentByPath.set(candidate.path, source.content);
     nextFiles.push({
       path: candidate.path, size: source.bytes, sha256: source.sha256, role, symbols,
       importSpecifiers, imports: [], importedBy: [],
@@ -569,9 +567,11 @@ export async function refreshWorkspaceIndex(inputRoot) {
     for (const specifier of file.importSpecifiers) {
       const matches = resolveSourceImport(file.path, specifier, pathSet, roles, goModulePath);
       for (const target of matches) {
-        if (target !== file.path && roles.get(target) !== "documentation" && !resolved.includes(target)) {
-          resolved.push(target);
-        }
+        const targetRole = roles.get(target);
+        const permittedRole = file.role === "test"
+          ? (targetRole === "source" || targetRole === "test")
+          : targetRole === "source";
+        if (target !== file.path && permittedRole && !resolved.includes(target)) resolved.push(target);
       }
       if (resolved.length >= MAX_RELATIONS_PER_FILE) break;
     }
