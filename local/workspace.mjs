@@ -532,6 +532,7 @@ export async function createAgentRun(inputRoot, goal) {
     changedFiles: [],
     proposalIds: [],
     checkpoint: { stage: "created", iteration: 0 },
+    recoveryPatch: null,
     events: [{ at: now, phase: "queued", message: "Agent task created." }],
     error: null
   };
@@ -603,6 +604,26 @@ export async function updateAgentRun(inputRoot, runId, patch = {}) {
         ? Math.max(0, Math.min(20, patch.checkpoint.iteration))
         : next.iteration
     };
+  }
+  if (patch.recoveryPatch === null) {
+    next.recoveryPatch = null;
+  } else if (patch.recoveryPatch && typeof patch.recoveryPatch === "object" && !Array.isArray(patch.recoveryPatch)) {
+    const recoveryPatch = {
+      summary: String(patch.recoveryPatch.summary || "").slice(0, 1000),
+      edits: Array.isArray(patch.recoveryPatch.edits) ? patch.recoveryPatch.edits.slice(0, 6).map(edit => ({
+        path: String(edit.path || "").slice(0, 1024),
+        find: typeof edit.find === "string" ? edit.find.slice(0, 30_000) : "",
+        replace: typeof edit.replace === "string" ? edit.replace.slice(0, 30_000) : "",
+        reason: String(edit.reason || "").slice(0, 500)
+      })) : []
+    };
+    if (!recoveryPatch.edits.length || recoveryPatch.edits.some(edit => !edit.path || (!edit.find && !edit.replace))) {
+      throw new Error("The saved patch checkpoint is incomplete.");
+    }
+    if (Buffer.byteLength(JSON.stringify(recoveryPatch), "utf8") > 100 * 1024) {
+      throw new Error("The saved patch checkpoint exceeds the 100 KB limit.");
+    }
+    next.recoveryPatch = recoveryPatch;
   }
   if (patch.event && typeof patch.event === "object" && !Array.isArray(patch.event)) {
     next.events = [...(Array.isArray(next.events) ? next.events : []), {
