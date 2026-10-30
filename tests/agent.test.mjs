@@ -101,7 +101,10 @@ test("agent implements and verifies multiple slices against one cumulative candi
           generated_tokens: 35, trained_steps: null
         };
       }
-      assert.equal(patchCalls, 2);
+      assert.equal(patchCalls, 2, JSON.stringify({
+      status: result.status, attempts: result.attempts, verification: result.verification,
+      observations: result.observations, slices: result.implementationSlices
+    }));
       assert.ok(body.prompt.includes("Implementation slice 2 of 2"));
       assert.ok(body.prompt.includes("module.exports = { value: 2 }"),
         "slice two must receive source context from the verified first slice");
@@ -208,7 +211,10 @@ test("an incomplete later slice cannot inherit an earlier passing verification s
       runChecks: true,
       modelRequest
     });
-    assert.equal(patchCalls, 2);
+    assert.equal(patchCalls, 2, JSON.stringify({
+      status: result.status, attempts: result.attempts, verification: result.verification,
+      observations: result.observations, slices: result.implementationSlices
+    }));
     assert.equal(result.implementationSlices[0].status, "completed");
     assert.equal(result.implementationSlices[1].status, "blocked");
     assert.equal(result.verification.status, "slice_incomplete");
@@ -301,7 +307,8 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(generated.length, 2, "one safe tool-plan generation should precede patch generation");
+    assert.equal(generated.length, 2, "one safe tool-plan generation should precede patch generation; " +
+      JSON.stringify({ status: result.status, attempts: result.attempts, verification: result.verification }));
     assert.equal(result.proposals.length, 1);
     assert.equal(result.proposals[0].path, "src/value.js");
     assert.deepEqual(result.toolCalls.map(call => call.name), [
