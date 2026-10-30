@@ -8,7 +8,6 @@ import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
-  applyFileProposals,
   discardFileProposals,
   listPendingProposals,
   readWorkspaceFile,
@@ -170,8 +169,20 @@ function updateChat(jobId, value) {
 
 
 async function applyProposals(root, proposals) {
-  const transaction = await applyFileProposals(root, proposals.map(proposal => proposal.id), true);
-  return transaction.applied;
+  const toolRun = await executeWorkspaceTool({
+    root, auditRoot: root, name: "workspace.proposals.apply-many",
+    input: { proposalIds: proposals.map(proposal => proposal.id) },
+    approval: true
+  });
+  if (!toolRun.ok) throw new Error(toolRun.error || toolRun.message || "The proposal apply tool failed.");
+  return {
+    applied: toolRun.output.applied,
+    toolCall: {
+      runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
+      permission: toolRun.permission, durationMs: toolRun.durationMs,
+      auditRecorded: toolRun.auditRecorded
+    }
+  };
 }
 
 async function readWorkspaceStatus(root = activeWorkspace) {
@@ -312,8 +323,10 @@ async function runChatTurn(jobId, message, history) {
         return;
       }
       updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
-      const applied = await applyProposals(activeWorkspace, saved.pending);
-      finishChat(jobId, "Applied the explicitly requested proposals:\n" + applied.map(item => "- " + item.path).join("\n") + "\n\nBackups are saved under .syntra.");
+      const transaction = await applyProposals(activeWorkspace, saved.pending);
+      finishChat(jobId, "Applied the explicitly requested proposals:\n" + transaction.applied.map(item => "- " + item.path).join("\n") + "\n\nBackups and tool audit records are saved under .syntra.", {
+        toolCalls: [transaction.toolCall]
+      });
       return;
     }
     if (/^\/discard\s*$/i.test(message.trim())) {
@@ -323,8 +336,12 @@ async function runChatTurn(jobId, message, history) {
         finishChat(jobId, "There are no saved proposal records to discard.");
         return;
       }
-      const discarded = await discardFileProposals(activeWorkspace, ids, true);
-      finishChat(jobId, "Discarded " + discarded.discarded.length + " saved proposal record(s). Project files were not modified.");
+      const discardRun = await executeWorkspaceTool({
+        root: activeWorkspace, auditRoot: activeWorkspace, name: "workspace.proposals.discard",
+        input: { proposalIds: ids }, approval: true
+      });
+      if (!discardRun.ok) throw new Error(discardRun.error || "The proposal discard tool failed.");
+      finishChat(jobId, "Discarded " + discardRun.output.discarded.length + " saved proposal record(s). Project files were not modified.");
       return;
     }
 
@@ -442,7 +459,9 @@ async function runChatTurn(jobId, message, history) {
       let applied = [];
       if (result.verification?.status === "passed" && result.proposals?.length) {
         updateChat(jobId, { phase: "applying", message: "Checks passed in a temporary copy; applying hash-checked proposals" });
-        applied = await applyProposals(activeWorkspace, result.proposals);
+        const transaction = await applyProposals(activeWorkspace, result.proposals);
+        applied = transaction.applied;
+        result.toolCalls.push(transaction.toolCall);
       }
       finishChat(jobId, compactAgentReply(result, applied), {
         verification: result.verification?.status || "not_run",
