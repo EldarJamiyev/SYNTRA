@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { validateStructuredPatch } from "../local/agent.mjs";
 import {
   createAgentRun,
   getAgentRun,
@@ -55,6 +60,13 @@ test("agent run records persist the task plan, context, checkpoint, and event hi
     assert.equal(restored.recoveryPatch.edits[0].replace, "value = 2");
     assert.equal(restored.checkpoint.stage, "patch_validated");
     assert.equal(restored.events.at(-1).message, "Patch checkpoint saved.");
+    await updateAgentRun(root, created.id, {
+      model: {
+        provider: "ollama-local", name: "qwen-local",
+        contextWindowTokens: 8192, contextBudgetTokens: 5570, outputBudgetTokens: 1024
+      }
+    });
+    assert.equal((await getAgentRun(root, created.id)).model.name, "qwen-local");
     assert.ok(Date.parse(updated.updatedAt) >= Date.parse(created.createdAt));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -102,6 +114,10 @@ test("cancellation requests are durable and terminal runs remain unchanged", asy
     const noOp = await requestAgentRunCancellation(root, run.id);
     assert.equal(noOp.status, "completed");
     assert.equal(noOp.cancelRequested, completed.cancelRequested);
+    await assert.rejects(
+      () => updateAgentRun(root, run.id, { status: "running" }),
+      /cannot transition from completed to running/
+    );
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -146,5 +162,109 @@ test("agent run state directories refuse symbolic-link redirection", async () =>
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("resuming a saved patch rejects source files changed since its checkpoint", async () => {
+  const root = await createWorkspace();
+  try {
+    const original = "export const value = 1;\\n";
+    const baseHash = createHash("sha256").update(original).digest("hex");
+    const patch = {
+      summary: "Update the exported value.",
+      edits: [{ path: "src/index.js", find: "value = 1", replace: "value = 2", reason: "Update value." }]
+    };
+    const valid = await validateStructuredPatch(root, patch, { "src/index.js": baseHash });
+    assert.equal(valid.changes[0].beforeHash, baseHash);
+
+    await fs.writeFile(path.join(root, "src", "index.js"), original + "export const extra = true;\\n");
+    await assert.rejects(
+      () => validateStructuredPatch(root, patch, { "src/index.js": baseHash }),
+      /changed after the checkpoint/
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+async function allocatePort() {
+  const probe = createServer();
+  await new Promise((resolve, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", resolve);
+  });
+  const address = probe.address();
+  if (!address || typeof address === "string") throw new Error("Could not allocate a local test port.");
+  await new Promise((resolve, reject) => probe.close(error => error ? reject(error) : resolve()));
+  return address.port;
+}
+
+async function startLocalService(root, port) {
+  const serverPath = fileURLToPath(new URL("../local/server.mjs", import.meta.url));
+  const child = spawn(process.execPath, [serverPath], {
+    cwd: path.dirname(path.dirname(serverPath)),
+    env: {
+      ...process.env,
+      SYNTRA_WORKSPACE: root,
+      SYNTRA_LOCAL_PORT: String(port),
+      SYNTRA_AI_PORT: String(port + 1)
+    },
+    stdio: "ignore"
+  });
+  const baseUrl = "http://127.0.0.1:" + port;
+  let lastError = null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (child.exitCode !== null) throw new Error("SYNTRA service exited during startup.");
+    try {
+      const response = await fetch(baseUrl + "/local-api/health", { signal: AbortSignal.timeout(250) });
+      if (response.ok) return { child, baseUrl };
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  child.kill();
+  throw new Error("SYNTRA service did not start: " + (lastError instanceof Error ? lastError.message : "timeout"));
+}
+
+async function stopLocalService(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise(resolve => {
+    const timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      resolve();
+    }, 3000);
+    timer.unref?.();
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.kill("SIGTERM");
+  });
+}
+
+test("run history preserves live tasks and a new service process recovers them", { timeout: 20000 }, async () => {
+  const root = await createWorkspace();
+  const port = await allocatePort();
+  let first = null;
+  let second = null;
+  try {
+    first = await startLocalService(root, port);
+    const run = await createAgentRun(root, "Exercise durable recovery across an actual service restart.");
+    const liveResponse = await fetch(first.baseUrl + "/local-api/agent/runs");
+    assert.equal(liveResponse.status, 200);
+    const liveRuns = await liveResponse.json();
+    assert.equal(liveRuns.runs.find(item => item.id === run.id)?.status, "running");
+
+    await stopLocalService(first.child);
+    second = await startLocalService(root, port);
+    const recoveredResponse = await fetch(second.baseUrl + "/local-api/agent/runs");
+    assert.equal(recoveredResponse.status, 200);
+    const recoveredRuns = await recoveredResponse.json();
+    assert.equal(recoveredRuns.runs.find(item => item.id === run.id)?.status, "interrupted");
+  } finally {
+    await stopLocalService(first?.child);
+    await stopLocalService(second?.child);
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
