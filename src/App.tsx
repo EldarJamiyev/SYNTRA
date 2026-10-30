@@ -534,7 +534,14 @@ export default function App() {
           onClick={() => {
             setHistoryOpen(false);
             setWorkspacePath(workspaceStatus?.root || loadWorkspacePath() || workspacePath);
-            setWorkspaceOpen(open => !open);
+            const opening = !workspaceOpen;
+            setWorkspaceOpen(opening);
+            if (opening) {
+              // A local service may have restarted while this view stayed open.
+              // Fetch its recovered run state when the workspace panel is reopened.
+              void refreshAgentRuns().catch(() => {});
+              void refreshWorkspaceStatus().catch(() => {});
+            }
           }}
         >
           <FolderOpen size={15} strokeWidth={1.8} />
