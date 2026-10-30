@@ -9,7 +9,9 @@ import {
   applyFileProposals,
   chooseCheck,
   createProjectPlan,
+  discardFileProposals,
   inspectWorkspace,
+  listPendingProposals,
   proposeFileChange,
   readWorkspaceFile,
   runProjectCheck,
@@ -63,6 +65,46 @@ test("proposal requires confirmation and protects concurrent edits", async () =>
   await assert.rejects(() => applyFileProposal(root, proposal.id, false), /explicit confirmation/);
   await fs.writeFile(path.join(root, "src", "network.ts"), "changed outside proposal\n", "utf8");
   await assert.rejects(() => applyFileProposal(root, proposal.id, true), /changed after the proposal/);
+});
+
+
+test("pending proposals are reconstructed from disk and stale or already-applied entries are excluded", async () => {
+  const root = await createTempProject();
+  const pending = await proposeFileChange(root, "src/network.ts", "export const staged = true;\n");
+  const restored = await listPendingProposals(root);
+  assert.equal(restored.pending.length, 1);
+  assert.equal(restored.pending[0].id, pending.id);
+  assert.equal(restored.stale.length, 0);
+
+  await fs.writeFile(path.join(root, "src", "network.ts"), "changed outside SYNTRA\n", "utf8");
+  const stale = await listPendingProposals(root);
+  assert.equal(stale.pending.length, 0);
+  assert.equal(stale.stale.length, 1);
+  assert.match(stale.stale[0].reason, /changed after this proposal/);
+});
+
+test("applied proposals are not restored as pending after a service restart", async () => {
+  const root = await createTempProject();
+  const proposal = await proposeFileChange(root, "src/network.ts", "export const staged = false;\n");
+  await applyFileProposal(root, proposal.id, true);
+  const restored = await listPendingProposals(root);
+  assert.equal(restored.pending.length, 0);
+  assert.equal(restored.stale.length, 0);
+});
+
+test("discarding saved proposals requires confirmation and only removes proposal records", async () => {
+  const root = await createTempProject();
+  const original = await fs.readFile(path.join(root, "src", "network.ts"), "utf8");
+  const proposal = await proposeFileChange(root, "src/network.ts", "export const staged = 'discard me';\n");
+  await assert.rejects(() => discardFileProposals(root, [proposal.id], false), /explicit confirmation/);
+  const result = await discardFileProposals(root, [proposal.id], true);
+  assert.equal(result.discarded[0].id, proposal.id);
+  assert.equal(await fs.readFile(path.join(root, "src", "network.ts"), "utf8"), original);
+  const restored = await listPendingProposals(root);
+  assert.equal(restored.pending.length, 0);
+  assert.equal(restored.stale.length, 0);
+  const audit = await fs.readFile(path.join(root, ".syntra", "actions.jsonl"), "utf8");
+  assert.match(audit, /discard_file_proposals/);
 });
 
 test("confirmed proposal applies and keeps a backup", async () => {
