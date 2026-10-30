@@ -2,6 +2,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
+import { getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
@@ -838,13 +839,9 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   if (request.method !== "GET") {
-    const origin = request.headers.origin;
-    if (origin && !ALLOWED_ORIGINS.has(origin)) {
-      sendJson(response, 403, { error: "Origin is not allowed by the local workspace service." });
-      return;
-    }
-    if (!origin && request.headers["sec-fetch-site"] === "cross-site") {
-      sendJson(response, 403, { error: "Cross-site requests are not accepted." });
+    const originRejection = getOriginRejection(request);
+    if (originRejection) {
+      sendJson(response, 403, { error: originRejection });
       return;
     }
   }
