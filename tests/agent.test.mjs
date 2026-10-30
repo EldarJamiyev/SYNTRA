@@ -8,6 +8,7 @@ import {
   buildRepositoryGraph,
   parsePatchOutput,
   runAgentTask,
+  validateReadOnlyToolPlan,
   validateStructuredPatch
 } from "../local/agent.mjs";
 
@@ -29,6 +30,102 @@ async function createProject() {
     'const test = require("node:test");\nconst assert = require("node:assert/strict");\nconst value = require("../src/value.js");\ntest("value is two", () => assert.equal(value.value, 2));\n');
   return root;
 }
+
+test("model-selected context plans allow only bounded search and safe listed-file reads", () => {
+  const valid = validateReadOnlyToolPlan({
+    calls: [
+      { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
+      { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } }
+    ]
+  }, ["src/server.js", "src/db.js"]);
+  assert.deepEqual(valid, [
+    { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
+    { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } }
+  ]);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.check", input: { task: "test" } }]
+  }, ["src/server.js"]), /restricted to workspace.search and workspace.read/);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.read", input: { path: ".env" } }]
+  }, ["src/server.js"]), /safe file list/);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.read", input: { path: "src/server.js", startLine: 1, endLine: 1000 } }]
+  }, ["src/server.js"]), /limited to 200 lines/);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.search", input: { query: "db", limit: 50 } }]
+  }, ["src/server.js"]), /limit from 1 to 10/);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: Array.from({ length: 5 }, () => ({ tool: "workspace.search", input: { query: "handler" } }))
+  }, ["src/server.js"]), /at most four calls/);
+});
+
+test("agent executes only model-selected read-only retrieval calls and feeds results into patch context", async () => {
+  const root = await createProject();
+  const generated = [];
+  const modelRequest = async (method, route, body) => {
+    if (method === "GET" && route === "/model/status") {
+      return {
+        checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      generated.push(body.prompt);
+      if (body.prompt.includes("SYNTRA_READ_ONLY_TOOL_PLAN")) {
+        return {
+          text: JSON.stringify({
+            calls: [
+              { tool: "workspace.search", input: { query: "value", limit: 5 } },
+              { tool: "workspace.read", input: { path: "src/value.js", startLine: 1, endLine: 1 } }
+            ]
+          }),
+          generated_tokens: 35, trained_steps: null
+        };
+      }
+      assert.match(body.prompt, /MODEL-SELECTED READ-ONLY CONTEXT/);
+      assert.ok(body.prompt.includes("module.exports = { value: 1 }"));
+      return {
+        text: JSON.stringify({
+          summary: "Update the exported value.",
+          edits: [{
+            path: "src/value.js",
+            find: "value: 1",
+            replace: "value: 2",
+            reason: "Update the value requested by the task."
+          }]
+        }),
+        generated_tokens: 30, trained_steps: null
+      };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Change the exported value from 1 to 2.",
+      maxIterations: 1,
+      runChecks: false,
+      modelToolSelection: true,
+      modelRequest
+    });
+    assert.equal(generated.length, 2, "one safe tool-plan generation should precede patch generation");
+    assert.equal(result.proposals.length, 1);
+    assert.equal(result.proposals[0].path, "src/value.js");
+    assert.deepEqual(result.toolCalls.map(call => call.name), [
+      "workspace.inspect", "git.status", "git.diff-summary",
+      "workspace.search", "workspace.read", "workspace.proposals.stage"
+    ]);
+    assert.ok(result.toolCalls.every(call => call.auditRecorded));
+    assert.ok(result.observations.some(item => item.kind === "model-readonly-tool-plan" && item.status === "accepted"));
+    assert.ok(result.observations.some(item => item.kind === "workspace.search" && item.status === "observed"));
+    assert.ok(result.observations.some(item => item.kind === "workspace.read" && item.path === "src/value.js"));
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
+      "model-selected retrieval and patch staging must not write the original project file");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 
 test("structured patch parser accepts one JSON object and rejects truncated output", () => {
   const parsed = parsePatchOutput('preface {"summary":"update","edits":[{"path":"a.js","find":"x","replace":"y"}]} trailing text');

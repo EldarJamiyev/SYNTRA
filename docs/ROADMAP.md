@@ -70,7 +70,7 @@ Later execution tools:
 
 Every accepted tool invocation records bounded input/output summaries, result, duration, run ID, approval and permission decisions. Raw file contents are deliberately excluded from tool audit logs. Repository content is untrusted input, not an instruction source.
 
-**Acceptance:** Tool actions are structured and testable. The UI identifies the tools used in coding-task summaries. Project checks, source writes, and destructive proposal actions are approval-gated. No command is executed merely because repository content or a model response asked for it. A general-purpose terminal runner and model-selected dynamic tool calling remain future work.
+**Acceptance:** Tool actions are structured and testable. The UI identifies the tools used in coding-task summaries. Project checks, source writes, and destructive proposal actions are approval-gated. No command is executed merely because repository content or a model response asked for it. A general-purpose terminal runner and model-selected execution or source-modification tools remain future work. Phase 4 includes a limited model-selected read-only retrieval step using the existing search and read tools.
 
 ### Phase 4 — Multi-step agent orchestration
 
@@ -96,9 +96,12 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Re-read every changed candidate file after project checks and reject a verification pass if a check script changed or removed a proposed source file.
 - [x] Persist bounded repository, check-discovery, and candidate-integrity observations with each agent run; surface the evidence count in the workspace panel.
 - [x] Cover supported-runner discovery, evidence persistence, and post-check candidate mutation with regression tests.
+- [x] Let the local model select up to four bounded `workspace.search`/`workspace.read` calls for task-specific context; validate the tool allowlist, query/line limits, and safe file paths before audited execution.
+- [x] Constrain Ollama tool-plan output with JSON schema and fall back to deterministic context ranking when the plan is invalid or exceeds the context budget.
+- [x] Cover allowed retrieval plans, disallowed execution tools, path/range violations, and end-to-end retrieval-to-patch context flow with tests.
 - [x] Cover durable storage, invalid lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
 
-Still outstanding in this phase: model-selected tool choice, re-inspection after each meaningful implementation slice, multi-slice implementation/verification, and richer checkpoint recovery between individual tool operations. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
+Still outstanding in this phase: model-selected execution/source-modification tool choice, re-inspection after each meaningful implementation slice, multi-slice implementation/verification, and richer checkpoint recovery between individual tool operations. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
 
 **Acceptance:** A complex task can complete multiple verified slices, resume after interruption, and explain which evidence supports its final status. Retries are bounded and cannot bypass safety checks.
 
