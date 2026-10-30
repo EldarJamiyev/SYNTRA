@@ -194,7 +194,6 @@ function publicAgentRun(run) {
 }
 
 async function listCurrentAgentRuns() {
-  await recoverInterruptedAgentRuns(activeWorkspace);
   const runs = await listAgentRuns(activeWorkspace, 12);
   return { root: activeWorkspace, runs: runs.map(publicAgentRun) };
 }
@@ -586,6 +585,11 @@ async function runChatTurn(jobId, message, history, signal) {
         signal,
         resumePatch: resumeRecord?.recoveryPatch || null,
         resumeIteration: resumeRecord?.checkpoint?.iteration || 1,
+        resumeBaseHashes: resumeRecord?.recoveryPatch
+          ? Object.fromEntries((resumeRecord.changedFiles || []).map(change => [change.path, change.baseHash ?? null]))
+          : null,
+        previousAttempts: resumeRecord?.attempts || [],
+        previousToolCalls: resumeRecord?.toolCalls || [],
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
         onProgress: async update => {
@@ -598,7 +602,7 @@ async function runChatTurn(jobId, message, history, signal) {
             event: { phase, message: messageText, iteration: update.iteration || 0 }
           };
           for (const key of [
-            "planSteps", "selectedContext", "attempts", "toolCalls",
+            "planSteps", "selectedContext", "model", "attempts", "toolCalls",
             "verification", "changedFiles", "proposalIds", "recoveryPatch"
           ]) {
             if (Object.prototype.hasOwnProperty.call(update, key)) runPatch[key] = update[key];
@@ -838,6 +842,16 @@ const server = http.createServer(async (request, response) => {
     });
   }
 });
+
+try {
+  const recoveredRuns = await recoverInterruptedAgentRuns(activeWorkspace);
+  if (recoveredRuns.length) {
+    process.stdout.write("Recovered " + recoveredRuns.length + " interrupted agent run(s) for the active workspace.\n");
+  }
+} catch (error) {
+  process.stderr.write("SYNTRA could not recover prior agent runs: " +
+    (error instanceof Error ? error.message : String(error)) + "\n");
+}
 
 server.listen(PORT, HOST, () => {
   process.stdout.write("SYNTRA local workspace service listening on http://" + HOST + ":" + PORT + "\n");
