@@ -693,18 +693,6 @@ async function copySandbox(root) {
   }
 }
 
-async function resetSandboxFiles(sandboxRoot, previous, originalChanges) {
-  for (const relative of previous) {
-    const original = originalChanges.get(relative);
-    const target = path.resolve(sandboxRoot, relative.split("/").join(path.sep));
-    if (!within(sandboxRoot, target)) throw new Error("Sandbox patch path escaped the temporary workspace.");
-    if (!original || !original.existedBefore) await fs.rm(target, { force: true }).catch(() => {});
-    else {
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, original.beforeContent, "utf8");
-    }
-  }
-}
 
 async function writeCandidateChanges(sandboxRoot, changes) {
   for (const change of changes) {
@@ -1106,7 +1094,7 @@ export async function runAgentTask({
         for (const change of candidate.changes) {
           if (!originalByPath.has(change.path)) {
             let original = null;
-            try { original = await readWorkspaceFile(root, change.path); }
+            try { original = await readWorkspaceFile(activePatchRoot, change.path); }
             catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               if (!message.startsWith("File does not exist:")) throw error;
