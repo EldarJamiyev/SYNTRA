@@ -141,12 +141,16 @@ Still outstanding in this phase: model-selected execution/source-modification to
 
 **Objective:** Measure engineering usefulness instead of assuming it.
 
-- Create a versioned coding benchmark from representative local tasks and regression fixtures.
-- Measure patch validity, build/test success, task completion, latency, token usage, and memory consumption by model.
+- [x] Create a versioned local coding benchmark with three real failing fixtures for string normalization, duration parsing, and header merging.
+- [x] Measure schema-valid patch rate, agent and independent test success, task completion, latency, all agent generation prompt/output tokens, repair attempts, and clearly scoped memory telemetry.
+- [ ] Expand task coverage with larger multi-file, framework, refactor, and cross-language maintenance tasks; repeat runs to measure variance.
+- [ ] Add report comparison across separate runs and provider/model configurations.
 - Add provider selection and clear model capability metadata.
 - Add failure recovery for provider disconnects, context exhaustion, and interrupted generations.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
 - Publish a reproducible release checklist and migration notes.
+
+**Current evidence:** The coding-v1 runner and its scoring are regression-tested, but no model benchmark results are committed; real scores are produced locally by running the selected model. Current task coverage is intentionally small.
 
 **Acceptance:** Release claims are backed by repeatable measurements. The installation path, test results, supported hardware, and model limitations are documented.
 
