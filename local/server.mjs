@@ -224,11 +224,13 @@ async function cancelChat(body) {
   if (job.phase === "applying") {
     return { ok: false, status: job.status, message: "A transactional file apply is in progress and cannot be interrupted safely." };
   }
+  // Change the in-memory phase and abort synchronously before awaiting durable
+  // state writes. This closes the race with the agent entering transactional apply.
+  updateChat(job.jobId, { phase: "cancelling", message: "Stopping the current task safely." });
+  job.controller?.abort();
   if (job.agentRunId) {
     await requestAgentRunCancellation(job.workspace, job.agentRunId);
   }
-  job.controller?.abort();
-  updateChat(job.jobId, { phase: "cancelling", message: "Stopping the current task safely." });
   return { ok: true, status: "cancelling", agentRunId: job.agentRunId || null };
 }
 
@@ -615,6 +617,11 @@ async function runChatTurn(jobId, message, history, signal) {
 
       let applied = [];
       if (result.verification?.status === "passed" && result.proposals?.length) {
+        if (signal?.aborted) {
+          const cancelled = new Error("Agent run was cancelled before file application.");
+          cancelled.name = "AbortError";
+          throw cancelled;
+        }
         updateChat(jobId, { phase: "applying", message: "Checks passed in a temporary copy; applying hash-checked proposals" });
         const transaction = await applyProposals(activeWorkspace, result.proposals, signal);
         applied = transaction.applied;
