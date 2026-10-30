@@ -407,7 +407,7 @@ export async function recordWorkspaceToolEvent(inputRoot, event) {
   const tool = typeof event.tool === "string" && /^[a-z][a-z0-9._-]{2,80}$/.test(event.tool) ? event.tool : null;
   const permission = ["read_only", "local_state_write", "execute", "source_write", "destructive_state_write"].includes(event.permission)
     ? event.permission : null;
-  const status = ["started", "completed", "failed", "approval_required"].includes(event.status) ? event.status : null;
+  const status = ["started", "completed", "failed", "cancelled", "approval_required"].includes(event.status) ? event.status : null;
   if (!runId || !tool || !permission || !status || typeof event.approved !== "boolean") {
     throw new Error("Tool audit event metadata is invalid.");
   }
@@ -1250,6 +1250,11 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
   const packageJson = await readJsonIfPresent(root, "package.json");
   const selected = await chooseCheck(root, task, packageJson);
   const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
+  if (options.signal?.aborted) {
+    const error = new Error("Project check was cancelled before it started.");
+    error.name = "AbortError";
+    throw error;
+  }
   const outputParts = [];
   let outputSize = 0;
   let timedOut = false;
@@ -1290,19 +1295,38 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
     let forceKillTimer;
+    let aborted = false;
+    const signal = options.signal;
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearTimeout(forceKillTimer);
+      signal?.removeEventListener("abort", abortProcess);
+    };
+    const abortProcess = () => {
+      if (aborted) return;
+      aborted = true;
+      terminateProcessTree(child, false);
+      forceKillTimer = setTimeout(() => terminateProcessTree(child, true), 1500);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
       terminateProcessTree(child, false);
       forceKillTimer = setTimeout(() => terminateProcessTree(child, true), 1500);
     }, timeoutMs);
+    if (signal?.aborted) abortProcess();
+    else signal?.addEventListener("abort", abortProcess, { once: true });
     child.on("error", error => {
-      clearTimeout(timer);
-      clearTimeout(forceKillTimer);
+      cleanup();
       reject(error);
     });
     child.on("close", code => {
-      clearTimeout(timer);
-      clearTimeout(forceKillTimer);
+      cleanup();
+      if (aborted) {
+        const error = new Error("Project check was cancelled.");
+        error.name = "AbortError";
+        reject(error);
+        return;
+      }
       const result = {
         root, task, command: selected.command, exitCode: code,
         passed: code === 0 && !timedOut, timedOut,
