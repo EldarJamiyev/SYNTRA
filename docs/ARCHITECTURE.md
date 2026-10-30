@@ -34,6 +34,20 @@ Unverified proposals are written under `.syntra/proposals` with the workspace ro
 
 The browser remembers the selected workspace path locally. That value is untrusted input and must pass workspace resolution before it can become active. The server remains loopback-only; switching projects does not expand its network exposure.
 
+## Permissioned tool runtime
+
+`local/tool-runtime.mjs` is the shared registry for local workspace operations. `GET /local-api/tools` returns the 12 tool definitions and their input schemas, permission classes, and approval requirements. `POST /local-api/tools/execute` validates calls against those definitions; unknown tools, undeclared fields, malformed IDs, out-of-range line windows, and invalid types are rejected.
+
+The current registry contains:
+
+- Read-only tools: `workspace.inspect`, `workspace.search`, `workspace.read`, `workspace.proposals.list`, `git.status`, and `git.diff-summary`.
+- Local SYNTRA-state writes: `workspace.plan` and `workspace.proposals.stage`. Staging writes a hash-bound proposal under `.syntra`; it does not alter the project source.
+- Approval-gated operations: `workspace.check` (executes project-defined checks), `workspace.proposals.apply`, `workspace.proposals.apply-many` (transactional source changes), and `workspace.proposals.discard` (irreversible deletion of proposal records).
+
+Every accepted tool invocation receives a UUID run ID and emits started/completed/failed or approval-required records to `.syntra/actions.jsonl`. Events contain bounded input/output summaries, permission and approval decisions, duration, and errors; source contents and full file excerpts are deliberately excluded. An initial audit-write failure prevents the operation from running. A final audit-write failure is returned as an explicit warning because an already-completed operation cannot safely be represented as not having happened. Calls for one workspace are serialized to prevent overlapping proposal, check, and audit operations.
+
+The coding agent now routes project inspection, temporary-copy candidate checks, proposal staging, and transactional apply through this registry. A candidate copy is not an OS-level security sandbox: approved project scripts run with the current user's normal filesystem and network privileges. Users should run these checks only for repositories whose scripts they trust. Its orchestration is still deterministic in the server/agent code; the local model does not yet choose arbitrary tools dynamically. Git inspection uses fixed `execFile` arguments, disables optional index writes and external diff, and does not contact remotes. There is no general-purpose terminal tool in this phase.
+
 ## Model and context handling
 
 Ollama discovery excludes cloud-tagged models and rejects weights files larger than 70% of physical RAM to preserve working memory for the OS and inference context/cache. Stored weight size is a heuristic, not a guarantee of runtime fit. Model detection is briefly cached between adjacent chat stages; injected/test fetch implementations bypass the cache for deterministic testing. The Ollama router uses an 8,192-token default context, configurable with SYNTRA_LOCAL_CONTEXT within the supported limits.

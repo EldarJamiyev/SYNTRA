@@ -313,6 +313,65 @@ async function runChatCommand(base, message) {
   return status;
 }
 
+test("local tool catalogue and API enforce permissions and record execution", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-tool-api-"));
+  await fs.mkdir(path.join(root, "src"), { recursive: true });
+  await fs.writeFile(path.join(root, "src", "index.js"), "export const value = 1;\n", "utf8");
+  let service = null;
+  try {
+    service = await startLocalServer(root);
+    const catalogueResponse = await fetch(service.base + "/local-api/tools");
+    assert.equal(catalogueResponse.status, 200);
+    const catalogue = await catalogueResponse.json();
+    assert.equal(catalogue.tools.length, 12);
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.search"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.proposals.apply-many" && tool.approvalRequired));
+    assert.ok(catalogue.tools.some(tool => tool.name === "git.diff-summary" && tool.permission === "read_only"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.check" && tool.approvalRequired));
+
+    const headers = { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" };
+    const inspectResponse = await fetch(service.base + "/local-api/tools/execute", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "workspace.inspect", root, input: {} })
+    });
+    assert.equal(inspectResponse.status, 200);
+    const inspectRun = await inspectResponse.json();
+    assert.equal(inspectRun.ok, true);
+    assert.equal(inspectRun.name, "workspace.inspect");
+    assert.equal(inspectRun.auditRecorded, true);
+
+    const deniedResponse = await fetch(service.base + "/local-api/tools/execute", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "workspace.check", root, input: { task: "test" } })
+    });
+    const denied = await deniedResponse.json();
+    assert.equal(denied.ok, false);
+    assert.equal(denied.status, "approval_required");
+
+    const legacyCheckResponse = await fetch(service.base + "/local-api/workspace/check", {
+      method: "POST", headers,
+      body: JSON.stringify({ task: "test" })
+    });
+    assert.equal(legacyCheckResponse.status, 400);
+    assert.match((await legacyCheckResponse.json()).error, /Explicit user approval is required/);
+
+    const deniedOrigin = await fetch(service.base + "/local-api/tools/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://attacker.invalid" },
+      body: JSON.stringify({ name: "workspace.inspect", root, input: {} })
+    });
+    assert.equal(deniedOrigin.status, 403);
+
+    const events = (await fs.readFile(path.join(root, ".syntra", "actions.jsonl"), "utf8"))
+      .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    assert.ok(events.some(event => event.tool === "workspace.inspect" && event.status === "completed"));
+    assert.ok(events.some(event => event.tool === "workspace.check" && event.status === "approval_required"));
+  } finally {
+    if (service?.child) await stopChild(service.child);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("saved workspace proposals survive a real local service restart", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-restart-workspace-"));
   await fs.mkdir(path.join(root, "src"), { recursive: true });

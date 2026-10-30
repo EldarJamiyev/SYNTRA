@@ -107,6 +107,12 @@ test("agent blocks verification when a patch rewrites package scripts or depende
     assert.equal(result.verification.checks[0].skipped, true);
     assert.equal(result.status, "proposals_ready_unverified");
     assert.equal(result.proposals[0].path, "package.json");
+    assert.deepEqual(result.toolCalls.map(call => call.name), ["workspace.inspect", "workspace.proposals.stage"]);
+    assert.ok(result.toolCalls.every(call => call.auditRecorded));
+    const toolAudit = (await fs.readFile(path.join(root, ".syntra", "actions.jsonl"), "utf8"))
+      .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
+      .filter(entry => entry.action === "tool_runtime_event");
+    assert.equal(toolAudit.length, 4);
     assert.match(result.verification.note, /dependency\/build manifests or lockfiles/);
     assert.equal(await fs.readFile(path.join(root, "package.json"), "utf8"), originalManifest,
       "the original manifest must remain untouched before explicit review/apply");
@@ -225,6 +231,10 @@ test("repository graph links local imports and agent repairs a failed test in a 
       "agent must not edit original project files before explicit apply");
     assert.equal(result.attempts[0].status, "invalid_patch");
     assert.equal(result.attempts[1].status, "verification_passed");
+    assert.deepEqual(result.toolCalls.map(call => call.name), [
+      "workspace.inspect", "workspace.check", "workspace.proposals.stage"
+    ]);
+    assert.ok(result.toolCalls.every(call => call.auditRecorded));
     const applied = await import("../local/workspace.mjs").then(module =>
       module.applyFileProposal(root, result.proposals[0].id, true)
     );

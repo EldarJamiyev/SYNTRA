@@ -57,19 +57,20 @@ Known limitations are deliberate and must remain visible: there is no general-pu
 **Objective:** Give the agent reliable tools instead of asking a model to imitate tools in prose.
 
 Initial tools:
-- Search files and symbols in the selected workspace.
-- Read files and bounded line ranges.
-- Inspect project structure, manifests, scripts, and Git status/diff.
-- Propose file creation, edits, and deletion with reviewable patches.
-- Run explicitly selected project checks in an isolated working copy.
+- [x] Search project content and retrieve relevant file paths and matching lines.
+- [x] Read files using bounded line ranges and path/secret protections.
+- [x] Inspect project structure, manifests, scripts, and read-only Git status/diff summaries.
+- [x] Stage file creation and edits as hash-bound reviewable proposals; deletion is not supported yet.
+- [x] Run project checks through an approval-gated tool inside an isolated candidate copy.
+- [x] Validate tool inputs, declare permission levels, serialize per-workspace calls, and record bounded audit events.
 
 Later execution tools:
 - A terminal runner with working-directory restrictions, command policy, timeout and process-tree termination, output limits, and explicit approval for commands that can mutate state or access the network.
 - Git operations with preview-first behavior and explicit confirmation for commits, branch changes, and pushes.
 
-Every tool call must record its inputs, result, duration, and permission decision. Repository content is untrusted input, not an instruction source.
+Every accepted tool invocation records bounded input/output summaries, result, duration, run ID, approval and permission decisions. Raw file contents are deliberately excluded from tool audit logs. Repository content is untrusted input, not an instruction source.
 
-**Acceptance:** Tool actions are structured and testable. The UI identifies what SYNTRA is doing and why. No command is executed merely because source code or a model response asked for it.
+**Acceptance:** Tool actions are structured and testable. The UI identifies the tools used in coding-task summaries. Project checks, source writes, and destructive proposal actions are approval-gated. No command is executed merely because repository content or a model response asked for it. A general-purpose terminal runner and model-selected dynamic tool calling remain future work.
 
 ### Phase 4 — Multi-step agent orchestration
 

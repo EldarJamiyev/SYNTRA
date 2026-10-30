@@ -3,22 +3,14 @@ import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
 import { runAgentTask } from "./agent.mjs";
+import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
-  applyFileProposal,
-  applyFileProposals,
-  createProjectPlan,
-  discardFileProposals,
-  inspectWorkspace,
   listPendingProposals,
-  listProposals,
-  proposeFileChange,
   readWorkspaceFile,
-  resolveWorkspace,
-  runProjectCheck,
-  searchWorkspace
+  resolveWorkspace
 } from "./workspace.mjs";
 
 const HOST = "127.0.0.1";
@@ -176,8 +168,20 @@ function updateChat(jobId, value) {
 
 
 async function applyProposals(root, proposals) {
-  const transaction = await applyFileProposals(root, proposals.map(proposal => proposal.id), true);
-  return transaction.applied;
+  const toolRun = await executeWorkspaceTool({
+    root, auditRoot: root, name: "workspace.proposals.apply-many",
+    input: { proposalIds: proposals.map(proposal => proposal.id) },
+    approval: true
+  });
+  if (!toolRun.ok) throw new Error(toolRun.error || toolRun.message || "The proposal apply tool failed.");
+  return {
+    applied: toolRun.output.applied,
+    toolCall: {
+      runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
+      permission: toolRun.permission, durationMs: toolRun.durationMs,
+      auditRecorded: toolRun.auditRecorded
+    }
+  };
 }
 
 async function readWorkspaceStatus(root = activeWorkspace) {
@@ -229,6 +233,14 @@ function formatProposalList(status) {
   return lines.join("\n");
 }
 
+async function executeToolOutput(options) {
+  const result = await executeWorkspaceTool(options);
+  if (!result.ok) throw new Error(result.error || result.message || "SYNTRA tool execution failed.");
+  return result.auditRecorded
+    ? result.output
+    : { ...result.output, auditWarning: "The tool completed, but its final audit record could not be persisted. Check .syntra/actions.jsonl." };
+}
+
 function compactAgentReply(result, applied) {
   const lines = [result.patchSummary || "Code task finished.", ""];
   if (applied.length) {
@@ -270,8 +282,15 @@ function compactAgentReply(result, applied) {
   if (result.proposals?.length && !applied.length) {
     lines.push("", "Review the proposed changes above before typing `/apply`. SYNTRA will recheck the original file hashes before writing.");
   }
+  if (result.toolCalls?.length) {
+    const toolNames = [...new Set(result.toolCalls.map(call => call.name))];
+    lines.push("", "Tools used: " + toolNames.map(name => "`" + name + "`").join(", ") + ".");
+    if (result.toolCalls.every(call => call.auditRecorded !== false)) {
+      lines.push("Tool execution events are recorded in `.syntra/actions.jsonl`.");
+    }
+  }
   if (result.attempts?.length) lines.push("", "Repair attempts: " + result.attempts.length + ".");
-  if (applied.length) lines.push("", "Backups and audit records are saved in .syntra.");
+  if (applied.length) lines.push("", "Backups are saved under .syntra.");
   return lines.join("\n");
 }
 
@@ -289,33 +308,66 @@ async function runChatTurn(jobId, message, history) {
       finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
       return;
     }
-    if (/^\/proposals\s*$/i.test(message.trim())) {
-      finishChat(jobId, formatProposalList(await readWorkspaceStatus()));
-      return;
-    }
-    if (/^\/apply\s*$/i.test(message.trim())) {
-      const saved = await listPendingProposals(activeWorkspace);
-      if (!saved.pending.length) {
-        const staleNote = saved.stale.length
-          ? " " + saved.stale.length + " stale proposal(s) were found; type /proposals to inspect them and /discard to remove their records."
-          : "";
-        finishChat(jobId, "There are no applicable pending changes for this workspace." + staleNote);
+    if (/^\/proposals\s*$/i.test(message.trim())
+      || /^\/apply\s*$/i.test(message.trim())
+      || /^\/discard\s*$/i.test(message.trim())) {
+      const listRun = await executeWorkspaceTool({
+        root: activeWorkspace, auditRoot: activeWorkspace,
+        name: "workspace.proposals.list", input: {}
+      });
+      if (!listRun.ok) throw new Error(listRun.error || "The proposal list tool failed.");
+      const saved = listRun.output;
+      const listTrace = {
+        runId: listRun.runId, name: listRun.name, status: listRun.status,
+        permission: listRun.permission, durationMs: listRun.durationMs,
+        auditRecorded: listRun.auditRecorded
+      };
+
+      if (/^\/proposals\s*$/i.test(message.trim())) {
+        finishChat(jobId, formatProposalList({
+          root: saved.root,
+          pendingProposals: saved.pending,
+          staleProposals: saved.stale
+        }), { toolCalls: [listTrace] });
         return;
       }
-      updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
-      const applied = await applyProposals(activeWorkspace, saved.pending);
-      finishChat(jobId, "Applied the explicitly requested proposals:\n" + applied.map(item => "- " + item.path).join("\n") + "\n\nBackups are saved under .syntra.");
-      return;
-    }
-    if (/^\/discard\s*$/i.test(message.trim())) {
-      const saved = await listPendingProposals(activeWorkspace);
+
+      if (/^\/apply\s*$/i.test(message.trim())) {
+        if (!saved.pending.length) {
+          const staleNote = saved.stale.length
+            ? " " + saved.stale.length + " stale proposal(s) were found; type /proposals to inspect them and /discard to remove their records."
+            : "";
+          finishChat(jobId, "There are no applicable pending changes for this workspace." + staleNote, { toolCalls: [listTrace] });
+          return;
+        }
+        updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
+        const transaction = await applyProposals(activeWorkspace, saved.pending);
+        const auditNote = transaction.toolCall.auditRecorded
+          ? "Backups and tool audit records are saved under .syntra."
+          : "Backups are saved under .syntra, but the final tool audit event could not be written.";
+        finishChat(jobId, "Applied the explicitly requested proposals:\n" + transaction.applied.map(item => "- " + item.path).join("\n") + "\n\n" + auditNote, {
+          toolCalls: [listTrace, transaction.toolCall]
+        });
+        return;
+      }
+
       const ids = [...saved.pending, ...saved.stale].map(item => item.id);
       if (!ids.length) {
-        finishChat(jobId, "There are no saved proposal records to discard.");
+        finishChat(jobId, "There are no saved proposal records to discard.", { toolCalls: [listTrace] });
         return;
       }
-      const discarded = await discardFileProposals(activeWorkspace, ids, true);
-      finishChat(jobId, "Discarded " + discarded.discarded.length + " saved proposal record(s). Project files were not modified.");
+      const discardRun = await executeWorkspaceTool({
+        root: activeWorkspace, auditRoot: activeWorkspace, name: "workspace.proposals.discard",
+        input: { proposalIds: ids }, approval: true
+      });
+      if (!discardRun.ok) throw new Error(discardRun.error || "The proposal discard tool failed.");
+      finishChat(jobId, "Discarded " + discardRun.output.discarded.length + " saved proposal record(s). Project files were not modified.", {
+        toolCalls: [listTrace, {
+          runId: discardRun.runId, name: discardRun.name, status: discardRun.status,
+          permission: discardRun.permission, durationMs: discardRun.durationMs,
+          auditRecorded: discardRun.auditRecorded
+        }]
+      });
       return;
     }
 
@@ -433,7 +485,9 @@ async function runChatTurn(jobId, message, history) {
       let applied = [];
       if (result.verification?.status === "passed" && result.proposals?.length) {
         updateChat(jobId, { phase: "applying", message: "Checks passed in a temporary copy; applying hash-checked proposals" });
-        applied = await applyProposals(activeWorkspace, result.proposals);
+        const transaction = await applyProposals(activeWorkspace, result.proposals);
+        applied = transaction.applied;
+        result.toolCalls.push(transaction.toolCall);
       }
       finishChat(jobId, compactAgentReply(result, applied), {
         verification: result.verification?.status || "not_run",
@@ -524,10 +578,18 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
+  "GET /local-api/tools": async () => ({ tools: listWorkspaceTools() }),
+  "POST /local-api/tools/execute": async body => executeWorkspaceTool({
+    root: body.root || activeWorkspace,
+    auditRoot: body.root || activeWorkspace,
+    name: body.name,
+    input: body.input || {},
+    approval: body.approval === true
+  }),
   "GET /local-api/workspace/status": async () => readWorkspaceStatus(),
   "POST /local-api/workspace/switch": switchWorkspace,
   "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
@@ -535,14 +597,37 @@ const routeHandlers = {
   "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", body),
   "POST /local-api/ai/finetune": async body => aiRequest("POST", "/model/finetune", body),
   "POST /local-api/agent/generate": generateAgentCompletion,
-  "POST /local-api/workspace/inspect": async body => inspectWorkspace(body.root),
-  "POST /local-api/workspace/search": async body => searchWorkspace(body.root, body.query, body.limit),
-  "POST /local-api/workspace/read": async body => readWorkspaceFile(body.root, body.path),
-  "POST /local-api/workspace/plan": async body => createProjectPlan(body.root, body.goal),
-  "POST /local-api/workspace/proposals": async body => listProposals(body.root),
-  "POST /local-api/workspace/propose": async body => proposeFileChange(body.root, body.path, body.content, body.expectedSha256),
-  "POST /local-api/workspace/apply": async body => applyFileProposal(body.root, body.proposalId, body.confirm === true),
-  "POST /local-api/workspace/check": async body => runProjectCheck(body.root, body.task, { timeoutMs: body.timeoutMs })
+  "POST /local-api/workspace/inspect": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.inspect", input: {}
+  }),
+  "POST /local-api/workspace/search": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.search",
+    input: { query: body.query, ...(body.limit === undefined ? {} : { limit: body.limit }) }
+  }),
+  "POST /local-api/workspace/read": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.read",
+    input: { path: body.path, ...(body.startLine === undefined ? {} : { startLine: body.startLine }), ...(body.endLine === undefined ? {} : { endLine: body.endLine }) }
+  }),
+  "POST /local-api/workspace/plan": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.plan", input: { goal: body.goal }
+  }),
+  "POST /local-api/workspace/proposals": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.proposals.list", input: {}
+  }),
+  "POST /local-api/workspace/propose": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.proposals.stage",
+    input: { path: body.path, content: body.content, ...(body.expectedSha256 ? { expectedBaseHash: body.expectedSha256 } : {}) }
+  }),
+  "POST /local-api/workspace/apply": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.proposals.apply",
+    input: { proposalId: body.proposalId }, approval: body.confirm === true
+  }),
+  "POST /local-api/workspace/check": async body => executeToolOutput({
+    root: body.root || activeWorkspace, auditRoot: body.root || activeWorkspace,
+    name: "workspace.check",
+    input: { task: body.task, ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }) },
+    approval: body.confirm === true
+  })
 };
 
 const server = http.createServer(async (request, response) => {

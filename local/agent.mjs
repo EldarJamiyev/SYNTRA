@@ -2,9 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import {
-  inspectWorkspace, proposeFileChange, readWorkspaceFile, resolveWorkspace, runProjectCheck
-} from "./workspace.mjs";
+import { readWorkspaceFile, resolveWorkspace } from "./workspace.mjs";
+import { executeWorkspaceTool } from "./tool-runtime.mjs";
 
 const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi",
@@ -562,8 +561,18 @@ export async function runAgentTask({
   const contextWindow = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 4096);
   const contextBudget = Math.max(128, Math.floor(contextWindow * 0.68));
   const outputBudget = Math.max(128, Math.min(1024, Math.floor(contextWindow * 0.22)));
-  const inventory = await inspectWorkspace(root);
-  onProgress({ phase: "repository-map", iteration: 0, message: "Inspecting files and building the local import graph." });
+  onProgress({ phase: "tool-execution", iteration: 0, message: "Tool: workspace.inspect — collecting project metadata and file inventory." });
+  const inspectionRun = await executeWorkspaceTool({
+    root, auditRoot: root, name: "workspace.inspect", input: {}
+  });
+  if (!inspectionRun.ok) throw new Error(inspectionRun.error || "The workspace inspection tool failed.");
+  const inventory = inspectionRun.output;
+  const toolCalls = [{
+    runId: inspectionRun.runId, name: inspectionRun.name, status: inspectionRun.status,
+    permission: inspectionRun.permission, durationMs: inspectionRun.durationMs,
+    auditRecorded: inspectionRun.auditRecorded
+  }];
+  onProgress({ phase: "repository-map", iteration: 0, message: "Inspection recorded. Building the local import graph." });
   const graph = await buildRepositoryGraph(root);
   const ranked = rankGraph(graph, goal, requestedPath);
   const plan = createPlan(goal, inventory, ranked, graph);
@@ -688,7 +697,20 @@ export async function runAgentTask({
       for (const task of tasks) {
         onProgress({ phase: "verification", iteration, message: "Running " + task + " in the temporary project copy." });
         try {
-          const result = await runProjectCheck(snapshot.root, task, { timeoutMs: CHECK_TIMEOUT_MS });
+          const toolRun = await executeWorkspaceTool({
+            root: snapshot.root,
+            auditRoot: root,
+            name: "workspace.check",
+            input: { task, timeoutMs: CHECK_TIMEOUT_MS },
+            approval: true
+          });
+          toolCalls.push({
+            runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
+            permission: toolRun.permission, durationMs: toolRun.durationMs,
+            auditRecorded: toolRun.auditRecorded
+          });
+          if (!toolRun.ok) throw new Error(toolRun.error || "The workspace check tool failed.");
+          const result = toolRun.output;
           checks.push({
             task, passed: result.passed, timedOut: result.timedOut, exitCode: result.exitCode,
             durationMs: result.durationMs, command: result.command, output: truncateOutput(result.output)
@@ -735,7 +757,22 @@ export async function runAgentTask({
 
     if (finalChanges) {
       onProgress({ phase: "staging-proposals", iteration: attempts.length, message: "Staging hash-bound proposals without modifying project files." });
-      for (const change of finalChanges.changes) proposals.push(await proposeFileChange(root, change.path, change.content, change.beforeHash));
+      for (const change of finalChanges.changes) {
+        const toolRun = await executeWorkspaceTool({
+          root, auditRoot: root, name: "workspace.proposals.stage",
+          input: {
+            path: change.path, content: change.content,
+            ...(typeof change.beforeHash === "string" ? { expectedBaseHash: change.beforeHash } : {})
+          }
+        });
+        toolCalls.push({
+          runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
+          permission: toolRun.permission, durationMs: toolRun.durationMs,
+          auditRecorded: toolRun.auditRecorded
+        });
+        if (!toolRun.ok) throw new Error(toolRun.error || "The proposal staging tool failed.");
+        proposals.push(toolRun.output);
+      }
       plan.steps.find(step => step.id === "verify").status = finalVerification.status === "passed" ? "completed" : finalVerification.status;
       plan.steps.find(step => step.id === "review").status = "completed";
     }
@@ -768,6 +805,7 @@ export async function runAgentTask({
         };
       }) || [],
       proposals, verification: finalVerification, attempts,
+      toolCalls,
       notices: [
         "Patch text came from the selected selected local model; a schema-valid patch is not automatically a correct patch.",
         "Original project files were not modified by this agent run. Changes are staged as hash-bound proposals for explicit review and apply.",
