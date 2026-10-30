@@ -765,7 +765,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
