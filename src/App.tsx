@@ -771,7 +771,7 @@ export default function App() {
                   aria-label="Project memory category"
                   value={memoryCategory}
                   onChange={event => setMemoryCategory(event.target.value as WorkspaceMemoryNote['category'])}
-                  disabled={memorySaving || pending}
+                  disabled={memorySaving || memoryLoading || pending}
                 >
                   <option value="architecture">Architecture</option>
                   <option value="convention">Convention</option>
@@ -786,7 +786,7 @@ export default function App() {
                   placeholder="Tags, comma separated"
                   maxLength={300}
                   aria-label="Project memory tags"
-                  disabled={memorySaving || pending}
+                  disabled={memorySaving || memoryLoading || pending}
                 />
               </div>
               <textarea
@@ -804,7 +804,7 @@ export default function App() {
                   {memorySaving ? 'Saving…' : editingMemoryId ? 'Save changes' : 'Save note'}
                 </button>
                 {editingMemoryId && (
-                  <button type="button" className="workspace-memory-cancel" onClick={resetWorkspaceMemoryDraft} disabled={memorySaving}>
+                  <button type="button" className="workspace-memory-cancel" onClick={resetWorkspaceMemoryDraft} disabled={memorySaving || memoryLoading}>
                     Cancel
                   </button>
                 )}
