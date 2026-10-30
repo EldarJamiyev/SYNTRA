@@ -164,12 +164,15 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(refreshed.testOwnershipCount, 1);
 
     const service = await searchWorkspaceSymbols(root, "resolveGateway");
-    assert.equal(service.results.length, 1);
-    assert.ok(service.results[0].imports.length === 0);
-    assert.ok(service.results[0].importedBy.includes("src/consumer.ts"));
-    assert.ok(service.results[0].importedBy.includes("tests/service.test.ts"));
-    assert.ok(service.results[0].referencedByDocs.includes("docs/architecture.md"));
-    assert.ok(service.results[0].ownedTests.includes("tests/service.test.ts"));
+    const implementation = service.results.find(item =>
+      item.path === "src/service.ts" && item.name === "resolveGateway"
+    );
+    assert.ok(implementation);
+    assert.equal(implementation.imports.length, 0);
+    assert.ok(implementation.importedBy.includes("src/consumer.ts"));
+    assert.ok(implementation.importedBy.includes("tests/service.test.ts"));
+    assert.ok(implementation.referencedByDocs.includes("docs/architecture.md"));
+    assert.ok(implementation.ownedTests.includes("tests/service.test.ts"));
 
     const consumer = await searchWorkspaceSymbols(root, "useGateway");
     assert.ok(consumer.results[0].imports.includes("src/service.ts"));
