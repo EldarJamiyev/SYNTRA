@@ -78,7 +78,7 @@ test("agent run records persist the task plan, context, checkpoint, and event hi
     assert.equal(recorded.observations[1].path, "src/index.js");
     assert.equal(recorded.observations[1].expectedHash, "d".repeat(64));
     await updateAgentRun(root, created.id, {
-      observations: [{ kind: "test", stage: "candidate", status: "observed", detail: "line one\\nline two" }]
+      observations: [{ kind: "test", stage: "candidate", status: "observed", detail: "line one\nline two" }]
     });
     assert.equal((await getAgentRun(root, created.id)).observations[0].detail, "line one line two");
     assert.ok(Date.parse(updated.updatedAt) >= Date.parse(created.createdAt));
