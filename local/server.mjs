@@ -773,6 +773,13 @@ function readChatStatus(body) {
 }
 
 const routeHandlers = {
+  "GET /": async () => ({
+    status: "ok",
+    service: "SYNTRA local API",
+    message: "The workspace API is running. Open the SYNTRA frontend at http://127.0.0.1:3000/.",
+    frontend: "http://127.0.0.1:3000/",
+    health: "http://127.0.0.1:" + PORT + "/local-api/health"
+  }),
   "GET /local-api/health": async () => ({
     status: "ok",
     service: "SYNTRA local chat and coding agent",
