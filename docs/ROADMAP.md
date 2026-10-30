@@ -104,7 +104,7 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Aggregate multi-slice changes against original workspace contents and source hashes; stage only the final cumulative proposal set.
 - [x] Mark a task unverified when any planned slice is incomplete. Do not apply a partial multi-slice result automatically.
 - [x] Persist each verified multi-slice candidate boundary in a separate bounded workspace-local checkpoint; validate run/workspace identity, content hashes, and original-file hashes on resume.
-- [x] Reconstruct the temporary candidate from a verified checkpoint after service restart, re-inspect it, and continue at the next pending slice; regenerate an in-flight unverified slice.
+- [x] Reconstruct the temporary candidate from a verified checkpoint after service restart, re-inspect it, and continue at the next pending slice; regenerate an in-flight or final-not-yet-staged slice. Persist checkpoints only when at least one slice remains pending.
 - [x] Remove candidate checkpoints after final proposal staging and report checkpoint persistence failures rather than claiming restartability.
 - [x] Cover candidate checkpoint bounds, invalid paths and hashes, symlink protection, interrupted-run continuation, and original-source preservation with tests.
 - [x] Cover two-slice verification, candidate-context refresh, cumulative proposal hashes, and incomplete-slice failure handling with tests.
