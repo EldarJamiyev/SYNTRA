@@ -84,7 +84,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
         };
       }
       assert.match(body.prompt, /MODEL-SELECTED READ-ONLY CONTEXT/);
-      assert.match(body.prompt, /module\\.exports = \\{ value: 1 \\}/);
+      assert.ok(body.prompt.includes("module.exports = { value: 1 }"));
       return {
         text: JSON.stringify({
           summary: "Update the exported value.",
@@ -120,7 +120,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
     assert.ok(result.observations.some(item => item.kind === "model-readonly-tool-plan" && item.status === "accepted"));
     assert.ok(result.observations.some(item => item.kind === "workspace.search" && item.status === "observed"));
     assert.ok(result.observations.some(item => item.kind === "workspace.read" && item.path === "src/value.js"));
-    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\\n",
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
       "model-selected retrieval and patch staging must not write the original project file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
