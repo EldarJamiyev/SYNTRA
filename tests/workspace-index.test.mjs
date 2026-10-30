@@ -216,6 +216,19 @@ test("Go module imports and Rust crate module declarations resolve to local file
       "use crate::networking::GatewayClient;",
       ""
     ].join("\n"), "utf8");
+    await fs.mkdir(path.join(root, "pkg"), { recursive: true });
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "pkg", "engine.py"), [
+      "def run_engine():",
+      "    return True",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "tests", "test_engine.py"), [
+      "from pkg.engine import run_engine",
+      "def test_run_engine():",
+      "    return run_engine()",
+      ""
+    ].join("\n"), "utf8");
     await fs.writeFile(path.join(root, "src", "networking.rs"), [
       "pub struct GatewayClient;",
       ""
@@ -227,6 +240,13 @@ test("Go module imports and Rust crate module declarations resolve to local file
     const rustEntry = await searchWorkspaceSymbols(root, "GatewayClient");
     assert.ok(rustEntry.results[0].importedBy.includes("src/lib.rs"));
     assert.ok(rustEntry.results[0].imports.length === 0);
+    const pythonEntry = await searchWorkspaceSymbols(root, "run_engine");
+    assert.ok(pythonEntry.results.some(item =>
+      item.path === "pkg/engine.py" && item.importedBy.includes("tests/test_engine.py")
+        && item.ownedTests.includes("tests/test_engine.py")
+    ));
+    const pythonTest = await searchWorkspaceSymbols(root, "test_run_engine");
+    assert.ok(pythonTest.results.some(item => item.testOwners.includes("pkg/engine.py")));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
