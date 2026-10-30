@@ -43,6 +43,7 @@ type AgentRunSummary = {
   updatedAt: string;
   recoveryAvailable: boolean;
   checkpoint?: { stage?: string; iteration?: number };
+  observations?: Array<{ kind: string; status: string; path?: string | null }>;
 };
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
@@ -599,6 +600,11 @@ export default function App() {
                   <span className="workspace-agent-run-meta">
                     <span className={'agent-run-status ' + run.status}>{run.status}</span>
                     <span>{run.checkpoint?.stage || run.phase}</span>
+                    {(run.observations?.length || 0) > 0 && (
+                      <span title="Persisted repository, verification, and candidate-integrity observations">
+                        {run.observations?.length} evidence points
+                      </span>
+                    )}
                   </span>
                 </div>
                 {run.status === 'interrupted' && (
