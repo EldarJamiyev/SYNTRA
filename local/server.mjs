@@ -203,6 +203,22 @@ function compactAgentReply(result, applied) {
     lines.push("- " + check.task + ": " + (check.passed ? "passed" : check.skipped ? "skipped" : check.timedOut ? "timed out" : "failed"));
     if (!check.passed && check.output) lines.push(check.output.slice(-1600));
   }
+  const reviewFiles = result.changedFiles || [];
+  if (reviewFiles.length) {
+    lines.push("", "### Change review");
+    for (const file of reviewFiles) {
+      const safePath = String(file.path || "changed file").replaceAll("`", "");
+      lines.push("", "**`" + safePath + "`**");
+      if (file.reason) lines.push(String(file.reason).replace(/[\r\n]+/g, " ").slice(0, 500));
+      const longestBacktickRun = Math.max(0, ...((String(file.diff || "").match(/`+/g) || []).map(run => run.length)));
+      const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+      lines.push(fence + "diff", file.diff || "Diff preview is unavailable.", fence);
+      if (file.diffTruncated) lines.push("*The changed section is large; this is a bounded preview, not the full file.*");
+    }
+  }
+  if (result.proposals?.length && !applied.length) {
+    lines.push("", "Review the proposed changes above before typing `/apply`. SYNTRA will recheck the original file hashes before writing.");
+  }
   if (result.attempts?.length) lines.push("", "Repair attempts: " + result.attempts.length + ".");
   if (applied.length) lines.push("", "Backups and audit records are saved in .syntra.");
   return lines.join("\n");
