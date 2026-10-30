@@ -107,7 +107,7 @@ test("agent implements and verifies multiple slices against one cumulative candi
           edits: [{
             path: "src/description.js",
             find: "",
-            replace: "module.exports = { description: 'SYNTRA' };\\n",
+            replace: "module.exports = { description: 'SYNTRA' };\n",
             reason: "Complete the second implementation slice."
           }]
         }),
@@ -136,14 +136,14 @@ test("agent implements and verifies multiple slices against one cumulative candi
     assert.ok(result.observations.some(item =>
       item.kind === "candidate-reinspection" && item.stage === "slice-2" && item.status === "observed"
     ));
-    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
     const applied = await import("../local/workspace.mjs").then(module =>
       module.applyFileProposals(root, result.proposals.map(proposal => proposal.id), true)
     );
     assert.equal(applied.applied.length, 2);
-    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\\n");
-    assert.equal(await fs.readFile(path.join(root, "src", "description.js"), "utf8"), "module.exports = { description: 'SYNTRA' };\\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "description.js"), "utf8"), "module.exports = { description: 'SYNTRA' };\n");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
