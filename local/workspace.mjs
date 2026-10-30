@@ -570,7 +570,6 @@ export async function listPendingProposals(inputRoot) {
         stale.push({ ...metadata, reason: "The source file changed after this proposal was staged." });
         continue;
       }
-      if (currentHash === proposal.afterHash) continue;
       pending.push(metadata);
     } catch (error) {
       if (error instanceof Error && error.message.includes("must be a regular file, not a symbolic link")) throw error;
