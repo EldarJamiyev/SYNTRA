@@ -13,6 +13,7 @@ import {
   readWorkspaceFile,
   recordWorkspaceToolEvent,
   resolveWorkspace,
+  isWorkspacePathExcluded,
   runProjectCheck,
   searchWorkspace
 } from "./workspace.mjs";
@@ -358,6 +359,65 @@ async function runGit(root, args) {
   return String(result.stdout || "").slice(0, 28000).trimEnd();
 }
 
+async function readFilteredGitStatus(root) {
+  const raw = await runGit(root, ["status", "--porcelain=v1", "--branch", "-z"]);
+  const records = raw.split("\0");
+  const visible = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
+    if (record.startsWith("## ")) {
+      visible.push(record);
+      continue;
+    }
+    if (record.length < 4) continue;
+    const status = record.slice(0, 2);
+    const currentPath = record.slice(3);
+    const isRenameOrCopy = /[RC]/.test(status);
+    const sourcePath = isRenameOrCopy ? records[index + 1] : "";
+    const excluded = await isWorkspacePathExcluded(root, currentPath)
+      || Boolean(sourcePath && await isWorkspacePathExcluded(root, sourcePath));
+    if (!excluded) visible.push(status + " " + currentPath);
+    if (isRenameOrCopy && sourcePath) index += 1;
+  }
+  return visible.join("\n");
+}
+
+async function readFilteredGitDiffSummary(root, args) {
+  const raw = await runGit(root, args);
+  const records = raw.split("\0");
+  let files = 0;
+  let insertions = 0;
+  let deletions = 0;
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (!record) continue;
+    const firstTab = record.indexOf("\t");
+    const secondTab = firstTab < 0 ? -1 : record.indexOf("\t", firstTab + 1);
+    if (secondTab < 0) continue;
+    const addedText = record.slice(0, firstTab);
+    const deletedText = record.slice(firstTab + 1, secondTab);
+    const inlinePath = record.slice(secondTab + 1);
+    const paths = inlinePath
+      ? [inlinePath]
+      : [records[index + 1], records[index + 2]].filter(Boolean);
+    if (!inlinePath && paths.length) index += paths.length;
+    let excluded = false;
+    for (const relativePath of paths) {
+      if (await isWorkspacePathExcluded(root, relativePath)) {
+        excluded = true;
+        break;
+      }
+    }
+    if (excluded || !paths.length) continue;
+    files += 1;
+    if (/^\d+$/.test(addedText)) insertions += Number(addedText);
+    if (/^\d+$/.test(deletedText)) deletions += Number(deletedText);
+  }
+  if (!files) return "No visible tracked changes.";
+  return files + " visible file(s) changed, " + insertions + " insertions(+), " + deletions + " deletions(-).";
+}
+
 async function invokeTool(root, name, input, signal) {
   switch (name) {
     case "workspace.inspect":
@@ -416,11 +476,11 @@ async function invokeTool(root, name, input, signal) {
     case "workspace.check":
       return runProjectCheck(root, input.task, { timeoutMs: input.timeoutMs || 120000, signal });
     case "git.status":
-      return { root, status: await runGit(root, ["status", "--short", "--branch"]) };
+      return { root, status: await readFilteredGitStatus(root) };
     case "git.diff-summary": {
       const [workingTree, index] = await Promise.all([
-        runGit(root, ["diff", "--stat", "--no-ext-diff"]),
-        runGit(root, ["diff", "--cached", "--stat", "--no-ext-diff"])
+        readFilteredGitDiffSummary(root, ["diff", "--numstat", "-z", "--no-ext-diff"]),
+        readFilteredGitDiffSummary(root, ["diff", "--cached", "--numstat", "-z", "--no-ext-diff"])
       ]);
       return { root, workingTree, index };
     }

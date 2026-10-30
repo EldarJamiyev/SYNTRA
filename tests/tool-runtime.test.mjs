@@ -439,3 +439,38 @@ test("tool runtime fails closed when the audit state path is a symbolic link", a
     await fs.rm(outside, { recursive: true, force: true });
   }
 });
+
+test("workspace exclusions are applied to read-only Git status and diff observations", async () => {
+  const root = await createProject();
+  try {
+    await fs.mkdir(path.join(root, "fixtures"), { recursive: true });
+    await fs.writeFile(path.join(root, "fixtures", "hidden.txt"), "private baseline\n", "utf8");
+    const git = (args) => {
+      const { execFileSync } = require("node:child_process");
+      return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    };
+    git(["init"]);
+    git(["config", "user.email", "syntra-tests@example.invalid"]);
+    git(["config", "user.name", "SYNTRA Tests"]);
+    git(["add", "."]);
+    git(["commit", "-m", "baseline"]);
+    await fs.writeFile(path.join(root, "src", "value.js"), "export const first = 100;\n", "utf8");
+    await fs.writeFile(path.join(root, "fixtures", "hidden.txt"), "private changed value\n", "utf8");
+    await fs.mkdir(path.join(root, "fixtures", "private"), { recursive: true });
+    await fs.writeFile(path.join(root, "fixtures", "private", "untracked.txt"), "do not list\n", "utf8");
+    const { updateWorkspaceExclusions } = await import("../local/workspace.mjs");
+    await updateWorkspaceExclusions(root, { patterns: ["fixtures/**"] });
+
+    const status = await executeWorkspaceTool({ root, name: "git.status" });
+    assert.equal(status.ok, true);
+    assert.match(status.output.status, /src\/value\.js/);
+    assert.doesNotMatch(status.output.status, /fixtures|hidden\.txt|untracked\.txt/);
+
+    const diff = await executeWorkspaceTool({ root, name: "git.diff-summary" });
+    assert.equal(diff.ok, true);
+    assert.match(diff.output.workingTree, /1 visible file/);
+    assert.doesNotMatch(diff.output.workingTree, /fixtures|hidden\.txt/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
