@@ -317,7 +317,7 @@ function validateInput(definition, input) {
     } else if (rule.type === "array") {
       if (!Array.isArray(value) || value.length < rule.minItems || value.length > rule.maxItems
         || value.some(item => typeof item !== "string" || !(new RegExp(rule.items.pattern).test(item)))) {
-        throw new Error("Tool input field " + key + " must contain 1-24 valid proposal IDs.");
+        throw new Error("Tool input field " + key + " contains an invalid item or exceeds its allowed item count.");
       }
       if (new Set(value).size !== value.length) throw new Error("Tool input field " + key + " must not contain duplicate IDs.");
     }
