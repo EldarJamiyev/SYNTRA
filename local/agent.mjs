@@ -397,8 +397,8 @@ export function validateReadOnlyToolPlan(payload, availablePaths = []) {
 
     if (Object.keys(input).some(key => !["path", "startLine", "endLine"].includes(key))
       || typeof input.path !== "string" || !allowedPaths.has(input.path)
-      || (input.startLine !== undefined && (!Number.isInteger(input.startLine) || input.startLine < 1))
-      || (input.endLine !== undefined && (!Number.isInteger(input.endLine) || input.endLine < 1))) {
+      || (input.startLine !== undefined && (!Number.isInteger(input.startLine) || input.startLine < 1 || input.startLine > 10_000_000))
+      || (input.endLine !== undefined && (!Number.isInteger(input.endLine) || input.endLine < 1 || input.endLine > 10_000_000))) {
       throw new Error("workspace.read must target a path in the supplied safe file list and use valid line numbers.");
     }
     const startLine = input.startLine ?? 1;
