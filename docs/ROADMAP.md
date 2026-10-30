@@ -126,8 +126,9 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Validate indexed source hashes before returning symbol-search results; reject stale entries and symbolic-link index files.
 - [x] Add audited index status, refresh, and symbol-search tools, and allow the agent to select symbol search as a bounded read-only retrieval operation.
 
-- [ ] Expand the incremental index with import edges, documentation references, and test ownership.
+- [x] Expand the incremental index with bounded local import edges, documentation references, and heuristic test ownership.
 - [x] Add bounded symbol search to model-selected read-only retrieval so the agent can retrieve declarations instead of relying only on full-text matches.
+- [x] Test JS/TS and Python import resolution, Go module-local package imports, Rust module declarations, documentation link resolution, test-owner inference, and hash validation of graph relationships.
 - Maintain task summaries and user-approved project notes.
 - Keep memory local and workspace-scoped, with controls to inspect, edit, and delete it.
 - Exclude credentials, private keys, ignored build artifacts, and user-configured paths.

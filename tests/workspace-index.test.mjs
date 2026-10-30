@@ -70,7 +70,7 @@ test("workspace symbol index extracts bounded declarations without persisting so
     const rust = await searchWorkspaceSymbols(root, "RouteProvider");
     assert.equal(rust.results[0].path, "src/lib.rs");
 
-    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v1.json"), "utf8");
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
     assert.equal(stored.includes("SYNTRA_SECRET"), false);
     assert.equal(stored.includes("return host"), false);
     assert.equal(stored.includes("GatewayOptions { host"), false);
@@ -128,15 +128,142 @@ test("symbol search validates query bounds and ignores unavailable indexes", asy
   }
 });
 
+
+test("workspace graph indexes local imports, documentation links, and test ownership", async () => {
+  const root = await createProject();
+  try {
+    await fs.mkdir(path.join(root, "docs"), { recursive: true });
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "src", "service.ts"), [
+      "export function resolveGateway(host: string) { return host; }",
+      "export class GatewayService {}",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "src", "consumer.ts"), [
+      'import { resolveGateway } from "./service";',
+      "export function useGateway() { return resolveGateway('localhost'); }",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "tests", "service.test.ts"), [
+      'import { resolveGateway } from "../src/service";',
+      "export function testResolveGateway() { return resolveGateway('localhost'); }",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "docs", "architecture.md"), [
+      "# Architecture",
+      "",
+      "The [gateway service](../src/service.ts) is used by the [consumer](../src/consumer.ts).",
+      ""
+    ].join("\n"), "utf8");
+
+    const refreshed = await refreshWorkspaceIndex(root);
+    assert.equal(refreshed.documentationFileCount, 1);
+    assert.equal(refreshed.testFileCount, 1);
+    assert.ok(refreshed.importEdgeCount >= 2);
+    assert.equal(refreshed.documentationReferenceCount, 2);
+    assert.equal(refreshed.testOwnershipCount, 1);
+
+    const service = await searchWorkspaceSymbols(root, "resolveGateway");
+    const implementation = service.results.find(item =>
+      item.path === "src/service.ts" && item.name === "resolveGateway"
+    );
+    assert.ok(implementation);
+    assert.equal(implementation.imports.length, 0);
+    assert.ok(implementation.importedBy.includes("src/consumer.ts"));
+    assert.ok(implementation.importedBy.includes("tests/service.test.ts"));
+    assert.ok(implementation.referencedByDocs.includes("docs/architecture.md"));
+    assert.ok(implementation.ownedTests.includes("tests/service.test.ts"));
+
+    const consumer = await searchWorkspaceSymbols(root, "useGateway");
+    assert.ok(consumer.results[0].imports.includes("src/service.ts"));
+
+    const testSymbol = await searchWorkspaceSymbols(root, "testResolveGateway");
+    assert.equal(testSymbol.results[0].role, "test");
+    assert.ok(testSymbol.results[0].testOwners.includes("src/service.ts"));
+
+    const status = await getWorkspaceIndexStatus(root);
+    assert.equal(status.documentationFileCount, 1);
+    assert.equal(status.testFileCount, 1);
+    assert.equal(status.importEdgeCount, refreshed.importEdgeCount);
+    assert.equal(status.documentationReferenceCount, 2);
+    assert.equal(status.testOwnershipCount, 1);
+
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
+    assert.equal(stored.includes("resolveGateway(host: string)"), false);
+    assert.equal(stored.includes("used by the"), false);
+    assert.equal(stored.includes("The [gateway service]"), false);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Go module imports and Rust crate module declarations resolve to local files", async () => {
+  const root = await createProject();
+  try {
+    await fs.mkdir(path.join(root, "internal", "store"), { recursive: true });
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "go.mod"), "module example.com/syntra-fixture\n", "utf8");
+    await fs.writeFile(path.join(root, "cmd.go"), [
+      "package main",
+      'import "example.com/syntra-fixture/internal/store"',
+      "func main() {}",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "internal", "store", "store.go"), [
+      "package store",
+      "func OpenStore() {}",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "src", "lib.rs"), [
+      "mod networking;",
+      "use crate::networking::GatewayClient;",
+      ""
+    ].join("\n"), "utf8");
+    await fs.mkdir(path.join(root, "pkg"), { recursive: true });
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "pkg", "engine.py"), [
+      "def run_engine():",
+      "    return True",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "tests", "test_engine.py"), [
+      "from pkg.engine import run_engine",
+      "def test_run_engine():",
+      "    return run_engine()",
+      ""
+    ].join("\n"), "utf8");
+    await fs.writeFile(path.join(root, "src", "networking.rs"), [
+      "pub struct GatewayClient;",
+      ""
+    ].join("\n"), "utf8");
+
+    await refreshWorkspaceIndex(root);
+    const goEntry = await searchWorkspaceSymbols(root, "OpenStore");
+    assert.ok(goEntry.results[0].importedBy.includes("cmd.go"));
+    const rustEntry = await searchWorkspaceSymbols(root, "GatewayClient");
+    assert.ok(rustEntry.results[0].importedBy.includes("src/lib.rs"));
+    assert.ok(rustEntry.results[0].imports.length === 0);
+    const pythonEntry = await searchWorkspaceSymbols(root, "run_engine");
+    assert.ok(pythonEntry.results.some(item =>
+      item.path === "pkg/engine.py" && item.importedBy.includes("tests/test_engine.py")
+        && item.ownedTests.includes("tests/test_engine.py")
+    ));
+    const pythonTest = await searchWorkspaceSymbols(root, "test_run_engine");
+    assert.ok(pythonTest.results.some(item => item.testOwners.includes("pkg/engine.py")));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("workspace index refuses a symbolic-link index file", async t => {
   const root = await createProject();
   const outside = path.join(os.tmpdir(), "syntra-index-outside-" + process.pid + ".json");
   try {
     await refreshWorkspaceIndex(root);
     await fs.writeFile(outside, JSON.stringify({ schemaVersion: 1 }), "utf8");
-    await fs.unlink(path.join(root, ".syntra", "workspace-index-v1.json"));
+    await fs.unlink(path.join(root, ".syntra", "workspace-index-v2.json"));
     try {
-      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v1.json"), "file");
+      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v2.json"), "file");
     } catch (error) {
       if (["EPERM", "EACCES", "ENOTSUP", "UNKNOWN"].includes(error?.code)) {
         t.skip("The current operating system does not permit creating file symlinks.");

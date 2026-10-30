@@ -16,7 +16,7 @@ const TEXT_EXTENSIONS = new Set([
   ".md", ".mdx", ".txt", ".xml", ".yaml", ".yml", ".toml", ".ini", ".csproj",
   ".fsproj", ".vbproj", ".sln", ".props", ".targets", ".sh",
   ".ps1", ".bat", ".cmd", ".dockerfile", ".graphql", ".gql", ".vue", ".svelte",
-  ".astro", ".env.example", ".gitignore", ".editorconfig"
+  ".astro", ".rst", ".env.example", ".gitignore", ".editorconfig"
 ]);
 const SENSITIVE_NAMES = new Set([
   ".env", ".env.local", ".env.production", ".npmrc", ".pypirc", "credentials",
@@ -172,9 +172,10 @@ async function walkFiles(root) {
   return files;
 }
 
-const WORKSPACE_INDEX_EXTENSIONS = new Set([
-  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".go", ".rs"
+const WORKSPACE_INDEX_SOURCE_EXTENSIONS = new Set([
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi", ".go", ".rs"
 ]);
+const WORKSPACE_INDEX_DOC_EXTENSIONS = new Set([".md", ".mdx", ".rst"]);
 
 export async function listWorkspaceIndexCandidates(inputRoot) {
   const root = await resolveWorkspace(inputRoot);
@@ -182,10 +183,13 @@ export async function listWorkspaceIndexCandidates(inputRoot) {
   return {
     root,
     truncated: files.length >= MAX_FILES,
-    files: files.filter(file => WORKSPACE_INDEX_EXTENSIONS.has(file.extension)).map(file => ({
+    files: files.filter(file =>
+      WORKSPACE_INDEX_SOURCE_EXTENSIONS.has(file.extension) || WORKSPACE_INDEX_DOC_EXTENSIONS.has(file.extension)
+    ).map(file => ({
       path: file.relative,
       size: file.size,
-      language: detectLanguage(file.extension, path.basename(file.relative))
+      language: detectLanguage(file.extension, path.basename(file.relative)),
+      role: WORKSPACE_INDEX_DOC_EXTENSIONS.has(file.extension) ? "documentation" : "source"
     }))
   };
 }
