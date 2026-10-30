@@ -604,7 +604,7 @@ async function runChatTurn(jobId, message, history, signal) {
             event: { phase, message: messageText, iteration: update.iteration || 0 }
           };
           for (const key of [
-            "planSteps", "selectedContext", "model", "attempts", "toolCalls",
+            "planSteps", "selectedContext", "model", "observations", "attempts", "toolCalls",
             "verification", "changedFiles", "proposalIds", "recoveryPatch"
           ]) {
             if (Object.prototype.hasOwnProperty.call(update, key)) runPatch[key] = update[key];
@@ -636,6 +636,7 @@ async function runChatTurn(jobId, message, history, signal) {
         planSteps: result.plan?.steps || [],
         attempts: result.attempts || [],
         toolCalls: result.toolCalls || [],
+        observations: result.observations || [],
         verification: result.verification || null,
         changedFiles: result.changedFiles || [],
         proposalIds: (result.proposals || []).map(proposal => proposal.id),
