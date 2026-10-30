@@ -440,6 +440,14 @@ export async function recordWorkspaceToolEvent(inputRoot, event) {
 const MAX_AGENT_RUNS = 40;
 const MAX_AGENT_RUN_BYTES = 160 * 1024;
 const AGENT_RUN_STATUSES = new Set(["queued", "running", "completed", "failed", "cancelled", "interrupted"]);
+const AGENT_RUN_TRANSITIONS = {
+  queued: new Set(["running", "interrupted", "failed", "cancelled"]),
+  running: new Set(["running", "interrupted", "completed", "failed", "cancelled"]),
+  interrupted: new Set(["interrupted", "running"]),
+  completed: new Set(["completed"]),
+  failed: new Set(["failed"]),
+  cancelled: new Set(["cancelled"])
+};
 
 function validAgentRunId(value) {
   return typeof value === "string"
@@ -539,6 +547,7 @@ export async function createAgentRun(inputRoot, goal) {
     createdAt: now,
     updatedAt: now,
     cancelRequested: false,
+    model: null,
     planSteps: [],
     selectedContext: [],
     attempts: [],
@@ -571,7 +580,22 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
 
   if (typeof patch.status === "string") {
     if (!AGENT_RUN_STATUSES.has(patch.status)) throw new Error("Agent run status is invalid.");
+    if (!AGENT_RUN_TRANSITIONS[run.status]?.has(patch.status)) {
+      throw new Error("Agent run cannot transition from " + run.status + " to " + patch.status + ".");
+    }
     next.status = patch.status;
+  }
+  if (patch.model && typeof patch.model === "object" && !Array.isArray(patch.model)) {
+    next.model = {
+      provider: String(patch.model.provider || "unknown").slice(0, 80),
+      name: String(patch.model.name || "unknown").slice(0, 120),
+      contextWindowTokens: Number.isFinite(patch.model.contextWindowTokens)
+        ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextWindowTokens))) : 0,
+      contextBudgetTokens: Number.isFinite(patch.model.contextBudgetTokens)
+        ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextBudgetTokens))) : 0,
+      outputBudgetTokens: Number.isFinite(patch.model.outputBudgetTokens)
+        ? Math.max(0, Math.min(100_000, Math.floor(patch.model.outputBudgetTokens))) : 0
+    };
   }
   if (typeof patch.phase === "string") next.phase = patch.phase.slice(0, 64);
   if (typeof patch.message === "string") next.message = patch.message.replace(/[\r\n]+/g, " ").slice(0, 500);
@@ -714,16 +738,19 @@ export async function recoverInterruptedAgentRuns(inputRoot) {
 }
 
 export async function requestAgentRunCancellation(inputRoot, runId) {
-  const run = await getAgentRun(inputRoot, runId);
-  if (!run) throw new Error("Agent run was not found.");
-  if (run.status !== "running" && run.status !== "queued") return run;
-  const updated = await updateAgentRun(inputRoot, runId, {
-    cancelRequested: true,
-    phase: "cancelling",
-    message: "Cancellation requested.",
-    event: { phase: "cancelling", message: "User requested cancellation." }
+  const root = await resolveWorkspace(inputRoot);
+  if (!validAgentRunId(runId)) throw new Error("A valid agent run ID is required.");
+  return withAgentRunUpdateQueue(root + "::" + runId, async () => {
+    const run = await readAgentRunRecord(root, runId);
+    if (!run) throw new Error("Agent run was not found.");
+    if (run.status !== "running" && run.status !== "queued") return run;
+    return updateAgentRunUnlocked(root, runId, {
+      cancelRequested: true,
+      phase: "cancelling",
+      message: "Cancellation requested.",
+      event: { phase: "cancelling", message: "User requested cancellation." }
+    });
   });
-  return updated;
 }
 
 export async function createProjectPlan(inputRoot, goal) {
