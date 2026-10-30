@@ -824,7 +824,7 @@ export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
   onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1,
   resumeBaseHashes = null, previousAttempts = [], previousToolCalls = [],
-  modelToolSelection = false
+  modelToolSelection = false, maxSlices = 1
 }) {
   const root = await resolveWorkspace(inputRoot);
   const emitProgress = async update => {
@@ -853,7 +853,7 @@ export async function runAgentTask({
     root, auditRoot: root, name: "workspace.inspect", input: {}, signal
   });
   if (!inspectionRun.ok) throw new Error(inspectionRun.error || "The workspace inspection tool failed.");
-  const inventory = inspectionRun.output;
+  let inventory = inspectionRun.output;
   const toolCalls = [
     ...(Array.isArray(previousToolCalls) ? previousToolCalls.slice(-56) : []),
     toolCallSummary(inspectionRun)
@@ -894,8 +894,40 @@ export async function runAgentTask({
     message: "Workspace and read-only Git observations recorded. Building the local import graph.",
     toolCalls, observations
   });
-  const graph = await buildRepositoryGraph(root);
-  const ranked = rankGraph(graph, goal, requestedPath);
+  let graph = await buildRepositoryGraph(root);
+  let ranked = rankGraph(graph, goal, requestedPath);
+  maxSlices = Math.max(1, Math.min(3, Number(maxSlices) || 1));
+  let implementationSlices = [{
+    id: "slice-1", goal: goal.trim(),
+    acceptance: "The requested task behavior is implemented and supported by relevant project checks.",
+    status: "pending"
+  }];
+  if (maxSlices > 1 && runChecks && !resumePatch) {
+    await emitProgress({
+      phase: "slice-planning", iteration: 0,
+      message: "Planning independently verifiable implementation slices."
+    });
+    try {
+      implementationSlices = await planImplementationSlices({
+        goal, inventory, ranked, modelRequest, contextBudget, maxSlices, signal
+      });
+      observations.push({
+        kind: "implementation-slice-plan", stage: "planning", status: "accepted",
+        detail: "Planned " + implementationSlices.length + " independently verifiable implementation slice(s)."
+      });
+    } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") throw error;
+      implementationSlices = [{
+        id: "slice-1", goal: goal.trim(),
+        acceptance: "The requested task behavior is implemented and supported by relevant project checks.",
+        status: "pending"
+      }];
+      observations.push({
+        kind: "implementation-slice-plan", stage: "planning", status: "fallback_single_slice",
+        detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+      });
+    }
+  }
   let modelSelectedContext = "";
   if (modelToolSelection && !resumePatch) {
     try {
@@ -916,6 +948,14 @@ export async function runAgentTask({
     }
   }
   const plan = createPlan(goal, inventory, ranked, graph, repositoryState);
+  for (const slice of implementationSlices) {
+    plan.steps.push({
+      id: slice.id,
+      title: slice.goal.slice(0, 90),
+      status: "pending",
+      detail: "Acceptance: " + slice.acceptance
+    });
+  }
   await emitProgress({
     phase: "plan-created",
     iteration: 0,
