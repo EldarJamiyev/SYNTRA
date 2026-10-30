@@ -340,6 +340,8 @@ button:disabled { cursor: not-allowed; }
 .workspace-popover-footer { margin-top: 13px; padding-top: 10px; color: #777777; border-top: 1px solid #333333; font-size: 10px; line-height: 1.5; }
 @media (max-width: 640px) {
   .workspace-popover { top: 60px; right: 10px; }
+  .header-session-title { max-width: 24vw; }
+  .workspace-trigger { max-width: 155px; }
 }
 @media (max-width: 460px) {
   .chat-header { gap: 8px; padding: 0 10px; }
