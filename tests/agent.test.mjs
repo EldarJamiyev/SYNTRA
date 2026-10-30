@@ -24,9 +24,14 @@ async function createProject() {
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
     name: "agent-fixture",
     version: "1.0.0",
-    scripts: { test: "node --test" }
+    scripts: { test: "node tests/value-check.mjs" }
   }, null, 2));
   await fs.writeFile(path.join(root, "src", "value.js"), "module.exports = { value: 1 };\n");
+  await fs.writeFile(path.join(root, "tests", "value-check.mjs"),
+    'import assert from "node:assert/strict";\\n' +
+    'import { createRequire } from "node:module";\\n' +
+    'const require = createRequire(import.meta.url);\\n' +
+    'assert.equal(require("../src/value.js").value, 2, "the candidate must export value 2");\\n');
   await fs.writeFile(path.join(root, "tests", "value.test.js"),
     'const test = require("node:test");\nconst assert = require("node:assert/strict");\nconst value = require("../src/value.js");\ntest("value is two", () => assert.equal(value.value, 2));\n');
   return root;
