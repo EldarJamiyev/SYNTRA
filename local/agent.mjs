@@ -597,7 +597,8 @@ export async function runAgentTask({
     selectedContext: ranked.slice(0, 12).map(({ path: filePath, score, sha256 }) => ({
       path: filePath, score: Number(score.toFixed(2)), sha256
     })),
-    checkpoint: { stage: "repository_mapped", iteration: 0 }
+    checkpoint: { stage: "repository_mapped", iteration: 0 },
+    toolCalls
   });
   const attempts = [];
   let feedback = "";
@@ -622,7 +623,7 @@ export async function runAgentTask({
       while (tokenInfo.token_count > contextBudget && selected.length > 1) {
         selected = selected.slice(0, -1);
         prompt = makePatchPrompt(goal, inventory, plan, graph, selected, feedback);
-        tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000);
+        tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
       }
       if (tokenInfo.token_count > contextBudget) {
         feedback = "Context budget exceeded: need " + tokenInfo.token_count + " tokens but only " + contextBudget + " are available. Shorten the plan and focus on one file.";
@@ -688,6 +689,7 @@ export async function runAgentTask({
         recoveryPatch: patchPayload,
         checkpoint: { stage: "patch_validated", iteration },
         planSteps: plan.steps,
+        toolCalls,
         attempts,
         changedFiles: candidate.changes.map(change => ({
           path: change.path, existedBefore: change.existedBefore,
@@ -840,7 +842,8 @@ export async function runAgentTask({
           input: {
             path: change.path, content: change.content,
             ...(typeof change.beforeHash === "string" ? { expectedBaseHash: change.beforeHash } : {})
-          }
+          },
+          signal
         });
         toolCalls.push({
           runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
