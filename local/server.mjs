@@ -8,9 +8,15 @@ import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
+  createAgentRun,
+  getAgentRun,
+  listAgentRuns,
   listPendingProposals,
   readWorkspaceFile,
-  resolveWorkspace
+  recoverInterruptedAgentRuns,
+  requestAgentRunCancellation,
+  resolveWorkspace,
+  updateAgentRun
 } from "./workspace.mjs";
 
 const HOST = "127.0.0.1";
@@ -59,12 +65,13 @@ async function parseBody(request) {
 
 async function aiRequest(method, route, body, timeoutMs = undefined, options = {}) {
   const onToken = typeof options?.onToken === "function" ? options.onToken : undefined;
+  const signal = options?.signal;
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
   if (modelRoute) {
     const provider = await detectLocalModel();
     if (provider) {
-      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken });
+      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken, signal });
       if (localResult) return localResult;
     }
   }
@@ -75,9 +82,10 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
       method,
       headers: method === "GET" ? {} : { "Content-Type": "application/json" },
       body: method === "GET" ? undefined : JSON.stringify(body || {}),
-      signal: AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))]) : AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
     });
-  } catch {
+  } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError") throw error;
     throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server', or install and run a local Ollama model for stronger local inference.");
   }
   const payload = await response.json().catch(() => ({}));
@@ -195,6 +203,7 @@ async function switchWorkspace(body) {
     throw new Error("Finish the current chat task before switching workspaces.");
   }
   activeWorkspace = await resolveWorkspace(body.root);
+  await recoverInterruptedAgentRuns(activeWorkspace);
   return readWorkspaceStatus(activeWorkspace);
 }
 
