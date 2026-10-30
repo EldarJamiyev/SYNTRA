@@ -230,8 +230,14 @@ function summarizeInput(name, input) {
 }
 
 async function runGit(root, args) {
-  const result = await execFileAsync("git", args, {
-    cwd: root, windowsHide: true, timeout: 8000, maxBuffer: 32 * 1024, encoding: "utf8"
+  const result = await execFileAsync("git", ["-c", "core.fsmonitor=false", "--no-optional-locks", ...args], {
+    cwd: root, windowsHide: true, timeout: 8000, maxBuffer: 32 * 1024, encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_OPTIONAL_LOCKS: "0",
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_PAGER: "cat"
+    }
   });
   return String(result.stdout || "").slice(0, 28000).trimEnd();
 }
