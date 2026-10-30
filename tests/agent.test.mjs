@@ -216,6 +216,11 @@ test("repository graph links local imports and agent repairs a failed test in a 
     assert.equal(result.verification.status, "passed");
     assert.equal(result.proposals.length, 1);
     assert.equal(result.proposals[0].path, "src/value.js");
+    assert.equal(result.changedFiles[0].path, "src/value.js");
+    assert.match(result.changedFiles[0].diff, /^--- a\/src\/value\.js\n\+\+\+ b\/src\/value\.js/m);
+    assert.match(result.changedFiles[0].diff, /^-module\.exports = \{ value: 1 \};$/m);
+    assert.match(result.changedFiles[0].diff, /^\+module\.exports = \{ value: 2 \};$/m);
+    assert.equal(result.changedFiles[0].diffTruncated, false);
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
       "agent must not edit original project files before explicit apply");
     assert.equal(result.attempts[0].status, "invalid_patch");
