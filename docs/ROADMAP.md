@@ -99,9 +99,15 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Let the local model select up to four bounded `workspace.search`/`workspace.read` calls for task-specific context; validate the tool allowlist, query/line limits, and safe file paths before audited execution.
 - [x] Constrain Ollama tool-plan output with JSON schema and fall back to deterministic context ranking when the plan is invalid or exceeds the context budget.
 - [x] Cover allowed retrieval plans, disallowed execution tools, path/range violations, and end-to-end retrieval-to-patch context flow with tests.
+- [x] Let the local model propose up to three ordered implementation slices with explicit acceptance criteria; validate each slice and fall back to one slice if planning fails.
+- [x] Reuse one cumulative temporary candidate across slices, re-inspect and rebuild context after each verified slice, and re-inspect before bounded repair attempts after failed verification.
+- [x] Aggregate multi-slice changes against original workspace contents and source hashes; stage only the final cumulative proposal set.
+- [x] Mark a task unverified when any planned slice is incomplete. Do not apply a partial multi-slice result automatically.
+- [x] Clear reusable patch checkpoints for multi-slice runs so interrupted work safely restarts from the overall goal instead of reusing a patch against a missing temporary candidate.
+- [x] Cover two-slice verification, candidate-context refresh, original-source preservation, cumulative proposal hashes, and incomplete-slice failure handling with tests.
 - [x] Cover durable storage, invalid lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
 
-Still outstanding in this phase: model-selected execution/source-modification tool choice, re-inspection after each meaningful implementation slice, multi-slice implementation/verification, and richer checkpoint recovery between individual tool operations. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
+Still outstanding in this phase: model-selected execution/source-modification tool choice, persistence of temporary candidate state for true mid-slice continuation, richer checkpoint recovery between individual tool operations, and optional parallel execution of independent read-only tasks. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
 
 **Acceptance:** A complex task can complete multiple verified slices, resume after interruption, and explain which evidence supports its final status. Retries are bounded and cannot bypass safety checks.
 
