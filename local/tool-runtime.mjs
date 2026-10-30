@@ -349,11 +349,19 @@ function summarizeOutput(name, output) {
     case "workspace.index.status":
       return {
         available: output.available, fileCount: output.fileCount,
-        symbolCount: output.symbolCount, truncated: output.truncated
+        symbolCount: output.symbolCount,
+        documentationFileCount: output.documentationFileCount,
+        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount,
+        documentationReferenceCount: output.documentationReferenceCount,
+        testOwnershipCount: output.testOwnershipCount, truncated: output.truncated
       };
     case "workspace.index.refresh":
       return {
         fileCount: output.fileCount, symbolCount: output.symbolCount,
+        documentationFileCount: output.documentationFileCount,
+        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount,
+        documentationReferenceCount: output.documentationReferenceCount,
+        testOwnershipCount: output.testOwnershipCount,
         parsedFiles: output.parsedFiles, reusedFiles: output.reusedFiles,
         removedFiles: output.removedFiles, skippedFiles: output.skippedFiles,
         truncated: output.truncated
