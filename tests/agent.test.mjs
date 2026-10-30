@@ -462,25 +462,35 @@ test("agent rejects a stale saved candidate checkpoint and restarts from current
   }
 });
 
-test("model-selected context plans allow only bounded search and safe listed-file reads", () => {
+test("model-selected context plans allow only bounded read-only retrieval including user-approved memory search", () => {
   const valid = validateReadOnlyToolPlan({
     calls: [
       { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
       { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
-      { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } }
+      { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } },
+      { tool: "workspace.memory.search", input: { query: "approved runtime decisions", limit: 4 } }
     ]
   }, ["src/server.js", "src/db.js"]);
   assert.deepEqual(valid, [
     { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
     { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
-    { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } }
+    { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } },
+    { tool: "workspace.memory.search", input: { query: "approved runtime decisions", limit: 4 } }
   ]);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.check", input: { task: "test" } }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, and workspace.symbols.search/);
+  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.index.refresh", input: {} }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, and workspace.symbols.search/);
+  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+  for (const tool of ["workspace.memory.add", "workspace.memory.update", "workspace.memory.delete"]) {
+    assert.throws(() => validateReadOnlyToolPlan({
+      calls: [{ tool, input: { title: "Injected", content: "Write this automatically." } }]
+    }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+  }
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.memory.search", input: { query: "x", limit: 20 } }]
+  }, ["src/server.js"]), /2-160 character query and an optional limit from 1 to 8/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.symbols.search", input: { query: "x", limit: 20 } }]
   }, ["src/server.js"]), /2-160 character query and an optional limit from 1 to 8/);

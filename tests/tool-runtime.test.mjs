@@ -35,12 +35,20 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 16);
+  assert.equal(tools.length, 21);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
   assert.equal(byName.get("workspace.index.status").permission, "read_only");
   assert.equal(byName.get("workspace.index.refresh").permission, "local_state_write");
   assert.equal(byName.get("workspace.index.refresh").approvalRequired, false);
   assert.equal(byName.get("workspace.symbols.search").permission, "read_only");
+  assert.equal(byName.get("workspace.memory.list").permission, "read_only");
+  assert.equal(byName.get("workspace.memory.search").permission, "read_only");
+  assert.equal(byName.get("workspace.memory.add").permission, "local_state_write");
+  assert.equal(byName.get("workspace.memory.add").approvalRequired, true);
+  assert.equal(byName.get("workspace.memory.update").permission, "local_state_write");
+  assert.equal(byName.get("workspace.memory.update").approvalRequired, true);
+  assert.equal(byName.get("workspace.memory.delete").permission, "destructive_state_write");
+  assert.equal(byName.get("workspace.memory.delete").approvalRequired, true);
   assert.equal(byName.get("workspace.checks.discover").permission, "read_only");
   assert.equal(byName.get("workspace.checks.discover").approvalRequired, false);
   assert.equal(byName.get("workspace.search").permission, "read_only");
@@ -91,6 +99,85 @@ test("workspace index tools refresh, search, and report status through the audit
     assert.ok(indexedEvents.some(event => event.tool === "workspace.index.refresh" && event.permission === "local_state_write"));
     assert.ok(indexedEvents.every(event => ["started", "completed"].includes(event.status)));
     assert.ok(events.every(event => !JSON.stringify(event).includes("calculateRoute(host)")));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("project memory tools require approval for every write and keep note contents out of audit events", async () => {
+  const root = await createProject();
+  try {
+    const listed = await executeWorkspaceTool({ root, name: "workspace.memory.list" });
+    assert.equal(listed.ok, true);
+    assert.equal(listed.output.total, 0);
+
+    const noteInput = {
+      title: "Gateway convention",
+      content: "Gateway clients must use bounded request timeouts and stable error codes.",
+      category: "convention",
+      tags: ["network", "api"]
+    };
+    const deniedAdd = await executeWorkspaceTool({
+      root, name: "workspace.memory.add", input: noteInput
+    });
+    assert.equal(deniedAdd.ok, false);
+    assert.equal(deniedAdd.status, "approval_required");
+    assert.equal((await listWorkspaceTools()).find(tool => tool.name === "workspace.memory.add").approvalRequired, true);
+    assert.equal((await executeWorkspaceTool({ root, name: "workspace.memory.list" })).output.total, 0);
+
+    const added = await executeWorkspaceTool({
+      root, name: "workspace.memory.add", input: noteInput, approval: true
+    });
+    assert.equal(added.ok, true);
+    assert.equal(added.output.note.title, noteInput.title);
+    assert.equal(added.permission, "local_state_write");
+    const noteId = added.output.note.id;
+    const expectedUpdatedAt = added.output.note.updatedAt;
+
+    const search = await executeWorkspaceTool({
+      root, name: "workspace.memory.search", input: { query: "bounded request timeout" }
+    });
+    assert.equal(search.ok, true);
+    assert.equal(search.output.results[0].id, noteId);
+
+    const updateInput = {
+      id: noteId, expectedUpdatedAt, title: "Gateway timeout convention",
+      content: "Gateway clients must use short bounded timeouts and stable error codes.",
+      category: "decision", tags: ["network"]
+    };
+    const deniedUpdate = await executeWorkspaceTool({
+      root, name: "workspace.memory.update", input: updateInput
+    });
+    assert.equal(deniedUpdate.status, "approval_required");
+    const updated = await executeWorkspaceTool({
+      root, name: "workspace.memory.update", input: updateInput, approval: true
+    });
+    assert.equal(updated.ok, true);
+    assert.equal(updated.output.note.category, "decision");
+
+    const deniedDelete = await executeWorkspaceTool({
+      root, name: "workspace.memory.delete",
+      input: { id: noteId, expectedUpdatedAt: updated.output.note.updatedAt }
+    });
+    assert.equal(deniedDelete.status, "approval_required");
+    const deleted = await executeWorkspaceTool({
+      root, name: "workspace.memory.delete",
+      input: { id: noteId, expectedUpdatedAt: updated.output.note.updatedAt },
+      approval: true
+    });
+    assert.equal(deleted.ok, true);
+    assert.equal(deleted.permission, "destructive_state_write");
+    assert.equal(deleted.output.deleted, true);
+    assert.equal((await executeWorkspaceTool({ root, name: "workspace.memory.list" })).output.total, 0);
+
+    const events = await readAudit(root);
+    const memoryEvents = events.filter(event => event.tool.startsWith("workspace.memory."));
+    assert.ok(memoryEvents.some(event => event.tool === "workspace.memory.add" && event.status === "approval_required"));
+    assert.ok(memoryEvents.some(event => event.tool === "workspace.memory.update" && event.status === "approval_required"));
+    assert.ok(memoryEvents.some(event => event.tool === "workspace.memory.delete" && event.status === "approval_required"));
+    assert.ok(memoryEvents.every(event => !JSON.stringify(event).includes(noteInput.title)));
+    assert.ok(memoryEvents.every(event => !JSON.stringify(event).includes(noteInput.content)));
+    assert.ok(memoryEvents.every(event => !JSON.stringify(event).includes(updateInput.content)));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

@@ -323,11 +323,16 @@ test("local tool catalogue and API enforce permissions and record execution", as
     const catalogueResponse = await fetch(service.base + "/local-api/tools");
     assert.equal(catalogueResponse.status, 200);
     const catalogue = await catalogueResponse.json();
-    assert.equal(catalogue.tools.length, 16);
+    assert.equal(catalogue.tools.length, 21);
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.search"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.index.status" && tool.permission === "read_only"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.index.refresh" && tool.permission === "local_state_write" && !tool.approvalRequired));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.symbols.search" && tool.permission === "read_only"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.list" && tool.permission === "read_only"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.search" && tool.permission === "read_only"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.add" && tool.permission === "local_state_write" && tool.approvalRequired));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.update" && tool.permission === "local_state_write" && tool.approvalRequired));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.delete" && tool.permission === "destructive_state_write" && tool.approvalRequired));
     assert.ok(catalogue.tools.some(tool =>
       tool.name === "workspace.checks.discover" && tool.permission === "read_only" && !tool.approvalRequired
     ));
@@ -346,6 +351,37 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.equal(inspectRun.name, "workspace.inspect");
     assert.equal(inspectRun.auditRecorded, true);
 
+    const memoryInput = {
+      title: "API convention",
+      content: "Use a stable error envelope and a request identifier for API failures.",
+      category: "convention",
+      tags: ["api"]
+    };
+    const deniedMemoryWriteResponse = await fetch(service.base + "/local-api/tools/execute", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "workspace.memory.add", root, input: memoryInput })
+    });
+    const deniedMemoryWrite = await deniedMemoryWriteResponse.json();
+    assert.equal(deniedMemoryWrite.ok, false);
+    assert.equal(deniedMemoryWrite.status, "approval_required");
+
+    const approvedMemoryWriteResponse = await fetch(service.base + "/local-api/tools/execute", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "workspace.memory.add", root, input: memoryInput, approval: true })
+    });
+    const approvedMemoryWrite = await approvedMemoryWriteResponse.json();
+    assert.equal(approvedMemoryWrite.ok, true);
+    assert.equal(approvedMemoryWrite.output.note.owner, "user");
+
+    const memoryReadResponse = await fetch(service.base + "/local-api/tools/execute", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "workspace.memory.search", root, input: { query: "stable error envelope" } })
+    });
+    const memoryRead = await memoryReadResponse.json();
+    assert.equal(memoryRead.ok, true);
+    assert.equal(memoryRead.output.results.length, 1);
+    assert.equal(memoryRead.output.results[0].id, approvedMemoryWrite.output.note.id);
+
     const deniedResponse = await fetch(service.base + "/local-api/tools/execute", {
       method: "POST", headers,
       body: JSON.stringify({ name: "workspace.check", root, input: { task: "test" } })
@@ -359,7 +395,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
       body: JSON.stringify({ task: "test" })
     });
     assert.equal(legacyCheckResponse.status, 400);
-    assert.match((await legacyCheckResponse.json()).error, /Explicit user approval is required/);
+    assert.match((await legacyCheckResponse.json()).error, /explicit user-approved action/);
 
     const deniedOrigin = await fetch(service.base + "/local-api/tools/execute", {
       method: "POST",
@@ -372,6 +408,11 @@ test("local tool catalogue and API enforce permissions and record execution", as
       .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
     assert.ok(events.some(event => event.tool === "workspace.inspect" && event.status === "completed"));
     assert.ok(events.some(event => event.tool === "workspace.check" && event.status === "approval_required"));
+    assert.ok(events.some(event => event.tool === "workspace.memory.add" && event.status === "approval_required"));
+    assert.ok(events.some(event => event.tool === "workspace.memory.add" && event.status === "completed"));
+    const memoryAudit = events.filter(event => event.tool?.startsWith("workspace.memory."));
+    assert.ok(memoryAudit.every(event => !JSON.stringify(event).includes(memoryInput.title)));
+    assert.ok(memoryAudit.every(event => !JSON.stringify(event).includes(memoryInput.content)));
   } finally {
     if (service?.child) await stopChild(service.child);
     await fs.rm(root, { recursive: true, force: true });

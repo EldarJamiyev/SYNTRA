@@ -21,6 +21,25 @@ type WorkspaceStatus = {
   staleProposals: WorkspaceProposal[];
 };
 
+type WorkspaceMemoryNote = {
+  id: string;
+  title: string;
+  content: string;
+  category: 'architecture' | 'convention' | 'decision' | 'workflow' | 'testing' | 'other';
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  owner: 'user';
+};
+
+type WorkspaceToolResponse<T> = {
+  ok: boolean;
+  output?: T;
+  error?: string;
+  message?: string;
+  status?: string;
+};
+
 type Message = ChatMessage;
 const MAX_VISIBLE_MESSAGES = 60;
 
@@ -164,6 +183,17 @@ export default function App() {
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const [workspaceError, setWorkspaceError] = useState('');
   const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
+  const [memoryNotes, setMemoryNotes] = useState<WorkspaceMemoryNote[]>([]);
+  const [memorySearch, setMemorySearch] = useState('');
+  const [memoryTitle, setMemoryTitle] = useState('');
+  const [memoryContent, setMemoryContent] = useState('');
+  const [memoryCategory, setMemoryCategory] = useState<WorkspaceMemoryNote['category']>('architecture');
+  const [memoryTags, setMemoryTags] = useState('');
+  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
+  const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memorySaving, setMemorySaving] = useState(false);
+  const [memoryError, setMemoryError] = useState('');
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [input, setInput] = useState('');
@@ -316,6 +346,16 @@ export default function App() {
       })
     : sessions;
 
+  const filteredMemoryNotes = memorySearch.trim()
+    ? memoryNotes.filter(note => {
+        const query = memorySearch.trim().toLowerCase();
+        return note.title.toLowerCase().includes(query)
+          || note.content.toLowerCase().includes(query)
+          || note.tags.some(tag => tag.toLowerCase().includes(query))
+          || note.category.includes(query);
+      })
+    : memoryNotes;
+
   const refreshWorkspaceStatus = async () => {
     const status = await getJson<WorkspaceStatus>('/local-api/workspace/status');
     if (mountedRef.current) {
@@ -326,9 +366,119 @@ export default function App() {
     }
   };
 
+  const executeWorkspaceTool = async <T,>(
+    name: string,
+    toolInput: Record<string, unknown> = {},
+    approval = false,
+    rootOverride?: string,
+  ): Promise<T> => {
+    const root = rootOverride || workspaceStatus?.root || workspacePath || undefined;
+    const result = await postJson<WorkspaceToolResponse<T>>('/local-api/tools/execute', {
+      ...(root ? { root } : {}),
+      name,
+      input: toolInput,
+      approval,
+    });
+    if (!result.ok || result.output === undefined) {
+      throw new Error(result.error || result.message || 'The workspace tool did not complete.');
+    }
+    return result.output;
+  };
+
+  const refreshWorkspaceMemory = async (rootOverride?: string) => {
+    setMemoryLoading(true);
+    try {
+      const result = await executeWorkspaceTool<{ notes: WorkspaceMemoryNote[] }>(
+        'workspace.memory.list', {}, false, rootOverride,
+      );
+      if (mountedRef.current) {
+        setMemoryNotes(result.notes || []);
+        setMemoryError('');
+      }
+    } finally {
+      if (mountedRef.current) setMemoryLoading(false);
+    }
+  };
+
+  const resetWorkspaceMemoryDraft = () => {
+    setEditingMemoryId(null);
+    setDeletingMemoryId(null);
+    setMemoryTitle('');
+    setMemoryContent('');
+    setMemoryCategory('architecture');
+    setMemoryTags('');
+    setMemoryError('');
+  };
+
+  const submitWorkspaceMemory = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (memorySaving || pending) return;
+    setMemorySaving(true);
+    setMemoryError('');
+    try {
+      const tags = memoryTags.split(',').map(tag => tag.trim()).filter(Boolean);
+      const editingNote = memoryNotes.find(note => note.id === editingMemoryId);
+      if (editingMemoryId && !editingNote) {
+        throw new Error('The note being edited is no longer available. Reload project memory and try again.');
+      }
+      if (editingNote) {
+        await executeWorkspaceTool('workspace.memory.update', {
+          id: editingNote.id,
+          expectedUpdatedAt: editingNote.updatedAt,
+          title: memoryTitle,
+          content: memoryContent,
+          category: memoryCategory,
+          tags,
+        }, true);
+      } else {
+        await executeWorkspaceTool('workspace.memory.add', {
+          title: memoryTitle,
+          content: memoryContent,
+          category: memoryCategory,
+          tags,
+        }, true);
+      }
+      resetWorkspaceMemoryDraft();
+      await refreshWorkspaceMemory();
+    } catch (cause) {
+      setMemoryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setMemorySaving(false);
+    }
+  };
+
+  const beginEditWorkspaceMemory = (note: WorkspaceMemoryNote) => {
+    setEditingMemoryId(note.id);
+    setDeletingMemoryId(null);
+    setMemoryTitle(note.title);
+    setMemoryContent(note.content);
+    setMemoryCategory(note.category);
+    setMemoryTags(note.tags.join(', '));
+    setMemoryError('');
+  };
+
+  const confirmDeleteWorkspaceMemory = async (note: WorkspaceMemoryNote) => {
+    if (memorySaving || pending) return;
+    setMemorySaving(true);
+    setMemoryError('');
+    try {
+      await executeWorkspaceTool('workspace.memory.delete', {
+        id: note.id,
+        expectedUpdatedAt: note.updatedAt,
+      }, true);
+      if (editingMemoryId === note.id) resetWorkspaceMemoryDraft();
+      setDeletingMemoryId(null);
+      await refreshWorkspaceMemory();
+    } catch (cause) {
+      setMemoryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setMemorySaving(false);
+    }
+  };
+
   const submitWorkspaceSwitch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (pending || workspaceSwitching) return;
+    if (pending || workspaceSwitching || memoryLoading || memorySaving) return;
     const requestedPath = workspacePath.trim();
     if (!requestedPath) {
       setWorkspaceError('Enter an absolute project folder path.');
@@ -341,7 +491,12 @@ export default function App() {
       setWorkspaceStatus(status);
       setWorkspacePath(status.root);
       saveWorkspacePath(status.root);
+      setMemoryNotes([]);
+      resetWorkspaceMemoryDraft();
       try { await refreshAgentRuns(); } catch { setAgentRuns([]); }
+      try { await refreshWorkspaceMemory(status.root); } catch (cause) {
+        setMemoryError(cause instanceof Error ? cause.message : String(cause));
+      }
       setWorkspaceOpen(false);
     } catch (cause) {
       setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
@@ -542,6 +697,9 @@ export default function App() {
               // Fetch its recovered run state when the workspace panel is reopened.
               void refreshAgentRuns().catch(() => {});
               void refreshWorkspaceStatus().catch(() => {});
+              void refreshWorkspaceMemory().catch(cause => {
+                if (mountedRef.current) setMemoryError(cause instanceof Error ? cause.message : String(cause));
+              });
             }
           }}
         >
@@ -580,15 +738,135 @@ export default function App() {
               onChange={event => setWorkspacePath(event.target.value)}
               placeholder={'C:\\Projects\\MyProject'}
               maxLength={4096}
-              disabled={pending || workspaceSwitching}
+              disabled={pending || workspaceSwitching || memoryLoading || memorySaving}
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="submit" disabled={pending || workspaceLoading || workspaceSwitching || !workspacePath.trim()}>
+            <button type="submit" disabled={pending || workspaceLoading || workspaceSwitching || memoryLoading || memorySaving || !workspacePath.trim()}>
               {workspaceSwitching ? 'Switching…' : 'Switch folder'}
             </button>
           </form>
           {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
+          <section className="workspace-memory-panel" aria-label="Project memory">
+            <div className="workspace-memory-heading">
+              <div>
+                <div className="workspace-agent-runs-heading">Project memory</div>
+                <div className="workspace-memory-subtitle">Only notes you save are available to the agent.</div>
+              </div>
+              <span className="workspace-memory-count">{memoryNotes.length}/200</span>
+            </div>
+            <form className="workspace-memory-form" onSubmit={submitWorkspaceMemory}>
+              <label htmlFor="memory-title">{editingMemoryId ? 'Edit note' : 'New note'}</label>
+              <input
+                id="memory-title"
+                value={memoryTitle}
+                onChange={event => setMemoryTitle(event.target.value)}
+                placeholder="Note title"
+                maxLength={120}
+                required
+                disabled={memorySaving || memoryLoading || pending}
+              />
+              <div className="workspace-memory-form-row">
+                <select
+                  aria-label="Project memory category"
+                  value={memoryCategory}
+                  onChange={event => setMemoryCategory(event.target.value as WorkspaceMemoryNote['category'])}
+                  disabled={memorySaving || memoryLoading || pending}
+                >
+                  <option value="architecture">Architecture</option>
+                  <option value="convention">Convention</option>
+                  <option value="decision">Decision</option>
+                  <option value="workflow">Workflow</option>
+                  <option value="testing">Testing</option>
+                  <option value="other">Other</option>
+                </select>
+                <input
+                  value={memoryTags}
+                  onChange={event => setMemoryTags(event.target.value)}
+                  placeholder="Tags, comma separated"
+                  maxLength={300}
+                  aria-label="Project memory tags"
+                  disabled={memorySaving || memoryLoading || pending}
+                />
+              </div>
+              <textarea
+                aria-label="Project memory note content"
+                value={memoryContent}
+                onChange={event => setMemoryContent(event.target.value)}
+                placeholder="A technical decision, project convention, or detail worth keeping…"
+                maxLength={2400}
+                rows={3}
+                required
+                disabled={memorySaving || pending}
+              />
+              <div className="workspace-memory-form-actions">
+                <button type="submit" disabled={memorySaving || memoryLoading || pending || (!editingMemoryId && memoryNotes.length >= 200) || !memoryTitle.trim() || !memoryContent.trim()}>
+                  {memorySaving ? 'Saving…' : editingMemoryId ? 'Save changes' : 'Save note'}
+                </button>
+                {editingMemoryId && (
+                  <button type="button" className="workspace-memory-cancel" onClick={resetWorkspaceMemoryDraft} disabled={memorySaving || memoryLoading}>
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </form>
+            <div className="workspace-memory-search">
+              <Search size={13} />
+              <input
+                value={memorySearch}
+                onChange={event => setMemorySearch(event.target.value)}
+                placeholder="Find a saved note"
+                aria-label="Search project memory"
+              />
+            </div>
+            {memoryError && <div className="workspace-error" role="alert">{memoryError}</div>}
+            <div className="workspace-memory-list" aria-live="polite">
+              {memoryLoading ? (
+                <div className="workspace-agent-runs-empty">Loading project memory…</div>
+              ) : filteredMemoryNotes.length === 0 ? (
+                <div className="workspace-agent-runs-empty">
+                  {memoryNotes.length ? 'No notes match this search.' : 'No saved project notes yet.'}
+                </div>
+              ) : filteredMemoryNotes.slice(0, 20).map(note => (
+                <article className="workspace-memory-note" key={note.id}>
+                  <div className="workspace-memory-note-top">
+                    <span className="workspace-memory-note-title">{note.title}</span>
+                    <span className="workspace-memory-note-category">{note.category}</span>
+                  </div>
+                  <p className="workspace-memory-note-content">{note.content}</p>
+                  {note.tags.length > 0 && (
+                    <div className="workspace-memory-tags">
+                      {note.tags.map(tag => <span key={tag}>{tag}</span>)}
+                    </div>
+                  )}
+                  <div className="workspace-memory-note-footer">
+                    <span>{new Date(note.updatedAt).toLocaleDateString()}</span>
+                    {deletingMemoryId === note.id ? (
+                      <span className="workspace-memory-confirm">
+                        Delete?
+                        <button type="button" onClick={() => void confirmDeleteWorkspaceMemory(note)} disabled={memorySaving || memoryLoading || pending}>Confirm</button>
+                        <button type="button" onClick={() => setDeletingMemoryId(null)} disabled={memorySaving}>Cancel</button>
+                      </span>
+                    ) : (
+                      <span className="workspace-memory-note-actions">
+                        <button type="button" aria-label={'Edit ' + note.title} title="Edit note" onClick={() => beginEditWorkspaceMemory(note)} disabled={memorySaving || memoryLoading || pending}>
+                          <Pencil size={12} />
+                        </button>
+                        <button type="button" aria-label={'Delete ' + note.title} title="Delete note" onClick={() => setDeletingMemoryId(note.id)} disabled={memorySaving || memoryLoading || pending}>
+                          <Trash2 size={12} />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                </article>
+              ))}
+              {filteredMemoryNotes.length > 20 && (
+                <div className="workspace-agent-runs-empty">Showing 20 of {filteredMemoryNotes.length} notes. Search to narrow the list.</div>
+              )}
+            </div>
+            <div className="workspace-memory-footnote">Stored in this workspace’s .syntra folder. The agent can search notes but cannot change them.</div>
+          </section>
+
           <div className="workspace-agent-runs">
             <div className="workspace-agent-runs-heading">Recent agent runs</div>
             {agentRuns.length === 0 ? (
@@ -638,7 +916,7 @@ export default function App() {
               </button>
             </div>
           )}
-          <div className="workspace-popover-footer">Project files and proposal records remain on this device.</div>
+          <div className="workspace-popover-footer">Project files, project notes, and proposal records remain on this device.</div>
         </section>
       )}
 
