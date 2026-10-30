@@ -634,7 +634,13 @@ async function runChatTurn(jobId, message, history, signal) {
       await updateAgentRun(activeWorkspace, agentRunId, {
         status: "completed",
         phase: "completed",
-        message: applied.length ? "Verified changes were applied." : "Agent task finished; review any staged proposals.",
+        message: applied.length
+          ? "Verified changes were applied."
+          : result.verification?.status === "slice_incomplete"
+            ? "Agent stopped with an incomplete implementation slice; review the unverified cumulative proposals."
+            : result.verification?.passed
+              ? "Agent task finished; review any staged proposals."
+              : "Agent task finished with unverified proposals; inspect the verification details before applying.",
         planSteps: result.plan?.steps || [],
         attempts: result.attempts || [],
         toolCalls: result.toolCalls || [],
