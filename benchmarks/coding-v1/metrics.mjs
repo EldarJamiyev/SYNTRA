@@ -31,8 +31,13 @@ export function evaluateTaskResult({
   const taskCompleted = patchValid && agentVerificationPassed && independentTestPassed
     && sourceChanged && protectedFilesIntact && onlyExpectedFilesChanged;
 
-  const promptTokens = attempts.reduce((sum, item) => sum + numeric(item?.promptTokens), 0);
-  const outputTokens = attempts.reduce((sum, item) => sum + numeric(item?.outputTokens), 0);
+  const usage = agentRun.modelUsage && typeof agentRun.modelUsage === "object" ? agentRun.modelUsage : null;
+  const promptTokens = usage
+    ? numeric(usage.promptTokens)
+    : attempts.reduce((sum, item) => sum + numeric(item?.promptTokens), 0);
+  const outputTokens = usage
+    ? numeric(usage.outputTokens)
+    : attempts.reduce((sum, item) => sum + numeric(item?.outputTokens), 0);
   const modelMemoryBefore = modelMemory?.before || null;
   const modelMemoryAfter = modelMemory?.after || null;
   const modelVramValues = [modelMemoryBefore?.vramBytes, modelMemoryAfter?.vramBytes]
@@ -59,6 +64,9 @@ export function evaluateTaskResult({
     promptTokens,
     outputTokens,
     totalTokens: promptTokens + outputTokens,
+    generationCalls: usage ? numeric(usage.generationCalls) : null,
+    promptTokenCountsExact: usage ? usage.promptTokenCountsExact === true : false,
+    tokenUsageSource: usage ? "agent-model-request-telemetry" : "patch-attempt-fallback",
     peakControllerRssBytes: Number.isFinite(Number(peakControllerRssBytes))
       ? Number(peakControllerRssBytes) : null,
     modelVramBytesBefore: modelVramValues.length ? modelMemoryBefore?.vramBytes ?? null : null,
