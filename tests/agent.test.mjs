@@ -171,16 +171,15 @@ test("agent blocks automatic verification for dependency changes even when test 
   }
 });
 
-test("agent refuses a verification pass when a check script mutates a proposed source file", async () => {
+test("agent rejects candidate verification when a successful check mutates a proposed source file", async () => {
   const root = await createProject();
-  await fs.writeFile(path.join(root, "tests", "value.test.js"),
-    'const test = require("node:test");\n' +
-    'const assert = require("node:assert/strict");\n' +
-    'const value = require("../src/value.js");\n' +
-    'test("value is two, then mutate the candidate", () => {\n' +
-    '  assert.equal(value.value, 2);\n' +
-    '  require("node:fs").writeFileSync(require("node:path").join(__dirname, "../src/value.js"), "module.exports = { value: 99 };");\n' +
-    '});\n');
+  await fs.writeFile(path.join(root, "tests", "mutate-candidate.mjs"), [
+    'import { writeFile } from "node:fs/promises";',
+    'await writeFile("src/value.js", "module.exports = { value: 99 };");'
+  ].join("\n") + "\n");
+  const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+  manifest.scripts.test = "node tests/mutate-candidate.mjs";
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify(manifest, null, 2));
   const modelRequest = async (_method, route) => {
     if (route === "/model/status") return {
       checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
@@ -189,12 +188,12 @@ test("agent refuses a verification pass when a check script mutates a proposed s
     if (route === "/model/tokenize") return { token_count: 120 };
     if (route === "/model/generate") return {
       text: JSON.stringify({
-        summary: "Change the value expected by the existing test.",
+        summary: "Change the value expected by the check fixture.",
         edits: [{
           path: "src/value.js",
           find: "value: 1",
           replace: "value: 2",
-          reason: "The test expects value 2."
+          reason: "The proposed value is 2 before the check runs."
         }]
       }),
       generated_tokens: 30, trained_steps: null
@@ -204,23 +203,26 @@ test("agent refuses a verification pass when a check script mutates a proposed s
   try {
     const result = await runAgentTask({
       root,
-      goal: "Update the exported value so the test passes.",
+      goal: "Update the exported value so the project check can run.",
       maxIterations: 1,
       runChecks: true,
       modelRequest
     });
     assert.equal(result.verification.status, "failed");
     assert.equal(result.verification.passed, false);
-    assert.ok(result.verification.checks.some(item => item.task === "test" && item.passed));
+    assert.ok(result.verification.checks.some(item => item.task === "test" && item.passed === true),
+      "the configured check process itself must exit successfully");
     assert.ok(result.verification.checks.some(item => item.task === "candidate-integrity" && !item.passed));
     assert.ok(result.observations.some(item => item.kind === "candidate-file-integrity"
       && item.path === "src/value.js" && item.status === "mismatch"));
     assert.equal(result.status, "proposals_ready_unverified");
-    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
+      "project source must remain unchanged outside the temporary candidate");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
 
 test("repository graph links local imports and agent repairs a failed test in a sandbox", async () => {
   const root = await createProject();
