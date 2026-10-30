@@ -103,11 +103,14 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Reuse one cumulative temporary candidate across slices, re-inspect and rebuild context after each verified slice, and re-inspect before bounded repair attempts after failed verification.
 - [x] Aggregate multi-slice changes against original workspace contents and source hashes; stage only the final cumulative proposal set.
 - [x] Mark a task unverified when any planned slice is incomplete. Do not apply a partial multi-slice result automatically.
-- [x] Clear reusable patch checkpoints for multi-slice runs so interrupted work safely restarts from the overall goal instead of reusing a patch against a missing temporary candidate.
-- [x] Cover two-slice verification, candidate-context refresh, original-source preservation, cumulative proposal hashes, and incomplete-slice failure handling with tests.
-- [x] Cover durable storage, invalid lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
+- [x] Persist each verified multi-slice candidate boundary in a separate bounded workspace-local checkpoint; validate run/workspace identity, content hashes, and original-file hashes on resume.
+- [x] Reconstruct the temporary candidate from a verified checkpoint after service restart, re-inspect it, and continue at the next pending slice; regenerate an in-flight unverified slice.
+- [x] Remove candidate checkpoints after final proposal staging and report checkpoint persistence failures rather than claiming restartability.
+- [x] Cover candidate checkpoint bounds, invalid paths and hashes, symlink protection, interrupted-run continuation, and original-source preservation with tests.
+- [x] Cover two-slice verification, candidate-context refresh, cumulative proposal hashes, and incomplete-slice failure handling with tests.
+- [x] Cover durable storage, lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
 
-Still outstanding in this phase: model-selected execution/source-modification tool choice, persistence of temporary candidate state for true mid-slice continuation, richer checkpoint recovery between individual tool operations, and optional parallel execution of independent read-only tasks. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
+Still outstanding in this phase: model-selected execution/source-modification tool choice, resumable checkpoints between individual operations within an unverified slice, and optional parallel execution of independent read-only tasks. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
 
 **Acceptance:** A complex task can complete multiple verified slices, resume after interruption, and explain which evidence supports its final status. Retries are bounded and cannot bypass safety checks.
 
