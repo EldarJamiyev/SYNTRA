@@ -232,7 +232,8 @@ export default function App() {
   }, [messages, pending, phase, streamingReply]);
 
   useEffect(() => {
-    // Persist every session independently. Storage quota/privacy failures are non-fatal.
+    // Save the user's prompt immediately too. Persist each conversation independently;
+    // bounded local storage and non-fatal quota/privacy failures keep chat available.
     saveSessionState(sessionState);
   }, [sessionState]);
 
