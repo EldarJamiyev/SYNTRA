@@ -72,7 +72,7 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(server, /phase: "streaming"/);
   assert.match(server, /onToken: \(_delta, fullText\)/);
   assert.match(server, /partialReply, updatedAt/);
-  assert.match(server, /new task must never inherit proposals/);
+  assert.match(server, /This workspace already has saved proposals/);
   assert.match(app, /noopener noreferrer/);
   assert.match(html, /<title>SYNTRA Chat<\/title>/);
   for (const label of [
