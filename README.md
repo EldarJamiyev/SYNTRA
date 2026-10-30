@@ -42,6 +42,30 @@ Before generating a code patch, SYNTRA can ask its local model to choose up to f
 
 SYNTRA's local tool runtime exposes a structured catalogue at `GET /local-api/tools` and accepts validated calls at `POST /local-api/tools/execute`. It currently provides 21 tools for workspace inspection, incremental source-symbol indexing/search, user-controlled project-memory list/search/write operations, file search/read, planning, proposal review/application/discard, approved project checks, check-runner discovery, and Git status/diff summaries. The workspace context index is local to each workspace, stores metadata and hashes rather than source/documentation contents, and reuses parsed declarations and references for unchanged files. It includes bounded import edges, Markdown/MDX/reStructuredText links, and heuristic test ownership. Each call has a run ID, a permission class, bounded input/output summaries, duration, result state, and an audit record in `.syntra/actions.jsonl`; raw file contents are not copied into tool audit events. The runtime serializes calls within a workspace. Ad-hoc project-check tool calls, applying source changes, discarding proposals, and adding, editing, or deleting project-memory notes require approval. A user-requested coding task authorizes SYNTRA's built-in checks in the temporary candidate copy and the existing verified-patch apply policy. That candidate copy is a separate working directory, not a hardened OS/container sandbox: project scripts still run with the current user's operating-system permissions and may access the network. Only run coding tasks against projects whose scripts you trust. Git inspection uses fixed, non-interactive arguments and does not fetch from remotes. This is a permissioned tool foundation, not a general-purpose terminal or arbitrary command runner.
 
+## Reproducible coding benchmark
+
+SYNTRA includes a versioned local coding benchmark (`coding-v1`) with three intentionally failing engineering fixtures: slug normalization, bounded duration parsing, and case-insensitive HTTP header merging. Run it while the local Vite/API stack is running and a local Ollama model or trained native checkpoint is available:
+
+```powershell
+npm run dev
+# In a second terminal:
+npm run benchmark:coding
+```
+
+Run one task or preserve its disposable workspace for inspection:
+
+```powershell
+npm run benchmark:coding -- --task slugify-normalization
+npm run benchmark:coding -- --keep-workspaces
+npm run benchmark:coding -- --timeout-seconds 1200 --output .\benchmark-results\coding-v1.json
+```
+
+The runner creates a fresh temporary workspace for each task and sends the real task through SYNTRA's local chat/coding-agent API. Its pass rule requires a schema-valid patch, passing agent verification, an independent post-run test, a changed target source file, and unchanged protected fixture tests/configuration. It records the actual provider/model, full-run prompt/output token totals, task latency, repair attempts, and per-task benchmark-runner peak RSS. Prompt-token exactness is reported separately when the provider returns token counts versus requiring tokenizer fallback.
+
+Memory figures are deliberately scoped: the runner's RSS belongs to the benchmark-controller process, not the model server. For Ollama, loaded model size and VRAM allocation are sampled from its local `/api/ps` endpoint when available; this is not total Ollama process memory. Native-model process memory is currently reported as unavailable. The report is written to `benchmarks/results/` by default and contains the real outcomes—SYNTRA does not fill in missing model results with synthetic scores.
+
+The benchmark uses the currently selected local provider; it does not switch models automatically. To compare models, run the same benchmark version separately under each configured local model and compare the JSON reports. The three tasks are small regression fixtures, not a broad industry benchmark or evidence of frontier-model equivalence. See [the benchmark methodology](docs/CODING_BENCHMARK.md) for metric definitions and limitations.
+
 ## Local model
 
 SYNTRA prefers an installed local Ollama model and does not call a hosted AI API. Its model selection excludes cloud-only models and rejects weights larger than 70% of physical RAM, leaving room for the OS and inference context/cache. That is a conservative file-size filter, not a guarantee that every remaining model will fit in practice. Model discovery is briefly cached between the status, token-count, and generation stages to avoid repeating the same probe. Inference speed and answer quality still depend on your hardware and the installed model.
