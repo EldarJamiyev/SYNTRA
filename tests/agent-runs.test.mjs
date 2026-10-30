@@ -378,8 +378,8 @@ test("run history preserves live tasks and a new service process recovers them",
   try {
     first = await startLocalService(root, port);
     const run = await createAgentRun(root, "Exercise durable recovery across an actual service restart.");
-    const originalContent = "export const value = 1;\\n";
-    const candidateContent = "export const value = 2;\\n";
+    const originalContent = "export const value = 1;\n";
+    const candidateContent = "export const value = 2;\n";
     await saveAgentCandidateCheckpoint(root, run.id, {
       schemaVersion: 1,
       runId: run.id,
