@@ -495,6 +495,60 @@ function verificationReviewReasons(changes) {
   return [...new Set(reasons)];
 }
 
+
+function createReviewDiff(relativePath, beforeContent, afterContent) {
+  const before = beforeContent === null ? [] : beforeContent.split(/\r?\n/);
+  const after = afterContent.split(/\r?\n/);
+  let prefix = 0;
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix++;
+
+  let beforeEnd = before.length;
+  let afterEnd = after.length;
+  while (beforeEnd > prefix && afterEnd > prefix && before[beforeEnd - 1] === after[afterEnd - 1]) {
+    beforeEnd--;
+    afterEnd--;
+  }
+
+  const context = 3;
+  const beforeContext = before.slice(Math.max(0, prefix - context), prefix);
+  const afterContext = before.slice(beforeEnd, Math.min(before.length, beforeEnd + context));
+  const removed = before.slice(prefix, beforeEnd);
+  const added = after.slice(prefix, afterEnd);
+  const maxChangedLines = 24;
+
+  function clip(lines, marker) {
+    if (lines.length <= maxChangedLines) return { lines, truncated: false };
+    const head = 12;
+    const tail = 11;
+    return {
+      lines: [
+        ...lines.slice(0, head),
+        marker + " … " + (lines.length - head - tail) + " changed lines omitted from preview …",
+        ...lines.slice(-tail)
+      ],
+      truncated: true
+    };
+  }
+
+  const clippedRemoved = clip(removed, "-");
+  const clippedAdded = clip(added, "+");
+  const isNewFile = beforeContent === null;
+  const lines = [
+    isNewFile ? "--- /dev/null" : "--- a/" + relativePath,
+    "+++ b/" + relativePath,
+    "@@ SYNTRA review preview @@",
+    ...beforeContext.map(line => " " + line),
+    ...clippedRemoved.lines.map(line => "-" + line),
+    ...clippedAdded.lines.map(line => "+" + line),
+    ...afterContext.map(line => " " + line)
+  ];
+
+  return {
+    diff: lines.join("\n"),
+    diffTruncated: clippedRemoved.truncated || clippedAdded.truncated
+  };
+}
+
 export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
   onProgress = () => {}
@@ -704,11 +758,15 @@ export async function runAgentTask({
         path: filePath, score: Number(score.toFixed(2)), imports, importedBy, sha256
       })),
       patchSummary: finalChanges?.summary || null,
-      changedFiles: finalChanges?.changes.map(change => ({
-        path: change.path, existedBefore: change.existedBefore, baseHash: change.beforeHash,
-        afterHash: sha256(change.content), reason: change.reason,
-        preview: change.content.split(/\r?\n/).slice(0, 32).join("\n")
-      })) || [],
+      changedFiles: finalChanges?.changes.map(change => {
+        const review = createReviewDiff(change.path, change.beforeContent, change.content);
+        return {
+          path: change.path, existedBefore: change.existedBefore, baseHash: change.beforeHash,
+          afterHash: sha256(change.content), reason: change.reason,
+          preview: change.content.split(/\r?\n/).slice(0, 32).join("\n"),
+          diff: review.diff, diffTruncated: review.diffTruncated
+        };
+      }) || [],
       proposals, verification: finalVerification, attempts,
       notices: [
         "Patch text came from the selected selected local model; a schema-valid patch is not automatically a correct patch.",
