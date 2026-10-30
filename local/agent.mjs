@@ -892,7 +892,8 @@ export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
   onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1,
   resumeBaseHashes = null, previousAttempts = [], previousToolCalls = [],
-  modelToolSelection = false, maxSlices = 1
+  modelToolSelection = false, maxSlices = 1, runId = null,
+  resumeCandidate = null, onCandidateCheckpoint = async () => {}
 }) {
   const root = await resolveWorkspace(inputRoot);
   const emitProgress = async update => {
@@ -965,12 +966,29 @@ export async function runAgentTask({
   let graph = await buildRepositoryGraph(root);
   let ranked = rankGraph(graph, goal, requestedPath);
   maxSlices = Math.max(1, Math.min(3, Number(maxSlices) || 1));
-  let implementationSlices = [{
+  let resumeCandidateState = null;
+  if (resumeCandidate) {
+    try {
+      resumeCandidateState = await validateResumeCandidateCheckpoint(root, goal, resumeCandidate, maxSlices);
+      observations.push({
+        kind: "candidate-checkpoint", stage: "resume-validation", status: "validated",
+        detail: "Saved verified slice state matched the original workspace hashes for " +
+          resumeCandidateState.files.length + " file(s)."
+      });
+    } catch (error) {
+      observations.push({
+        kind: "candidate-checkpoint", stage: "resume-validation", status: "rejected",
+        detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+      });
+      await onCandidateCheckpoint(null);
+    }
+  }
+  let implementationSlices = resumeCandidateState?.slices || [{
     id: "slice-1", goal: goal.trim(),
     acceptance: "The requested task behavior is implemented and supported by relevant project checks.",
     status: "pending"
   }];
-  if (maxSlices > 1 && runChecks && !resumePatch) {
+  if (!resumeCandidateState && maxSlices > 1 && runChecks && !resumePatch) {
     await emitProgress({
       phase: "slice-planning", iteration: 0,
       message: "Planning independently verifiable implementation slices."
@@ -1020,7 +1038,7 @@ export async function runAgentTask({
     plan.steps.push({
       id: slice.id,
       title: slice.goal.slice(0, 90),
-      status: "pending",
+      status: slice.status,
       detail: "Acceptance: " + slice.acceptance
     });
   }
