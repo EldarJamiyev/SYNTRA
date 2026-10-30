@@ -308,31 +308,49 @@ async function runChatTurn(jobId, message, history) {
       finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
       return;
     }
-    if (/^\/proposals\s*$/i.test(message.trim())) {
-      finishChat(jobId, formatProposalList(await readWorkspaceStatus()));
-      return;
-    }
-    if (/^\/apply\s*$/i.test(message.trim())) {
-      const saved = await listPendingProposals(activeWorkspace);
-      if (!saved.pending.length) {
-        const staleNote = saved.stale.length
-          ? " " + saved.stale.length + " stale proposal(s) were found; type /proposals to inspect them and /discard to remove their records."
-          : "";
-        finishChat(jobId, "There are no applicable pending changes for this workspace." + staleNote);
+    if (/^\/proposals\s*$/i.test(message.trim())
+      || /^\/apply\s*$/i.test(message.trim())
+      || /^\/discard\s*$/i.test(message.trim())) {
+      const listRun = await executeWorkspaceTool({
+        root: activeWorkspace, auditRoot: activeWorkspace,
+        name: "workspace.proposals.list", input: {}
+      });
+      if (!listRun.ok) throw new Error(listRun.error || "The proposal list tool failed.");
+      const saved = listRun.output;
+      const listTrace = {
+        runId: listRun.runId, name: listRun.name, status: listRun.status,
+        permission: listRun.permission, durationMs: listRun.durationMs,
+        auditRecorded: listRun.auditRecorded
+      };
+
+      if (/^\/proposals\s*$/i.test(message.trim())) {
+        finishChat(jobId, formatProposalList({
+          root: saved.root,
+          pendingProposals: saved.pending,
+          staleProposals: saved.stale
+        }), { toolCalls: [listTrace] });
         return;
       }
-      updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
-      const transaction = await applyProposals(activeWorkspace, saved.pending);
-      finishChat(jobId, "Applied the explicitly requested proposals:\n" + transaction.applied.map(item => "- " + item.path).join("\n") + "\n\nBackups and tool audit records are saved under .syntra.", {
-        toolCalls: [transaction.toolCall]
-      });
-      return;
-    }
-    if (/^\/discard\s*$/i.test(message.trim())) {
-      const saved = await listPendingProposals(activeWorkspace);
+
+      if (/^\/apply\s*$/i.test(message.trim())) {
+        if (!saved.pending.length) {
+          const staleNote = saved.stale.length
+            ? " " + saved.stale.length + " stale proposal(s) were found; type /proposals to inspect them and /discard to remove their records."
+            : "";
+          finishChat(jobId, "There are no applicable pending changes for this workspace." + staleNote, { toolCalls: [listTrace] });
+          return;
+        }
+        updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
+        const transaction = await applyProposals(activeWorkspace, saved.pending);
+        finishChat(jobId, "Applied the explicitly requested proposals:\n" + transaction.applied.map(item => "- " + item.path).join("\n") + "\n\nBackups and tool audit records are saved under .syntra.", {
+          toolCalls: [listTrace, transaction.toolCall]
+        });
+        return;
+      }
+
       const ids = [...saved.pending, ...saved.stale].map(item => item.id);
       if (!ids.length) {
-        finishChat(jobId, "There are no saved proposal records to discard.");
+        finishChat(jobId, "There are no saved proposal records to discard.", { toolCalls: [listTrace] });
         return;
       }
       const discardRun = await executeWorkspaceTool({
@@ -340,7 +358,13 @@ async function runChatTurn(jobId, message, history) {
         input: { proposalIds: ids }, approval: true
       });
       if (!discardRun.ok) throw new Error(discardRun.error || "The proposal discard tool failed.");
-      finishChat(jobId, "Discarded " + discardRun.output.discarded.length + " saved proposal record(s). Project files were not modified.");
+      finishChat(jobId, "Discarded " + discardRun.output.discarded.length + " saved proposal record(s). Project files were not modified.", {
+        toolCalls: [listTrace, {
+          runId: discardRun.runId, name: discardRun.name, status: discardRun.status,
+          permission: discardRun.permission, durationMs: discardRun.durationMs,
+          auditRecorded: discardRun.auditRecorded
+        }]
+      });
       return;
     }
 
