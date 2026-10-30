@@ -43,8 +43,11 @@ test("implementation slice plan validation is bounded, unique, and requires meas
   assert.equal(slices[0].id, "slice-1");
   assert.equal(slices[1].status, "pending");
   assert.throws(() => validateImplementationSlicePlan({
-    slices: [{ goal: "Update the service response mapping.", acceptance: "The tests pass." }]
-  }, "Complete a bigger service update.", 0), /between one and 1 slices/);
+    slices: [
+      { goal: "Update the service response mapping.", acceptance: "The tests pass." },
+      { goal: "Add the metadata helper module.", acceptance: "The helper is exported and tested." }
+    ]
+  }, "Complete a bigger service update.", 1), /between one and 1 slices/);
   assert.throws(() => validateImplementationSlicePlan({
     slices: [
       { goal: "Update the service response mapping.", acceptance: "The tests pass." },
