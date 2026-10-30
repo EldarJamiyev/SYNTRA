@@ -17,7 +17,7 @@ This roadmap separates shipped behavior from planned capabilities. A checked ite
 
 The repository already contains:
 
-- A minimal React chat interface with bounded browser-side conversation history.
+- A minimal React chat interface with bounded, local multi-conversation history, automatic titles, search, rename/delete/resume, and migration from the original single-thread store.
 - A loopback-only Node service that routes chat, network diagnostics, workspace operations, and coding requests.
 - Local model routing to installed Ollama models, with a native PyTorch research runtime as fallback.
 - Workspace inspection, text search, file reading, a local import graph, and relevance-ranked source context.
@@ -25,7 +25,7 @@ The repository already contains:
 - Candidate verification in a temporary project copy, bounded repair attempts, and hash-checked proposal application with backups and an audit log.
 - Local ping, DNS, and single-port TCP diagnostics.
 
-Known limitations are deliberate and must remain visible: there is no general-purpose terminal tool in the chat, no multi-agent execution system, and no evidence that the from-scratch native model performs at a Claude-class level. The current chat history is one browser-local thread rather than a full session manager.
+Known limitations are deliberate and must remain visible: there is no general-purpose terminal tool in the chat, no multi-agent execution system, and no evidence that the from-scratch native model performs at a Claude-class level. Sessions remain browser-local to one device; active-workspace labeling and restoring pending proposals after a service restart are not implemented yet.
 
 ## Delivery phases
 
@@ -36,7 +36,7 @@ Known limitations are deliberate and must remain visible: there is no general-pu
 - [x] Return a per-file diff preview from the exact before/after source.
 - [x] Bound large previews and report when content was omitted.
 - [x] Show the preview beside the verification result in chat.
-- [ ] Verify the full CI matrix on the review branch before merge.
+- [x] Verify the full CI matrix on the review branch before merge.
 
 **Acceptance:** A coding task reports each changed path, the reason, a readable preview, and the actual check status. A pending proposal clearly requires explicit approval. Source hashes are rechecked before application.
 
@@ -44,11 +44,11 @@ Known limitations are deliberate and must remain visible: there is no general-pu
 
 **Objective:** Make the chat operate as a persistent project workspace without turning it into a noisy administration dashboard.
 
-- Add a visible active-workspace indicator and a predictable project-switch flow.
-- Add multiple named conversations, local session persistence, rename/delete, and resume.
-- Keep workspace selection and session state separate from chat messages.
-- Restore pending proposals after service restarts and let users inspect or discard them.
-- Add clear empty, loading, offline-model, and failed-request states.
+- [ ] Add a visible active-workspace indicator and a predictable project-switch flow.
+- [x] Add multiple named conversations, local session persistence, rename/delete, search, and resume.
+- [x] Keep session state separate from individual chat messages and migrate the legacy single-thread history.
+- [ ] Restore pending proposals after service restarts and let users inspect or discard them.
+- [x] Preserve clear empty, loading, offline-model, and failed-request states while introducing the session experience.
 
 **Acceptance:** A user can reopen SYNTRA, return to a named conversation, confirm the selected workspace, and recover staged proposals without guessing which project they belong to.
 
