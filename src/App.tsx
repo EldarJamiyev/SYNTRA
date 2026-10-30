@@ -1,10 +1,12 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { ArrowUp, LoaderCircle } from 'lucide-react';
+import { ArrowUp, Check, LoaderCircle, Menu, MessageSquare, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { loadMessages, saveMessages } from './chat-history.js';
+import { createChatSession, loadSessionState, MAX_CHAT_SESSIONS, saveSessionState, titleFromMessages } from './chat-sessions.js';
+import type { ChatMessage } from './chat-history.js';
+import type { ChatSession, ChatSessionState } from './chat-sessions.js';
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type Message = ChatMessage;
 const MAX_VISIBLE_MESSAGES = 60;
 
 type ChatJob = {
@@ -45,6 +47,17 @@ function safeMarkdownHref(href?: string) {
   if (!href) return null;
   if (/^(?:https?:\/\/|mailto:|#|\/(?!\/)|\.{1,2}\/)/i.test(href)) return href;
   return null;
+}
+
+function sessionDateLabel(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (date.toDateString() === today.toDateString()) return 'Today';
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date);
 }
 
 function MessageContent({ content }: { content: string }) {
@@ -88,12 +101,36 @@ function MessageContent({ content }: { content: string }) {
 }
 
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>(() => loadMessages());
+  const [sessionState, setSessionState] = useState<ChatSessionState>(() => loadSessionState());
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const [phase, setPhase] = useState('');
   const [streamingReply, setStreamingReply] = useState('');
   const [error, setError] = useState('');
+  const sessions = sessionState.sessions;
+  const activeSession = sessions.find(session => session.id === sessionState.activeSessionId) || sessions[0];
+  const messages = activeSession?.messages || [];
+
+  const setMessages = (update: Message[] | ((current: Message[]) => Message[])) => {
+    setSessionState(current => {
+      const target = current.sessions.find(session => session.id === current.activeSessionId);
+      if (!target) return current;
+      const nextMessages = typeof update === 'function' ? update(target.messages) : update;
+      const safeMessages = nextMessages.slice(-MAX_VISIBLE_MESSAGES);
+      const title = safeMessages.length === 0
+        ? 'New chat'
+        : target.title === 'New chat' ? titleFromMessages(safeMessages) : target.title;
+      const updatedAt = new Date().toISOString();
+      const nextSessions = current.sessions.map(session => session.id === target.id
+        ? { ...session, title, messages: safeMessages, updatedAt }
+        : session).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      return { ...current, sessions: nextSessions };
+    });
+  };
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const threadRef = useRef<HTMLElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -105,6 +142,76 @@ export default function App() {
     textareaRef.current?.focus();
     return () => { mountedRef.current = false; };
   }, []);
+
+  const startNewChat = () => {
+    if (pending) return;
+    const session = createChatSession();
+    setSessionState(current => ({
+      version: 1,
+      activeSessionId: session.id,
+      sessions: [session, ...current.sessions].slice(0, MAX_CHAT_SESSIONS)
+    }));
+    setHistoryOpen(false);
+    setSessionSearch('');
+    setError('');
+    setStreamingReply('');
+    setInput('');
+    textareaRef.current?.focus();
+  };
+
+  const selectSession = (sessionId: string) => {
+    if (pending) return;
+    setSessionState(current => current.sessions.some(session => session.id === sessionId)
+      ? { ...current, activeSessionId: sessionId }
+      : current);
+    setHistoryOpen(false);
+    setError('');
+    setStreamingReply('');
+    setInput('');
+    textareaRef.current?.focus();
+  };
+
+  const deleteSession = (sessionId: string) => {
+    if (pending) return;
+    setSessionState(current => {
+      const remaining = current.sessions.filter(session => session.id !== sessionId);
+      if (!remaining.length) {
+        const fresh = createChatSession();
+        return { version: 1, activeSessionId: fresh.id, sessions: [fresh] };
+      }
+      const activeSessionId = current.activeSessionId === sessionId
+        ? remaining[0].id
+        : current.activeSessionId;
+      return { ...current, activeSessionId, sessions: remaining };
+    });
+    if (renamingSessionId === sessionId) setRenamingSessionId(null);
+  };
+
+  const beginRename = (session: ChatSession) => {
+    setRenamingSessionId(session.id);
+    setRenameDraft(session.title);
+  };
+
+  const saveRename = (event: FormEvent<HTMLFormElement>, sessionId: string) => {
+    event.preventDefault();
+    const title = renameDraft.trim().slice(0, 80);
+    if (title) {
+      setSessionState(current => ({
+        ...current,
+        sessions: current.sessions.map(session => session.id === sessionId ? { ...session, title } : session)
+      }));
+    }
+    setRenamingSessionId(null);
+    setRenameDraft('');
+  };
+
+  const filteredSessions = sessionSearch.trim()
+    ? sessions.filter(session => {
+        const query = sessionSearch.trim().toLowerCase();
+        return session.title.toLowerCase().includes(query)
+          || session.messages.some(message => message.content.toLowerCase().includes(query));
+      })
+    : sessions;
 
   const handleThreadScroll = () => {
     const thread = threadRef.current;
@@ -123,10 +230,9 @@ export default function App() {
   }, [messages, pending, phase, streamingReply]);
 
   useEffect(() => {
-    // Save the user's prompt immediately too, so a refresh during a long response
-    // doesn't silently erase the request. The storage module trims history safely.
-    saveMessages(messages);
-  }, [messages]);
+    // Persist every session independently. Storage quota/privacy failures are non-fatal.
+    saveSessionState(sessionState);
+  }, [sessionState]);
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -225,8 +331,103 @@ export default function App() {
   return (
     <main className="chat-app">
       <header className="chat-header">
+        <button
+          className="header-icon-button"
+          type="button"
+          aria-label={historyOpen ? 'Close conversation history' : 'Open conversation history'}
+          aria-expanded={historyOpen}
+          onClick={() => setHistoryOpen(open => !open)}
+        >
+          <Menu size={19} strokeWidth={1.8} />
+        </button>
         <span className="chat-brand">SYNTRA</span>
+        <span className="header-session-title">{activeSession?.title || 'New chat'}</span>
+        <div className="chat-header-spacer" />
+        <button
+          className="header-icon-button new-chat-button"
+          type="button"
+          aria-label="New chat"
+          title="New chat"
+          onClick={startNewChat}
+          disabled={pending}
+        >
+          <Plus size={19} strokeWidth={1.9} />
+        </button>
       </header>
+
+      {historyOpen && (
+        <>
+          <button
+            className="history-backdrop"
+            type="button"
+            aria-label="Close conversation history"
+            onClick={() => setHistoryOpen(false)}
+          />
+          <aside className="history-drawer" aria-label="Conversation history">
+            <div className="history-drawer-header">
+              <div className="history-drawer-title"><MessageSquare size={17} /> <span>Conversations</span></div>
+              <button className="history-icon-button" type="button" aria-label="Close history" onClick={() => setHistoryOpen(false)}>
+                <X size={18} />
+              </button>
+            </div>
+            <label className="history-search">
+              <Search size={16} />
+              <input
+                value={sessionSearch}
+                onChange={event => setSessionSearch(event.target.value)}
+                placeholder="Search conversations"
+                aria-label="Search conversations"
+              />
+            </label>
+            <button className="history-new-chat" type="button" onClick={startNewChat} disabled={pending}>
+              <Plus size={16} /> <span>New chat</span>
+            </button>
+            <div className="history-list">
+              {filteredSessions.length === 0 ? (
+                <div className="history-empty">No matching conversations.</div>
+              ) : filteredSessions.map(session => (
+                <div className={'history-item ' + (session.id === sessionState.activeSessionId ? 'active' : '')} key={session.id}>
+                  {renamingSessionId === session.id ? (
+                    <form className="history-rename-form" onSubmit={event => saveRename(event, session.id)}>
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={event => setRenameDraft(event.target.value)}
+                        maxLength={80}
+                        aria-label="Conversation name"
+                      />
+                      <button className="history-icon-button" type="submit" aria-label="Save conversation name"><Check size={15} /></button>
+                      <button className="history-icon-button" type="button" aria-label="Cancel rename" onClick={() => setRenamingSessionId(null)}><X size={15} /></button>
+                    </form>
+                  ) : (
+                    <>
+                      <button
+                        className="history-item-open"
+                        type="button"
+                        onClick={() => selectSession(session.id)}
+                        disabled={pending}
+                        aria-current={session.id === sessionState.activeSessionId ? 'page' : undefined}
+                      >
+                        <span className="history-item-title">{session.title}</span>
+                        <span className="history-item-date">{sessionDateLabel(session.updatedAt)} · {session.messages.length} messages</span>
+                      </button>
+                      <div className="history-item-actions">
+                        <button className="history-icon-button" type="button" aria-label={'Rename ' + session.title} title="Rename" onClick={() => beginRename(session)} disabled={pending}>
+                          <Pencil size={14} />
+                        </button>
+                        <button className="history-icon-button danger" type="button" aria-label={'Delete ' + session.title} title="Delete" onClick={() => deleteSession(session.id)} disabled={pending}>
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="history-drawer-footer">Saved locally on this device</div>
+          </aside>
+        </>
+      )}
 
       <section
         ref={threadRef}
