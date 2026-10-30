@@ -91,6 +91,11 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Stop active local inference and supported candidate-check processes, while protecting an in-progress transactional apply.
 - [x] Resume a validated patch only after rechecking its original file hashes and exact anchors; otherwise restart discovery/generation.
 - [x] Show recent runs in the workspace panel and refresh their state when the panel is reopened.
+- [x] Collect bounded, read-only Git status and diff-summary observations before patch generation; pass them to the model as untrusted context.
+- [x] Discover executable build/test/lint/type-check runners from the actual candidate workspace instead of inferring runnable checks from manifest presence alone.
+- [x] Re-read every changed candidate file after project checks and reject a verification pass if a check script changed or removed a proposed source file.
+- [x] Persist bounded repository, check-discovery, and candidate-integrity observations with each agent run; surface the evidence count in the workspace panel.
+- [x] Cover supported-runner discovery, evidence persistence, and post-check candidate mutation with regression tests.
 - [x] Cover durable storage, invalid lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
 
 Still outstanding in this phase: model-selected tool choice, re-inspection after each meaningful implementation slice, multi-slice implementation/verification, and richer checkpoint recovery between individual tool operations. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
