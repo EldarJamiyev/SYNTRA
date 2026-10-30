@@ -363,6 +363,101 @@ function isPlainToolInput(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
+export function validateImplementationSlicePlan(payload, taskGoal, maxSlices = 3) {
+  const maximum = Math.max(1, Math.min(3, Number(maxSlices) || 3));
+  if (!isPlainToolInput(payload) || Object.keys(payload).some(key => key !== "slices")
+    || !Array.isArray(payload.slices) || payload.slices.length < 1 || payload.slices.length > maximum) {
+    throw new Error("Implementation plan must contain between one and " + maximum + " slices.");
+  }
+  const slices = [];
+  const seen = new Set();
+  for (const item of payload.slices) {
+    if (!isPlainToolInput(item) || Object.keys(item).some(key => !["goal", "acceptance"].includes(key))
+      || typeof item.goal !== "string" || item.goal.trim().length < 8 || item.goal.length > 1200
+      || typeof item.acceptance !== "string" || item.acceptance.trim().length < 8 || item.acceptance.length > 400) {
+      throw new Error("Each implementation slice requires a bounded goal and measurable acceptance criterion.");
+    }
+    const sliceGoal = item.goal.trim();
+    const key = sliceGoal.toLowerCase();
+    if (seen.has(key)) throw new Error("Implementation slice goals must be unique.");
+    seen.add(key);
+    slices.push({
+      id: "slice-" + (slices.length + 1),
+      goal: sliceGoal,
+      acceptance: item.acceptance.trim(),
+      status: "pending"
+    });
+  }
+  if (slices.length > 1 && slices.some(item => item.goal.toLowerCase() === String(taskGoal).trim().toLowerCase())) {
+    throw new Error("A multi-slice plan must define focused sub-goals instead of repeating the complete task.");
+  }
+  return slices;
+}
+
+function makeImplementationSlicePlanPrompt(goal, inventory, ranked) {
+  const context = ranked.slice(0, 10).map(item => ({
+    path: item.path, language: item.language, imports: item.imports.slice(0, 5),
+    importedBy: item.importedBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 700)
+  }));
+  return [
+    "SYNTRA_IMPLEMENTATION_SLICE_PLAN",
+    "Break the requested software task into one to three ordered, independently verifiable implementation slices.",
+    "Prefer the smallest useful number of slices. Use one slice when the task is already atomic.",
+    "Each slice must deliver a concrete part of the requested outcome and have a testable acceptance criterion.",
+    "Later slices may build on earlier verified slices. Do not invent unrelated work, documentation-only padding, or work outside the user request.",
+    "Return only JSON with shape {slices:[{goal:string,acceptance:string}]}. Keep each goal under 1200 characters and each acceptance criterion under 400 characters.",
+    "
+TASK:
+" + goal,
+    "
+PROJECT:
+" + JSON.stringify({
+      name: inventory.name, frameworks: inventory.frameworks, scripts: inventory.scripts,
+      context
+    })
+  ].join("
+");
+}
+
+async function planImplementationSlices({
+  goal, inventory, ranked, modelRequest, contextBudget, maxSlices, signal
+}) {
+  const prompt = makeImplementationSlicePlanPrompt(goal, inventory, ranked);
+  const tokens = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+  if (Number(tokens.token_count) > Math.min(contextBudget, 1600)) {
+    throw new Error("Implementation slice plan exceeds the bounded planning context.");
+  }
+  const generated = await modelJson(modelRequest, "/model/generate", {
+    prompt, max_new_tokens: 384, temperature: 0.1, top_k: 20, device: "auto"
+  }, 120000, signal);
+  return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
+}
+
+async function collectFinalCandidateChanges(originalRoot, candidateRoot, changedPaths, originalByPath) {
+  const changes = [];
+  for (const relative of [...changedPaths].sort()) {
+    const original = originalByPath.get(relative);
+    if (!original) throw new Error("Missing original-file baseline for candidate path: " + relative);
+    let current;
+    try { current = await readWorkspaceFile(candidateRoot, relative); }
+    catch (error) {
+      throw new Error("Final candidate file could not be read: " + relative + ". " +
+        (error instanceof Error ? error.message : String(error)));
+    }
+    if (original.beforeContent === current.content) continue;
+    changes.push({
+      path: relative,
+      beforeContent: original.beforeContent,
+      beforeHash: original.beforeHash,
+      existedBefore: original.existedBefore,
+      content: current.content,
+      reason: original.reason || "Updated in a verified implementation slice.",
+      matches: original.existedBefore ? 1 : 0
+    });
+  }
+  return changes;
+}
+
 export function validateReadOnlyToolPlan(payload, availablePaths = []) {
   if (!isPlainToolInput(payload) || Object.keys(payload).some(key => key !== "calls")) {
     throw new Error("Read-only tool plan must contain only a calls array.");
