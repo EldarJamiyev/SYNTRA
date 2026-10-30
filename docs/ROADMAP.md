@@ -25,7 +25,7 @@ The repository already contains:
 - Candidate verification in a temporary project copy, bounded repair attempts, and hash-checked proposal application with backups and an audit log.
 - Local ping, DNS, and single-port TCP diagnostics.
 
-Known limitations are deliberate and must remain visible: there is no general-purpose terminal tool in the chat, no multi-agent execution system, and no evidence that the from-scratch native model performs at a Claude-class level. Sessions remain browser-local to one device; active-workspace labeling and restoring pending proposals after a service restart are not implemented yet.
+Known limitations are deliberate and must remain visible: there is no general-purpose terminal tool in the chat, no multi-agent execution system, and no evidence that the from-scratch native model performs at a Claude-class level. Conversation history and the selected workspace path are browser-local to one device; workspace proposal records are stored in each project's `.syntra` directory and can be recovered by the local service after a restart.
 
 ## Delivery phases
 
@@ -44,13 +44,13 @@ Known limitations are deliberate and must remain visible: there is no general-pu
 
 **Objective:** Make the chat operate as a persistent project workspace without turning it into a noisy administration dashboard.
 
-- [ ] Add a visible active-workspace indicator and a predictable project-switch flow.
+- [x] Add a visible active-workspace indicator and a predictable project-switch flow.
 - [x] Add multiple named conversations, local session persistence, rename/delete, search, and resume.
 - [x] Keep session state separate from individual chat messages and migrate the legacy single-thread history.
-- [ ] Restore pending proposals after service restarts and let users inspect or discard them.
+- [x] Restore pending proposals after service restarts and let users inspect, apply, or discard them.
 - [x] Preserve clear empty, loading, offline-model, and failed-request states while introducing the session experience.
 
-**Acceptance:** A user can reopen SYNTRA, return to a named conversation, confirm the selected workspace, and recover staged proposals without guessing which project they belong to.
+**Acceptance:** A user can reopen SYNTRA, return to a named conversation, confirm or switch the selected workspace, and recover staged proposals with hash validation after a local service restart. Pending/stale queues remain visible and must be applied or discarded before another coding task starts.
 
 ### Phase 3 — A real, permissioned tool runtime
 

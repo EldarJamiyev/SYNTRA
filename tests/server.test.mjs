@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import net from "node:net";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const projectRoot = fileURLToPath(new URL("../", import.meta.url));
+const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 
 async function reservePort() {
   const server = net.createServer();
@@ -88,6 +91,30 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(health.host, "127.0.0.1");
     assert.ok(health.capabilities.includes("local-chat"));
     assert.ok(health.capabilities.includes("local-network-diagnostics"));
+    assert.ok(health.capabilities.includes("persistent-proposal-review"));
+
+    const workspaceStatusResponse = await fetch(base + "/local-api/workspace/status");
+    assert.equal(workspaceStatusResponse.status, 200);
+    const workspaceStatus = await workspaceStatusResponse.json();
+    assert.equal(workspaceStatus.root, projectRoot);
+    assert.deepEqual(workspaceStatus.pendingProposals, []);
+    assert.deepEqual(workspaceStatus.staleProposals, []);
+
+    const switchWorkspaceResponse = await fetch(base + "/local-api/workspace/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root: projectRoot })
+    });
+    assert.equal(switchWorkspaceResponse.status, 200);
+    assert.equal((await switchWorkspaceResponse.json()).root, projectRoot);
+
+    const invalidWorkspaceResponse = await fetch(base + "/local-api/workspace/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root: path.join(projectRoot, "missing-workspace") })
+    });
+    assert.equal(invalidWorkspaceResponse.status, 400);
+    assert.match((await invalidWorkspaceResponse.json()).error, /workspace|directory|folder/i);
 
     const deniedOrigin = await fetch(base + "/local-api/chat", {
       method: "POST",
@@ -170,6 +197,8 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(helpStatus?.status, "completed");
     assert.match(helpStatus?.reply || "", /SYNTRA help/);
     assert.ok((helpStatus?.reply || "").includes("/dns example.com"));
+    assert.ok((helpStatus?.reply || "").includes("/proposals"));
+    assert.ok((helpStatus?.reply || "").includes("/discard"));
 
     const naturalHelpResponse = await fetch(base + "/local-api/chat", {
       method: "POST",
@@ -223,5 +252,113 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.match((await unknownRoute.json()).error, /Route not found/);
   } finally {
     await stopChild(child);
+  }
+});
+
+
+async function startLocalServer(workspaceRoot) {
+  const port = await reservePort();
+  const aiPort = await reservePort();
+  const child = spawn(process.execPath, ["local/server.mjs"], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      SYNTRA_LOCAL_PORT: String(port),
+      SYNTRA_AI_PORT: String(aiPort),
+      SYNTRA_WORKSPACE: workspaceRoot,
+      SYNTRA_MODEL_PROVIDER: "native"
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true
+  });
+  let logs = "";
+  const collect = chunk => {
+    logs += chunk.toString("utf8");
+    if (logs.length > 12_000) logs = logs.slice(-12_000);
+  };
+  child.stdout.on("data", collect);
+  child.stderr.on("data", collect);
+  try {
+    await waitForHealth(port, child, () => logs);
+    return { base: "http://127.0.0.1:" + port, child, getLogs: () => logs };
+  } catch (error) {
+    await stopChild(child);
+    throw new Error((error instanceof Error ? error.message : String(error)) + "\n" + logs);
+  }
+}
+
+async function runChatCommand(base, message) {
+  const headers = { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" };
+  const start = await fetch(base + "/local-api/chat", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ message })
+  });
+  assert.equal(start.status, 200);
+  const job = await start.json();
+  const deadline = Date.now() + 5_000;
+  let status = null;
+  while (Date.now() < deadline) {
+    const response = await fetch(base + "/local-api/chat/status", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jobId: job.jobId })
+    });
+    assert.equal(response.status, 200);
+    status = await response.json();
+    if (status.status !== "running") break;
+    await delay(40);
+  }
+  assert.equal(status?.status, "completed", "Chat command did not complete.");
+  return status;
+}
+
+test("saved workspace proposals survive a real local service restart", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-restart-workspace-"));
+  await fs.mkdir(path.join(root, "src"), { recursive: true });
+  const canonicalRoot = await fs.realpath(root);
+  const sourcePath = path.join(root, "src", "app.js");
+  const original = "export const version = 1;\n";
+  const proposed = "export const version = 2;\n";
+  await fs.writeFile(sourcePath, original, "utf8");
+
+  let service = null;
+  try {
+    service = await startLocalServer(root);
+    const staged = await fetch(service.base + "/local-api/workspace/propose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root, path: "src/app.js", content: proposed })
+    });
+    assert.equal(staged.status, 200);
+    const proposal = await staged.json();
+    assert.ok(proposal.id);
+    assert.equal(await fs.readFile(sourcePath, "utf8"), original, "staging must not modify the source file");
+
+    await stopChild(service.child);
+    service = await startLocalServer(root);
+
+    const restoredResponse = await fetch(service.base + "/local-api/workspace/status");
+    assert.equal(restoredResponse.status, 200);
+    const restored = await restoredResponse.json();
+    assert.equal(restored.root, canonicalRoot);
+    assert.equal(restored.pendingProposals.length, 1);
+    assert.equal(restored.pendingProposals[0].id, proposal.id);
+
+    const review = await runChatCommand(service.base, "/proposals");
+    assert.match(review.reply, /Saved workspace proposals/);
+    assert.ok(review.reply.includes("src/app.js"));
+
+    const applied = await runChatCommand(service.base, "/apply");
+    assert.match(applied.reply, /Applied the explicitly requested proposals/);
+    assert.equal(await fs.readFile(sourcePath, "utf8"), proposed);
+
+    const afterApply = await fetch(service.base + "/local-api/workspace/status");
+    const finalStatus = await afterApply.json();
+    assert.deepEqual(finalStatus.pendingProposals, []);
+    assert.deepEqual(finalStatus.staleProposals, []);
+  } finally {
+    if (service?.child) await stopChild(service.child);
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

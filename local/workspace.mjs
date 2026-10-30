@@ -518,6 +518,114 @@ export async function listProposals(inputRoot) {
   return { root, proposals };
 }
 
+
+/**
+ * Rebuild the actionable proposal queue from disk. A proposal is pending only
+ * while its original file hash still matches; already-applied and stale
+ * proposals are kept out of the apply queue and reported separately.
+ */
+export async function listPendingProposals(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const directory = path.join(stateDirectory(root), "proposals");
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+  const pending = [];
+  const stale = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^[a-f0-9-]{36}\.json$/i.test(entry.name)) continue;
+    const id = entry.name.slice(0, -5);
+    const proposalPath = path.join(directory, entry.name);
+    try {
+      if (!(await assertRegularStateFile(proposalPath, "Saved proposal"))) continue;
+      const proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
+      if (!proposal || proposal.id !== id || path.resolve(String(proposal.root || "")) !== root) continue;
+
+      const metadata = {
+        id,
+        createdAt: proposal.createdAt,
+        path: proposal.path,
+        existedBefore: proposal.existedBefore,
+        beforeHash: proposal.beforeHash,
+        afterHash: proposal.afterHash,
+        summary: proposal.summary
+      };
+      const resolved = await resolveFile(root, proposal.path, { allowMissing: true });
+      if (resolved.stat && resolved.stat.size > MAX_TEXT_BYTES) {
+        stale.push({ ...metadata, reason: "The source file now exceeds the proposal size limit." });
+        continue;
+      }
+      const currentContent = resolved.stat ? await fs.readFile(resolved.target, "utf8") : null;
+      const currentHash = currentContent === null ? null : sha256(currentContent);
+
+      if (typeof proposal.content !== "string"
+        || Buffer.byteLength(proposal.content, "utf8") > MAX_TEXT_BYTES
+        || typeof proposal.afterHash !== "string"
+        || sha256(proposal.content) !== proposal.afterHash) {
+        stale.push({ ...metadata, reason: "The saved proposal failed its content-integrity check." });
+        continue;
+      }
+
+      if (currentHash === proposal.afterHash) continue;
+      if (currentHash !== proposal.beforeHash) {
+        stale.push({ ...metadata, reason: "The source file changed after this proposal was staged." });
+        continue;
+      }
+      pending.push(metadata);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("must be a regular file, not a symbolic link")) throw error;
+      // A malformed or unreadable proposal must never be treated as applicable.
+    }
+  }
+
+  const sortByDate = (a, b) => String(b.createdAt).localeCompare(String(a.createdAt));
+  pending.sort(sortByDate);
+  stale.sort(sortByDate);
+  return { root, pending, stale };
+}
+
+/**
+ * Explicitly discard saved proposal records. This does not modify project files.
+ */
+export async function discardFileProposals(inputRoot, proposalIds, confirmation) {
+  const root = await resolveWorkspace(inputRoot);
+  if (confirmation !== true) throw new Error("Discarding proposals requires explicit confirmation.");
+  if (!Array.isArray(proposalIds) || proposalIds.length < 1 || proposalIds.length > 24) {
+    throw new Error("A discard operation must contain between 1 and 24 proposal IDs.");
+  }
+  if (proposalIds.some(id => typeof id !== "string" || !/^[a-f0-9-]{36}$/i.test(id))) {
+    throw new Error("Every proposal identifier must be a valid UUID.");
+  }
+  if (new Set(proposalIds).size !== proposalIds.length) {
+    throw new Error("A proposal may appear only once in a discard operation.");
+  }
+
+  const staged = [];
+  for (const id of proposalIds) {
+    const proposalPath = path.join(stateDirectory(root), "proposals", id + ".json");
+    if (!(await assertRegularStateFile(proposalPath, "Saved proposal"))) {
+      throw new Error("Proposal " + id + " is missing; no proposals were discarded.");
+    }
+    let proposal;
+    try {
+      proposal = JSON.parse(await fs.readFile(proposalPath, "utf8"));
+    } catch {
+      throw new Error("Proposal " + id + " is unreadable; no proposals were discarded.");
+    }
+    if (!proposal || proposal.id !== id || path.resolve(String(proposal.root || "")) !== root) {
+      throw new Error("Proposal " + id + " belongs to a different workspace; no proposals were discarded.");
+    }
+    staged.push({ id, path: proposal.path, proposalPath });
+  }
+
+  for (const item of staged) await fs.rm(item.proposalPath);
+  await appendAudit(root, {
+    action: "discard_file_proposals",
+    proposalIds: staged.map(item => item.id),
+    paths: staged.map(item => item.path)
+  });
+  return { root, discarded: staged.map(item => ({ id: item.id, path: item.path })) };
+}
+
 export async function applyFileProposal(inputRoot, proposalId, confirmation) {
   const transaction = await applyFileProposals(inputRoot, [proposalId], confirmation);
   return {
