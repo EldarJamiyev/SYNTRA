@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -235,6 +236,227 @@ test("an incomplete later slice cannot inherit an earlier passing verification s
     assert.equal(result.proposals.length, 1);
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent resumes from the last verified slice after a process interruption", async () => {
+  const root = await createSliceProject();
+  const runId = "00000000-0000-4000-8000-000000000001";
+  const goal = "Update the exported value and add a description helper.";
+  let savedCheckpoint = null;
+  let firstPatchCalls = 0;
+  let secondPatchCalls = 0;
+  let secondPlannerCalls = 0;
+  let checkpointRemoved = false;
+  const modelStatus = {
+    checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+    tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+  };
+  const firstModelRequest = async (_method, route, body) => {
+    if (route === "/model/status") return modelStatus;
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        return {
+          text: JSON.stringify({
+            slices: [
+              { goal: "Update the exported value from one to two.", acceptance: "The existing value test passes." },
+              { goal: "Add a small exported description helper.", acceptance: "The helper file is present and the full test suite still passes." }
+            ]
+          }),
+          generated_tokens: 45, trained_steps: null
+        };
+      }
+      firstPatchCalls += 1;
+      if (firstPatchCalls === 1) {
+        return {
+          text: JSON.stringify({
+            summary: "Update the exported value.",
+            edits: [{
+              path: "src/value.js", find: "value: 1", replace: "value: 2",
+              reason: "Complete the first implementation slice."
+            }]
+          }),
+          generated_tokens: 30, trained_steps: null
+        };
+      }
+      const interrupted = new Error("Simulated process interruption after the first verified slice.");
+      interrupted.name = "AbortError";
+      throw interrupted;
+    }
+    throw new Error("Unexpected first model route: " + route);
+  };
+  const secondModelRequest = async (_method, route, body) => {
+    if (route === "/model/status") return modelStatus;
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        secondPlannerCalls += 1;
+        throw new Error("The resumed run must not create a new slice plan.");
+      }
+      secondPatchCalls += 1;
+      assert.ok(body.prompt.includes("Implementation slice 2 of 2"));
+      assert.ok(body.prompt.includes("module.exports = { value: 2 }"),
+        "resumed slice two must see the restored candidate from slice one");
+      return {
+        text: JSON.stringify({
+          summary: "Add an exported description helper.",
+          edits: [{
+            path: "src/description.js",
+            find: "",
+            replace: "module.exports = { description: 'SYNTRA' };\n",
+            reason: "Complete the second implementation slice."
+          }]
+        }),
+        generated_tokens: 35, trained_steps: null
+      };
+    }
+    throw new Error("Unexpected resumed model route: " + route);
+  };
+  try {
+    await assert.rejects(() => runAgentTask({
+      root, goal, runId, maxIterations: 1, maxSlices: 2, runChecks: true,
+      modelRequest: firstModelRequest,
+      onCandidateCheckpoint: async checkpoint => {
+        if (checkpoint) savedCheckpoint = structuredClone(checkpoint);
+      }
+    }), /Simulated process interruption/);
+    assert.ok(savedCheckpoint, "slice one must leave a durable candidate checkpoint");
+    assert.equal(savedCheckpoint.nextSliceIndex, 1);
+    assert.equal(savedCheckpoint.slices[0].status, "completed");
+    assert.equal(savedCheckpoint.slices[1].status, "pending");
+    assert.equal(savedCheckpoint.files.length, 1);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
+
+    const result = await runAgentTask({
+      root, goal, runId, resumeCandidate: savedCheckpoint,
+      maxIterations: 1, maxSlices: 2, runChecks: true,
+      modelRequest: secondModelRequest,
+      onCandidateCheckpoint: async checkpoint => {
+        if (checkpoint === null) checkpointRemoved = true;
+        else savedCheckpoint = structuredClone(checkpoint);
+      }
+    });
+    assert.equal(secondPlannerCalls, 0, "the saved two-slice plan must be restored instead of regenerated");
+    assert.equal(secondPatchCalls, 1, "only the next uncompleted slice should request a new patch");
+    assert.deepEqual(result.implementationSlices.map(slice => slice.status), ["completed", "completed"]);
+    assert.equal(result.verification.status, "passed");
+    assert.equal(result.verification.passed, true);
+    assert.deepEqual(result.changedFiles.map(file => file.path).sort(), ["src/description.js", "src/value.js"]);
+    assert.equal(result.proposals.length, 2);
+    assert.equal(checkpointRemoved, true, "the candidate checkpoint must be removed after final proposal staging");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    const applied = await import("../local/workspace.mjs").then(module =>
+      module.applyFileProposals(root, result.proposals.map(proposal => proposal.id), true)
+    );
+    assert.equal(applied.applied.length, 2);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "description.js"), "utf8"), "module.exports = { description: 'SYNTRA' };\n");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent rejects a stale saved candidate checkpoint and restarts from current workspace state", async () => {
+  const root = await createSliceProject();
+  const canonicalRoot = await fs.realpath(root);
+  const runId = "00000000-0000-4000-8000-000000000002";
+  const goal = "Update the exported value and add a description helper.";
+  const originalAtCheckpoint = "module.exports = { value: 1 };\n";
+  const changedOriginal = "module.exports = { value: 3 };\n";
+  const candidateAtCheckpoint = "module.exports = { value: 2 };\n";
+  const hash = value => createHash("sha256").update(value).digest("hex");
+  let checkpointCleared = false;
+  let plannerCalls = 0;
+  let patchCalls = 0;
+  const staleCheckpoint = {
+    schemaVersion: 1,
+    runId,
+    root: canonicalRoot,
+    stage: "slice_verified",
+    nextSliceIndex: 1,
+    slices: [
+      { id: "slice-1", goal: "Update the exported value from one to two.", acceptance: "The existing value test passes.", status: "completed" },
+      { id: "slice-2", goal: "Add a small exported description helper.", acceptance: "The helper file is present and the full test suite still passes.", status: "pending" }
+    ],
+    files: [{
+      path: "src/value.js",
+      existedBefore: true,
+      baseHash: hash(originalAtCheckpoint),
+      content: candidateAtCheckpoint,
+      contentHash: hash(candidateAtCheckpoint),
+      reason: "First verified slice."
+    }],
+    verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true, exitCode: 0 }] }
+  };
+  await fs.writeFile(path.join(root, "src", "value.js"), changedOriginal);
+  const modelRequest = async (_method, route, body) => {
+    if (route === "/model/status") {
+      return {
+        checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        plannerCalls += 1;
+        return {
+          text: JSON.stringify({
+            slices: [{
+              goal: "Update the exported value from three to two.",
+              acceptance: "The current value regression test passes."
+            }]
+          }),
+          generated_tokens: 30, trained_steps: null
+        };
+      }
+      patchCalls += 1;
+      assert.ok(body.prompt.includes("module.exports = { value: 3 }"),
+        "fresh generation must inspect the changed original workspace, not stale candidate content");
+      return {
+        text: JSON.stringify({
+          summary: "Update the current exported value.",
+          edits: [{
+            path: "src/value.js",
+            find: "value: 3",
+            replace: "value: 2",
+            reason: "Regenerate from the updated original source."
+          }]
+        }),
+        generated_tokens: 30, trained_steps: null
+      };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const result = await runAgentTask({
+      root,
+      goal,
+      runId,
+      resumeCandidate: staleCheckpoint,
+      maxIterations: 1,
+      maxSlices: 2,
+      runChecks: true,
+      modelRequest,
+      onCandidateCheckpoint: async checkpoint => {
+        if (checkpoint === null) checkpointCleared = true;
+      }
+    });
+    assert.equal(plannerCalls, 1, "a stale checkpoint must not reuse its saved slice plan");
+    assert.equal(patchCalls, 1);
+    assert.equal(checkpointCleared, true);
+    assert.ok(result.observations.some(item =>
+      item.kind === "candidate-checkpoint" && item.stage === "resume-validation" && item.status === "rejected"
+        && /original file changed/.test(item.detail)
+    ));
+    assert.equal(result.verification.status, "passed");
+    assert.equal(result.proposals.length, 1);
+    assert.equal(result.changedFiles[0].baseHash, hash(changedOriginal));
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), changedOriginal);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

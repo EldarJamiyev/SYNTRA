@@ -10,6 +10,7 @@ import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs"
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
+  getAgentCandidateCheckpoint,
   getAgentRun,
   listAgentRuns,
   listPendingProposals,
@@ -17,6 +18,7 @@ import {
   recoverInterruptedAgentRuns,
   requestAgentRunCancellation,
   resolveWorkspace,
+  saveAgentCandidateCheckpoint,
   updateAgentRun
 } from "./workspace.mjs";
 
@@ -534,6 +536,7 @@ async function runChatTurn(jobId, message, history, signal) {
 
     const resumeMatch = message.trim().match(/^\/resume\s+([0-9a-f-]{36})$/i);
     let resumeRecord = null;
+    let resumeCandidate = null;
     let taskGoal = message;
     if (resumeMatch) {
       resumeRecord = await getAgentRun(activeWorkspace, resumeMatch[1]);
@@ -541,6 +544,7 @@ async function runChatTurn(jobId, message, history, signal) {
       if (resumeRecord.status !== "interrupted") {
         throw new Error("Only interrupted agent runs can be resumed. Current status: " + resumeRecord.status + ".");
       }
+      resumeCandidate = await getAgentCandidateCheckpoint(activeWorkspace, resumeRecord.id);
       taskGoal = resumeRecord.goal;
     }
 
@@ -559,9 +563,11 @@ async function runChatTurn(jobId, message, history, signal) {
           message: "Resuming from the last durable checkpoint.",
           cancelRequested: false,
           proposalIds: [],
-          event: { phase: "resuming", message: resumeRecord.recoveryPatch
-            ? "Restoring and revalidating the saved patch checkpoint."
-            : "Restarting task discovery because no validated patch checkpoint was saved." }
+          event: { phase: "resuming", message: resumeCandidate
+            ? "Restoring the last verified candidate snapshot and continuing at the next implementation slice."
+            : resumeRecord.recoveryPatch
+              ? "Restoring and revalidating the saved patch checkpoint."
+              : "Restarting task discovery because no verified candidate or patch checkpoint was saved." }
         });
       } else {
         const createdRun = await createAgentRun(activeWorkspace, taskGoal);
@@ -589,6 +595,9 @@ async function runChatTurn(jobId, message, history, signal) {
         previousAttempts: resumeRecord?.attempts || [],
         previousToolCalls: resumeRecord?.toolCalls || [],
         modelToolSelection: true,
+        runId: agentRunId,
+        resumeCandidate,
+        onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
         onProgress: async update => {
@@ -711,6 +720,7 @@ async function runChatTurn(jobId, message, history, signal) {
   } catch (error) {
     const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
     if (agentRunId) {
+      try { await saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, null); } catch {}
       try {
         await updateAgentRun(activeWorkspace, agentRunId, {
           status: cancelled ? "cancelled" : "failed",

@@ -10,10 +10,12 @@ import test from "node:test";
 import { validateStructuredPatch } from "../local/agent.mjs";
 import {
   createAgentRun,
+  getAgentCandidateCheckpoint,
   getAgentRun,
   listAgentRuns,
   recoverInterruptedAgentRuns,
   requestAgentRunCancellation,
+  saveAgentCandidateCheckpoint,
   updateAgentRun
 } from "../local/workspace.mjs";
 
@@ -179,6 +181,136 @@ test("agent run state directories refuse symbolic-link redirection", async () =>
   }
 });
 
+test("verified candidate checkpoints persist bounded slice state separately from run records", async () => {
+  const root = await createWorkspace();
+  try {
+    const run = await createAgentRun(root, "Complete a multi-slice change and resume at the next verified slice.");
+    const original = "export const value = 1;\n";
+    const candidate = "export const value = 2;\n";
+    const baseHash = createHash("sha256").update(original).digest("hex");
+    const contentHash = createHash("sha256").update(candidate).digest("hex");
+    const payload = {
+      schemaVersion: 1,
+      runId: run.id,
+      root: run.root,
+      stage: "slice_verified",
+      nextSliceIndex: 1,
+      slices: [
+        { id: "slice-1", goal: "Update the exported value.", acceptance: "The value regression test passes.", status: "completed" },
+        { id: "slice-2", goal: "Add the exported metadata helper.", acceptance: "The helper is added and checked.", status: "pending" }
+      ],
+      files: [{
+        path: "src/index.js", existedBefore: true, baseHash,
+        content: candidate, contentHash, reason: "Complete the first verified implementation slice."
+      }],
+      verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true, exitCode: 0 }] }
+    };
+    const saved = await saveAgentCandidateCheckpoint(root, run.id, payload);
+    assert.equal(saved.saved, true);
+    assert.equal(saved.nextSliceIndex, 1);
+    assert.equal(saved.files, 1);
+    const restored = await getAgentCandidateCheckpoint(root, run.id);
+    assert.equal(restored.nextSliceIndex, 1);
+    assert.equal(restored.files[0].content, candidate);
+    assert.equal(restored.files[0].baseHash, baseHash);
+    assert.equal(restored.slices[0].status, "completed");
+    assert.equal(restored.slices[1].status, "pending");
+    assert.equal((await getAgentRun(root, run.id)).recoveryPatch, null,
+      "candidate contents must not inflate the bounded run record");
+    await saveAgentCandidateCheckpoint(root, run.id, null);
+    assert.equal(await getAgentCandidateCheckpoint(root, run.id), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate checkpoint storage rejects stale schemas, unsafe paths, invalid hashes, and oversized content", async () => {
+  const root = await createWorkspace();
+  try {
+    const run = await createAgentRun(root, "Reject unsafe candidate checkpoint payloads.");
+    const original = "export const value = 1;\n";
+    const candidate = "export const value = 2;\n";
+    const baseHash = createHash("sha256").update(original).digest("hex");
+    const contentHash = createHash("sha256").update(candidate).digest("hex");
+    const base = {
+      schemaVersion: 1, runId: run.id, root: run.root, stage: "slice_verified", nextSliceIndex: 1,
+      slices: [
+        { id: "slice-1", goal: "Update the exported value.", acceptance: "The value regression test passes.", status: "completed" },
+        { id: "slice-2", goal: "Add the exported metadata helper.", acceptance: "The helper is added and checked.", status: "pending" }
+      ],
+      files: [{
+        path: "src/index.js", existedBefore: true, baseHash,
+        content: candidate, contentHash, reason: "First slice."
+      }],
+      verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true }] }
+    };
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{ ...base.files[0], path: "../outside.js" }]
+    }), /traversal|path segments/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{ ...base.files[0], path: ".env.local" }]
+    }), /secret|credential/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{ ...base.files[0], contentHash: "0".repeat(64) }]
+    }), /content hash/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{
+        ...base.files[0],
+        content: "x".repeat(140 * 1024),
+        contentHash: createHash("sha256").update("x".repeat(140 * 1024)).digest("hex")
+      }]
+    }), /128 KB/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: Array.from({ length: 5 }, (_, index) => {
+        const content = String(index).repeat(110 * 1024);
+        return {
+          path: "src/checkpoint-" + index + ".js",
+          existedBefore: true,
+          baseHash,
+          content,
+          contentHash: createHash("sha256").update(content).digest("hex"),
+          reason: "Total checkpoint size fixture."
+        };
+      })
+    }), /512 KB/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, slices: [
+        base.slices[0],
+        { ...base.slices[1], status: "running" }
+      ]
+    }), /slice statuses do not match/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, nextSliceIndex: 2
+    }), /slice progression is invalid/);
+    assert.equal(await getAgentCandidateCheckpoint(root, run.id), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate checkpoint files refuse symbolic-link redirection", async () => {
+  const root = await createWorkspace();
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-candidate-outside-"));
+  try {
+    const run = await createAgentRun(root, "Reject candidate checkpoint symlink redirection.");
+    const runs = path.join(root, ".syntra", "runs");
+    const target = path.join(runs, run.id + ".candidate.json");
+    await fs.symlink(path.join(outside, "redirect.json"), target, process.platform === "win32" ? "file" : undefined);
+    await assert.rejects(
+      () => getAgentCandidateCheckpoint(root, run.id),
+      /regular file|symbolic link/
+    );
+    await assert.rejects(
+      () => saveAgentCandidateCheckpoint(root, run.id, null),
+      /regular file|symbolic link/
+    );
+    assert.deepEqual(await fs.readdir(outside), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
 test("resuming a saved patch rejects source files changed since its checkpoint", async () => {
   const root = await createWorkspace();
   try {
@@ -265,6 +397,28 @@ test("run history preserves live tasks and a new service process recovers them",
   try {
     first = await startLocalService(root, port);
     const run = await createAgentRun(root, "Exercise durable recovery across an actual service restart.");
+    const originalContent = "export const value = 1;\n";
+    const candidateContent = "export const value = 2;\n";
+    await saveAgentCandidateCheckpoint(root, run.id, {
+      schemaVersion: 1,
+      runId: run.id,
+      root: run.root,
+      stage: "slice_verified",
+      nextSliceIndex: 1,
+      slices: [
+        { id: "slice-1", goal: "Update the exported value.", acceptance: "The value tests pass.", status: "completed" },
+        { id: "slice-2", goal: "Add the metadata helper.", acceptance: "The helper exists and checks pass.", status: "pending" }
+      ],
+      files: [{
+        path: "src/index.js",
+        existedBefore: true,
+        baseHash: createHash("sha256").update(originalContent).digest("hex"),
+        content: candidateContent,
+        contentHash: createHash("sha256").update(candidateContent).digest("hex"),
+        reason: "First verified slice."
+      }],
+      verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true, exitCode: 0 }] }
+    });
     const liveResponse = await fetch(first.baseUrl + "/local-api/agent/runs");
     assert.equal(liveResponse.status, 200);
     const liveRuns = await liveResponse.json();
@@ -276,6 +430,11 @@ test("run history preserves live tasks and a new service process recovers them",
     assert.equal(recoveredResponse.status, 200);
     const recoveredRuns = await recoveredResponse.json();
     assert.equal(recoveredRuns.runs.find(item => item.id === run.id)?.status, "interrupted");
+    const restoredCandidate = await getAgentCandidateCheckpoint(root, run.id);
+    assert.equal(restoredCandidate.nextSliceIndex, 1);
+    assert.equal(restoredCandidate.files[0].content, candidateContent);
+    assert.equal(restoredCandidate.slices[0].status, "completed");
+    assert.equal(restoredCandidate.slices[1].status, "pending");
   } finally {
     await stopLocalService(first?.child);
     await stopLocalService(second?.child);

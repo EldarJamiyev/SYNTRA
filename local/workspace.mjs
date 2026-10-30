@@ -439,6 +439,9 @@ export async function recordWorkspaceToolEvent(inputRoot, event) {
 
 const MAX_AGENT_RUNS = 40;
 const MAX_AGENT_RUN_BYTES = 160 * 1024;
+const MAX_AGENT_CANDIDATE_FILES = 24;
+const MAX_AGENT_CANDIDATE_FILE_BYTES = 128 * 1024;
+const MAX_AGENT_CANDIDATE_CHECKPOINT_BYTES = 512 * 1024;
 const AGENT_RUN_STATUSES = new Set(["queued", "running", "completed", "failed", "cancelled", "interrupted"]);
 const AGENT_RUN_TRANSITIONS = {
   queued: new Set(["running", "interrupted", "failed", "cancelled"]),
@@ -496,6 +499,172 @@ async function writeAgentRunRecord(root, run) {
   await writeFileAtomic(target, serialized);
 }
 
+function validateAgentCandidateCheckpoint(root, runId, payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Candidate checkpoint must be a structured object.");
+  }
+  const allowed = new Set(["schemaVersion", "runId", "root", "stage", "nextSliceIndex", "slices", "files", "verification"]);
+  if (Object.keys(payload).some(key => !allowed.has(key))) {
+    throw new Error("Candidate checkpoint contains unknown fields.");
+  }
+  if (payload.schemaVersion !== 1 || payload.runId !== runId || path.resolve(String(payload.root || "")) !== root) {
+    throw new Error("Candidate checkpoint does not match this run and workspace.");
+  }
+  if (payload.stage !== "slice_verified") throw new Error("Only a verified slice boundary can be persisted for continuation.");
+  if (!Number.isInteger(payload.nextSliceIndex) || !Array.isArray(payload.slices)
+    || payload.slices.length < 1 || payload.slices.length > 3
+    || payload.nextSliceIndex < 1 || payload.nextSliceIndex >= payload.slices.length) {
+    throw new Error("Candidate checkpoint slice progression is invalid.");
+  }
+  const slices = payload.slices.map((slice, index) => {
+    if (!slice || typeof slice !== "object" || Array.isArray(slice)
+      || Object.keys(slice).some(key => !["id", "goal", "acceptance", "status"].includes(key))
+      || slice.id !== "slice-" + (index + 1)
+      || typeof slice.goal !== "string" || slice.goal.trim().length < 8 || slice.goal.length > 1200
+      || typeof slice.acceptance !== "string" || slice.acceptance.trim().length < 8 || slice.acceptance.length > 400) {
+      throw new Error("Candidate checkpoint contains an invalid implementation slice.");
+    }
+    const expectedStatus = index < payload.nextSliceIndex ? "completed" : "pending";
+    if (slice.status !== expectedStatus) {
+      throw new Error("Candidate checkpoint slice statuses do not match the next-slice index.");
+    }
+    return {
+      id: slice.id,
+      goal: slice.goal.trim(),
+      acceptance: slice.acceptance.trim(),
+      status: expectedStatus
+    };
+  });
+  if (!Array.isArray(payload.files) || payload.files.length < 1 || payload.files.length > MAX_AGENT_CANDIDATE_FILES) {
+    throw new Error("Candidate checkpoint must contain between one and " + MAX_AGENT_CANDIDATE_FILES + " changed files.");
+  }
+  const seen = new Set();
+  const files = payload.files.map(file => {
+    if (!file || typeof file !== "object" || Array.isArray(file)
+      || Object.keys(file).some(key => !["path", "existedBefore", "baseHash", "content", "contentHash", "reason"].includes(key))) {
+      throw new Error("Candidate checkpoint file entry is invalid.");
+    }
+    const relative = normalizeRelativePath(file.path);
+    if (relative.length > 1024 || relative !== file.path || seen.has(relative)) {
+      throw new Error("Candidate checkpoint contains an unsafe or duplicate file path: " + relative);
+    }
+    if (isSensitiveRelativePath(relative)) {
+      throw new Error("Candidate checkpoint cannot contain a secret or credential path: " + relative);
+    }
+    seen.add(relative);
+    if (typeof file.existedBefore !== "boolean"
+      || (file.existedBefore && (typeof file.baseHash !== "string" || !/^[a-f0-9]{64}$/i.test(file.baseHash)))
+      || (!file.existedBefore && file.baseHash !== null)) {
+      throw new Error("Candidate checkpoint original-file baseline is invalid for " + relative + ".");
+    }
+    if (typeof file.content !== "string"
+      || Buffer.byteLength(file.content, "utf8") > MAX_AGENT_CANDIDATE_FILE_BYTES) {
+      throw new Error("Candidate checkpoint file exceeds the 128 KB per-file limit: " + relative);
+    }
+    if (typeof file.contentHash !== "string" || !/^[a-f0-9]{64}$/i.test(file.contentHash)
+      || sha256(file.content) !== file.contentHash) {
+      throw new Error("Candidate checkpoint content hash is invalid for " + relative + ".");
+    }
+    return {
+      path: relative,
+      existedBefore: file.existedBefore,
+      baseHash: file.baseHash,
+      content: file.content,
+      contentHash: file.contentHash,
+      reason: typeof file.reason === "string" ? file.reason.slice(0, 500) : ""
+    };
+  });
+  const verification = payload.verification;
+  if (!verification || typeof verification !== "object" || Array.isArray(verification)
+    || verification.passed !== true
+    || !["passed", "passed_review_required"].includes(verification.status)) {
+    throw new Error("Only a successfully verified candidate slice can be resumed.");
+  }
+  const sanitized = {
+    schemaVersion: 1,
+    runId,
+    root,
+    stage: "slice_verified",
+    nextSliceIndex: payload.nextSliceIndex,
+    slices,
+    files,
+    verification: {
+      status: verification.status,
+      passed: true,
+      checks: Array.isArray(verification.checks)
+        ? verification.checks
+            .filter(check => check && typeof check === "object" && !Array.isArray(check))
+            .slice(0, 8)
+            .map(check => ({
+              task: String(check.task || "").slice(0, 40),
+              passed: check.passed === true,
+              exitCode: Number.isInteger(check.exitCode) ? check.exitCode : null,
+              timedOut: check.timedOut === true,
+              durationMs: Number.isFinite(check.durationMs) ? Math.max(0, Math.floor(check.durationMs)) : null
+            }))
+        : []
+    }
+  };
+  const serialized = JSON.stringify(sanitized, null, 2) + "\n";
+  if (Buffer.byteLength(serialized, "utf8") > MAX_AGENT_CANDIDATE_CHECKPOINT_BYTES) {
+    throw new Error("Candidate checkpoint exceeds the 512 KB total storage limit.");
+  }
+  return { checkpoint: sanitized, serialized };
+}
+
+export async function saveAgentCandidateCheckpoint(inputRoot, runId, payload) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!validAgentRunId(runId)) throw new Error("A valid agent run ID is required.");
+  if (!(await readAgentRunRecord(root, runId))) throw new Error("Agent run was not found.");
+  const directory = await agentRunDirectory(root);
+  const target = path.join(directory, runId + ".candidate.json");
+  if (payload === null) {
+    if (await assertRegularStateFile(target, "Agent candidate checkpoint")) {
+      await fs.rm(target);
+      await appendAudit(root, { action: "agent_candidate_checkpoint_removed", runId });
+    }
+    return { saved: false, runId };
+  }
+  const normalized = validateAgentCandidateCheckpoint(root, runId, payload);
+  if (await assertRegularStateFile(target, "Agent candidate checkpoint")) {
+    const stat = await fs.lstat(target);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("Agent candidate checkpoint must be a regular file.");
+    }
+  }
+  await writeFileAtomic(target, normalized.serialized);
+  await appendAudit(root, {
+    action: "agent_candidate_checkpoint_saved",
+    runId,
+    nextSliceIndex: normalized.checkpoint.nextSliceIndex,
+    slices: normalized.checkpoint.slices.length,
+    files: normalized.checkpoint.files.length,
+    bytes: Buffer.byteLength(normalized.serialized, "utf8")
+  });
+  return {
+    saved: true,
+    runId,
+    nextSliceIndex: normalized.checkpoint.nextSliceIndex,
+    files: normalized.checkpoint.files.length
+  };
+}
+
+export async function getAgentCandidateCheckpoint(inputRoot, runId) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!validAgentRunId(runId)) throw new Error("A valid agent run ID is required.");
+  const directory = await agentRunDirectory(root);
+  const target = path.join(directory, runId + ".candidate.json");
+  if (!(await assertRegularStateFile(target, "Agent candidate checkpoint"))) return null;
+  const stat = await fs.stat(target);
+  if (stat.size > MAX_AGENT_CANDIDATE_CHECKPOINT_BYTES) {
+    throw new Error("Agent candidate checkpoint exceeds the 512 KB storage limit.");
+  }
+  let payload;
+  try { payload = JSON.parse(await fs.readFile(target, "utf8")); }
+  catch { throw new Error("Agent candidate checkpoint is malformed and cannot be resumed."); }
+  return validateAgentCandidateCheckpoint(root, runId, payload).checkpoint;
+}
+
 function summarizeAgentVerification(value) {
   if (!value || typeof value !== "object") return null;
   return {
@@ -523,10 +692,19 @@ async function pruneAgentRunRecords(root) {
     const target = path.join(directory, entry.name);
     if (!(await assertRegularStateFile(target, "Agent run record"))) continue;
     const stat = await fs.stat(target);
-    records.push({ path: target, modifiedAt: stat.mtimeMs });
+    records.push({
+      path: target,
+      candidatePath: path.join(directory, entry.name.slice(0, -5) + ".candidate.json"),
+      modifiedAt: stat.mtimeMs
+    });
   }
   records.sort((a, b) => b.modifiedAt - a.modifiedAt);
-  for (const record of records.slice(MAX_AGENT_RUNS)) await fs.rm(record.path);
+  for (const record of records.slice(MAX_AGENT_RUNS)) {
+    await fs.rm(record.path);
+    if (await assertRegularStateFile(record.candidatePath, "Agent candidate checkpoint")) {
+      await fs.rm(record.candidatePath);
+    }
+  }
 }
 
 export async function createAgentRun(inputRoot, goal) {

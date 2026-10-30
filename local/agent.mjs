@@ -429,6 +429,93 @@ async function planImplementationSlices({
   return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
 }
 
+async function validateResumeCandidateCheckpoint(root, runId, goal, checkpoint, maxSlices) {
+  if (!isPlainToolInput(checkpoint) || checkpoint.schemaVersion !== 1
+    || checkpoint.runId !== runId || checkpoint.root !== root || checkpoint.stage !== "slice_verified"
+    || !Array.isArray(checkpoint.slices) || !Array.isArray(checkpoint.files)
+    || !Number.isInteger(checkpoint.nextSliceIndex)) {
+    throw new Error("Saved candidate checkpoint metadata is invalid.");
+  }
+  const planned = validateImplementationSlicePlan({
+    slices: checkpoint.slices.map(slice => ({
+      goal: slice.goal,
+      acceptance: slice.acceptance
+    }))
+  }, goal, maxSlices);
+  if (checkpoint.nextSliceIndex < 1 || checkpoint.nextSliceIndex >= planned.length) {
+    throw new Error("Saved candidate checkpoint points to an invalid next slice.");
+  }
+  for (let index = 0; index < planned.length; index += 1) {
+    const expected = index < checkpoint.nextSliceIndex ? "completed" : "pending";
+    if (checkpoint.slices[index]?.id !== planned[index].id
+      || checkpoint.slices[index]?.status !== expected) {
+      throw new Error("Saved candidate checkpoint slice progression is inconsistent.");
+    }
+    planned[index].status = expected;
+  }
+  if (!checkpoint.verification || checkpoint.verification.passed !== true
+    || !["passed", "passed_review_required"].includes(checkpoint.verification.status)) {
+    throw new Error("Saved candidate checkpoint has no successful verification evidence.");
+  }
+  if (!Array.isArray(checkpoint.files) || checkpoint.files.length < 1
+    || checkpoint.files.length > 24) {
+    throw new Error("Saved candidate checkpoint file list is invalid.");
+  }
+  const seen = new Set();
+  const files = [];
+  for (const file of checkpoint.files) {
+    if (!isPlainToolInput(file)) throw new Error("Saved candidate checkpoint contains an invalid file entry.");
+    const relative = normalizeAgentPath(file.path);
+    if (relative !== file.path || seen.has(relative)
+      || typeof file.content !== "string" || sha256(file.content) !== file.contentHash) {
+      throw new Error("Saved candidate checkpoint content or path is invalid: " + relative);
+    }
+    seen.add(relative);
+    const original = await readWorkspaceFileOrNull(root, relative);
+    if (file.existedBefore === true) {
+      if (!original || typeof file.baseHash !== "string" || original.sha256 !== file.baseHash) {
+        throw new Error("Saved candidate checkpoint is stale because the original file changed: " + relative);
+      }
+    } else if (file.existedBefore === false) {
+      if (original || file.baseHash !== null) {
+        throw new Error("Saved candidate checkpoint is stale because a previously new file now exists: " + relative);
+      }
+    } else {
+      throw new Error("Saved candidate checkpoint has an invalid original-file flag: " + relative);
+    }
+    if (Buffer.byteLength(file.content, "utf8") > 128 * 1024) {
+      throw new Error("Saved candidate checkpoint file exceeds the 128 KB per-file limit: " + relative);
+    }
+    files.push({
+      path: relative,
+      existedBefore: file.existedBefore,
+      baseHash: file.baseHash,
+      beforeContent: original?.content ?? null,
+      content: file.content,
+      contentHash: file.contentHash,
+      reason: typeof file.reason === "string" ? file.reason.slice(0, 500) : ""
+    });
+  }
+  return {
+    nextSliceIndex: checkpoint.nextSliceIndex,
+    slices: planned,
+    files,
+    verification: {
+      status: checkpoint.verification.status,
+      passed: true,
+      checks: Array.isArray(checkpoint.verification.checks) ? checkpoint.verification.checks.slice(0, 8) : []
+    }
+  };
+}
+
+async function readWorkspaceFileOrNull(root, relative) {
+  try { return await readWorkspaceFile(root, relative); }
+  catch (error) {
+    if (error instanceof Error && error.message.startsWith("File does not exist:")) return null;
+    throw error;
+  }
+}
+
 async function collectFinalCandidateChanges(changedPaths, originalByPath, expectedContents) {
   const changes = [];
   for (const relative of [...changedPaths].sort()) {
@@ -805,7 +892,8 @@ export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
   onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1,
   resumeBaseHashes = null, previousAttempts = [], previousToolCalls = [],
-  modelToolSelection = false, maxSlices = 1
+  modelToolSelection = false, maxSlices = 1, runId = null,
+  resumeCandidate = null, onCandidateCheckpoint = async () => {}
 }) {
   const root = await resolveWorkspace(inputRoot);
   const emitProgress = async update => {
@@ -878,12 +966,29 @@ export async function runAgentTask({
   let graph = await buildRepositoryGraph(root);
   let ranked = rankGraph(graph, goal, requestedPath);
   maxSlices = Math.max(1, Math.min(3, Number(maxSlices) || 1));
-  let implementationSlices = [{
+  let resumeCandidateState = null;
+  if (resumeCandidate) {
+    try {
+      resumeCandidateState = await validateResumeCandidateCheckpoint(root, runId, goal, resumeCandidate, maxSlices);
+      observations.push({
+        kind: "candidate-checkpoint", stage: "resume-validation", status: "validated",
+        detail: "Saved verified slice state matched the original workspace hashes for " +
+          resumeCandidateState.files.length + " file(s)."
+      });
+    } catch (error) {
+      observations.push({
+        kind: "candidate-checkpoint", stage: "resume-validation", status: "rejected",
+        detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+      });
+      await onCandidateCheckpoint(null);
+    }
+  }
+  let implementationSlices = resumeCandidateState?.slices || [{
     id: "slice-1", goal: goal.trim(),
     acceptance: "The requested task behavior is implemented and supported by relevant project checks.",
     status: "pending"
   }];
-  if (maxSlices > 1 && runChecks && !resumePatch) {
+  if (!resumeCandidateState && maxSlices > 1 && runChecks && !resumePatch) {
     await emitProgress({
       phase: "slice-planning", iteration: 0,
       message: "Planning independently verifiable implementation slices."
@@ -933,7 +1038,7 @@ export async function runAgentTask({
     plan.steps.push({
       id: slice.id,
       title: slice.goal.slice(0, 90),
-      status: "pending",
+      status: slice.status,
       detail: "Acceptance: " + slice.acceptance
     });
   }
@@ -962,14 +1067,92 @@ export async function runAgentTask({
   try {
     let savedPatch = resumePatch && typeof resumePatch === "object" ? resumePatch : null;
     const firstIteration = Math.max(1, Math.min(MAX_ITERATIONS, Number(resumeIteration) || 1));
-    let iteration = firstIteration - 1;
+    let iteration = resumeCandidateState
+      ? Math.max(0, Number(attempts.at(-1)?.iteration) || 0)
+      : firstIteration - 1;
     let activePatchRoot = root;
     let stopAfterSlice = false;
     const touchedPaths = new Set();
     const expectedCandidateContents = new Map();
     const sliceSummaries = [];
+    let firstSliceIndex = 0;
+    if (resumeCandidateState) {
+      snapshot = await copySandbox(root);
+      const restoredChanges = [];
+      for (const file of resumeCandidateState.files) {
+        originalByPath.set(file.path, {
+          beforeContent: file.beforeContent,
+          beforeHash: file.baseHash,
+          existedBefore: file.existedBefore,
+          reason: file.reason
+        });
+        touchedPaths.add(file.path);
+        expectedCandidateContents.set(file.path, file.content);
+        restoredChanges.push({
+          path: file.path,
+          content: file.content,
+          beforeContent: file.beforeContent,
+          beforeHash: file.baseHash,
+          existedBefore: file.existedBefore,
+          reason: file.reason
+        });
+      }
+      await writeCandidateChanges(snapshot.root, restoredChanges);
+      activePatchRoot = snapshot.root;
+      firstSliceIndex = resumeCandidateState.nextSliceIndex;
+      finalVerification = resumeCandidateState.verification;
+      for (const slice of implementationSlices) {
+        if (slice.status === "completed") sliceSummaries.push(slice.goal + " — " + slice.acceptance);
+      }
+      const restoredInspection = await executeWorkspaceTool({
+        root: snapshot.root, auditRoot: root, name: "workspace.inspect", input: {}, signal
+      });
+      toolCalls.push(toolCallSummary(restoredInspection));
+      if (!restoredInspection.ok) {
+        throw new Error("The saved candidate could not be re-inspected safely: " +
+          String(restoredInspection.error || "unknown error"));
+      }
+      inventory = restoredInspection.output;
+      graph = await buildRepositoryGraph(snapshot.root);
+      ranked = rankGraph(graph, implementationSlices[firstSliceIndex]?.goal || goal, requestedPath);
+      modelSelectedContext = "";
+      if (modelToolSelection && firstSliceIndex < implementationSlices.length) {
+        try {
+          modelSelectedContext = await runModelSelectedReadOnlyTools({
+            root: snapshot.root, goal: implementationSlices[firstSliceIndex].goal, ranked,
+            modelRequest, contextBudget, signal, toolCalls, observations
+          });
+        } catch (error) {
+          if (signal?.aborted || error?.name === "AbortError") throw error;
+          observations.push({
+            kind: "model-readonly-tool-plan", stage: "resume-context",
+            status: "unavailable",
+            detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+          });
+        }
+      }
+      const patchStep = plan.steps.find(step => step.id === "patch");
+      if (patchStep && firstSliceIndex >= implementationSlices.length) patchStep.status = "completed";
+      const verifyStep = plan.steps.find(step => step.id === "verify");
+      if (verifyStep) {
+        verifyStep.status = "completed";
+        verifyStep.detail = "Previous slices were verified before restart; the next slice will be checked independently.";
+      }
+      observations.push({
+        kind: "candidate-checkpoint", stage: "resume-restore", status: "restored",
+        detail: "Reconstructed the candidate from " + restoredChanges.length +
+          " hash-validated file(s); continuing at slice " + (firstSliceIndex + 1) + "."
+      });
+      await emitProgress({
+        phase: "candidate-restored",
+        iteration: Math.max(0, Number(resumeCandidate?.iteration) || 0),
+        message: "Restored the last verified candidate snapshot and re-inspected it before continuing.",
+        planSteps: plan.steps, observations, toolCalls, verification: finalVerification,
+        checkpoint: { stage: "candidate_restored", iteration: Math.max(0, Number(resumeCandidate?.iteration) || 0) }
+      });
+    }
 
-    for (let sliceIndex = 0; sliceIndex < implementationSlices.length && !stopAfterSlice; sliceIndex += 1) {
+    for (let sliceIndex = firstSliceIndex; sliceIndex < implementationSlices.length && !stopAfterSlice; sliceIndex += 1) {
       const slice = implementationSlices[sliceIndex];
       const sliceStep = plan.steps.find(step => step.id === slice.id);
       const sliceGoal = implementationSlices.length === 1
@@ -1308,6 +1491,67 @@ export async function runAgentTask({
         });
 
         if (allPassed) {
+          if (implementationSlices.length > 1 && sliceIndex < implementationSlices.length - 1
+            && runId && typeof onCandidateCheckpoint === "function") {
+            const checkpointFiles = [...touchedPaths].sort().map(relative => {
+              const original = originalByPath.get(relative);
+              const content = expectedCandidateContents.get(relative);
+              if (!original || typeof content !== "string") {
+                throw new Error("Cannot persist an incomplete candidate checkpoint for " + relative + ".");
+              }
+              return {
+                path: relative,
+                existedBefore: original.existedBefore,
+                baseHash: original.beforeHash,
+                content,
+                contentHash: sha256(content),
+                reason: original.reason || ""
+              };
+            });
+            try {
+              throwIfAborted(signal);
+              await onCandidateCheckpoint({
+                schemaVersion: 1,
+                runId,
+                root,
+                stage: "slice_verified",
+                nextSliceIndex: sliceIndex + 1,
+                slices: implementationSlices.map(({ id, goal: sliceGoal, acceptance, status }) => ({
+                  id, goal: sliceGoal, acceptance, status
+                })),
+                files: checkpointFiles,
+                verification: finalVerification
+              });
+              observations.push({
+                kind: "candidate-checkpoint",
+                stage: slice.id,
+                status: "persisted",
+                detail: "Saved " + checkpointFiles.length + " cumulative candidate file(s) for restart continuation."
+              });
+              await emitProgress({
+                phase: "candidate-checkpoint-saved",
+                iteration,
+                message: "Saved a hash-bound checkpoint after the verified slice; restart can continue at the next slice.",
+                observations, planSteps: plan.steps, toolCalls,
+                checkpoint: { stage: "candidate_slice_persisted", iteration }
+              });
+            } catch (error) {
+              if (signal?.aborted || error?.name === "AbortError") throw error;
+              observations.push({
+                kind: "candidate-checkpoint",
+                stage: slice.id,
+                status: "not_persisted",
+                detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+              });
+              await emitProgress({
+                phase: "candidate-checkpoint-unavailable",
+                iteration,
+                message: "The verified slice remains in the temporary candidate, but restart continuation could not be saved.",
+                observations, planSteps: plan.steps, toolCalls,
+                checkpoint: { stage: "candidate_checkpoint_unavailable", iteration }
+              });
+            }
+          }
           await emitProgress({
             phase: reviewReasons.length ? "verification-review-required" : "verification-passed",
             iteration,
@@ -1522,6 +1766,16 @@ export async function runAgentTask({
         verifyStep.status = finalVerification.passed ? "completed" : finalVerification.status;
       }
       plan.steps.find(step => step.id === "review").status = "completed";
+    }
+
+    if (runId && typeof onCandidateCheckpoint === "function") {
+      try { await onCandidateCheckpoint(null); }
+      catch (error) {
+        observations.push({
+          kind: "candidate-checkpoint", stage: "finalization", status: "cleanup_failed",
+          detail: String(error instanceof Error ? error.message : error).slice(0, 300)
+        });
+      }
     }
 
     await emitProgress({
