@@ -10,10 +10,12 @@ import test from "node:test";
 import { validateStructuredPatch } from "../local/agent.mjs";
 import {
   createAgentRun,
+  getAgentCandidateCheckpoint,
   getAgentRun,
   listAgentRuns,
   recoverInterruptedAgentRuns,
   requestAgentRunCancellation,
+  saveAgentCandidateCheckpoint,
   updateAgentRun
 } from "../local/workspace.mjs";
 
@@ -171,6 +173,113 @@ test("agent run state directories refuse symbolic-link redirection", async () =>
     await assert.rejects(
       () => createAgentRun(root, "Do not write through the state directory link."),
       /runs state directory|symbolic link/
+    );
+    assert.deepEqual(await fs.readdir(outside), []);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("verified candidate checkpoints persist bounded slice state separately from run records", async () => {
+  const root = await createWorkspace();
+  try {
+    const run = await createAgentRun(root, "Complete a multi-slice change and resume at the next verified slice.");
+    const original = "export const value = 1;\n";
+    const candidate = "export const value = 2;\n";
+    const baseHash = createHash("sha256").update(original).digest("hex");
+    const contentHash = createHash("sha256").update(candidate).digest("hex");
+    const payload = {
+      schemaVersion: 1,
+      runId: run.id,
+      root,
+      stage: "slice_verified",
+      nextSliceIndex: 1,
+      slices: [
+        { id: "slice-1", goal: "Update the exported value.", acceptance: "The value regression test passes.", status: "completed" },
+        { id: "slice-2", goal: "Add the exported metadata helper.", acceptance: "The helper is added and checked.", status: "pending" }
+      ],
+      files: [{
+        path: "src/index.js", existedBefore: true, baseHash,
+        content: candidate, contentHash, reason: "Complete the first verified implementation slice."
+      }],
+      verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true, exitCode: 0 }] }
+    };
+    const saved = await saveAgentCandidateCheckpoint(root, run.id, payload);
+    assert.equal(saved.saved, true);
+    assert.equal(saved.nextSliceIndex, 1);
+    assert.equal(saved.files, 1);
+    const restored = await getAgentCandidateCheckpoint(root, run.id);
+    assert.equal(restored.nextSliceIndex, 1);
+    assert.equal(restored.files[0].content, candidate);
+    assert.equal(restored.files[0].baseHash, baseHash);
+    assert.equal(restored.slices[0].status, "completed");
+    assert.equal(restored.slices[1].status, "pending");
+    assert.equal((await getAgentRun(root, run.id)).recoveryPatch, null,
+      "candidate contents must not inflate the bounded run record");
+    await saveAgentCandidateCheckpoint(root, run.id, null);
+    assert.equal(await getAgentCandidateCheckpoint(root, run.id), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate checkpoint storage rejects stale schemas, unsafe paths, invalid hashes, and oversized content", async () => {
+  const root = await createWorkspace();
+  try {
+    const run = await createAgentRun(root, "Reject unsafe candidate checkpoint payloads.");
+    const original = "export const value = 1;\n";
+    const candidate = "export const value = 2;\n";
+    const baseHash = createHash("sha256").update(original).digest("hex");
+    const contentHash = createHash("sha256").update(candidate).digest("hex");
+    const base = {
+      schemaVersion: 1, runId: run.id, root, stage: "slice_verified", nextSliceIndex: 1,
+      slices: [
+        { id: "slice-1", goal: "Update the exported value.", acceptance: "The value regression test passes.", status: "completed" },
+        { id: "slice-2", goal: "Add the exported metadata helper.", acceptance: "The helper is added and checked.", status: "pending" }
+      ],
+      files: [{
+        path: "src/index.js", existedBefore: true, baseHash,
+        content: candidate, contentHash, reason: "First slice."
+      }],
+      verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true }] }
+    };
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{ ...base.files[0], path: "../outside.js" }]
+    }), /traversal|path segments/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{ ...base.files[0], path: ".env.local" }]
+    }), /secret|credential/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{ ...base.files[0], contentHash: "0".repeat(64) }]
+    }), /content hash/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: [{ ...base.files[0], content: "x".repeat(140 * 1024), contentHash: "0".repeat(64) }]
+    }), /128 KB/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, slices: [{ ...base.slices[0], status: "running" }]
+    }), /between one and 3 slices|slice progression/);
+    assert.equal(await getAgentCandidateCheckpoint(root, run.id), null);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("candidate checkpoint files refuse symbolic-link redirection", async () => {
+  const root = await createWorkspace();
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-candidate-outside-"));
+  try {
+    const run = await createAgentRun(root, "Reject candidate checkpoint symlink redirection.");
+    const runs = path.join(root, ".syntra", "runs");
+    const target = path.join(runs, run.id + ".candidate.json");
+    await fs.symlink(path.join(outside, "redirect.json"), target, process.platform === "win32" ? "file" : undefined);
+    await assert.rejects(
+      () => getAgentCandidateCheckpoint(root, run.id),
+      /regular file|symbolic link/
+    );
+    await assert.rejects(
+      () => saveAgentCandidateCheckpoint(root, run.id, null),
+      /regular file|symbolic link/
     );
     assert.deepEqual(await fs.readdir(outside), []);
   } finally {
