@@ -753,10 +753,14 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
+  "POST /local-api/chat/cancel": cancelChat,
+  "GET /local-api/agent/runs": listCurrentAgentRuns,
+  "POST /local-api/agent/runs/get": readCurrentAgentRun,
+  "POST /local-api/agent/runs/resume": resumeAgentRun,
   "GET /local-api/tools": async () => ({ tools: listWorkspaceTools() }),
   "POST /local-api/tools/execute": async body => executeWorkspaceTool({
     root: body.root || activeWorkspace,
