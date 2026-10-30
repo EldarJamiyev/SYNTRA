@@ -966,15 +966,72 @@ export async function runAgentTask({
   resumeCandidate = null, onCandidateCheckpoint = async () => {}
 }) {
   const root = await resolveWorkspace(inputRoot);
-  const emitProgress = async update => {
-    throwIfAborted(signal);
-    await onProgress(update);
-    throwIfAborted(signal);
-  };
   throwIfAborted(signal);
   if (typeof goal !== "string" || !goal.trim() || goal.length > 5000) throw new Error("Enter a specific application/code task (maximum 5,000 characters).");
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 3));
+  const modelUsage = {
+    generationCalls: 0, completedGenerationCalls: 0, failedGenerationCalls: 0,
+    promptTokens: 0, outputTokens: 0, totalTokens: 0,
+    providerReportedPromptCalls: 0, tokenizerFallbackPromptCalls: 0, unmeasuredPromptCalls: 0,
+    reportedOutputCalls: 0, unreportedOutputCalls: 0,
+    tokenizationCalls: 0, tokenizer: null, promptTokenCountsExact: true
+  };
+  const rawModelRequest = modelRequest;
+  let latestTokenization = null;
+  modelRequest = async (method, route, body, timeoutMs, options) => {
+    const generationRequest = method === "POST" && route === "/model/generate";
+    if (generationRequest) {
+      modelUsage.generationCalls += 1;
+    }
+    try {
+      const response = await rawModelRequest(method, route, body, timeoutMs, options);
+      if (method === "POST" && route === "/model/tokenize") {
+        modelUsage.tokenizationCalls += 1;
+        latestTokenization = {
+          count: Number.isFinite(Number(response?.token_count)) ? Math.max(0, Number(response.token_count)) : null,
+          estimated: response?.is_estimate === true,
+          tokenizer: typeof response?.tokenizer === "string" ? response.tokenizer : null
+        };
+        if (latestTokenization.tokenizer) modelUsage.tokenizer = latestTokenization.tokenizer;
+      } else if (generationRequest) {
+        modelUsage.completedGenerationCalls += 1;
+        const reportedPromptTokens = Number(response?.prompt_tokens);
+        if (Number.isFinite(reportedPromptTokens) && reportedPromptTokens > 0) {
+          modelUsage.promptTokens += reportedPromptTokens;
+          modelUsage.providerReportedPromptCalls += 1;
+        } else if (latestTokenization?.count !== null && latestTokenization?.count !== undefined) {
+          modelUsage.promptTokens += latestTokenization.count;
+          modelUsage.tokenizerFallbackPromptCalls += 1;
+          if (latestTokenization.estimated) modelUsage.promptTokenCountsExact = false;
+        } else {
+          modelUsage.unmeasuredPromptCalls += 1;
+          modelUsage.promptTokenCountsExact = false;
+        }
+        latestTokenization = null;
+        const reportedOutputTokens = Number(response?.generated_tokens);
+        if (Number.isFinite(reportedOutputTokens) && reportedOutputTokens >= 0) {
+          modelUsage.outputTokens += reportedOutputTokens;
+          modelUsage.reportedOutputCalls += 1;
+        } else {
+          modelUsage.unreportedOutputCalls += 1;
+        }
+        modelUsage.totalTokens = modelUsage.promptTokens + modelUsage.outputTokens;
+      }
+      return response;
+    } catch (error) {
+      if (generationRequest) {
+        modelUsage.failedGenerationCalls += 1;
+        latestTokenization = null;
+      }
+      throw error;
+    }
+  };
+  const emitProgress = async update => {
+    throwIfAborted(signal);
+    await onProgress({ ...update, modelUsage: { ...modelUsage } });
+    throwIfAborted(signal);
+  };
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
   if (!modelStatus.checkpoint_exists) throw new Error("No usable local model is available. Start a local Ollama model or train SYNTRA's native model before requesting an agent patch.");
   const contextWindow = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 4096);
@@ -1892,6 +1949,7 @@ export async function runAgentTask({
         };
       }) || [],
       proposals, verification: finalVerification, attempts,
+      modelUsage: { ...modelUsage },
       implementationSlices: implementationSlices.map(({ id, goal: sliceGoal, acceptance, status }) => ({
         id, goal: sliceGoal, acceptance, status
       })),
