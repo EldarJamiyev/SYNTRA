@@ -2,6 +2,8 @@
 
 SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It shows the conversation, a message field, and one send control—without a dashboard full of toggles. Recent conversation history is saved in the browser on that device, with bounded storage and graceful fallback when browser storage is unavailable. The visible conversation is capped at the latest 60 messages, and a prompt is saved immediately so a refresh during generation does not erase what you asked. Type /clear in the message field to erase the visible conversation and its saved history.
 
+See [the staged product roadmap](docs/ROADMAP.md) for the planned path from the current local coding agent to a more complete, permissioned engineering assistant.
+
 ## Windows launch
 
 Requirements: Node.js 20+ and Git. The test suite includes an HTTP smoke test for the local API's origin guards and request validation. Python 3.11+ is required only for the native model fallback. A compatible local model in Ollama is preferred automatically.
