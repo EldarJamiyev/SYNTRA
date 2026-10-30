@@ -1491,6 +1491,66 @@ export async function runAgentTask({
         });
 
         if (allPassed) {
+          if (implementationSlices.length > 1 && runId && typeof onCandidateCheckpoint === "function") {
+            const checkpointFiles = [...touchedPaths].sort().map(relative => {
+              const original = originalByPath.get(relative);
+              const content = expectedCandidateContents.get(relative);
+              if (!original || typeof content !== "string") {
+                throw new Error("Cannot persist an incomplete candidate checkpoint for " + relative + ".");
+              }
+              return {
+                path: relative,
+                existedBefore: original.existedBefore,
+                baseHash: original.beforeHash,
+                content,
+                contentHash: sha256(content),
+                reason: original.reason || ""
+              };
+            });
+            try {
+              throwIfAborted(signal);
+              await onCandidateCheckpoint({
+                schemaVersion: 1,
+                runId,
+                root,
+                stage: "slice_verified",
+                nextSliceIndex: sliceIndex + 1,
+                slices: implementationSlices.map(({ id, goal: sliceGoal, acceptance, status }) => ({
+                  id, goal: sliceGoal, acceptance, status
+                })),
+                files: checkpointFiles,
+                verification: finalVerification
+              });
+              observations.push({
+                kind: "candidate-checkpoint",
+                stage: slice.id,
+                status: "persisted",
+                detail: "Saved " + checkpointFiles.length + " cumulative candidate file(s) for restart continuation."
+              });
+              await emitProgress({
+                phase: "candidate-checkpoint-saved",
+                iteration,
+                message: "Saved a hash-bound checkpoint after the verified slice; restart can continue at the next slice.",
+                observations, planSteps: plan.steps, toolCalls,
+                checkpoint: { stage: "candidate_slice_persisted", iteration }
+              });
+            } catch (error) {
+              if (signal?.aborted || error?.name === "AbortError") throw error;
+              observations.push({
+                kind: "candidate-checkpoint",
+                stage: slice.id,
+                status: "not_persisted",
+                detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+              });
+              await emitProgress({
+                phase: "candidate-checkpoint-unavailable",
+                iteration,
+                message: "The verified slice remains in the temporary candidate, but restart continuation could not be saved.",
+                observations, planSteps: plan.steps, toolCalls,
+                checkpoint: { stage: "candidate_checkpoint_unavailable", iteration }
+              });
+            }
+          }
           await emitProgress({
             phase: reviewReasons.length ? "verification-review-required" : "verification-passed",
             iteration,
