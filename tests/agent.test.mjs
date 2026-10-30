@@ -232,7 +232,7 @@ test("repository graph links local imports and agent repairs a failed test in a 
     assert.equal(result.attempts[0].status, "invalid_patch");
     assert.equal(result.attempts[1].status, "verification_passed");
     assert.deepEqual(result.toolCalls.map(call => call.name), [
-      "workspace.inspect", "workspace.check", "workspace.check", "workspace.proposals.stage"
+      "workspace.inspect", "workspace.check", "workspace.proposals.stage"
     ]);
     assert.ok(result.toolCalls.every(call => call.auditRecorded));
     const applied = await import("../local/workspace.mjs").then(module =>
