@@ -1473,7 +1473,9 @@ export async function runAgentTask({
         };
       }
     }
-    const incompleteSlices = implementationSlices.filter(slice => slice.status !== "completed");
+    const incompleteSlices = implementationSlices.length > 1
+      ? implementationSlices.filter(slice => slice.status !== "completed")
+      : [];
     if (incompleteSlices.length && finalChanges) {
       finalVerification = {
         ...finalVerification,
