@@ -620,7 +620,7 @@ function makeReadOnlyToolPlanPrompt(goal, ranked) {
 }
 
 async function runModelSelectedReadOnlyTools({
-  root, auditRoot = root, auditRoot: root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
+  root, auditRoot = root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
 }) {
   const indexRefresh = await executeWorkspaceTool({
     root, auditRoot, name: "workspace.index.refresh", input: {}, signal
@@ -1059,7 +1059,7 @@ export async function runAgentTask({
         message: "Asking the local model to select bounded read-only context tools."
       });
       modelSelectedContext = await runModelSelectedReadOnlyTools({
-        root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
+        root, auditRoot: root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
       });
     } catch (error) {
       if (signal?.aborted || error?.name === "AbortError") throw error;
