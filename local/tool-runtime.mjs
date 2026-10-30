@@ -360,7 +360,7 @@ async function runGit(root, args) {
 }
 
 async function isAgentPathExcluded(root, relativePath) {
-  const normalized = String(relativePath || "").replaceAll("\\", "/");
+  const normalized = String(relativePath || "").replaceAll("\\", "/").replace(/\/+$/, "");
   if (normalized === ".syntra" || normalized.startsWith(".syntra/")) return true;
   return isWorkspacePathExcluded(root, normalized);
 }
