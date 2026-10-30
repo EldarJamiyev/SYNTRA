@@ -22,7 +22,9 @@ The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:300
 8. Failed checks are supplied as feedback for a bounded repair attempt. The original source is not modified during planning or verification.
 9. If every discovered check passes and the patch does not modify tests or verification configuration, SYNTRA rechecks source hashes and applies the change with a backup and audit record. Dependency/build manifest or lockfile changes block automatic verification because sandbox dependencies are not reinstalled; changes to test or verification configuration require review even when checks pass. In those cases, proposals remain unapplied unless the user explicitly types /apply.
 
-Before reporting a coding task, the agent also returns a bounded per-file diff preview generated from the exact original and candidate contents. Large changed sections are explicitly marked as truncated; the preview is for inspection, not a replacement for opening the full file. The chat response presents these diffs alongside the verification result and the explicit `/apply` instruction for proposals that were not automatically applied.\n\nA passing check proves only that the project's discovered checks passed in the temporary copy; it does not prove the absence of defects.
+Before reporting a coding task, the agent also returns a bounded per-file diff preview generated from the exact original and candidate contents. Large changed sections are explicitly marked as truncated; the preview is for inspection, not a replacement for opening the full file. The chat response presents these diffs alongside the verification result and the explicit `/apply` instruction for proposals that were not automatically applied.
+
+A passing check proves only that the project's discovered checks passed in the temporary copy; it does not prove the absence of defects.
 
 ## Model and context handling
 
