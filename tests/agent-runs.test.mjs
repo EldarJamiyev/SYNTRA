@@ -168,7 +168,7 @@ test("agent run state directories refuse symbolic-link redirection", async () =>
 test("resuming a saved patch rejects source files changed since its checkpoint", async () => {
   const root = await createWorkspace();
   try {
-    const original = "export const value = 1;\\n";
+    const original = "export const value = 1;\n";
     const baseHash = createHash("sha256").update(original).digest("hex");
     const patch = {
       summary: "Update the exported value.",
@@ -177,7 +177,7 @@ test("resuming a saved patch rejects source files changed since its checkpoint",
     const valid = await validateStructuredPatch(root, patch, { "src/index.js": baseHash });
     assert.equal(valid.changes[0].beforeHash, baseHash);
 
-    await fs.writeFile(path.join(root, "src", "index.js"), original + "export const extra = true;\\n");
+    await fs.writeFile(path.join(root, "src", "index.js"), original + "export const extra = true;\n");
     await assert.rejects(
       () => validateStructuredPatch(root, patch, { "src/index.js": baseHash }),
       /changed after the checkpoint/
