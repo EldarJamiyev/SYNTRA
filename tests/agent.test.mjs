@@ -362,6 +362,7 @@ test("agent resumes from the last verified slice after a process interruption", 
 
 test("agent rejects a stale saved candidate checkpoint and restarts from current workspace state", async () => {
   const root = await createSliceProject();
+  const canonicalRoot = await fs.realpath(root);
   const runId = "00000000-0000-4000-8000-000000000002";
   const goal = "Update the exported value and add a description helper.";
   const originalAtCheckpoint = "module.exports = { value: 1 };\n";
@@ -374,7 +375,7 @@ test("agent rejects a stale saved candidate checkpoint and restarts from current
   const staleCheckpoint = {
     schemaVersion: 1,
     runId,
-    root,
+    root: canonicalRoot,
     stage: "slice_verified",
     nextSliceIndex: 1,
     slices: [
