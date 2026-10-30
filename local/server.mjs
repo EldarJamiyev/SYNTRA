@@ -2,6 +2,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
+import { getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
@@ -22,12 +23,6 @@ import {
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.SYNTRA_LOCAL_PORT || 3001);
 const AI_BASE = "http://127.0.0.1:" + Number(process.env.SYNTRA_AI_PORT || 3002);
-const ALLOWED_ORIGINS = new Set([
-  "http://127.0.0.1:3000",
-  "http://localhost:3000",
-  "http://127.0.0.1:5173",
-  "http://localhost:5173"
-]);
 const MAX_BODY_BYTES = 600 * 1024;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let activeWorkspace = process.env.SYNTRA_WORKSPACE ? path.resolve(process.env.SYNTRA_WORKSPACE) : REPO_ROOT;
@@ -838,13 +833,9 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   if (request.method !== "GET") {
-    const origin = request.headers.origin;
-    if (origin && !ALLOWED_ORIGINS.has(origin)) {
-      sendJson(response, 403, { error: "Origin is not allowed by the local workspace service." });
-      return;
-    }
-    if (!origin && request.headers["sec-fetch-site"] === "cross-site") {
-      sendJson(response, 403, { error: "Cross-site requests are not accepted." });
+    const originRejection = getOriginRejection(request);
+    if (originRejection) {
+      sendJson(response, 403, { error: originRejection });
       return;
     }
   }

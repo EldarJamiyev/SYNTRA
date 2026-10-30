@@ -49,3 +49,11 @@ If Ollama is unavailable, SYNTRA can use its own local PyTorch runtime. The nati
 ## Important boundary
 
 This app is designed to run locally at http://127.0.0.1:3000; the Node service binds to loopback and is not a hosted AI endpoint. A static GitHub Pages copy cannot execute your local model or workspace agent. Use the local launcher for real chat and code changes.
+
+## Development-server startup
+
+The Vite development configuration starts the Node workspace API automatically. It first checks `http://127.0.0.1:3001/local-api/health`, reuses a healthy SYNTRA API when one is already running, or starts `local/server.mjs` and waits for its health endpoint before Vite finishes starting. The API child started by Vite is stopped when the development server closes. Set `SYNTRA_AUTOSTART_LOCAL_API=0` only when managing the API process yourself.
+
+The workspace API remains bound to loopback. Browser POST requests are restricted to the built-in local origins, exact same-origin requests forwarded by the Vite proxy, or exact additional origins listed in `SYNTRA_ALLOWED_ORIGINS` (comma-separated; no wildcard values).
+
+**Hosted-preview boundary:** this starts the Node workspace API inside the same runtime as Vite; it does not connect that runtime to files, Ollama, or a Python model running on your personal computer. A hosted preview can use only files and model services available inside its own runtime. The native Python model remains a separate service and must be installed, started, and supplied with a valid checkpoint independently.
