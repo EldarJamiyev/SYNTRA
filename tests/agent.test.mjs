@@ -466,16 +466,24 @@ test("model-selected context plans allow only bounded search and safe listed-fil
   const valid = validateReadOnlyToolPlan({
     calls: [
       { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
-      { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } }
+      { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
+      { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } }
     ]
   }, ["src/server.js", "src/db.js"]);
   assert.deepEqual(valid, [
     { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
-    { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } }
+    { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
+    { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } }
   ]);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.check", input: { task: "test" } }]
-  }, ["src/server.js"]), /restricted to workspace.search and workspace.read/);
+  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, and workspace.symbols.search/);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.index.refresh", input: {} }]
+  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, and workspace.symbols.search/);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.symbols.search", input: { query: "x", limit: 20 } }]
+  }, ["src/server.js"]), /2-160 character query and an optional limit from 1 to 8/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.read", input: { path: ".env" } }]
   }, ["src/server.js"]), /safe file list/);
@@ -508,6 +516,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
           text: JSON.stringify({
             calls: [
               { tool: "workspace.search", input: { query: "value", limit: 5 } },
+              { tool: "workspace.symbols.search", input: { query: "value", limit: 4 } },
               { tool: "workspace.read", input: { path: "src/value.js", startLine: 1, endLine: 1 } }
             ]
           }),
@@ -545,11 +554,13 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
     assert.equal(result.proposals[0].path, "src/value.js");
     assert.deepEqual(result.toolCalls.map(call => call.name), [
       "workspace.inspect", "git.status", "git.diff-summary",
-      "workspace.search", "workspace.read", "workspace.proposals.stage"
+      "workspace.index.refresh", "workspace.search", "workspace.symbols.search",
+      "workspace.read", "workspace.proposals.stage"
     ]);
     assert.ok(result.toolCalls.every(call => call.auditRecorded));
     assert.ok(result.observations.some(item => item.kind === "model-readonly-tool-plan" && item.status === "accepted"));
     assert.ok(result.observations.some(item => item.kind === "workspace.search" && item.status === "observed"));
+    assert.ok(result.observations.some(item => item.kind === "workspace.symbols.search" && item.status === "observed"));
     assert.ok(result.observations.some(item => item.kind === "workspace.read" && item.path === "src/value.js"));
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
       "model-selected retrieval and patch staging must not write the original project file");
