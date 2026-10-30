@@ -536,30 +536,112 @@ async function runChatTurn(jobId, message, history, signal) {
       return;
     }
 
-    if (isCodingTask(message)) {
+    const resumeMatch = message.trim().match(/^\/resume\s+([0-9a-f-]{36})$/i);
+    let resumeRecord = null;
+    let taskGoal = message;
+    if (resumeMatch) {
+      resumeRecord = await getAgentRun(activeWorkspace, resumeMatch[1]);
+      if (!resumeRecord) throw new Error("Agent run was not found in the active workspace.");
+      if (resumeRecord.status !== "interrupted") {
+        throw new Error("Only interrupted agent runs can be resumed. Current status: " + resumeRecord.status + ".");
+      }
+      taskGoal = resumeRecord.goal;
+    }
+
+    if (isCodingTask(message) || resumeRecord) {
       const saved = await listPendingProposals(activeWorkspace);
       if (saved.pending.length || saved.stale.length) {
-        finishChat(jobId, "This workspace already has saved proposals. Type /proposals to inspect them, then use /apply or /discard before starting another code task.");
+        finishChat(jobId, "This workspace already has saved proposals. Type /proposals to inspect them, then use /apply or /discard before starting or resuming a code task.");
         return;
       }
-      updateChat(jobId, { phase: "planning", message: "Reading the project and planning a code change" });
-      const result = await runAgentTask({
-        root: activeWorkspace, goal: message, maxIterations: 3, runChecks: true,
-        modelRequest: aiRequest,
-        onProgress: update => updateChat(jobId, {
-          phase: update.phase || "working",
-          message: update.message || "Working on the requested change",
-          iteration: update.iteration || 0
-        })
+
+      if (resumeRecord) {
+        agentRunId = resumeRecord.id;
+        await updateAgentRun(activeWorkspace, agentRunId, {
+          status: "running",
+          phase: "resuming",
+          message: "Resuming from the last durable checkpoint.",
+          cancelRequested: false,
+          proposalIds: [],
+          event: { phase: "resuming", message: resumeRecord.recoveryPatch
+            ? "Restoring and revalidating the saved patch checkpoint."
+            : "Restarting task discovery because no validated patch checkpoint was saved." }
+        });
+      } else {
+        const createdRun = await createAgentRun(activeWorkspace, taskGoal);
+        agentRunId = createdRun.id;
+      }
+
+      updateChat(jobId, {
+        agentRunId,
+        phase: resumeRecord ? "resuming" : "planning",
+        message: resumeRecord ? "Restoring the saved agent checkpoint" : "Reading the project and planning a code change"
       });
+
+      const result = await runAgentTask({
+        root: activeWorkspace,
+        goal: taskGoal,
+        maxIterations: 3,
+        runChecks: true,
+        signal,
+        resumePatch: resumeRecord?.recoveryPatch || null,
+        resumeIteration: resumeRecord?.checkpoint?.iteration || 1,
+        modelRequest: (method, route, body, timeoutMs, options = {}) =>
+          aiRequest(method, route, body, timeoutMs, { ...options, signal }),
+        onProgress: async update => {
+          const phase = update.phase || "working";
+          const messageText = update.message || "Working on the requested change";
+          const runPatch = {
+            phase,
+            iteration: update.iteration || 0,
+            message: messageText,
+            event: { phase, message: messageText, iteration: update.iteration || 0 }
+          };
+          for (const key of [
+            "planSteps", "selectedContext", "attempts", "toolCalls",
+            "verification", "changedFiles", "proposalIds", "recoveryPatch"
+          ]) {
+            if (Object.prototype.hasOwnProperty.call(update, key)) runPatch[key] = update[key];
+          }
+          if (update.checkpoint) runPatch.checkpoint = update.checkpoint;
+          await updateAgentRun(activeWorkspace, agentRunId, runPatch);
+          updateChat(jobId, { agentRunId, phase, message: messageText, iteration: update.iteration || 0 });
+        }
+      });
+
       let applied = [];
       if (result.verification?.status === "passed" && result.proposals?.length) {
         updateChat(jobId, { phase: "applying", message: "Checks passed in a temporary copy; applying hash-checked proposals" });
-        const transaction = await applyProposals(activeWorkspace, result.proposals);
+        const transaction = await applyProposals(activeWorkspace, result.proposals, signal);
         applied = transaction.applied;
         result.toolCalls.push(transaction.toolCall);
       }
+
+      const completedAt = new Date().toISOString();
+      await updateAgentRun(activeWorkspace, agentRunId, {
+        status: "completed",
+        phase: "completed",
+        message: applied.length ? "Verified changes were applied." : "Agent task finished; review any staged proposals.",
+        planSteps: result.plan?.steps || [],
+        attempts: result.attempts || [],
+        toolCalls: result.toolCalls || [],
+        verification: result.verification || null,
+        changedFiles: result.changedFiles || [],
+        proposalIds: (result.proposals || []).map(proposal => proposal.id),
+        recoveryPatch: null,
+        checkpoint: {
+          stage: applied.length ? "applied" : result.proposals?.length ? "proposals_ready" : "completed",
+          iteration: result.attempts?.length || 0
+        },
+        event: {
+          phase: "completed",
+          message: applied.length ? "Verified proposals were applied transactionally." : "Agent task completed.",
+          iteration: result.attempts?.length || 0
+        }
+      });
+
       finishChat(jobId, compactAgentReply(result, applied), {
+        agentRunId,
         verification: result.verification?.status || "not_run",
         changedFiles: result.changedFiles?.map(item => item.path) || []
       });
@@ -612,7 +694,27 @@ async function runChatTurn(jobId, message, history, signal) {
       contextTokensUsed: tokenInfo.token_count, trainedSteps: generation.trained_steps
     });
   } catch (error) {
-    failChat(jobId, error);
+    const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
+    if (agentRunId) {
+      try {
+        await updateAgentRun(activeWorkspace, agentRunId, {
+          status: cancelled ? "cancelled" : "failed",
+          phase: cancelled ? "cancelled" : "failed",
+          message: cancelled
+            ? "Task cancelled at a safe checkpoint. Inspect any staged proposals before continuing."
+            : error instanceof Error ? error.message : String(error),
+          cancelRequested: cancelled,
+          error: cancelled ? null : (error instanceof Error ? error.message : String(error)),
+          event: {
+            phase: cancelled ? "cancelled" : "failed",
+            message: cancelled ? "The user cancelled this task." : "The task stopped after an error.",
+            iteration: 0
+          }
+        });
+      } catch {}
+    }
+    if (cancelled) cancelChatJob(jobId);
+    else failChat(jobId, error);
   }
 }
 
