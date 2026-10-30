@@ -173,13 +173,73 @@ function updateChat(jobId, value) {
   if (job) Object.assign(job, value, { updatedAt: new Date().toISOString() });
 }
 
+function cancelChatJob(jobId, reply = "Task cancelled. Any proposals already staged remain in the workspace; type /proposals to inspect them.") {
+  const job = chatJobs.get(jobId);
+  if (!job) return;
+  Object.assign(job, {
+    status: "cancelled",
+    phase: "cancelled",
+    message: "Task cancelled.",
+    reply,
+    error: null,
+    updatedAt: new Date().toISOString()
+  });
+  if (activeChatJobId === jobId) activeChatJobId = null;
+}
+
+function publicAgentRun(run) {
+  if (!run) return null;
+  const { recoveryPatch, ...visible } = run;
+  return { ...visible, recoveryAvailable: Boolean(recoveryPatch) };
+}
+
+async function listCurrentAgentRuns() {
+  await recoverInterruptedAgentRuns(activeWorkspace);
+  const runs = await listAgentRuns(activeWorkspace, 12);
+  return { root: activeWorkspace, runs: runs.map(publicAgentRun) };
+}
+
+async function readCurrentAgentRun(body) {
+  const run = await getAgentRun(activeWorkspace, body.runId);
+  if (!run) throw new Error("Agent run was not found in the active workspace.");
+  return { run: publicAgentRun(run), recoveryPatch: run.recoveryPatch || null };
+}
+
+async function resumeAgentRun(body) {
+  const run = await getAgentRun(activeWorkspace, body.runId);
+  if (!run) throw new Error("Agent run was not found in the active workspace.");
+  if (run.status !== "interrupted") {
+    throw new Error("Only interrupted agent runs can be resumed. Current status: " + run.status + ".");
+  }
+  const saved = await listPendingProposals(activeWorkspace);
+  if (saved.pending.length || saved.stale.length) {
+    throw new Error("Resolve existing workspace proposals with /proposals and /apply or /discard before resuming this run.");
+  }
+  return startChat({ message: "/resume " + run.id, history: [] });
+}
+
+async function cancelChat(body) {
+  const job = chatJobs.get(typeof body.jobId === "string" ? body.jobId : "");
+  if (!job) throw new Error("Chat turn not found or expired.");
+  if (job.status !== "running") return { ok: false, status: job.status, message: "This task is no longer running." };
+  if (job.phase === "applying") {
+    return { ok: false, status: job.status, message: "A transactional file apply is in progress and cannot be interrupted safely." };
+  }
+  if (job.agentRunId) {
+    await requestAgentRunCancellation(job.workspace, job.agentRunId);
+  }
+  job.controller?.abort();
+  updateChat(job.jobId, { phase: "cancelling", message: "Stopping the current task safely." });
+  return { ok: true, status: "cancelling", agentRunId: job.agentRunId || null };
+}
 
 
-async function applyProposals(root, proposals) {
+
+async function applyProposals(root, proposals, signal) {
   const toolRun = await executeWorkspaceTool({
     root, auditRoot: root, name: "workspace.proposals.apply-many",
     input: { proposalIds: proposals.map(proposal => proposal.id) },
-    approval: true
+    approval: true, signal
   });
   if (!toolRun.ok) throw new Error(toolRun.error || toolRun.message || "The proposal apply tool failed.");
   return {
@@ -303,7 +363,8 @@ function compactAgentReply(result, applied) {
   return lines.join("\n");
 }
 
-async function runChatTurn(jobId, message, history) {
+async function runChatTurn(jobId, message, history, signal) {
+  let agentRunId = null;
   try {
     updateChat(jobId, { phase: "connecting", message: "Connecting to the local model" });
     const workspaceCommand = message.match(/^\/workspace(?:\s+(.+))?$/is);
@@ -464,7 +525,7 @@ async function runChatTurn(jobId, message, history) {
       return;
     }
 
-    const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000);
+    const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000, { signal });
     if (!modelStatus.checkpoint_exists) {
       finishChat(jobId,
         "The local AI backend is running, but there is no trained checkpoint yet. Train once from the repository folder, then return here:\n\n"
@@ -564,21 +625,24 @@ function startChat(body) {
     activeChatJobId = null;
   }
   const jobId = crypto.randomUUID();
+  const controller = new AbortController();
   const job = {
     jobId, status: "running", phase: "starting", message: "Starting local response",
-    reply: "", error: null, workspace: activeWorkspace, updatedAt: new Date().toISOString()
+    reply: "", error: null, workspace: activeWorkspace, controller,
+    updatedAt: new Date().toISOString()
   };
   chatJobs.set(jobId, job);
   activeChatJobId = jobId;
   pruneChatJobs();
-  void runChatTurn(jobId, message, Array.isArray(body.history) ? body.history : []);
+  void runChatTurn(jobId, message, Array.isArray(body.history) ? body.history : [], controller.signal);
   return { jobId, status: job.status, phase: job.phase };
 }
 
 function readChatStatus(body) {
   const job = chatJobs.get(typeof body.jobId === "string" ? body.jobId : "");
   if (!job) throw new Error("Chat turn not found or expired. Send your message again.");
-  return job;
+  const { controller, ...visible } = job;
+  return visible;
 }
 
 const routeHandlers = {
