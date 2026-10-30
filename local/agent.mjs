@@ -364,7 +364,8 @@ function isPlainToolInput(value) {
 }
 
 export function validateImplementationSlicePlan(payload, taskGoal, maxSlices = 3) {
-  const maximum = Math.max(1, Math.min(3, Number(maxSlices) || 3));
+  const requestedMaximum = Number(maxSlices);
+  const maximum = Math.max(1, Math.min(3, Number.isFinite(requestedMaximum) ? requestedMaximum : 3));
   if (!isPlainToolInput(payload) || Object.keys(payload).some(key => key !== "slices")
     || !Array.isArray(payload.slices) || payload.slices.length < 1 || payload.slices.length > maximum) {
     throw new Error("Implementation plan must contain between one and " + maximum + " slices.");
@@ -406,17 +407,12 @@ function makeImplementationSlicePlanPrompt(goal, inventory, ranked) {
     "Each slice must deliver a concrete part of the requested outcome and have a testable acceptance criterion.",
     "Later slices may build on earlier verified slices. Do not invent unrelated work, documentation-only padding, or work outside the user request.",
     "Return only JSON with shape {slices:[{goal:string,acceptance:string}]}. Keep each goal under 1200 characters and each acceptance criterion under 400 characters.",
-    "
-TASK:
-" + goal,
-    "
-PROJECT:
-" + JSON.stringify({
+    "\nTASK:\n" + goal,
+    "\nPROJECT:\n" + JSON.stringify({
       name: inventory.name, frameworks: inventory.frameworks, scripts: inventory.scripts,
       context
     })
-  ].join("
-");
+  ].join("\n");
 }
 
 async function planImplementationSlices({
