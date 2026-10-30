@@ -278,8 +278,13 @@ async function startLocalServer(workspaceRoot) {
   };
   child.stdout.on("data", collect);
   child.stderr.on("data", collect);
-  await waitForHealth(port, child, () => logs);
-  return { base: "http://127.0.0.1:" + port, child, getLogs: () => logs };
+  try {
+    await waitForHealth(port, child, () => logs);
+    return { base: "http://127.0.0.1:" + port, child, getLogs: () => logs };
+  } catch (error) {
+    await stopChild(child);
+    throw new Error((error instanceof Error ? error.message : String(error)) + "\n" + logs);
+  }
 }
 
 async function runChatCommand(base, message) {
@@ -312,8 +317,8 @@ test("saved workspace proposals survive a real local service restart", async () 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-restart-workspace-"));
   await fs.mkdir(path.join(root, "src"), { recursive: true });
   const sourcePath = path.join(root, "src", "app.js");
-  const original = "export const version = 1;\\n";
-  const proposed = "export const version = 2;\\n";
+  const original = "export const version = 1;\n";
+  const proposed = "export const version = 2;\n";
   await fs.writeFile(sourcePath, original, "utf8");
 
   let service = null;
@@ -341,7 +346,7 @@ test("saved workspace proposals survive a real local service restart", async () 
 
     const review = await runChatCommand(service.base, "/proposals");
     assert.match(review.reply, /Saved workspace proposals/);
-    assert.match(review.reply, /src\\/app\\.js/);
+    assert.ok(review.reply.includes("src/app.js"));
 
     const applied = await runChatCommand(service.base, "/apply");
     assert.match(applied.reply, /Applied the explicitly requested proposals/);
