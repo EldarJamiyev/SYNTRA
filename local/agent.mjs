@@ -342,7 +342,7 @@ function throwIfAborted(signal) {
   throw error;
 }
 
-async function validatePatch(root, payload) {
+async function validatePatch(root, payload, expectedBaseHashes = null) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Structured patch must be a JSON object.");
   if (typeof payload.summary !== "string" || !payload.summary.trim()) throw new Error("Structured patch is missing a short summary.");
   if (!Array.isArray(payload.edits) || payload.edits.length < 1 || payload.edits.length > 6) throw new Error("Patch must contain between 1 and 6 file edits.");
@@ -361,6 +361,13 @@ async function validatePatch(root, payload) {
     catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!message.startsWith("File does not exist:")) throw error;
+    }
+    if (expectedBaseHashes && Object.prototype.hasOwnProperty.call(expectedBaseHashes, relative)) {
+      const expectedHash = expectedBaseHashes[relative];
+      const currentHash = before?.sha256 || null;
+      if (currentHash !== expectedHash) {
+        throw new Error("Saved patch cannot be resumed safely: " + relative + " changed after the checkpoint. Review the current file and start a new coding task.");
+      }
     }
     if (before === null) {
       if (edit.find !== "" || !edit.replace.trim()) throw new Error("A new file requires an empty find and non-empty replace.");
@@ -557,7 +564,8 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 
 export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
-  onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1
+  onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1,
+  resumeBaseHashes = null, previousAttempts = [], previousToolCalls = []
 }) {
   const root = await resolveWorkspace(inputRoot);
   const emitProgress = async update => {
@@ -574,17 +582,27 @@ export async function runAgentTask({
   const contextWindow = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 4096);
   const contextBudget = Math.max(128, Math.floor(contextWindow * 0.68));
   const outputBudget = Math.max(128, Math.min(1024, Math.floor(contextWindow * 0.22)));
+  const modelMetadata = {
+    provider: String(modelStatus.provider || "native-local").slice(0, 80),
+    name: String(modelStatus.model_name || modelStatus.model || "unknown").slice(0, 120),
+    contextWindowTokens: contextWindow,
+    contextBudgetTokens: contextBudget,
+    outputBudgetTokens: outputBudget
+  };
   await emitProgress({ phase: "tool-execution", iteration: 0, message: "Tool: workspace.inspect — collecting project metadata and file inventory." });
   const inspectionRun = await executeWorkspaceTool({
     root, auditRoot: root, name: "workspace.inspect", input: {}
   });
   if (!inspectionRun.ok) throw new Error(inspectionRun.error || "The workspace inspection tool failed.");
   const inventory = inspectionRun.output;
-  const toolCalls = [{
-    runId: inspectionRun.runId, name: inspectionRun.name, status: inspectionRun.status,
-    permission: inspectionRun.permission, durationMs: inspectionRun.durationMs,
-    auditRecorded: inspectionRun.auditRecorded
-  }];
+  const toolCalls = [
+    ...(Array.isArray(previousToolCalls) ? previousToolCalls.slice(-59) : []),
+    {
+      runId: inspectionRun.runId, name: inspectionRun.name, status: inspectionRun.status,
+      permission: inspectionRun.permission, durationMs: inspectionRun.durationMs,
+      auditRecorded: inspectionRun.auditRecorded
+    }
+  ];
   await emitProgress({ phase: "repository-map", iteration: 0, message: "Inspection recorded. Building the local import graph." });
   const graph = await buildRepositoryGraph(root);
   const ranked = rankGraph(graph, goal, requestedPath);
@@ -597,10 +615,11 @@ export async function runAgentTask({
     selectedContext: ranked.slice(0, 12).map(({ path: filePath, score, sha256 }) => ({
       path: filePath, score: Number(score.toFixed(2)), sha256
     })),
+    model: modelMetadata,
     checkpoint: { stage: "repository_mapped", iteration: 0 },
     toolCalls
   });
-  const attempts = [];
+  const attempts = Array.isArray(previousAttempts) ? previousAttempts.slice(-11) : [];
   let feedback = "";
   let finalChanges = null;
   let finalVerification = { status: "not_run", checks: [], passed: false };
@@ -660,7 +679,7 @@ export async function runAgentTask({
       let patchPayload;
       try {
         patchPayload = extractJsonObject(generated.text);
-        candidate = await validatePatch(root, patchPayload);
+        candidate = await validatePatch(root, patchPayload, resumingSavedPatch ? resumeBaseHashes : null);
       } catch (error) {
         if (signal?.aborted || error?.name === "AbortError") throw error;
         if (resumingSavedPatch) {
@@ -684,7 +703,7 @@ export async function runAgentTask({
         phase: "patch-validated",
         iteration,
         message: resumingSavedPatch
-          ? "Restored the saved patch checkpoint and revalidated its original file hashes."
+          ? "Restored the saved patch checkpoint and revalidated every original source-file hash and exact anchor."
           : "Patch schema, paths, file hashes and exact anchors validated.",
         recoveryPatch: patchPayload,
         checkpoint: { stage: "patch_validated", iteration },
