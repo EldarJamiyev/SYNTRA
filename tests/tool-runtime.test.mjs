@@ -167,11 +167,11 @@ test("multi-file apply is approval-gated and remains transactional", async () =>
   try {
     const first = await executeWorkspaceTool({
       root, name: "workspace.proposals.stage",
-      input: { path: "src/value.js", content: "export const first = 'updated';\\n" }
+      input: { path: "src/value.js", content: "export const first = 'updated';\n" }
     });
     const second = await executeWorkspaceTool({
       root, name: "workspace.proposals.stage",
-      input: { path: "src/added.js", content: "export const added = true;\\n" }
+      input: { path: "src/added.js", content: "export const added = true;\n" }
     });
     const before = await fs.readFile(path.join(root, "src", "value.js"), "utf8");
     const denied = await executeWorkspaceTool({
@@ -189,8 +189,8 @@ test("multi-file apply is approval-gated and remains transactional", async () =>
     });
     assert.equal(applied.ok, true);
     assert.equal(applied.output.applied.length, 2);
-    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "export const first = 'updated';\\n");
-    assert.equal(await fs.readFile(path.join(root, "src", "added.js"), "utf8"), "export const added = true;\\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "export const first = 'updated';\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "added.js"), "utf8"), "export const added = true;\n");
     const events = await readAudit(root);
     assert.ok(events.some(event => event.tool === "workspace.proposals.apply-many" && event.status === "completed" && event.approved));
   } finally {
