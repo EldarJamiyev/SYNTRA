@@ -699,6 +699,13 @@ export async function runAgentTask({
         continue;
       }
 
+      attempts.push({
+        iteration, status: runChecks ? "patch_validated" : "patch_validated_not_run",
+        summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path),
+        promptTokens: tokenInfo.token_count, outputTokens: generated.generated_tokens,
+        modelStep: generated.trained_steps
+      });
+      plan.steps.find(step => step.id === "patch").status = "completed";
       await emitProgress({
         phase: "patch-validated",
         iteration,
@@ -715,14 +722,7 @@ export async function runAgentTask({
           baseHash: change.beforeHash, afterHash: sha256(change.content), reason: change.reason
         }))
       });
-      attempts.push({
-        iteration, status: runChecks ? "patch_validated" : "patch_validated_not_run",
-        summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path),
-        promptTokens: tokenInfo.token_count, outputTokens: generated.generated_tokens,
-        modelStep: generated.trained_steps
-      });
       finalChanges = candidate;
-      plan.steps.find(step => step.id === "patch").status = "completed";
       if (!runChecks) {
         finalVerification = {
           status: "not_run", passed: false, checks: [],
@@ -817,11 +817,14 @@ export async function runAgentTask({
       attempts[attempts.length - 1].status = allPassed
         ? reviewReasons.length ? "verification_passed_review_required" : "verification_passed"
         : "verification_failed";
+      plan.steps.find(step => step.id === "verify").status = allPassed
+        ? "completed" : tasks.length ? "blocked" : "not_available";
       await emitProgress({
         phase: "verification-result",
         iteration,
         message: allPassed ? "Verification result checkpointed." : "Verification failure checkpointed for a bounded repair attempt.",
         verification: finalVerification,
+        planSteps: plan.steps,
         attempts,
         toolCalls,
         checkpoint: { stage: allPassed ? "verification_passed" : "verification_failed", iteration }
@@ -876,6 +879,7 @@ export async function runAgentTask({
           iteration: attempts.length,
           message: "Staged proposal for " + change.path + ".",
           proposalIds: proposals.map(proposal => proposal.id),
+          planSteps: plan.steps,
           toolCalls,
           checkpoint: { stage: "proposal_staging", iteration: attempts.length }
         });
@@ -888,6 +892,7 @@ export async function runAgentTask({
       phase: finalChanges ? "completed" : "generation-failed",
       iteration: attempts.length,
       message: finalChanges ? "Agent loop finished; review staged proposals." : "Agent did not produce a schema-valid patch.",
+      planSteps: plan.steps,
       proposalIds: proposals.map(proposal => proposal.id),
       toolCalls, attempts, verification: finalVerification,
       checkpoint: { stage: finalChanges ? "proposals_staged" : "generation_failed", iteration: attempts.length },
