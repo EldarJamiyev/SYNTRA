@@ -242,7 +242,7 @@ async function runGit(root, args) {
   return String(result.stdout || "").slice(0, 28000).trimEnd();
 }
 
-async function invokeTool(root, name, input) {
+async function invokeTool(root, name, input, signal) {
   switch (name) {
     case "workspace.inspect":
       return inspectWorkspace(root);
@@ -280,7 +280,7 @@ async function invokeTool(root, name, input) {
     case "workspace.proposals.discard":
       return discardFileProposals(root, input.proposalIds, true);
     case "workspace.check":
-      return runProjectCheck(root, input.task, { timeoutMs: input.timeoutMs || 120000 });
+      return runProjectCheck(root, input.task, { timeoutMs: input.timeoutMs || 120000, signal });
     case "git.status":
       return { root, status: await runGit(root, ["status", "--short", "--branch"]) };
     case "git.diff-summary": {
@@ -326,7 +326,7 @@ function summarizeOutput(name, output) {
   }
 }
 
-async function executeWorkspaceToolUnlocked({ root: inputRoot, auditRoot: inputAuditRoot, name, input = {}, approval = false }) {
+async function executeWorkspaceToolUnlocked({ root: inputRoot, auditRoot: inputAuditRoot, name, input = {}, approval = false, signal }) {
   const definition = definitionsByName.get(name);
   if (!definition) throw new Error("Unknown SYNTRA tool: " + String(name));
   validateInput(definition, input);
@@ -373,13 +373,24 @@ async function executeWorkspaceToolUnlocked({ root: inputRoot, auditRoot: inputA
   let output;
   let failure = null;
   try {
-    output = await invokeTool(root, name, input);
+    if (signal?.aborted) {
+      const cancelled = new Error("Tool execution was cancelled.");
+      cancelled.name = "AbortError";
+      throw cancelled;
+    }
+    output = await invokeTool(root, name, input, signal);
+    if (signal?.aborted) {
+      const cancelled = new Error("Tool execution was cancelled.");
+      cancelled.name = "AbortError";
+      throw cancelled;
+    }
   } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
   }
 
   const durationMs = Date.now() - startedAt;
-  const status = failure ? "failed" : "completed";
+  const cancelled = Boolean(signal?.aborted);
+  const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
   let auditRecorded = true;
   try {
     await recordWorkspaceToolEvent(auditRoot, {
