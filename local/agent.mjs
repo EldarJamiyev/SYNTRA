@@ -429,6 +429,93 @@ async function planImplementationSlices({
   return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
 }
 
+async function validateResumeCandidateCheckpoint(root, goal, checkpoint, maxSlices) {
+  if (!isPlainToolInput(checkpoint) || checkpoint.schemaVersion !== 1
+    || checkpoint.root !== root || checkpoint.stage !== "slice_verified"
+    || !Array.isArray(checkpoint.slices) || !Array.isArray(checkpoint.files)
+    || !Number.isInteger(checkpoint.nextSliceIndex)) {
+    throw new Error("Saved candidate checkpoint metadata is invalid.");
+  }
+  const planned = validateImplementationSlicePlan({
+    slices: checkpoint.slices.map(slice => ({
+      goal: slice.goal,
+      acceptance: slice.acceptance
+    }))
+  }, goal, maxSlices);
+  if (checkpoint.nextSliceIndex < 1 || checkpoint.nextSliceIndex > planned.length) {
+    throw new Error("Saved candidate checkpoint points to an invalid next slice.");
+  }
+  for (let index = 0; index < planned.length; index += 1) {
+    const expected = index < checkpoint.nextSliceIndex ? "completed" : "pending";
+    if (checkpoint.slices[index]?.id !== planned[index].id
+      || checkpoint.slices[index]?.status !== expected) {
+      throw new Error("Saved candidate checkpoint slice progression is inconsistent.");
+    }
+    planned[index].status = expected;
+  }
+  if (!checkpoint.verification || checkpoint.verification.passed !== true
+    || !["passed", "passed_review_required"].includes(checkpoint.verification.status)) {
+    throw new Error("Saved candidate checkpoint has no successful verification evidence.");
+  }
+  if (!Array.isArray(checkpoint.files) || checkpoint.files.length < 1
+    || checkpoint.files.length > 24) {
+    throw new Error("Saved candidate checkpoint file list is invalid.");
+  }
+  const seen = new Set();
+  const files = [];
+  for (const file of checkpoint.files) {
+    if (!isPlainToolInput(file)) throw new Error("Saved candidate checkpoint contains an invalid file entry.");
+    const relative = normalizeAgentPath(file.path);
+    if (relative !== file.path || seen.has(relative)
+      || typeof file.content !== "string" || sha256(file.content) !== file.contentHash) {
+      throw new Error("Saved candidate checkpoint content or path is invalid: " + relative);
+    }
+    seen.add(relative);
+    const original = await readWorkspaceFileOrNull(root, relative);
+    if (file.existedBefore === true) {
+      if (!original || typeof file.baseHash !== "string" || original.sha256 !== file.baseHash) {
+        throw new Error("Saved candidate checkpoint is stale because the original file changed: " + relative);
+      }
+    } else if (file.existedBefore === false) {
+      if (original || file.baseHash !== null) {
+        throw new Error("Saved candidate checkpoint is stale because a previously new file now exists: " + relative);
+      }
+    } else {
+      throw new Error("Saved candidate checkpoint has an invalid original-file flag: " + relative);
+    }
+    if (Buffer.byteLength(file.content, "utf8") > 128 * 1024) {
+      throw new Error("Saved candidate checkpoint file exceeds the 128 KB per-file limit: " + relative);
+    }
+    files.push({
+      path: relative,
+      existedBefore: file.existedBefore,
+      baseHash: file.baseHash,
+      beforeContent: original?.content ?? null,
+      content: file.content,
+      contentHash: file.contentHash,
+      reason: typeof file.reason === "string" ? file.reason.slice(0, 500) : ""
+    });
+  }
+  return {
+    nextSliceIndex: checkpoint.nextSliceIndex,
+    slices: planned,
+    files,
+    verification: {
+      status: checkpoint.verification.status,
+      passed: true,
+      checks: Array.isArray(checkpoint.verification.checks) ? checkpoint.verification.checks.slice(0, 8) : []
+    }
+  };
+}
+
+async function readWorkspaceFileOrNull(root, relative) {
+  try { return await readWorkspaceFile(root, relative); }
+  catch (error) {
+    if (error instanceof Error && error.message.startsWith("File does not exist:")) return null;
+    throw error;
+  }
+}
+
 async function collectFinalCandidateChanges(changedPaths, originalByPath, expectedContents) {
   const changes = [];
   for (const relative of [...changedPaths].sort()) {
