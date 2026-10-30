@@ -1767,6 +1767,16 @@ export async function runAgentTask({
       plan.steps.find(step => step.id === "review").status = "completed";
     }
 
+    if (runId && typeof onCandidateCheckpoint === "function") {
+      try { await onCandidateCheckpoint(null); }
+      catch (error) {
+        observations.push({
+          kind: "candidate-checkpoint", stage: "finalization", status: "cleanup_failed",
+          detail: String(error instanceof Error ? error.message : error).slice(0, 300)
+        });
+      }
+    }
+
     await emitProgress({
       phase: finalChanges ? "completed" : "generation-failed",
       iteration: attempts.length,
