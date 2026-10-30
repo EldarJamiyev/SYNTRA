@@ -760,7 +760,10 @@ export async function runAgentTask({
       for (const change of finalChanges.changes) {
         const toolRun = await executeWorkspaceTool({
           root, auditRoot: root, name: "workspace.proposals.stage",
-          input: { path: change.path, content: change.content, expectedBaseHash: change.beforeHash }
+          input: {
+            path: change.path, content: change.content,
+            ...(typeof change.beforeHash === "string" ? { expectedBaseHash: change.beforeHash } : {})
+          }
         });
         toolCalls.push({
           runId: toolRun.runId, name: toolRun.name, status: toolRun.status,
