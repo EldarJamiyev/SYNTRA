@@ -513,7 +513,7 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
   if (payload.stage !== "slice_verified") throw new Error("Only a verified slice boundary can be persisted for continuation.");
   if (!Number.isInteger(payload.nextSliceIndex) || !Array.isArray(payload.slices)
     || payload.slices.length < 1 || payload.slices.length > 3
-    || payload.nextSliceIndex < 1 || payload.nextSliceIndex > payload.slices.length) {
+    || payload.nextSliceIndex < 1 || payload.nextSliceIndex >= payload.slices.length) {
     throw new Error("Candidate checkpoint slice progression is invalid.");
   }
   const slices = payload.slices.map((slice, index) => {
