@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
 import { runAgentTask } from "./agent.mjs";
+import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
@@ -17,7 +18,6 @@ import {
   proposeFileChange,
   readWorkspaceFile,
   resolveWorkspace,
-  runProjectCheck,
   searchWorkspace
 } from "./workspace.mjs";
 
@@ -229,6 +229,13 @@ function formatProposalList(status) {
   return lines.join("\n");
 }
 
+async function executeToolOutput(options) {
+  const result = await executeWorkspaceTool(options);
+  if (!result.ok) throw new Error(result.error || result.message || "SYNTRA tool execution failed.");
+  if (!result.auditRecorded) throw new Error("The tool ran, but its completion audit record could not be persisted. Check .syntra/actions.jsonl.");
+  return result.output;
+}
+
 function compactAgentReply(result, applied) {
   const lines = [result.patchSummary || "Code task finished.", ""];
   if (applied.length) {
@@ -269,6 +276,13 @@ function compactAgentReply(result, applied) {
   }
   if (result.proposals?.length && !applied.length) {
     lines.push("", "Review the proposed changes above before typing `/apply`. SYNTRA will recheck the original file hashes before writing.");
+  }
+  if (result.toolCalls?.length) {
+    const toolNames = [...new Set(result.toolCalls.map(call => call.name))];
+    lines.push("", "Tools used: " + toolNames.map(name => "`" + name + "`").join(", ") + ".");
+    if (result.toolCalls.every(call => call.auditRecorded !== false)) {
+      lines.push("Tool execution events are recorded in `.syntra/actions.jsonl`.");
+    }
   }
   if (result.attempts?.length) lines.push("", "Repair attempts: " + result.attempts.length + ".");
   if (applied.length) lines.push("", "Backups and audit records are saved in .syntra.");
@@ -524,10 +538,18 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
+  "GET /local-api/tools": async () => ({ tools: listWorkspaceTools() }),
+  "POST /local-api/tools/execute": async body => executeWorkspaceTool({
+    root: body.root || activeWorkspace,
+    auditRoot: body.root || activeWorkspace,
+    name: body.name,
+    input: body.input || {},
+    approval: body.approval === true
+  }),
   "GET /local-api/workspace/status": async () => readWorkspaceStatus(),
   "POST /local-api/workspace/switch": switchWorkspace,
   "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
@@ -542,7 +564,12 @@ const routeHandlers = {
   "POST /local-api/workspace/proposals": async body => listProposals(body.root),
   "POST /local-api/workspace/propose": async body => proposeFileChange(body.root, body.path, body.content, body.expectedSha256),
   "POST /local-api/workspace/apply": async body => applyFileProposal(body.root, body.proposalId, body.confirm === true),
-  "POST /local-api/workspace/check": async body => runProjectCheck(body.root, body.task, { timeoutMs: body.timeoutMs })
+  "POST /local-api/workspace/check": async body => executeToolOutput({
+    root: body.root || activeWorkspace, auditRoot: body.root || activeWorkspace,
+    name: "workspace.check",
+    input: { task: body.task, ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }) },
+    approval: body.confirm === true
+  })
 };
 
 const server = http.createServer(async (request, response) => {
