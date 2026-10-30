@@ -24,16 +24,28 @@ async function createProject() {
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
     name: "agent-fixture",
     version: "1.0.0",
-    scripts: { test: "node tests/value-check.mjs" }
+    scripts: { test: "node --test" }
   }, null, 2));
   await fs.writeFile(path.join(root, "src", "value.js"), "module.exports = { value: 1 };\n");
-  await fs.writeFile(path.join(root, "tests", "value-check.mjs"),
-    'import assert from "node:assert/strict";\\n' +
-    'import { createRequire } from "node:module";\\n' +
-    'const require = createRequire(import.meta.url);\\n' +
-    'assert.equal(require("../src/value.js").value, 2, "the candidate must export value 2");\\n');
   await fs.writeFile(path.join(root, "tests", "value.test.js"),
     'const test = require("node:test");\nconst assert = require("node:assert/strict");\nconst value = require("../src/value.js");\ntest("value is two", () => assert.equal(value.value, 2));\n');
+  return root;
+}
+
+async function createSliceProject() {
+  const root = await createProject();
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({
+    name: "agent-slice-fixture",
+    version: "1.0.0",
+    scripts: { test: "node tests/value-check.mjs" }
+  }, null, 2));
+  const checkScript = [
+    'import assert from "node:assert/strict";',
+    'import { createRequire } from "node:module";',
+    'const require = createRequire(import.meta.url);',
+    'assert.equal(require("../src/value.js").value, 2, "the candidate must export value 2");'
+  ].join("\n") + "\n";
+  await fs.writeFile(path.join(root, "tests", "value-check.mjs"), checkScript);
   return root;
 }
 
@@ -65,7 +77,7 @@ test("implementation slice plan validation is bounded, unique, and requires meas
 });
 
 test("agent implements and verifies multiple slices against one cumulative candidate", async () => {
-  const root = await createProject();
+  const root = await createSliceProject();
   const generatedPrompts = [];
   const recoveryCheckpoints = [];
   let patchCalls = 0;
@@ -165,7 +177,7 @@ test("agent implements and verifies multiple slices against one cumulative candi
 });
 
 test("an incomplete later slice cannot inherit an earlier passing verification status", async () => {
-  const root = await createProject();
+  const root = await createSliceProject();
   let patchCalls = 0;
   const modelRequest = async (method, route, body) => {
     if (method === "GET" && route === "/model/status") {
