@@ -1,8 +1,4 @@
-import {
-  CHAT_HISTORY_KEY,
-  loadMessages,
-  normalizeMessages
-} from "./chat-history.js";
+import { loadMessages, normalizeMessages } from "./chat-history.js";
 
 export const CHAT_SESSIONS_KEY = "syntra-chat-sessions-v1";
 export const MAX_CHAT_SESSIONS = 24;
