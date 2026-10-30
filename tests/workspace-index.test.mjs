@@ -70,7 +70,7 @@ test("workspace symbol index extracts bounded declarations without persisting so
     const rust = await searchWorkspaceSymbols(root, "RouteProvider");
     assert.equal(rust.results[0].path, "src/lib.rs");
 
-    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v1.json"), "utf8");
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
     assert.equal(stored.includes("SYNTRA_SECRET"), false);
     assert.equal(stored.includes("return host"), false);
     assert.equal(stored.includes("GatewayOptions { host"), false);
@@ -185,7 +185,7 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(status.documentationReferenceCount, 2);
     assert.equal(status.testOwnershipCount, 1);
 
-    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v1.json"), "utf8");
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
     assert.equal(stored.includes("resolveGateway(host: string)"), false);
     assert.equal(stored.includes("used by the"), false);
     assert.equal(stored.includes("The [gateway service]"), false);
@@ -238,9 +238,9 @@ test("workspace index refuses a symbolic-link index file", async t => {
   try {
     await refreshWorkspaceIndex(root);
     await fs.writeFile(outside, JSON.stringify({ schemaVersion: 1 }), "utf8");
-    await fs.unlink(path.join(root, ".syntra", "workspace-index-v1.json"));
+    await fs.unlink(path.join(root, ".syntra", "workspace-index-v2.json"));
     try {
-      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v1.json"), "file");
+      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v2.json"), "file");
     } catch (error) {
       if (["EPERM", "EACCES", "ENOTSUP", "UNKNOWN"].includes(error?.code)) {
         t.skip("The current operating system does not permit creating file symlinks.");
