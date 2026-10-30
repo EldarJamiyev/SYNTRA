@@ -621,7 +621,7 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
     status: String(item.status || "recorded").slice(0, 40),
     expectedHash: typeof item.expectedHash === "string" ? item.expectedHash.slice(0, 64) : null,
     observedHash: typeof item.observedHash === "string" ? item.observedHash.slice(0, 64) : null,
-    detail: String(item.detail || "").replace(/[\\r\\n]+/g, " ").slice(0, 400)
+    detail: String(item.detail || "").replace(/[\r\n]+/g, " ").slice(0, 400)
   }));
   if (Array.isArray(patch.attempts)) next.attempts = patch.attempts.slice(-12).map(item => ({
     iteration: Number.isInteger(item.iteration) ? item.iteration : 0,
