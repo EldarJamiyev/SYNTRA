@@ -316,7 +316,7 @@ async function runChatCommand(base, message) {
 test("local tool catalogue and API enforce permissions and record execution", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-tool-api-"));
   await fs.mkdir(path.join(root, "src"), { recursive: true });
-  await fs.writeFile(path.join(root, "src", "index.js"), "export const value = 1;\\n", "utf8");
+  await fs.writeFile(path.join(root, "src", "index.js"), "export const value = 1;\n", "utf8");
   let service = null;
   try {
     service = await startLocalServer(root);
