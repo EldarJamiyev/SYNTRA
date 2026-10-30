@@ -464,7 +464,10 @@ export default function App() {
           type="button"
           aria-label={historyOpen ? 'Close conversation history' : 'Open conversation history'}
           aria-expanded={historyOpen}
-          onClick={() => setHistoryOpen(open => !open)}
+          onClick={() => {
+            setWorkspaceOpen(false);
+            setHistoryOpen(open => !open);
+          }}
         >
           <Menu size={19} strokeWidth={1.8} />
         </button>
@@ -477,6 +480,7 @@ export default function App() {
           aria-expanded={workspaceOpen}
           title={workspaceStatus?.root || 'Local project workspace'}
           onClick={() => {
+            setHistoryOpen(false);
             setWorkspacePath(workspaceStatus?.root || loadWorkspacePath() || workspacePath);
             setWorkspaceOpen(open => !open);
           }}
@@ -514,13 +518,13 @@ export default function App() {
               id="workspace-path"
               value={workspacePath}
               onChange={event => setWorkspacePath(event.target.value)}
-              placeholder="C:\\Projects\\MyProject"
+              placeholder={'C:\\Projects\\MyProject'}
               maxLength={4096}
               disabled={pending || workspaceSwitching}
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="submit" disabled={pending || workspaceSwitching || !workspacePath.trim()}>
+            <button type="submit" disabled={pending || workspaceLoading || workspaceSwitching || !workspacePath.trim()}>
               {workspaceSwitching ? 'Switching…' : 'Switch folder'}
             </button>
           </form>
