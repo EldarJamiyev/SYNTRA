@@ -32,6 +32,12 @@ type WorkspaceMemoryNote = {
   owner: 'user';
 };
 
+type WorkspaceExclusions = {
+  root: string;
+  patterns: string[];
+  updatedAt: string | null;
+};
+
 type WorkspaceToolResponse<T> = {
   ok: boolean;
   output?: T;
@@ -182,6 +188,12 @@ export default function App() {
   const [workspacePath, setWorkspacePath] = useState(() => loadWorkspacePath() || '');
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const [workspaceError, setWorkspaceError] = useState('');
+  const [workspaceExclusions, setWorkspaceExclusions] = useState<WorkspaceExclusions | null>(null);
+  const [exclusionsDraft, setExclusionsDraft] = useState('');
+  const [exclusionsLoading, setExclusionsLoading] = useState(false);
+  const [exclusionsSaving, setExclusionsSaving] = useState(false);
+  const [exclusionsError, setExclusionsError] = useState('');
+  const [exclusionsSaved, setExclusionsSaved] = useState(false);
   const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
   const [memoryNotes, setMemoryNotes] = useState<WorkspaceMemoryNote[]>([]);
   const [memorySearch, setMemorySearch] = useState('');
@@ -385,6 +397,42 @@ export default function App() {
     return result.output;
   };
 
+  const refreshWorkspaceExclusions = async () => {
+    setExclusionsLoading(true);
+    try {
+      const result = await getJson<WorkspaceExclusions>('/local-api/workspace/exclusions');
+      if (mountedRef.current) {
+        setWorkspaceExclusions(result);
+        setExclusionsDraft((result.patterns || []).join('\n'));
+        setExclusionsError('');
+        setExclusionsSaved(false);
+      }
+    } finally {
+      if (mountedRef.current) setExclusionsLoading(false);
+    }
+  };
+
+  const submitWorkspaceExclusions = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (exclusionsSaving || pending || !workspaceExclusions) return;
+    setExclusionsSaving(true);
+    setExclusionsError('');
+    setExclusionsSaved(false);
+    try {
+      const result = await postJson<WorkspaceExclusions>('/local-api/workspace/exclusions', {
+        patterns: exclusionsDraft.split(/\r?\n/),
+        expectedUpdatedAt: workspaceExclusions.updatedAt,
+      });
+      setWorkspaceExclusions(result);
+      setExclusionsDraft(result.patterns.join('\n'));
+      setExclusionsSaved(true);
+    } catch (cause) {
+      setExclusionsError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setExclusionsSaving(false);
+    }
+  };
+
   const refreshWorkspaceMemory = async (rootOverride?: string) => {
     setMemoryLoading(true);
     try {
@@ -494,6 +542,9 @@ export default function App() {
       setMemoryNotes([]);
       resetWorkspaceMemoryDraft();
       try { await refreshAgentRuns(); } catch { setAgentRuns([]); }
+      try { await refreshWorkspaceExclusions(); } catch (cause) {
+        setExclusionsError(cause instanceof Error ? cause.message : String(cause));
+      }
       try { await refreshWorkspaceMemory(status.root); } catch (cause) {
         setMemoryError(cause instanceof Error ? cause.message : String(cause));
       }
@@ -697,6 +748,9 @@ export default function App() {
               // Fetch its recovered run state when the workspace panel is reopened.
               void refreshAgentRuns().catch(() => {});
               void refreshWorkspaceStatus().catch(() => {});
+              void refreshWorkspaceExclusions().catch(cause => {
+                if (mountedRef.current) setExclusionsError(cause instanceof Error ? cause.message : String(cause));
+              });
               void refreshWorkspaceMemory().catch(cause => {
                 if (mountedRef.current) setMemoryError(cause instanceof Error ? cause.message : String(cause));
               });
@@ -747,6 +801,39 @@ export default function App() {
             </button>
           </form>
           {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
+          <section className="workspace-exclusions-panel" aria-label="Agent path exclusions">
+            <div className="workspace-memory-heading">
+              <div>
+                <div className="workspace-agent-runs-heading">Agent path exclusions</div>
+                <div className="workspace-memory-subtitle">Keep selected folders and files out of agent discovery, search, indexing, and file tools.</div>
+              </div>
+              <span className="workspace-memory-count">{workspaceExclusions?.patterns.length || 0}/100</span>
+            </div>
+            <form className="workspace-exclusions-form" onSubmit={submitWorkspaceExclusions}>
+              <label htmlFor="workspace-exclusions">One relative glob pattern per line</label>
+              <textarea
+                id="workspace-exclusions"
+                value={exclusionsDraft}
+                onChange={event => {
+                  setExclusionsDraft(event.target.value);
+                  setExclusionsSaved(false);
+                }}
+                placeholder={'docs/internal/**\n*.generated.ts\nfixtures/private/**'}
+                maxLength={16000}
+                rows={4}
+                disabled={exclusionsLoading || exclusionsSaving || pending || !workspaceExclusions}
+                spellCheck={false}
+              />
+              <div className="workspace-exclusions-actions">
+                <span role="status">{exclusionsLoading ? 'Loading…' : exclusionsSaved ? 'Saved for this workspace' : 'Patterns are stored locally'}</span>
+                <button type="submit" disabled={exclusionsLoading || exclusionsSaving || pending || !workspaceExclusions}>
+                  {exclusionsSaving ? 'Saving…' : 'Save exclusions'}
+                </button>
+              </div>
+            </form>
+            {exclusionsError && <div className="workspace-error" role="alert">{exclusionsError}</div>}
+            <div className="workspace-memory-footnote">Supports *, ?, and **. Exclusions are workspace-specific and cannot target .syntra. Existing hard-coded secret and build-folder protections remain active.</div>
+          </section>
           <section className="workspace-memory-panel" aria-label="Project memory">
             <div className="workspace-memory-heading">
               <div>

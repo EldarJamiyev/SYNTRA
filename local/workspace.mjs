@@ -491,8 +491,7 @@ function globPatternRegExp(pattern) {
     } else if (character === "?") {
       source += "[^/]";
     } else {
-      source += character.replace(/[|\\{}()[\]^$+?.]/g, "\\async function appendAudit(root, entry) {
-");
+      source += ".^$+?()|{}[]\\".includes(character) ? "\\" + character : character;
     }
   }
   return new RegExp(source + "$", "i");

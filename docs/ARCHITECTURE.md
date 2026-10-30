@@ -4,11 +4,11 @@ SYNTRA uses a small local stack rather than a cloud AI service.
 
 ## Runtime components
 
-1. **React/Vite frontend** — one active conversation view and one composer, with a compact history drawer for multiple named sessions. Session state is stored in bounded browser storage, the previous single-thread history is migrated on first load, and /clear erases only the active conversation. Search, rename, delete, resume, and storage-failure fallback are handled locally. Assistant Markdown is rendered without enabling raw HTML; links are protocol-checked before rendering.
+1. **React/Vite frontend** — one active conversation view and one composer, with a compact history drawer for multiple named sessions. Session state is stored in bounded browser storage, the previous single-thread history is migrated on first load, and /clear erases only the active conversation. Search, rename, delete, resume, and storage-failure fallback are handled locally. The workspace panel can save a bounded set of workspace-specific relative glob exclusions. Assistant Markdown is rendered without enabling raw HTML; links are protocol-checked before rendering.
 2. **Node loopback service** — validates requests, owns chat jobs, keeps the active workspace, routes ordinary messages to chat, and coordinates repository edits.
 3. **Local model backend** — if a suitable local Ollama model is installed, prompts are sent to that loopback Ollama service. Otherwise the router falls back to SYNTRA's local Python/PyTorch service. The native path is a from-scratch research model, not a pretrained frontier assistant.
 
-The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:3000; the workspace API is proxied to 127.0.0.1:3001; the native AI service normally uses 127.0.0.1:3002; Ollama listens on 127.0.0.1:11434.
+The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:3000; the workspace API is proxied to 127.0.0.1:3001; the native AI service normally uses 127.0.0.1:3002; Ollama listens on 127.0.0.1:11434. Workspace exclusion rules live in each project's `.syntra/workspace-exclusions-v1.json`; they filter recursive discovery, full-text search, symbol-index refresh and lookup, direct reads, and proposal file access. Patterns are relative to the workspace root and support `*`, `?`, and `**`.
 
 ## Chat request lifecycle
 

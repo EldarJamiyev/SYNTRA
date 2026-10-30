@@ -133,7 +133,8 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Provide controls to list, search, add, edit, and delete saved notes; note changes and deletion require explicit approval.
 - [x] Keep note contents out of tool audit events and limit agent retrieval to bounded, read-only search.
 - [x] Enforce note-count, file-size, title, body, and tag limits; reject known credential patterns and refuse symlink or invalid stores.
-- [ ] Add configurable path exclusions and stronger secret scanning. Current credential detection is best-effort and is not a substitute for a secret manager.
+- [x] Add workspace-specific relative glob exclusions for discovery, full-text search, symbol indexing, direct reads, and proposal access; store settings locally with optimistic-concurrency protection and reject invalid or symlinked configuration.
+- [ ] Strengthen secret scanning. Current credential detection is best-effort and is not a substitute for a secret manager.
 
 **Acceptance:** Context selection is explainable, reproducible, workspace-scoped, and covered by tests for stale-index invalidation, explicit memory approval, audit redaction, workspace isolation, and best-effort secret detection.
 

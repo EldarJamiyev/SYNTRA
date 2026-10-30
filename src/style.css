@@ -472,3 +472,43 @@ button:disabled { cursor: not-allowed; }
 @media (max-width: 460px) {
   .workspace-memory-form-row { grid-template-columns: 1fr; }
 }
+
+
+/* Workspace-local agent path exclusions */
+.workspace-exclusions-panel {
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid #383838;
+}
+.workspace-exclusions-panel .workspace-agent-runs-heading { margin-bottom: 3px; }
+.workspace-exclusions-form { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+.workspace-exclusions-form > label { color: #bdbdbd; font-size: 10px; font-weight: 550; }
+.workspace-exclusions-form textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 82px;
+  padding: 8px 9px;
+  color: #ededed;
+  border: 1px solid #3c3c3c;
+  border-radius: 7px;
+  outline: 0;
+  background: #252525;
+  font: 10px/1.55 Consolas, "Cascadia Code", monospace;
+  resize: vertical;
+}
+.workspace-exclusions-form textarea:focus { border-color: #777777; }
+.workspace-exclusions-form textarea::placeholder { color: #777777; }
+.workspace-exclusions-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.workspace-exclusions-actions span { color: #858585; font-size: 9px; }
+.workspace-exclusions-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: #242424;
+  border: 0;
+  border-radius: 7px;
+  background: #dfdfdf;
+  font-size: 10px;
+  font-weight: 600;
+}
+.workspace-exclusions-actions button:hover:not(:disabled) { background: #ffffff; }
+.workspace-exclusions-actions button:disabled { opacity: .45; cursor: not-allowed; }
