@@ -588,13 +588,18 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
     verification: {
       status: verification.status,
       passed: true,
-      checks: Array.isArray(verification.checks) ? verification.checks.slice(0, 8).map(check => ({
-        task: String(check.task || "").slice(0, 40),
-        passed: check.passed === true,
-        exitCode: Number.isInteger(check.exitCode) ? check.exitCode : null,
-        timedOut: check.timedOut === true,
-        durationMs: Number.isFinite(check.durationMs) ? Math.max(0, Math.floor(check.durationMs)) : null
-      })) : []
+      checks: Array.isArray(verification.checks)
+        ? verification.checks
+            .filter(check => check && typeof check === "object" && !Array.isArray(check))
+            .slice(0, 8)
+            .map(check => ({
+              task: String(check.task || "").slice(0, 40),
+              passed: check.passed === true,
+              exitCode: Number.isInteger(check.exitCode) ? check.exitCode : null,
+              timedOut: check.timedOut === true,
+              durationMs: Number.isFinite(check.durationMs) ? Math.max(0, Math.floor(check.durationMs)) : null
+            }))
+        : []
     }
   };
   const serialized = JSON.stringify(sanitized, null, 2) + "\n";
