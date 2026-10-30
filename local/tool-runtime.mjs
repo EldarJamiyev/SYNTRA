@@ -6,6 +6,7 @@ import {
   applyFileProposals,
   createProjectPlan,
   discardFileProposals,
+  discoverProjectChecks,
   inspectWorkspace,
   listPendingProposals,
   proposeFileChange,
@@ -24,6 +25,13 @@ const TOOL_DEFINITIONS = [
   {
     name: "workspace.inspect",
     description: "Inspect project metadata, supported languages, manifests, scripts, frameworks, and bounded file inventory.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.checks.discover",
+    description: "Discover build, test, lint, and type-check runners that are actually configured for this workspace without executing them.",
     permission: "read_only",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
@@ -246,6 +254,8 @@ async function invokeTool(root, name, input, signal) {
   switch (name) {
     case "workspace.inspect":
       return inspectWorkspace(root);
+    case "workspace.checks.discover":
+      return discoverProjectChecks(root);
     case "workspace.search":
       return searchWorkspace(root, input.query, input.limit || 20);
     case "workspace.read": {
@@ -299,6 +309,12 @@ function summarizeOutput(name, output) {
   switch (name) {
     case "workspace.inspect":
       return { name: output.name, fileCount: output.fileCount, frameworks: output.frameworks };
+    case "workspace.checks.discover":
+      return {
+        supportedTasks: output.checks.map(check => check.task),
+        runnerKinds: output.checks.map(check => check.kind),
+        unavailableTasks: output.unavailable.map(item => item.task)
+      };
     case "workspace.search":
       return { searchedFiles: output.searchedFiles, resultCount: output.results.length, topPaths: output.results.slice(0, 8).map(item => item.path) };
     case "workspace.read":
