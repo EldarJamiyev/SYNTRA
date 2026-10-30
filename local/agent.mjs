@@ -396,9 +396,9 @@ export function validateImplementationSlicePlan(payload, taskGoal, maxSlices = 3
 }
 
 function makeImplementationSlicePlanPrompt(goal, inventory, ranked) {
-  const context = ranked.slice(0, 10).map(item => ({
+  const context = ranked.slice(0, 8).map(item => ({
     path: item.path, language: item.language, imports: item.imports.slice(0, 5),
-    importedBy: item.importedBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 700)
+    importedBy: item.importedBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 360)
   }));
   return [
     "SYNTRA_IMPLEMENTATION_SLICE_PLAN",
