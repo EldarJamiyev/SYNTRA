@@ -378,6 +378,28 @@ test("run history preserves live tasks and a new service process recovers them",
   try {
     first = await startLocalService(root, port);
     const run = await createAgentRun(root, "Exercise durable recovery across an actual service restart.");
+    const originalContent = "export const value = 1;\\n";
+    const candidateContent = "export const value = 2;\\n";
+    await saveAgentCandidateCheckpoint(root, run.id, {
+      schemaVersion: 1,
+      runId: run.id,
+      root,
+      stage: "slice_verified",
+      nextSliceIndex: 1,
+      slices: [
+        { id: "slice-1", goal: "Update the exported value.", acceptance: "The value tests pass.", status: "completed" },
+        { id: "slice-2", goal: "Add the metadata helper.", acceptance: "The helper exists and checks pass.", status: "pending" }
+      ],
+      files: [{
+        path: "src/index.js",
+        existedBefore: true,
+        baseHash: createHash("sha256").update(originalContent).digest("hex"),
+        content: candidateContent,
+        contentHash: createHash("sha256").update(candidateContent).digest("hex"),
+        reason: "First verified slice."
+      }],
+      verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true, exitCode: 0 }] }
+    });
     const liveResponse = await fetch(first.baseUrl + "/local-api/agent/runs");
     assert.equal(liveResponse.status, 200);
     const liveRuns = await liveResponse.json();
@@ -389,6 +411,11 @@ test("run history preserves live tasks and a new service process recovers them",
     assert.equal(recoveredResponse.status, 200);
     const recoveredRuns = await recoveredResponse.json();
     assert.equal(recoveredRuns.runs.find(item => item.id === run.id)?.status, "interrupted");
+    const restoredCandidate = await getAgentCandidateCheckpoint(root, run.id);
+    assert.equal(restoredCandidate.nextSliceIndex, 1);
+    assert.equal(restoredCandidate.files[0].content, candidateContent);
+    assert.equal(restoredCandidate.slices[0].status, "completed");
+    assert.equal(restoredCandidate.slices[1].status, "pending");
   } finally {
     await stopLocalService(first?.child);
     await stopLocalService(second?.child);
