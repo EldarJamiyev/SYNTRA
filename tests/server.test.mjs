@@ -348,6 +348,13 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.equal(denied.ok, false);
     assert.equal(denied.status, "approval_required");
 
+    const legacyCheckResponse = await fetch(service.base + "/local-api/workspace/check", {
+      method: "POST", headers,
+      body: JSON.stringify({ task: "test" })
+    });
+    assert.equal(legacyCheckResponse.status, 400);
+    assert.match((await legacyCheckResponse.json()).error, /Explicit user approval is required/);
+
     const deniedOrigin = await fetch(service.base + "/local-api/tools/execute", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "https://attacker.invalid" },
