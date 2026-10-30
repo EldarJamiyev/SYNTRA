@@ -1485,7 +1485,44 @@ export async function runAgentTask({
         };
       }
     }
-    if (finalChanges) plan.steps.find(step => step.id === "review").status = "completed";
+    if (finalChanges) {
+      await emitProgress({
+        phase: "staging-proposals",
+        iteration: attempts.length,
+        message: "Staging the final cumulative hash-bound proposals without modifying project files.",
+        verification: finalVerification, attempts, observations, toolCalls,
+        checkpoint: { stage: "staging_proposals", iteration: attempts.length }
+      });
+      for (const change of finalChanges.changes) {
+        throwIfAborted(signal);
+        const toolRun = await executeWorkspaceTool({
+          root, auditRoot: root, name: "workspace.proposals.stage",
+          input: {
+            path: change.path,
+            content: change.content,
+            ...(typeof change.beforeHash === "string" ? { expectedBaseHash: change.beforeHash } : {})
+          },
+          signal
+        });
+        toolCalls.push(toolCallSummary(toolRun));
+        if (!toolRun.ok) throw new Error(toolRun.error || "The proposal staging tool failed.");
+        proposals.push(toolRun.output);
+        await emitProgress({
+          phase: "proposal-staged",
+          iteration: attempts.length,
+          message: "Staged cumulative proposal for " + change.path + ".",
+          proposalIds: proposals.map(proposal => proposal.id),
+          planSteps: plan.steps,
+          toolCalls, observations,
+          checkpoint: { stage: "proposal_staging", iteration: attempts.length }
+        });
+      }
+      const verifyStep = plan.steps.find(step => step.id === "verify");
+      if (verifyStep && finalVerification.status !== "slice_incomplete") {
+        verifyStep.status = finalVerification.passed ? "completed" : finalVerification.status;
+      }
+      plan.steps.find(step => step.id === "review").status = "completed";
+    }
 
     await emitProgress({
       phase: finalChanges ? "completed" : "generation-failed",
