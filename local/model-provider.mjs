@@ -309,7 +309,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
     const temperature = Math.max(0, Math.min(2, Number.isFinite(Number(body.temperature)) ? Number(body.temperature) : 0.2));
     const topK = Math.max(1, Math.min(100, Math.floor(Number(body.top_k) || 40)));
     const toolPlanMode = /SYNTRA_READ_ONLY_TOOL_PLAN/.test(prompt);
-    const patchMode = /return (?:exactly )?one json object|schema: \{"summary"|required schema:/i.test(prompt);
+    const patchMode = !toolPlanMode && /return (?:exactly )?one json object|schema: \{"summary"|required schema:/i.test(prompt);
     const requestBody = {
       model: provider.model,
       messages: [
@@ -344,7 +344,17 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
               type: "object",
               properties: {
                 tool: { type: "string", enum: ["workspace.search", "workspace.read"] },
-                input: { type: "object" }
+                input: {
+                  type: "object",
+                  properties: {
+                    query: { type: "string", minLength: 2, maxLength: 300 },
+                    limit: { type: "integer", minimum: 1, maximum: 10 },
+                    path: { type: "string" },
+                    startLine: { type: "integer", minimum: 1, maximum: 10000000 },
+                    endLine: { type: "integer", minimum: 1, maximum: 10000000 }
+                  },
+                  additionalProperties: false
+                }
               },
               required: ["tool", "input"],
               additionalProperties: false
