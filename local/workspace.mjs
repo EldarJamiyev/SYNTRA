@@ -545,8 +545,11 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
       throw new Error("Candidate checkpoint file entry is invalid.");
     }
     const relative = normalizeRelativePath(file.path);
-    if (relative.length > 1024 || relative !== file.path || isSensitiveRelativePath(relative) || seen.has(relative)) {
+    if (relative.length > 1024 || relative !== file.path || seen.has(relative)) {
       throw new Error("Candidate checkpoint contains an unsafe or duplicate file path: " + relative);
+    }
+    if (isSensitiveRelativePath(relative)) {
+      throw new Error("Candidate checkpoint cannot contain a secret or credential path: " + relative);
     }
     seen.add(relative);
     if (typeof file.existedBefore !== "boolean"
