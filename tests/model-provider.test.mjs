@@ -140,38 +140,6 @@ test("local model read-only tool plans use a schema restricted to search and fil
     capturedBody.format.properties.calls.items.properties.tool.enum,
     ["workspace.search", "workspace.read"]
   );
-  assert.equal(capturedBody.messages[0].role, "system");
-  assert.match(capturedBody.messages[0].content, /read-only context planner/);
-  assert.equal(result.text, '{"calls":[{"tool":"workspace.search","input":{"query":"router"}}]}');
-});
-
-test("local model read-only tool plans use a schema restricted to search and file reads", async () => {
-  let capturedBody = null;
-  const provider = {
-    provider: "ollama-local",
-    baseUrl: "http://127.0.0.1:11434",
-    model: "qwen2.5-coder:14b",
-    modelSizeBytes: 9 * GB,
-    contextTokens: 8192,
-    tokenizer: "ollama-local-tokenizer"
-  };
-  const fetchImpl = async (_url, options) => {
-    capturedBody = JSON.parse(options.body);
-    return new Response(JSON.stringify({
-      message: { role: "assistant", content: '{"calls":[{"tool":"workspace.search","input":{"query":"router"}}]}' },
-      prompt_eval_count: 80, eval_count: 15
-    }), { status: 200, headers: { "Content-Type": "application/json" } });
-  };
-  const result = await handleLocalModelRequest(provider, "POST", "/model/generate", {
-    prompt: 'SYNTRA_READ_ONLY_TOOL_PLAN\nReturn exactly one JSON object with a calls array.',
-    max_new_tokens: 256, temperature: 0.1, top_k: 20
-  }, { fetchImpl, timeoutMs: 1000 });
-  assert.equal(capturedBody.format.type, "object");
-  assert.deepEqual(capturedBody.format.required, ["calls"]);
-  assert.deepEqual(
-    capturedBody.format.properties.calls.items.properties.tool.enum,
-    ["workspace.search", "workspace.read"]
-  );
   assert.deepEqual(
     Object.keys(capturedBody.format.properties.calls.items.properties.input.properties).sort(),
     ["endLine", "limit", "path", "query", "startLine"]
