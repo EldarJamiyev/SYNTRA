@@ -10,7 +10,9 @@ import {
   applyFileProposal,
   applyFileProposals,
   createProjectPlan,
+  discardFileProposals,
   inspectWorkspace,
+  listPendingProposals,
   listProposals,
   proposeFileChange,
   readWorkspaceFile,
@@ -33,7 +35,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 let activeWorkspace = process.env.SYNTRA_WORKSPACE ? path.resolve(process.env.SYNTRA_WORKSPACE) : REPO_ROOT;
 const chatJobs = new Map();
 let activeChatJobId = null;
-let pendingProposals = { root: null, proposals: [] };
+
 
 function sendJson(response, status, data) {
   response.writeHead(status, {
@@ -178,6 +180,55 @@ async function applyProposals(root, proposals) {
   return transaction.applied;
 }
 
+async function readWorkspaceStatus(root = activeWorkspace) {
+  const proposals = await listPendingProposals(root);
+  return { root: proposals.root, pendingProposals: proposals.pending, staleProposals: proposals.stale };
+}
+
+async function switchWorkspace(body) {
+  const currentJob = activeChatJobId ? chatJobs.get(activeChatJobId) : null;
+  if (currentJob?.status === "running") {
+    throw new Error("Finish the current chat task before switching workspaces.");
+  }
+  activeWorkspace = await resolveWorkspace(body.root);
+  return readWorkspaceStatus(activeWorkspace);
+}
+
+function formatProposalList(status) {
+  const lines = ["**Saved workspace proposals**", "", "Workspace: " + status.root];
+  if (!status.pendingProposals.length && !status.staleProposals.length) {
+    lines.push("", "No pending or stale proposals were found.");
+    return lines.join("\n");
+  }
+  for (const proposal of status.pendingProposals) {
+    const summary = proposal.summary || {};
+    lines.push(
+      "",
+      "**Pending · `" + String(proposal.path || "unknown path").replaceAll("`", "") + "`**",
+      "Added: " + Number(summary.addedLines || 0) + " · Removed: " + Number(summary.removedLines || 0)
+    );
+    if (summary.preview) {
+      const preview = String(summary.preview).slice(0, 2000);
+      const longestBacktickRun = Math.max(0, ...((preview.match(/`+/g) || []).map(run => run.length)));
+      const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+      lines.push(fence + "text", preview, fence);
+    }
+  }
+  for (const proposal of status.staleProposals) {
+    lines.push(
+      "",
+      "**Stale · `" + String(proposal.path || "unknown path").replaceAll("`", "") + "`**",
+      String(proposal.reason || "The original source no longer matches this proposal.")
+    );
+  }
+  lines.push(
+    "",
+    "The full diff remains in the conversation where the proposal was created.",
+    "Type `/apply` to apply pending proposals after reviewing them, or `/discard` to remove pending and stale proposal records without changing project files."
+  );
+  return lines.join("\n");
+}
+
 function compactAgentReply(result, applied) {
   const lines = [result.patchSummary || "Code task finished.", ""];
   if (applied.length) {
@@ -235,19 +286,36 @@ async function runChatTurn(jobId, message, history) {
         return;
       }
       activeWorkspace = await resolveWorkspace(requested);
-      pendingProposals = { root: null, proposals: [] };
       finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
       return;
     }
+    if (/^\/proposals\s*$/i.test(message.trim())) {
+      finishChat(jobId, formatProposalList(await readWorkspaceStatus()));
+      return;
+    }
     if (/^\/apply\s*$/i.test(message.trim())) {
-      if (pendingProposals.root !== activeWorkspace || !pendingProposals.proposals.length) {
-        finishChat(jobId, "There are no pending unverified changes for this workspace.");
+      const saved = await listPendingProposals(activeWorkspace);
+      if (!saved.pending.length) {
+        const staleNote = saved.stale.length
+          ? " " + saved.stale.length + " stale proposal(s) were found; type /proposals to inspect them and /discard to remove their records."
+          : "";
+        finishChat(jobId, "There are no applicable pending changes for this workspace." + staleNote);
         return;
       }
-      updateChat(jobId, { phase: "applying", message: "Checking source hashes and applying proposals" });
-      const applied = await applyProposals(activeWorkspace, pendingProposals.proposals);
-      pendingProposals = { root: null, proposals: [] };
+      updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
+      const applied = await applyProposals(activeWorkspace, saved.pending);
       finishChat(jobId, "Applied the explicitly requested proposals:\n" + applied.map(item => "- " + item.path).join("\n") + "\n\nBackups are saved under .syntra.");
+      return;
+    }
+    if (/^\/discard\s*$/i.test(message.trim())) {
+      const saved = await listPendingProposals(activeWorkspace);
+      const ids = [...saved.pending, ...saved.stale].map(item => item.id);
+      if (!ids.length) {
+        finishChat(jobId, "There are no saved proposal records to discard.");
+        return;
+      }
+      const discarded = await discardFileProposals(activeWorkspace, ids, true);
+      finishChat(jobId, "Discarded " + discarded.discarded.length + " saved proposal record(s). Project files were not modified.");
       return;
     }
 
@@ -266,7 +334,9 @@ async function runChatTurn(jobId, message, history) {
         "Coding and workspace:",
         "- Ask for a specific software change to invoke the repository-aware coding agent.",
         "- /workspace followed by an absolute folder path switches the active project.",
+        "- /proposals lists saved proposals after a service restart.",
         "- /apply applies pending proposals only after you review and explicitly request it.",
+        "- /discard removes pending/stale proposal records without changing project files.",
         "- /status checks whether the local model backend is reachable.",
         "- /clear clears this conversation and its saved browser history.",
         "",
@@ -345,8 +415,11 @@ async function runChatTurn(jobId, message, history) {
     }
 
     if (isCodingTask(message)) {
-      // A new task must never inherit proposals from an earlier failed task.
-      pendingProposals = { root: null, proposals: [] };
+      const saved = await listPendingProposals(activeWorkspace);
+      if (saved.pending.length || saved.stale.length) {
+        finishChat(jobId, "This workspace already has saved proposals. Type /proposals to inspect them, then use /apply or /discard before starting another code task.");
+        return;
+      }
       updateChat(jobId, { phase: "planning", message: "Reading the project and planning a code change" });
       const result = await runAgentTask({
         root: activeWorkspace, goal: message, maxIterations: 3, runChecks: true,
@@ -361,10 +434,7 @@ async function runChatTurn(jobId, message, history) {
       if (result.verification?.status === "passed" && result.proposals?.length) {
         updateChat(jobId, { phase: "applying", message: "Checks passed in a temporary copy; applying hash-checked proposals" });
         applied = await applyProposals(activeWorkspace, result.proposals);
-        pendingProposals = { root: null, proposals: [] };
-      } else if (result.proposals?.length) {
-        pendingProposals = { root: activeWorkspace, proposals: result.proposals };
-      } else pendingProposals = { root: null, proposals: [] };
+      }
       finishChat(jobId, compactAgentReply(result, applied), {
         verification: result.verification?.status || "not_run",
         changedFiles: result.changedFiles?.map(item => item.path) || []
@@ -454,10 +524,12 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
+  "GET /local-api/workspace/status": async () => readWorkspaceStatus(),
+  "POST /local-api/workspace/switch": switchWorkspace,
   "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
   "GET /local-api/ai/train/status": async () => aiRequest("GET", "/model/train/status"),
   "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", body),
