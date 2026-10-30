@@ -398,6 +398,44 @@ async function appendAudit(root, entry) {
   await fs.appendFile(auditPath, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n", "utf8");
 }
 
+export async function recordWorkspaceToolEvent(inputRoot, event) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    throw new Error("A structured tool event is required.");
+  }
+  const runId = typeof event.runId === "string" && /^[a-f0-9-]{36}$/i.test(event.runId) ? event.runId : null;
+  const tool = typeof event.tool === "string" && /^[a-z][a-z0-9._-]{2,80}$/.test(event.tool) ? event.tool : null;
+  const permission = ["read_only", "local_state_write", "execute", "source_write", "destructive_state_write"].includes(event.permission)
+    ? event.permission : null;
+  const status = ["started", "completed", "failed", "approval_required"].includes(event.status) ? event.status : null;
+  if (!runId || !tool || !permission || !status || typeof event.approved !== "boolean") {
+    throw new Error("Tool audit event metadata is invalid.");
+  }
+  const inputSummary = event.inputSummary && typeof event.inputSummary === "object" && !Array.isArray(event.inputSummary)
+    ? event.inputSummary : {};
+  const outputSummary = event.outputSummary && typeof event.outputSummary === "object" && !Array.isArray(event.outputSummary)
+    ? event.outputSummary : {};
+  const serializeBounded = (value, label) => {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > 3000) throw new Error(label + " exceeds the audit size limit.");
+    return value;
+  };
+  const durationMs = Number.isFinite(event.durationMs) ? Math.max(0, Math.min(3_600_000, Math.floor(event.durationMs))) : 0;
+  await appendAudit(root, {
+    action: "tool_runtime_event",
+    runId,
+    tool,
+    permission,
+    approved: event.approved,
+    status,
+    durationMs,
+    inputSummary: serializeBounded(inputSummary, "Tool input summary"),
+    outputSummary: serializeBounded(outputSummary, "Tool output summary"),
+    error: typeof event.error === "string" ? event.error.slice(0, 1000) : undefined
+  });
+  return { root, recorded: true, runId, status };
+}
+
 export async function createProjectPlan(inputRoot, goal) {
   const root = await resolveWorkspace(inputRoot);
   if (typeof goal !== "string" || goal.trim().length < 8 || goal.length > 4000) {
