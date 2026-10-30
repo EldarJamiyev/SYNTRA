@@ -19,13 +19,52 @@ function Test-Endpoint([string]$Uri, [string]$ExpectedContent = "") {
     }
 }
 
-function Wait-Endpoint([string]$Uri, [int]$TimeoutSeconds = 45) {
+function Get-EndpointDiagnostic([string]$Uri) {
+    try {
+        $response = Invoke-WebRequest -Uri $Uri -TimeoutSec 3 -UseBasicParsing
+        $body = [string]$response.Content
+        if ($body.Length -gt 240) { $body = $body.Substring(0, 240) + "..." }
+        return "Last response: HTTP $([int]$response.StatusCode). Body: $body"
+    } catch {
+        $status = "no HTTP response"
+        $body = [string]$_.Exception.Message
+        try {
+            if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                $status = "HTTP $([int]$_.Exception.Response.StatusCode)"
+            }
+        } catch {}
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $body = [string]$_.ErrorDetails.Message
+        }
+        $body = $body -replace '[\r\n]+', ' '
+        if ($body.Length -gt 240) { $body = $body.Substring(0, 240) + "..." }
+        return "Last response: $status. Detail: $body"
+    }
+}
+
+function Wait-Endpoint([string]$Uri, [int]$TimeoutSeconds = 45, [string]$ExpectedContent = "") {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
-        if (Test-Endpoint $Uri) { return }
+        if (Test-Endpoint $Uri $ExpectedContent) { return }
         Start-Sleep -Seconds 1
     } while ((Get-Date) -lt $deadline)
-    throw "Service did not become ready at $Uri. Check its open service window for the actual error."
+
+    $diagnostic = Get-EndpointDiagnostic $Uri
+    $listenerDetails = @()
+    try {
+        $listeners = @(Get-NetTCPConnection -State Listen -LocalPort ([uri]$Uri).Port -ErrorAction SilentlyContinue)
+        foreach ($listener in $listeners) {
+            try {
+                $processInfo = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$listener.OwningProcess) -ErrorAction Stop
+                $listenerDetails += "PID $($listener.OwningProcess): $($processInfo.Name) $($processInfo.CommandLine)"
+            } catch {
+                $listenerDetails += "PID $($listener.OwningProcess): process details unavailable"
+            }
+        }
+    } catch {}
+    $owner = if ($listenerDetails.Count) { " Port owner: " + ($listenerDetails -join " | ") } else { " No listening process was found on the target port." }
+    $marker = if ($ExpectedContent) { " Expected page marker: '$ExpectedContent'." } else { "" }
+    throw "Service did not become ready at $Uri.$marker $diagnostic$owner Check the Vite service window for its startup error."
 }
 
 function Ensure-Service([int]$Port, [string]$HealthUrl, [string]$NpmScript, [string]$ExpectedContent = "") {
@@ -66,8 +105,12 @@ function Ensure-Service([int]$Port, [string]$HealthUrl, [string]$NpmScript, [str
     }
 
     Write-Host "Starting $NpmScript ..."
-    Start-Process -FilePath $env:ComSpec -ArgumentList @("/k", "npm run $NpmScript") -WorkingDirectory $Root
-    Wait-Endpoint $HealthUrl
+    $command = if ($NpmScript -eq "dev") { "npm run dev -- --clearScreen false" } else { "npm run $NpmScript" }
+    Start-Process -FilePath $env:ComSpec -ArgumentList @("/k", $command) -WorkingDirectory $Root
+    if ($NpmScript -eq "dev") {
+        Write-Host "The Vite service window will show the frontend startup log. The launcher checks for the SYNTRA Chat page before continuing."
+    }
+    Wait-Endpoint $HealthUrl 45 $ExpectedContent
     Write-Host "Ready: $NpmScript" -ForegroundColor Green
 }
 
