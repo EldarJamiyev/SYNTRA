@@ -9,7 +9,7 @@ import {
   resolveWorkspace
 } from "./workspace.mjs";
 
-const INDEX_FILENAME = "workspace-index-v1.json";
+const INDEX_FILENAME = "workspace-index-v2.json";
 const INDEX_SCHEMA_VERSION = 2;
 const MAX_INDEX_CANDIDATES = 2000;
 const MAX_INDEX_SCAN_BYTES = 32 * 1024 * 1024;
@@ -230,7 +230,7 @@ function resolveRustImport(source, specifier, pathSet) {
   const baseDir = path.posix.dirname(source);
   let segments = [];
   if (specifier.startsWith("mod:")) {
-    segments = [specifier.slice(4)];
+    segments = [baseDir, specifier.slice(4)].filter(Boolean);
   } else if (specifier.startsWith("crate::")) {
     segments = ["src", ...specifier.slice(7).split("::")];
     if (segments.length > 2) segments = segments.slice(0, -1);
@@ -307,7 +307,7 @@ function inferTestOwners(testPath, sourceFiles) {
   return candidates.slice(0, 3).map(item => item.path);
 }
 
-function validIndexedFile(root, item) {
+function validIndexedFile(item) {
   if (!item || typeof item !== "object" || Array.isArray(item)
     || !safeIndexedPath(item.path)
     || !(SOURCE_EXTENSIONS.has(path.posix.extname(item.path).toLowerCase())
@@ -357,7 +357,7 @@ function validateLoadedIndex(root, value) {
   const seenPaths = new Set();
   const files = [];
   for (const raw of value.files) {
-    const file = validIndexedFile(root, raw);
+    const file = validIndexedFile(raw);
     if (!file || seenPaths.has(file.path)) return null;
     seenPaths.add(file.path);
     totalSymbols += file.symbols.length;
