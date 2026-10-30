@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import {
   executeWorkspaceTool,
   listWorkspaceTools
@@ -445,10 +446,9 @@ test("workspace exclusions are applied to read-only Git status and diff observat
   try {
     await fs.mkdir(path.join(root, "fixtures"), { recursive: true });
     await fs.writeFile(path.join(root, "fixtures", "hidden.txt"), "private baseline\n", "utf8");
-    const git = (args) => {
-      const { execFileSync } = require("node:child_process");
-      return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    };
+    const git = (args) => execFileSync("git", args, {
+      cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"]
+    });
     git(["init"]);
     git(["config", "user.email", "syntra-tests@example.invalid"]);
     git(["config", "user.name", "SYNTRA Tests"]);
