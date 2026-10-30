@@ -462,7 +462,7 @@ test("workspace exclusions are applied to read-only Git status and diff observat
     await updateWorkspaceExclusions(root, { patterns: ["fixtures/**"] });
 
     const status = await executeWorkspaceTool({ root, name: "git.status" });
-    assert.equal(status.ok, true);
+    assert.equal(status.ok, true, status.error || status.message || JSON.stringify(status));
     assert.match(status.output.status, /src\/value\.js/);
     assert.doesNotMatch(status.output.status, /fixtures|hidden\.txt|untracked\.txt/);
 
