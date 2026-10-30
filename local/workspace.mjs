@@ -648,6 +648,15 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
   if (patch.recoveryPatch === null) {
     next.recoveryPatch = null;
   } else if (patch.recoveryPatch && typeof patch.recoveryPatch === "object" && !Array.isArray(patch.recoveryPatch)) {
+    let incomingPatchBytes;
+    try {
+      incomingPatchBytes = Buffer.byteLength(JSON.stringify(patch.recoveryPatch), "utf8");
+    } catch {
+      throw new Error("The saved patch checkpoint must be serializable JSON.");
+    }
+    if (!Number.isFinite(incomingPatchBytes) || incomingPatchBytes > 100 * 1024) {
+      throw new Error("The saved patch checkpoint exceeds the 100 KB input limit.");
+    }
     const recoveryPatch = {
       summary: String(patch.recoveryPatch.summary || "").slice(0, 1000),
       edits: Array.isArray(patch.recoveryPatch.edits) ? patch.recoveryPatch.edits.slice(0, 6).map(edit => ({
