@@ -67,6 +67,20 @@ test("agent run records persist the task plan, context, checkpoint, and event hi
       }
     });
     assert.equal((await getAgentRun(root, created.id)).model.name, "qwen-local");
+    await updateAgentRun(root, created.id, {
+      observations: [
+        { kind: "git.status", stage: "baseline", status: "observed", detail: "## main" },
+        { kind: "candidate-file-integrity", stage: "attempt-1", path: "src/index.js", status: "matched", expectedHash: "d".repeat(64), observedHash: "d".repeat(64) }
+      ]
+    });
+    const recorded = await getAgentRun(root, created.id);
+    assert.equal(recorded.observations.length, 2);
+    assert.equal(recorded.observations[1].path, "src/index.js");
+    assert.equal(recorded.observations[1].expectedHash, "d".repeat(64));
+    await updateAgentRun(root, created.id, {
+      observations: [{ kind: "test", stage: "candidate", status: "observed", detail: "line one\nline two" }]
+    });
+    assert.equal((await getAgentRun(root, created.id)).observations[0].detail, "line one line two");
     assert.ok(Date.parse(updated.updatedAt) >= Date.parse(created.createdAt));
   } finally {
     await fs.rm(root, { recursive: true, force: true });

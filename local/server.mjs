@@ -604,7 +604,7 @@ async function runChatTurn(jobId, message, history, signal) {
             event: { phase, message: messageText, iteration: update.iteration || 0 }
           };
           for (const key of [
-            "planSteps", "selectedContext", "model", "attempts", "toolCalls",
+            "planSteps", "selectedContext", "model", "observations", "attempts", "toolCalls",
             "verification", "changedFiles", "proposalIds", "recoveryPatch"
           ]) {
             if (Object.prototype.hasOwnProperty.call(update, key)) runPatch[key] = update[key];
@@ -636,6 +636,7 @@ async function runChatTurn(jobId, message, history, signal) {
         planSteps: result.plan?.steps || [],
         attempts: result.attempts || [],
         toolCalls: result.toolCalls || [],
+        observations: result.observations || [],
         verification: result.verification || null,
         changedFiles: result.changedFiles || [],
         proposalIds: (result.proposals || []).map(proposal => proposal.id),
@@ -764,7 +765,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,

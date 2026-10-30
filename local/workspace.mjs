@@ -550,6 +550,7 @@ export async function createAgentRun(inputRoot, goal) {
     model: null,
     planSteps: [],
     selectedContext: [],
+    observations: [],
     attempts: [],
     toolCalls: [],
     verification: null,
@@ -612,6 +613,15 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
     path: String(item.path || "").slice(0, 1024),
     score: Number.isFinite(item.score) ? Number(item.score) : 0,
     sha256: typeof item.sha256 === "string" ? item.sha256.slice(0, 64) : ""
+  }));
+  if (Array.isArray(patch.observations)) next.observations = patch.observations.slice(-40).map(item => ({
+    kind: String(item.kind || "observation").slice(0, 48),
+    stage: String(item.stage || "unknown").slice(0, 48),
+    path: typeof item.path === "string" ? item.path.slice(0, 1024) : null,
+    status: String(item.status || "recorded").slice(0, 40),
+    expectedHash: typeof item.expectedHash === "string" ? item.expectedHash.slice(0, 64) : null,
+    observedHash: typeof item.observedHash === "string" ? item.observedHash.slice(0, 64) : null,
+    detail: String(item.detail || "").replace(/[\r\n]+/g, " ").slice(0, 400)
   }));
   if (Array.isArray(patch.attempts)) next.attempts = patch.attempts.slice(-12).map(item => ({
     iteration: Number.isInteger(item.iteration) ? item.iteration : 0,
@@ -1316,6 +1326,30 @@ export async function chooseCheck(root, task, packageJson) {
   }
 
   throw new Error("No supported " + task + " command was found in the project manifest.");
+}
+
+export async function discoverProjectChecks(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const packageJson = await readJsonIfPresent(root, "package.json");
+  const checks = [];
+  const unavailable = [];
+  for (const task of ["build", "test", "lint", "typecheck"]) {
+    try {
+      const runner = await chooseCheck(root, task, packageJson);
+      checks.push({
+        task,
+        kind: String(runner.kind || "unknown").slice(0, 40),
+        label: String(runner.label || (runner.script ? "package.json " + runner.script : runner.command || task)).slice(0, 120),
+        command: String(runner.command || "").slice(0, 500)
+      });
+    } catch (error) {
+      unavailable.push({
+        task,
+        reason: (error instanceof Error ? error.message : String(error)).slice(0, 400)
+      });
+    }
+  }
+  return { root, checks, unavailable };
 }
 
 export async function runProjectCheck(inputRoot, task, options = {}) {

@@ -9,6 +9,7 @@ import {
   applyFileProposals,
   chooseCheck,
   createProjectPlan,
+  discoverProjectChecks,
   discardFileProposals,
   inspectWorkspace,
   listPendingProposals,
@@ -39,6 +40,20 @@ test("inspect workspace reports project metadata and source files", async () => 
   assert.ok(info.fileCount >= 3);
   assert.ok(info.frameworks.includes("React"));
   assert.ok(info.scripts.build);
+});
+
+test("check discovery reports only runners that are actually configured", async () => {
+  const root = await createTempProject();
+  try {
+    const result = await discoverProjectChecks(root);
+    assert.deepEqual(result.checks.map(item => item.task), ["build", "test", "lint"]);
+    assert.ok(result.checks.every(item => item.kind === "npm-script"));
+    assert.equal(result.checks.find(item => item.task === "test")?.command, "npm run test");
+    assert.deepEqual(result.unavailable.map(item => item.task), ["typecheck"]);
+    assert.match(result.unavailable[0].reason, /No supported typecheck command/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("search returns matching paths and line numbers", async () => {
