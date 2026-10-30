@@ -145,6 +145,7 @@ export default function App() {
 
   const startNewChat = () => {
     if (pending) return;
+    shouldFollowRef.current = true;
     const session = createChatSession();
     setSessionState(current => ({
       version: 1,
@@ -161,6 +162,7 @@ export default function App() {
 
   const selectSession = (sessionId: string) => {
     if (pending) return;
+    shouldFollowRef.current = true;
     setSessionState(current => current.sessions.some(session => session.id === sessionId)
       ? { ...current, activeSessionId: sessionId }
       : current);
