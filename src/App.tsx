@@ -478,7 +478,7 @@ export default function App() {
 
   const submitWorkspaceSwitch = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (pending || workspaceSwitching) return;
+    if (pending || workspaceSwitching || memoryLoading || memorySaving) return;
     const requestedPath = workspacePath.trim();
     if (!requestedPath) {
       setWorkspaceError('Enter an absolute project folder path.');
@@ -738,11 +738,11 @@ export default function App() {
               onChange={event => setWorkspacePath(event.target.value)}
               placeholder={'C:\\Projects\\MyProject'}
               maxLength={4096}
-              disabled={pending || workspaceSwitching}
+              disabled={pending || workspaceSwitching || memoryLoading || memorySaving}
               autoComplete="off"
               spellCheck={false}
             />
-            <button type="submit" disabled={pending || workspaceLoading || workspaceSwitching || !workspacePath.trim()}>
+            <button type="submit" disabled={pending || workspaceLoading || workspaceSwitching || memoryLoading || memorySaving || !workspacePath.trim()}>
               {workspaceSwitching ? 'Switching…' : 'Switch folder'}
             </button>
           </form>
@@ -764,7 +764,7 @@ export default function App() {
                 placeholder="Note title"
                 maxLength={120}
                 required
-                disabled={memorySaving || pending}
+                disabled={memorySaving || memoryLoading || pending}
               />
               <div className="workspace-memory-form-row">
                 <select
@@ -790,6 +790,7 @@ export default function App() {
                 />
               </div>
               <textarea
+                aria-label="Project memory note content"
                 value={memoryContent}
                 onChange={event => setMemoryContent(event.target.value)}
                 placeholder="A technical decision, project convention, or detail worth keeping…"
@@ -799,7 +800,7 @@ export default function App() {
                 disabled={memorySaving || pending}
               />
               <div className="workspace-memory-form-actions">
-                <button type="submit" disabled={memorySaving || pending || !memoryTitle.trim() || !memoryContent.trim()}>
+                <button type="submit" disabled={memorySaving || memoryLoading || pending || (!editingMemoryId && memoryNotes.length >= 200) || !memoryTitle.trim() || !memoryContent.trim()}>
                   {memorySaving ? 'Saving…' : editingMemoryId ? 'Save changes' : 'Save note'}
                 </button>
                 {editingMemoryId && (
@@ -843,15 +844,15 @@ export default function App() {
                     {deletingMemoryId === note.id ? (
                       <span className="workspace-memory-confirm">
                         Delete?
-                        <button type="button" onClick={() => void confirmDeleteWorkspaceMemory(note)} disabled={memorySaving || pending}>Confirm</button>
+                        <button type="button" onClick={() => void confirmDeleteWorkspaceMemory(note)} disabled={memorySaving || memoryLoading || pending}>Confirm</button>
                         <button type="button" onClick={() => setDeletingMemoryId(null)} disabled={memorySaving}>Cancel</button>
                       </span>
                     ) : (
                       <span className="workspace-memory-note-actions">
-                        <button type="button" aria-label={'Edit ' + note.title} title="Edit note" onClick={() => beginEditWorkspaceMemory(note)} disabled={memorySaving || pending}>
+                        <button type="button" aria-label={'Edit ' + note.title} title="Edit note" onClick={() => beginEditWorkspaceMemory(note)} disabled={memorySaving || memoryLoading || pending}>
                           <Pencil size={12} />
                         </button>
-                        <button type="button" aria-label={'Delete ' + note.title} title="Delete note" onClick={() => setDeletingMemoryId(note.id)} disabled={memorySaving || pending}>
+                        <button type="button" aria-label={'Delete ' + note.title} title="Delete note" onClick={() => setDeletingMemoryId(note.id)} disabled={memorySaving || memoryLoading || pending}>
                           <Trash2 size={12} />
                         </button>
                       </span>
