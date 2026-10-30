@@ -232,8 +232,8 @@ async function runOneTask(task, options, runStartedAt) {
       workspace: options.keepWorkspaces ? workspace : null,
       finishedAt: new Date().toISOString(),
       model: {
-        provider: modelStatus.provider || "unknown",
-        name: modelStatus.model_name || "unknown",
+        provider: modelStatus.provider || (modelStatus.pretrained_weights === false ? "native-local" : "unknown"),
+        name: modelStatus.model_name || modelStatus.model || (modelStatus.pretrained_weights === false ? "SYNTRA native Transformer" : "unknown"),
         contextWindowTokens: modelStatus.context_tokens || modelStatus.context_window_tokens || null,
         tokenizer: modelStatus.tokenizer || null,
         pretrainedWeights: modelStatus.pretrained_weights === true,
@@ -246,6 +246,7 @@ async function runOneTask(task, options, runStartedAt) {
         status: agentRun.status,
         verification: agentRun.verification,
         attempts: agentRun.attempts,
+        modelUsage: agentRun.modelUsage || null,
         changedFiles: (agentRun.changedFiles || []).map(file => file.path),
         selectedContextCount: (agentRun.selectedContext || []).length,
         toolCallCount: (agentRun.toolCalls || []).length
