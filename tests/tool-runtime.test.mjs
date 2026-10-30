@@ -35,8 +35,10 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 12);
+  assert.equal(tools.length, 13);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
+  assert.equal(byName.get("workspace.checks.discover").permission, "read_only");
+  assert.equal(byName.get("workspace.checks.discover").approvalRequired, false);
   assert.equal(byName.get("workspace.search").permission, "read_only");
   assert.equal(byName.get("workspace.proposals.stage").permission, "local_state_write");
   assert.equal(byName.get("workspace.proposals.apply").approvalRequired, true);
@@ -49,6 +51,25 @@ test("tool registry exposes structured schemas and explicit permission metadata"
   assert.equal(byName.get("git.diff-summary").permission, "read_only");
   assert.ok(tools.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(!tools.some(item => /shell|terminal|powershell/i.test(item.name)));
+});
+
+test("check discovery is read-only, auditable, and reports supported runners", async () => {
+  const root = await createProject();
+  try {
+    const result = await executeWorkspaceTool({ root, name: "workspace.checks.discover" });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.output.checks.map(item => item.task), ["test"]);
+    assert.equal(result.output.checks[0].kind, "npm-script");
+    assert.ok(result.output.unavailable.some(item => item.task === "build"));
+    const events = await readAudit(root);
+    const discoveryEvents = events.filter(event => event.tool === "workspace.checks.discover");
+    assert.equal(discoveryEvents.length, 2);
+    assert.ok(discoveryEvents.every(event => event.permission === "read_only"));
+    assert.ok(discoveryEvents.every(event => event.status === "started" || event.status === "completed"));
+    await assert.rejects(() => fs.stat(path.join(root, "check-ran.txt")), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("inspection, search, and line-range reads return structured output and durable audit events", async () => {
