@@ -13,7 +13,8 @@
     "test": "node --test",
     "ai:install": "python scripts/setup_syntra_env.py",
     "ai:server": "python scripts/run_syntra_module.py server",
-    "ai:cli": "python scripts/run_syntra_module.py cli"
+    "ai:cli": "python scripts/run_syntra_module.py cli",
+    "benchmark:coding": "node scripts/run-coding-benchmark.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
