@@ -240,6 +240,125 @@ test("an incomplete later slice cannot inherit an earlier passing verification s
   }
 });
 
+test("agent resumes from the last verified slice after a process interruption", async () => {
+  const root = await createSliceProject();
+  const runId = "00000000-0000-4000-8000-000000000001";
+  const goal = "Update the exported value and add a description helper.";
+  let savedCheckpoint = null;
+  let firstPatchCalls = 0;
+  let secondPatchCalls = 0;
+  let secondPlannerCalls = 0;
+  let checkpointRemoved = false;
+  const modelStatus = {
+    checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+    tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+  };
+  const firstModelRequest = async (_method, route, body) => {
+    if (route === "/model/status") return modelStatus;
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        return {
+          text: JSON.stringify({
+            slices: [
+              { goal: "Update the exported value from one to two.", acceptance: "The existing value test passes." },
+              { goal: "Add a small exported description helper.", acceptance: "The helper file is present and the full test suite still passes." }
+            ]
+          }),
+          generated_tokens: 45, trained_steps: null
+        };
+      }
+      firstPatchCalls += 1;
+      if (firstPatchCalls === 1) {
+        return {
+          text: JSON.stringify({
+            summary: "Update the exported value.",
+            edits: [{
+              path: "src/value.js", find: "value: 1", replace: "value: 2",
+              reason: "Complete the first implementation slice."
+            }]
+          }),
+          generated_tokens: 30, trained_steps: null
+        };
+      }
+      const interrupted = new Error("Simulated process interruption after the first verified slice.");
+      interrupted.name = "AbortError";
+      throw interrupted;
+    }
+    throw new Error("Unexpected first model route: " + route);
+  };
+  const secondModelRequest = async (_method, route, body) => {
+    if (route === "/model/status") return modelStatus;
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        secondPlannerCalls += 1;
+        throw new Error("The resumed run must not create a new slice plan.");
+      }
+      secondPatchCalls += 1;
+      assert.ok(body.prompt.includes("Implementation slice 2 of 2"));
+      assert.ok(body.prompt.includes("module.exports = { value: 2 }"),
+        "resumed slice two must see the restored candidate from slice one");
+      return {
+        text: JSON.stringify({
+          summary: "Add an exported description helper.",
+          edits: [{
+            path: "src/description.js",
+            find: "",
+            replace: "module.exports = { description: 'SYNTRA' };\n",
+            reason: "Complete the second implementation slice."
+          }]
+        }),
+        generated_tokens: 35, trained_steps: null
+      };
+    }
+    throw new Error("Unexpected resumed model route: " + route);
+  };
+  try {
+    await assert.rejects(() => runAgentTask({
+      root, goal, runId, maxIterations: 1, maxSlices: 2, runChecks: true,
+      modelRequest: firstModelRequest,
+      onCandidateCheckpoint: async checkpoint => {
+        if (checkpoint) savedCheckpoint = structuredClone(checkpoint);
+      }
+    }), /Simulated process interruption/);
+    assert.ok(savedCheckpoint, "slice one must leave a durable candidate checkpoint");
+    assert.equal(savedCheckpoint.nextSliceIndex, 1);
+    assert.equal(savedCheckpoint.slices[0].status, "completed");
+    assert.equal(savedCheckpoint.slices[1].status, "pending");
+    assert.equal(savedCheckpoint.files.length, 1);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
+
+    const result = await runAgentTask({
+      root, goal, runId, resumeCandidate: savedCheckpoint,
+      maxIterations: 1, maxSlices: 2, runChecks: true,
+      modelRequest: secondModelRequest,
+      onCandidateCheckpoint: async checkpoint => {
+        if (checkpoint === null) checkpointRemoved = true;
+        else savedCheckpoint = structuredClone(checkpoint);
+      }
+    });
+    assert.equal(secondPlannerCalls, 0, "the saved two-slice plan must be restored instead of regenerated");
+    assert.equal(secondPatchCalls, 1, "only the next uncompleted slice should request a new patch");
+    assert.deepEqual(result.implementationSlices.map(slice => slice.status), ["completed", "completed"]);
+    assert.equal(result.verification.status, "passed");
+    assert.equal(result.verification.passed, true);
+    assert.deepEqual(result.changedFiles.map(file => file.path).sort(), ["src/description.js", "src/value.js"]);
+    assert.equal(result.proposals.length, 2);
+    assert.equal(checkpointRemoved, true, "the candidate checkpoint must be removed after final proposal staging");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    const applied = await import("../local/workspace.mjs").then(module =>
+      module.applyFileProposals(root, result.proposals.map(proposal => proposal.id), true)
+    );
+    assert.equal(applied.applied.length, 2);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "description.js"), "utf8"), "module.exports = { description: 'SYNTRA' };\n");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("model-selected context plans allow only bounded search and safe listed-file reads", () => {
   const valid = validateReadOnlyToolPlan({
     calls: [
