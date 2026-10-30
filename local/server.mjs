@@ -8,17 +8,11 @@ import { isCodingTask } from "./chat-intent.mjs";
 import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
-  applyFileProposal,
   applyFileProposals,
-  createProjectPlan,
   discardFileProposals,
-  inspectWorkspace,
   listPendingProposals,
-  listProposals,
-  proposeFileChange,
   readWorkspaceFile,
-  resolveWorkspace,
-  searchWorkspace
+  resolveWorkspace
 } from "./workspace.mjs";
 
 const HOST = "127.0.0.1";
@@ -558,13 +552,31 @@ const routeHandlers = {
   "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", body),
   "POST /local-api/ai/finetune": async body => aiRequest("POST", "/model/finetune", body),
   "POST /local-api/agent/generate": generateAgentCompletion,
-  "POST /local-api/workspace/inspect": async body => inspectWorkspace(body.root),
-  "POST /local-api/workspace/search": async body => searchWorkspace(body.root, body.query, body.limit),
-  "POST /local-api/workspace/read": async body => readWorkspaceFile(body.root, body.path),
-  "POST /local-api/workspace/plan": async body => createProjectPlan(body.root, body.goal),
-  "POST /local-api/workspace/proposals": async body => listProposals(body.root),
-  "POST /local-api/workspace/propose": async body => proposeFileChange(body.root, body.path, body.content, body.expectedSha256),
-  "POST /local-api/workspace/apply": async body => applyFileProposal(body.root, body.proposalId, body.confirm === true),
+  "POST /local-api/workspace/inspect": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.inspect", input: {}
+  }),
+  "POST /local-api/workspace/search": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.search",
+    input: { query: body.query, ...(body.limit === undefined ? {} : { limit: body.limit }) }
+  }),
+  "POST /local-api/workspace/read": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.read",
+    input: { path: body.path, ...(body.startLine === undefined ? {} : { startLine: body.startLine }), ...(body.endLine === undefined ? {} : { endLine: body.endLine }) }
+  }),
+  "POST /local-api/workspace/plan": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.plan", input: { goal: body.goal }
+  }),
+  "POST /local-api/workspace/proposals": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.proposals.list", input: {}
+  }),
+  "POST /local-api/workspace/propose": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.proposals.stage",
+    input: { path: body.path, content: body.content, ...(body.expectedSha256 ? { expectedBaseHash: body.expectedSha256 } : {}) }
+  }),
+  "POST /local-api/workspace/apply": async body => executeToolOutput({
+    root: body.root || activeWorkspace, name: "workspace.proposals.apply",
+    input: { proposalId: body.proposalId }, approval: body.confirm === true
+  }),
   "POST /local-api/workspace/check": async body => executeToolOutput({
     root: body.root || activeWorkspace, auditRoot: body.root || activeWorkspace,
     name: "workspace.check",
