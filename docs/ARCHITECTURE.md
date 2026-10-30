@@ -26,6 +26,14 @@ Before reporting a coding task, the agent also returns a bounded per-file diff p
 
 A passing check proves only that the project's discovered checks passed in the temporary copy; it does not prove the absence of defects.
 
+## Workspace selection and proposal recovery
+
+The active workspace is held by the local Node service. The frontend reads it from `GET /local-api/workspace/status`, restores the last selected folder from device-local browser storage, and switches the backend through the origin-checked `POST /local-api/workspace/switch` route. The selected path is validated by the same workspace resolver used by file operations. Workspace selection and conversation history are stored separately.
+
+Unverified proposals are written under `.syntra/proposals` with the workspace root, original source hash, proposed content hash, and bounded change summary. The server reconstructs the pending queue from those files rather than relying on an in-memory list. It classifies a proposal as pending only when its current source hash still equals the recorded base hash; an already-applied proposal is omitted, and a changed source is marked stale. The `/proposals` command lists the restored queue, `/apply` rechecks hashes through the existing transactional apply path, and `/discard` removes selected queue records after explicit user intent without touching project files. A new coding task is blocked while pending or stale proposals remain, preventing a later request from silently replacing an earlier review queue.
+
+The browser remembers the selected workspace path locally. That value is untrusted input and must pass workspace resolution before it can become active. The server remains loopback-only; switching projects does not expand its network exposure.
+
 ## Model and context handling
 
 Ollama discovery excludes cloud-tagged models and rejects weights files larger than 70% of physical RAM to preserve working memory for the OS and inference context/cache. Stored weight size is a heuristic, not a guarantee of runtime fit. Model detection is briefly cached between adjacent chat stages; injected/test fetch implementations bypass the cache for deterministic testing. The Ollama router uses an 8,192-token default context, configurable with SYNTRA_LOCAL_CONTEXT within the supported limits.
