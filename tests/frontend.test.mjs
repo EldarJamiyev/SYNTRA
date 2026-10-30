@@ -7,14 +7,16 @@ const indexPath = new URL('../index.html', import.meta.url);
 const serverPath = new URL('../local/server.mjs', import.meta.url);
 const stylePath = new URL('../src/style.css', import.meta.url);
 const historyModulePath = new URL('../src/chat-history.js', import.meta.url);
+const workspaceSettingsPath = new URL('../src/workspace-settings.js', import.meta.url);
 
 test('the frontend stays a simple chat rather than a model dashboard', async () => {
-  const [app, html, server, css, historyModule] = await Promise.all([
+  const [app, html, server, css, historyModule, workspaceSettings] = await Promise.all([
     fs.readFile(appPath, 'utf8'),
     fs.readFile(indexPath, 'utf8'),
     fs.readFile(serverPath, 'utf8'),
     fs.readFile(stylePath, 'utf8'),
     fs.readFile(historyModulePath, 'utf8'),
+    fs.readFile(workspaceSettingsPath, 'utf8'),
   ]);
   const frontend = app + '\n' + html;
   assert.match(app, /placeholder="Message SYNTRA"/);
@@ -51,6 +53,14 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /Saved locally on this device/);
   assert.match(app, /selectSession\(session.id\)/);
   assert.match(app, /saveRename/);
+  assert.match(app, /aria-label="Active workspace"/);
+  assert.match(app, /\/local-api\/workspace\/status/);
+  assert.match(app, /\/local-api\/workspace\/switch/);
+  assert.match(app, /submitWorkspaceSwitch/);
+  assert.match(app, /Review saved proposals in chat/);
+  assert.match(app, /loadWorkspacePath\(\)/);
+  assert.match(workspaceSettings, /WORKSPACE_PATH_KEY/);
+  assert.match(css, /\.workspace-popover/);
   assert.match(app, /role: 'user' as const/);
   assert.match(app, /role: 'assistant' as const/);
   assert.match(app, /Save the user's prompt immediately too/);
@@ -74,7 +84,6 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
     'TRAINING STEP',
     'CLI Commands',
     'Data & Training',
-    'Workspace',
   ]) {
     assert.equal(frontend.toLowerCase().includes(label.toLowerCase()), false, `legacy dashboard label leaked into frontend: ${label}`);
   }
