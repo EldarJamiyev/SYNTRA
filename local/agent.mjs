@@ -910,7 +910,8 @@ export async function runAgentTask({
       const reviewReasons = verificationReviewReasons(candidate.changes);
       const verificationStatus = allPassed
         ? reviewReasons.length ? "passed_review_required" : "passed"
-        : tasks.length ? "failed" : "no_checks_configured";
+        : !discoveryRun.ok ? "discovery_failed"
+          : tasks.length ? "failed" : "no_checks_configured";
       finalVerification = {
         status: verificationStatus,
         passed: allPassed, checks,
@@ -921,7 +922,7 @@ export async function runAgentTask({
         ? reviewReasons.length ? "verification_passed_review_required" : "verification_passed"
         : "verification_failed";
       plan.steps.find(step => step.id === "verify").status = allPassed
-        ? "completed" : tasks.length ? "blocked" : "not_available";
+        ? "completed" : tasks.length || !discoveryRun.ok ? "blocked" : "not_available";
       await emitProgress({
         phase: "verification-result",
         iteration,
@@ -946,12 +947,15 @@ export async function runAgentTask({
         break;
       }
       if (tasks.length === 0) {
-        feedback = "No supported build/test/lint/typecheck runner was discovered in the candidate workspace. " +
-          unavailableChecks.map(item => item.task + ": " + item.reason).join(" | ");
+        feedback = discoveryRun.ok
+          ? "No supported build/test/lint/typecheck runner was discovered in the candidate workspace. " +
+            unavailableChecks.map(item => item.task + ": " + item.reason).join(" | ")
+          : "SYNTRA could not discover supported check runners in the candidate workspace: " +
+            String(discoveryRun.error || discoveryRun.message || "Unknown discovery error.");
         await emitProgress({
           phase: "verification-unavailable", iteration, message: feedback,
           observations, toolCalls,
-          checkpoint: { stage: "verification_unavailable", iteration }
+          checkpoint: { stage: discoveryRun.ok ? "verification_unavailable" : "check_discovery_failed", iteration }
         });
         break;
       }
