@@ -583,6 +583,7 @@ async function runChatTurn(jobId, message, history, signal) {
         root: activeWorkspace,
         goal: taskGoal,
         maxIterations: 3,
+        maxSlices: 3,
         runChecks: true,
         signal,
         resumePatch: resumeRecord?.recoveryPatch || null,
