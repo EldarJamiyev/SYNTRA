@@ -261,6 +261,19 @@ test("candidate checkpoint storage rejects stale schemas, unsafe paths, invalid 
       }]
     }), /128 KB/);
     await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, files: Array.from({ length: 5 }, (_, index) => {
+        const content = String(index).repeat(110 * 1024);
+        return {
+          path: "src/checkpoint-" + index + ".js",
+          existedBefore: true,
+          baseHash,
+          content,
+          contentHash: createHash("sha256").update(content).digest("hex"),
+          reason: "Total checkpoint size fixture."
+        };
+      })
+    }), /512 KB/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
       ...base, slices: [{ ...base.slices[0], status: "running" }]
     }), /slice statuses do not match/);
     assert.equal(await getAgentCandidateCheckpoint(root, run.id), null);
