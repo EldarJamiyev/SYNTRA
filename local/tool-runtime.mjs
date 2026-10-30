@@ -48,8 +48,8 @@ const TOOL_DEFINITIONS = [
       type: "object", required: ["path"],
       properties: {
         path: { type: "string", minLength: 1, maxLength: 1024 },
-        startLine: { type: "integer", minimum: 1 },
-        endLine: { type: "integer", minimum: 1 }
+        startLine: { type: "integer", minimum: 1, maximum: 10_000_000 },
+        endLine: { type: "integer", minimum: 1, maximum: 10_000_000 }
       },
       additionalProperties: false
     }
@@ -198,8 +198,10 @@ function validateInput(definition, input) {
         throw new Error("Tool input field " + key + " has an unsupported value.");
       }
     } else if (rule.type === "integer") {
-      if (!Number.isInteger(value) || value < rule.minimum || value > rule.maximum) {
-        throw new Error("Tool input field " + key + " must be an integer between " + rule.minimum + " and " + rule.maximum + ".");
+      if (!Number.isInteger(value)
+        || (rule.minimum !== undefined && value < rule.minimum)
+        || (rule.maximum !== undefined && value > rule.maximum)) {
+        throw new Error("Tool input field " + key + " is outside its allowed integer range.");
       }
     } else if (rule.type === "array") {
       if (!Array.isArray(value) || value.length < rule.minItems || value.length > rule.maxItems
@@ -318,7 +320,7 @@ function summarizeOutput(name, output) {
   }
 }
 
-export async function executeWorkspaceTool({ root: inputRoot, auditRoot: inputAuditRoot, name, input = {}, approval = false }) {
+async function executeWorkspaceToolUnlocked({ root: inputRoot, auditRoot: inputAuditRoot, name, input = {}, approval = false }) {
   const definition = definitionsByName.get(name);
   if (!definition) throw new Error("Unknown SYNTRA tool: " + String(name));
   validateInput(definition, input);
@@ -395,4 +397,37 @@ export async function executeWorkspaceTool({ root: inputRoot, auditRoot: inputAu
     approvalRequired: definition.approvalRequired, durationMs,
     output, auditRecorded
   };
+}
+
+
+const workspaceExecutionQueues = new Map();
+
+async function withWorkspaceQueue(key, action) {
+  const previous = workspaceExecutionQueues.get(key) || Promise.resolve();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const queued = previous.then(() => gate);
+  workspaceExecutionQueues.set(key, queued);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (workspaceExecutionQueues.get(key) === queued) workspaceExecutionQueues.delete(key);
+  }
+}
+
+/**
+ * Serialize tools against one workspace so check/apply/stage/discard operations
+ * cannot race each other or interleave their audit records.
+ */
+export async function executeWorkspaceTool(options = {}) {
+  if (!isPlainObject(options)) throw new Error("Tool execution options must be a JSON object.");
+  const inputRoot = await resolveWorkspace(options.root);
+  const auditRoot = await resolveWorkspace(options.auditRoot || options.root);
+  return withWorkspaceQueue(auditRoot, () => executeWorkspaceToolUnlocked({
+    ...options,
+    root: inputRoot,
+    auditRoot
+  }));
 }
