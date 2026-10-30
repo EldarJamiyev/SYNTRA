@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import net from "node:net";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -88,6 +89,30 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(health.host, "127.0.0.1");
     assert.ok(health.capabilities.includes("local-chat"));
     assert.ok(health.capabilities.includes("local-network-diagnostics"));
+    assert.ok(health.capabilities.includes("persistent-proposal-review"));
+
+    const workspaceStatusResponse = await fetch(base + "/local-api/workspace/status");
+    assert.equal(workspaceStatusResponse.status, 200);
+    const workspaceStatus = await workspaceStatusResponse.json();
+    assert.equal(workspaceStatus.root, projectRoot);
+    assert.deepEqual(workspaceStatus.pendingProposals, []);
+    assert.deepEqual(workspaceStatus.staleProposals, []);
+
+    const switchWorkspaceResponse = await fetch(base + "/local-api/workspace/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root: projectRoot })
+    });
+    assert.equal(switchWorkspaceResponse.status, 200);
+    assert.equal((await switchWorkspaceResponse.json()).root, projectRoot);
+
+    const invalidWorkspaceResponse = await fetch(base + "/local-api/workspace/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root: path.join(projectRoot, "missing-workspace") })
+    });
+    assert.equal(invalidWorkspaceResponse.status, 400);
+    assert.match((await invalidWorkspaceResponse.json()).error, /workspace|directory|folder/i);
 
     const deniedOrigin = await fetch(base + "/local-api/chat", {
       method: "POST",
@@ -170,6 +195,8 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(helpStatus?.status, "completed");
     assert.match(helpStatus?.reply || "", /SYNTRA help/);
     assert.ok((helpStatus?.reply || "").includes("/dns example.com"));
+    assert.ok((helpStatus?.reply || "").includes("/proposals"));
+    assert.ok((helpStatus?.reply || "").includes("/discard"));
 
     const naturalHelpResponse = await fetch(base + "/local-api/chat", {
       method: "POST",
