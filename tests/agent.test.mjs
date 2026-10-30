@@ -107,12 +107,14 @@ test("agent blocks verification when a patch rewrites package scripts or depende
     assert.equal(result.verification.checks[0].skipped, true);
     assert.equal(result.status, "proposals_ready_unverified");
     assert.equal(result.proposals[0].path, "package.json");
-    assert.deepEqual(result.toolCalls.map(call => call.name), ["workspace.inspect", "workspace.proposals.stage"]);
+    assert.deepEqual(result.toolCalls.map(call => call.name), [
+      "workspace.inspect", "git.status", "git.diff-summary", "workspace.proposals.stage"
+    ]);
     assert.ok(result.toolCalls.every(call => call.auditRecorded));
     const toolAudit = (await fs.readFile(path.join(root, ".syntra", "actions.jsonl"), "utf8"))
       .split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line))
       .filter(entry => entry.action === "tool_runtime_event");
-    assert.equal(toolAudit.length, 4);
+    assert.equal(toolAudit.length, 8);
     assert.match(result.verification.note, /dependency\/build manifests or lockfiles/);
     assert.equal(await fs.readFile(path.join(root, "package.json"), "utf8"), originalManifest,
       "the original manifest must remain untouched before explicit review/apply");
@@ -164,6 +166,52 @@ test("agent blocks automatic verification for dependency changes even when test 
     assert.match(result.verification.note, /requirements\.txt/);
     assert.equal(result.proposals[0].path, "requirements.txt");
     assert.equal(await fs.readFile(path.join(root, "requirements.txt"), "utf8"), original);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent refuses a verification pass when a check script mutates a proposed source file", async () => {
+  const root = await createProject();
+  const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
+  manifest.scripts.test = "node --test && node -e \"require('fs').writeFileSync('src/value.js', 'module.exports = { value: 99 };\\\\n')\"";
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify(manifest, null, 2));
+  const modelRequest = async (_method, route) => {
+    if (route === "/model/status") return {
+      checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+      tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+    };
+    if (route === "/model/tokenize") return { token_count: 120 };
+    if (route === "/model/generate") return {
+      text: JSON.stringify({
+        summary: "Change the value expected by the existing test.",
+        edits: [{
+          path: "src/value.js",
+          find: "value: 1",
+          replace: "value: 2",
+          reason: "The test expects value 2."
+        }]
+      }),
+      generated_tokens: 30, trained_steps: null
+    };
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Update the exported value so the test passes.",
+      maxIterations: 1,
+      runChecks: true,
+      modelRequest
+    });
+    assert.equal(result.verification.status, "failed");
+    assert.equal(result.verification.passed, false);
+    assert.ok(result.verification.checks.some(item => item.task === "test" && item.passed));
+    assert.ok(result.verification.checks.some(item => item.task === "candidate-integrity" && !item.passed));
+    assert.ok(result.observations.some(item => item.kind === "candidate-file-integrity"
+      && item.path === "src/value.js" && item.status === "mismatch"));
+    assert.equal(result.status, "proposals_ready_unverified");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\\n");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -232,8 +280,12 @@ test("repository graph links local imports and agent repairs a failed test in a 
     assert.equal(result.attempts[0].status, "invalid_patch");
     assert.equal(result.attempts[1].status, "verification_passed");
     assert.deepEqual(result.toolCalls.map(call => call.name), [
-      "workspace.inspect", "workspace.check", "workspace.proposals.stage"
+      "workspace.inspect", "git.status", "git.diff-summary", "workspace.checks.discover",
+      "workspace.check", "workspace.read", "workspace.proposals.stage"
     ]);
+    assert.ok(result.observations.some(item => item.kind === "workspace.checks.discover" && item.status === "observed"));
+    assert.ok(result.observations.some(item => item.kind === "candidate-file-integrity"
+      && item.path === "src/value.js" && item.status === "matched"));
     assert.ok(result.toolCalls.every(call => call.auditRecorded));
     const applied = await import("../local/workspace.mjs").then(module =>
       module.applyFileProposal(root, result.proposals[0].id, true)
