@@ -685,7 +685,14 @@ async function runModelSelectedReadOnlyTools({
       });
     } else if (call.tool === "workspace.symbols.search") {
       const results = (toolRun.output.results || []).slice(0, 8).map(item => ({
-        name: item.name, kind: item.kind, path: item.path, line: item.line, score: item.score
+        name: item.name, kind: item.kind, path: item.path, line: item.line, score: item.score,
+        role: item.role,
+        imports: (item.imports || []).slice(0, 6),
+        importedBy: (item.importedBy || []).slice(0, 6),
+        documentationReferences: (item.documentationReferences || []).slice(0, 6),
+        referencedByDocs: (item.referencedByDocs || []).slice(0, 6),
+        testOwners: (item.testOwners || []).slice(0, 3),
+        ownedTests: (item.ownedTests || []).slice(0, 6)
       }));
       fragment = JSON.stringify({
         tool: call.tool, query: call.input.query, available: toolRun.output.available,
