@@ -290,7 +290,7 @@ function compactAgentReply(result, applied) {
     }
   }
   if (result.attempts?.length) lines.push("", "Repair attempts: " + result.attempts.length + ".");
-  if (applied.length) lines.push("", "Backups and audit records are saved in .syntra.");
+  if (applied.length) lines.push("", "Backups are saved under .syntra.");
   return lines.join("\n");
 }
 
@@ -342,7 +342,10 @@ async function runChatTurn(jobId, message, history) {
         }
         updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
         const transaction = await applyProposals(activeWorkspace, saved.pending);
-        finishChat(jobId, "Applied the explicitly requested proposals:\n" + transaction.applied.map(item => "- " + item.path).join("\n") + "\n\nBackups and tool audit records are saved under .syntra.", {
+        const auditNote = transaction.toolCall.auditRecorded
+          ? "Backups and tool audit records are saved under .syntra."
+          : "Backups are saved under .syntra, but the final tool audit event could not be written.";
+        finishChat(jobId, "Applied the explicitly requested proposals:\n" + transaction.applied.map(item => "- " + item.path).join("\n") + "\n\n" + auditNote, {
           toolCalls: [listTrace, transaction.toolCall]
         });
         return;
