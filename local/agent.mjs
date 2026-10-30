@@ -429,7 +429,7 @@ async function planImplementationSlices({
   return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
 }
 
-async function collectFinalCandidateChanges(originalRoot, changedPaths, originalByPath, expectedContents) {
+async function collectFinalCandidateChanges(changedPaths, originalByPath, expectedContents) {
   const changes = [];
   for (const relative of [...changedPaths].sort()) {
     const original = originalByPath.get(relative);
@@ -1397,6 +1397,8 @@ export async function runAgentTask({
       }
 
       if (!slicePassed) {
+        const patchStep = plan.steps.find(step => step.id === "patch");
+        if (patchStep && patchStep.status === "running") patchStep.status = "blocked";
         if (sliceStep && slice.status === "running") sliceStep.status = "blocked";
         slice.status = slice.status === "running" ? "blocked" : slice.status;
         stopAfterSlice = true;
@@ -1462,7 +1464,7 @@ export async function runAgentTask({
     }
 
     if (snapshot && touchedPaths.size) {
-      const aggregated = await collectFinalCandidateChanges(root, touchedPaths, originalByPath, expectedCandidateContents);
+      const aggregated = await collectFinalCandidateChanges(touchedPaths, originalByPath, expectedCandidateContents);
       if (aggregated.length) {
         finalChanges = {
           summary: sliceSummaries.length
