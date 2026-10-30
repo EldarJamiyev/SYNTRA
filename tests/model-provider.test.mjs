@@ -113,7 +113,7 @@ test("local generation uses only loopback Ollama and JSON mode for structured pa
   assert.equal(result.generated_tokens, 12);
 });
 
-test("local model read-only tool plans use a schema restricted to search and file reads", async () => {
+test("local model read-only tool plans expose the same safe search tools as the agent allowlist", async () => {
   let capturedBody = null;
   const provider = {
     provider: "ollama-local",
@@ -138,7 +138,7 @@ test("local model read-only tool plans use a schema restricted to search and fil
   assert.deepEqual(capturedBody.format.required, ["calls"]);
   assert.deepEqual(
     capturedBody.format.properties.calls.items.properties.tool.enum,
-    ["workspace.search", "workspace.read"]
+    ["workspace.search", "workspace.read", "workspace.symbols.search", "workspace.memory.search"]
   );
   assert.deepEqual(
     Object.keys(capturedBody.format.properties.calls.items.properties.input.properties).sort(),
