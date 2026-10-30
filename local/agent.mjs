@@ -972,12 +972,14 @@ export async function runAgentTask({
     for (let sliceIndex = 0; sliceIndex < implementationSlices.length && !stopAfterSlice; sliceIndex += 1) {
       const slice = implementationSlices[sliceIndex];
       const sliceStep = plan.steps.find(step => step.id === slice.id);
-      const sliceGoal = [
-        "Overall user request: " + goal,
-        "Implementation slice " + (sliceIndex + 1) + " of " + implementationSlices.length + ": " + slice.goal,
-        "Acceptance criterion: " + slice.acceptance,
-        "Implement only this slice. Earlier completed slices are already present in the candidate workspace. Do not repeat their changes or add unrelated work."
-      ].join("\n");
+      const sliceGoal = implementationSlices.length === 1
+        ? goal
+        : [
+          "Overall user request: " + goal,
+          "Implementation slice " + (sliceIndex + 1) + " of " + implementationSlices.length + ": " + slice.goal,
+          "Acceptance criterion: " + slice.acceptance,
+          "Implement only this slice. Earlier completed slices are already present in the candidate workspace. Do not repeat their changes or add unrelated work."
+        ].join("\n");
       let slicePassed = false;
       slice.status = "running";
       if (sliceStep) sliceStep.status = "running";
