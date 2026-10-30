@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-const projectRoot = fileURLToPath(new URL("../", import.meta.url));
+const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 
 async function reservePort() {
   const server = net.createServer();
@@ -316,6 +316,7 @@ async function runChatCommand(base, message) {
 test("saved workspace proposals survive a real local service restart", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-restart-workspace-"));
   await fs.mkdir(path.join(root, "src"), { recursive: true });
+  const canonicalRoot = await fs.realpath(root);
   const sourcePath = path.join(root, "src", "app.js");
   const original = "export const version = 1;\n";
   const proposed = "export const version = 2;\n";
@@ -340,7 +341,7 @@ test("saved workspace proposals survive a real local service restart", async () 
     const restoredResponse = await fetch(service.base + "/local-api/workspace/status");
     assert.equal(restoredResponse.status, 200);
     const restored = await restoredResponse.json();
-    assert.equal(restored.root, root);
+    assert.equal(restored.root, canonicalRoot);
     assert.equal(restored.pendingProposals.length, 1);
     assert.equal(restored.pendingProposals[0].id, proposal.id);
 
