@@ -101,10 +101,7 @@ test("agent implements and verifies multiple slices against one cumulative candi
           generated_tokens: 35, trained_steps: null
         };
       }
-      console.log("DEBUG_SLICE_PATCH", patchCalls, body.prompt.slice(0, 180), body.prompt.length);
-      if (!body.prompt.includes("Implementation slice 2 of 2")) {
-        return { text: '{"summary":"debug stop"}', generated_tokens: 8, trained_steps: null };
-      }
+      assert.ok(body.prompt.includes("Implementation slice 2 of 2"));
       assert.ok(body.prompt.includes("Implementation slice 2 of 2"));
       assert.ok(body.prompt.includes("module.exports = { value: 2 }"),
         "slice two must receive source context from the verified first slice");
@@ -135,11 +132,6 @@ test("agent implements and verifies multiple slices against one cumulative candi
         if (Object.prototype.hasOwnProperty.call(update, "recoveryPatch")) recoveryCheckpoints.push(update.recoveryPatch);
       }
     });
-    console.log("DEBUG_MULTI_RESULT", JSON.stringify({
-      patchCalls, status: result.status, attempts: result.attempts,
-      verification: result.verification, observations: result.observations,
-      slices: result.implementationSlices
-    }));
     assert.equal(patchCalls, 2);
     assert.ok(recoveryCheckpoints.length > 0);
     assert.ok(recoveryCheckpoints.every(value => value === null),
@@ -216,11 +208,6 @@ test("an incomplete later slice cannot inherit an earlier passing verification s
       runChecks: true,
       modelRequest
     });
-    console.log("DEBUG_INCOMPLETE_RESULT", JSON.stringify({
-      patchCalls, status: result.status, attempts: result.attempts,
-      verification: result.verification, observations: result.observations,
-      slices: result.implementationSlices
-    }));
     assert.equal(patchCalls, 2);
     assert.equal(result.implementationSlices[0].status, "completed");
     assert.equal(result.implementationSlices[1].status, "blocked");
@@ -314,10 +301,6 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       modelToolSelection: true,
       modelRequest
     });
-    console.log("DEBUG_RETRIEVAL_RESULT", JSON.stringify({
-      generated: generated.map(p => ({ marker: p.includes("SYNTRA_READ_ONLY_TOOL_PLAN"), length: p.length })),
-      status: result.status, attempts: result.attempts, verification: result.verification
-    }));
     assert.equal(generated.length, 2, "one safe tool-plan generation should precede patch generation");
     assert.equal(result.proposals.length, 1);
     assert.equal(result.proposals[0].path, "src/value.js");
