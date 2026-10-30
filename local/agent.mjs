@@ -429,9 +429,9 @@ async function planImplementationSlices({
   return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
 }
 
-async function validateResumeCandidateCheckpoint(root, goal, checkpoint, maxSlices) {
+async function validateResumeCandidateCheckpoint(root, runId, goal, checkpoint, maxSlices) {
   if (!isPlainToolInput(checkpoint) || checkpoint.schemaVersion !== 1
-    || checkpoint.root !== root || checkpoint.stage !== "slice_verified"
+    || checkpoint.runId !== runId || checkpoint.root !== root || checkpoint.stage !== "slice_verified"
     || !Array.isArray(checkpoint.slices) || !Array.isArray(checkpoint.files)
     || !Number.isInteger(checkpoint.nextSliceIndex)) {
     throw new Error("Saved candidate checkpoint metadata is invalid.");
@@ -969,7 +969,7 @@ export async function runAgentTask({
   let resumeCandidateState = null;
   if (resumeCandidate) {
     try {
-      resumeCandidateState = await validateResumeCandidateCheckpoint(root, goal, resumeCandidate, maxSlices);
+      resumeCandidateState = await validateResumeCandidateCheckpoint(root, runId, goal, resumeCandidate, maxSlices);
       observations.push({
         kind: "candidate-checkpoint", stage: "resume-validation", status: "validated",
         detail: "Saved verified slice state matched the original workspace hashes for " +
