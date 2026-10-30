@@ -1067,14 +1067,92 @@ export async function runAgentTask({
   try {
     let savedPatch = resumePatch && typeof resumePatch === "object" ? resumePatch : null;
     const firstIteration = Math.max(1, Math.min(MAX_ITERATIONS, Number(resumeIteration) || 1));
-    let iteration = firstIteration - 1;
+    let iteration = resumeCandidateState
+      ? Math.max(0, Number(attempts.at(-1)?.iteration) || 0)
+      : firstIteration - 1;
     let activePatchRoot = root;
     let stopAfterSlice = false;
     const touchedPaths = new Set();
     const expectedCandidateContents = new Map();
     const sliceSummaries = [];
+    let firstSliceIndex = 0;
+    if (resumeCandidateState) {
+      snapshot = await copySandbox(root);
+      const restoredChanges = [];
+      for (const file of resumeCandidateState.files) {
+        originalByPath.set(file.path, {
+          beforeContent: file.beforeContent,
+          beforeHash: file.baseHash,
+          existedBefore: file.existedBefore,
+          reason: file.reason
+        });
+        touchedPaths.add(file.path);
+        expectedCandidateContents.set(file.path, file.content);
+        restoredChanges.push({
+          path: file.path,
+          content: file.content,
+          beforeContent: file.beforeContent,
+          beforeHash: file.baseHash,
+          existedBefore: file.existedBefore,
+          reason: file.reason
+        });
+      }
+      await writeCandidateChanges(snapshot.root, restoredChanges);
+      activePatchRoot = snapshot.root;
+      firstSliceIndex = resumeCandidateState.nextSliceIndex;
+      finalVerification = resumeCandidateState.verification;
+      for (const slice of implementationSlices) {
+        if (slice.status === "completed") sliceSummaries.push(slice.goal + " — " + slice.acceptance);
+      }
+      const restoredInspection = await executeWorkspaceTool({
+        root: snapshot.root, auditRoot: root, name: "workspace.inspect", input: {}, signal
+      });
+      toolCalls.push(toolCallSummary(restoredInspection));
+      if (!restoredInspection.ok) {
+        throw new Error("The saved candidate could not be re-inspected safely: " +
+          String(restoredInspection.error || "unknown error"));
+      }
+      inventory = restoredInspection.output;
+      graph = await buildRepositoryGraph(snapshot.root);
+      ranked = rankGraph(graph, implementationSlices[firstSliceIndex]?.goal || goal, requestedPath);
+      modelSelectedContext = "";
+      if (modelToolSelection && firstSliceIndex < implementationSlices.length) {
+        try {
+          modelSelectedContext = await runModelSelectedReadOnlyTools({
+            root: snapshot.root, goal: implementationSlices[firstSliceIndex].goal, ranked,
+            modelRequest, contextBudget, signal, toolCalls, observations
+          });
+        } catch (error) {
+          if (signal?.aborted || error?.name === "AbortError") throw error;
+          observations.push({
+            kind: "model-readonly-tool-plan", stage: "resume-context",
+            status: "unavailable",
+            detail: String(error instanceof Error ? error.message : error).slice(0, 400)
+          });
+        }
+      }
+      const patchStep = plan.steps.find(step => step.id === "patch");
+      if (patchStep && firstSliceIndex >= implementationSlices.length) patchStep.status = "completed";
+      const verifyStep = plan.steps.find(step => step.id === "verify");
+      if (verifyStep) {
+        verifyStep.status = "completed";
+        verifyStep.detail = "Previous slices were verified before restart; the next slice will be checked independently.";
+      }
+      observations.push({
+        kind: "candidate-checkpoint", stage: "resume-restore", status: "restored",
+        detail: "Reconstructed the candidate from " + restoredChanges.length +
+          " hash-validated file(s); continuing at slice " + (firstSliceIndex + 1) + "."
+      });
+      await emitProgress({
+        phase: "candidate-restored",
+        iteration: Math.max(0, Number(resumeCandidate?.iteration) || 0),
+        message: "Restored the last verified candidate snapshot and re-inspected it before continuing.",
+        planSteps: plan.steps, observations, toolCalls, verification: finalVerification,
+        checkpoint: { stage: "candidate_restored", iteration: Math.max(0, Number(resumeCandidate?.iteration) || 0) }
+      });
+    }
 
-    for (let sliceIndex = 0; sliceIndex < implementationSlices.length && !stopAfterSlice; sliceIndex += 1) {
+    for (let sliceIndex = firstSliceIndex; sliceIndex < implementationSlices.length && !stopAfterSlice; sliceIndex += 1) {
       const slice = implementationSlices[sliceIndex];
       const sliceStep = plan.steps.find(step => step.id === slice.id);
       const sliceGoal = implementationSlices.length === 1
