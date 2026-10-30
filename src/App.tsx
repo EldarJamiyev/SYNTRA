@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, FolderOpen, LoaderCircle, Menu, MessageSquare, Pencil, Plus, Search, Trash2, X } from 'lucide-react';
+import { ArrowUp, Check, FolderOpen, LoaderCircle, Menu, MessageSquare, Pencil, Plus, Search, Square, Trash2, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { createChatSession, loadSessionState, MAX_CHAT_SESSIONS, saveSessionState, titleFromMessages } from './chat-sessions.js';
@@ -26,12 +26,23 @@ const MAX_VISIBLE_MESSAGES = 60;
 
 type ChatJob = {
   jobId: string;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
   phase?: string;
   message?: string;
   reply?: string;
   error?: string | null;
   partialReply?: string;
+};
+
+type AgentRunSummary = {
+  id: string;
+  goal: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'queued';
+  phase: string;
+  message: string;
+  updatedAt: string;
+  recoveryAvailable: boolean;
+  checkpoint?: { stage?: string; iteration?: number };
 };
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
@@ -151,6 +162,7 @@ export default function App() {
   const [workspacePath, setWorkspacePath] = useState(() => loadWorkspacePath() || '');
   const [workspaceSwitching, setWorkspaceSwitching] = useState(false);
   const [workspaceError, setWorkspaceError] = useState('');
+  const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [input, setInput] = useState('');
@@ -183,6 +195,7 @@ export default function App() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const shouldFollowRef = useRef(true);
   const mountedRef = useRef(true);
+  const activeJobIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -211,6 +224,12 @@ export default function App() {
         if (!cancelled) {
           setWorkspaceStatus(status);
           if (!(savedPath && status.root !== savedPath)) setWorkspacePath(status.root);
+          try {
+            const runs = await getJson<{ runs: AgentRunSummary[] }>('/local-api/agent/runs');
+            if (!cancelled) setAgentRuns(runs.runs || []);
+          } catch {
+            // Chat remains available when the optional run-history view is unavailable.
+          }
           setWorkspaceLoading(false);
         }
       } catch (cause) {
@@ -321,6 +340,7 @@ export default function App() {
       setWorkspaceStatus(status);
       setWorkspacePath(status.root);
       saveWorkspacePath(status.root);
+      try { await refreshAgentRuns(); } catch { setAgentRuns([]); }
       setWorkspaceOpen(false);
     } catch (cause) {
       setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
@@ -333,6 +353,23 @@ export default function App() {
     setInput('/proposals');
     setWorkspaceOpen(false);
     textareaRef.current?.focus();
+  };
+
+  const refreshAgentRuns = async () => {
+    const result = await getJson<{ root: string; runs: AgentRunSummary[] }>('/local-api/agent/runs');
+    if (mountedRef.current) setAgentRuns(result.runs || []);
+  };
+
+  const cancelActiveChat = async () => {
+    const jobId = activeJobIdRef.current;
+    if (!jobId) return;
+    setPhase('Stopping safely…');
+    try {
+      const result = await postJson<{ ok: boolean; message?: string }>('/local-api/chat/cancel', { jobId });
+      if (!result.ok && result.message) setError(result.message);
+    } catch (cause) {
+      if (mountedRef.current) setError(cause instanceof Error ? cause.message : String(cause));
+    }
   };
 
   const handleThreadScroll = () => {
@@ -357,9 +394,9 @@ export default function App() {
     saveSessionState(sessionState);
   }, [sessionState]);
 
-  const send = async (event?: FormEvent) => {
+  const send = async (event?: FormEvent, explicitContent?: string) => {
     event?.preventDefault();
-    const content = input.trim();
+    const content = (explicitContent ?? input).trim();
     if (!content || pending) return;
 
     if (content.toLowerCase() === '/clear') {
@@ -386,6 +423,7 @@ export default function App() {
     try {
       const started = await postJson<ChatJob>('/local-api/chat', { message: content, history });
       requestStarted = true;
+      activeJobIdRef.current = started.jobId;
       let job = started;
       while (job.status === 'running') {
         if (!mountedRef.current) return;
@@ -398,6 +436,18 @@ export default function App() {
         job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
       }
       if (!mountedRef.current) return;
+      if (job.status === 'cancelled') {
+        setStreamingReply('');
+        const partial = partialReply || job.partialReply || '';
+        const cancellation = job.reply || 'Task cancelled. Any staged proposals remain available in workspace review.';
+        setMessages(current => [...current, {
+          role: 'assistant' as const,
+          content: partial ? partial + '\n\n---\n\n' + cancellation : cancellation
+        }].slice(-MAX_VISIBLE_MESSAGES));
+        try { await refreshAgentRuns(); } catch {}
+        try { await refreshWorkspaceStatus(); } catch {}
+        return;
+      }
       if (job.status === 'failed') {
         setStreamingReply('');
         const interrupted = partialReply || job.partialReply || '';
@@ -419,6 +469,7 @@ export default function App() {
       setMessages(current => [...current, { role: 'assistant' as const, content: answer }].slice(-MAX_VISIBLE_MESSAGES));
       try {
         await refreshWorkspaceStatus();
+        await refreshAgentRuns();
       } catch {
         // A transient status refresh must not turn a completed chat answer into a failure.
       }
@@ -441,6 +492,7 @@ export default function App() {
         setError(detail);
       }
     } finally {
+      activeJobIdRef.current = null;
       if (mountedRef.current) {
         setPending(false);
         setPhase('');
@@ -529,6 +581,28 @@ export default function App() {
             </button>
           </form>
           {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
+          <div className="workspace-agent-runs">
+            <div className="workspace-agent-runs-heading">Recent agent runs</div>
+            {agentRuns.length === 0 ? (
+              <div className="workspace-agent-runs-empty">No coding tasks recorded yet.</div>
+            ) : agentRuns.slice(0, 5).map(run => (
+              <div className="workspace-agent-run" key={run.id}>
+                <div className="workspace-agent-run-main">
+                  <span className="workspace-agent-run-goal">{run.goal}</span>
+                  <span className="workspace-agent-run-meta">
+                    <span className={'agent-run-status ' + run.status}>{run.status}</span>
+                    <span>{run.checkpoint?.stage || run.phase}</span>
+                  </span>
+                </div>
+                {run.status === 'interrupted' && (
+                  <button className="workspace-agent-resume" type="button" onClick={() => {
+                    setWorkspaceOpen(false);
+                    void send(undefined, '/resume ' + run.id);
+                  }}>Resume</button>
+                )}
+              </div>
+            ))}
+          </div>
           {workspaceStatus && (workspaceStatus.pendingProposals.length > 0 || workspaceStatus.staleProposals.length > 0) && (
             <div className="workspace-proposal-summary">
               <div className="workspace-proposal-count">
@@ -693,9 +767,15 @@ export default function App() {
             rows={1}
             disabled={pending || workspaceLoading}
           />
-          <button className="send-button" type="submit" aria-label="Send message" disabled={pending || workspaceLoading || !input.trim()}>
-            {pending ? <LoaderCircle size={18} className="thinking-spinner" /> : <ArrowUp size={18} strokeWidth={2.4} />}
-          </button>
+          {pending ? (
+            <button className="send-button stop-button" type="button" aria-label="Stop task" title="Stop task" onClick={() => void cancelActiveChat()}>
+              <Square size={14} fill="currentColor" strokeWidth={1.5} />
+            </button>
+          ) : (
+            <button className="send-button" type="submit" aria-label="Send message" disabled={workspaceLoading || !input.trim()}>
+              <ArrowUp size={18} strokeWidth={2.4} />
+            </button>
+          )}
         </form>
       </div>
     </main>
