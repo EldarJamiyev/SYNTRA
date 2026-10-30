@@ -198,12 +198,61 @@ test("multi-file apply is approval-gated and remains transactional", async () =>
   }
 });
 
+test("tool calls against one workspace serialize long-running checks and reads", async () => {
+  const root = await createProject();
+  try {
+    const manifestPath = path.join(root, "package.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    manifest.scripts.test = "node -e \"require('fs').writeFileSync('check-started.txt', 'yes'); setTimeout(() => {}, 180)\"";
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
+
+    const checkPromise = executeWorkspaceTool({
+      root, name: "workspace.check", input: { task: "test" }, approval: true
+    });
+
+    const deadline = Date.now() + 3000;
+    let started = false;
+    while (Date.now() < deadline) {
+      started = await fs.access(path.join(root, "check-started.txt")).then(() => true).catch(() => false);
+      if (started) break;
+      await new Promise(resolve => setTimeout(resolve, 15));
+    }
+    assert.equal(started, true, "the approved project check should begin before the second tool call");
+
+    const searchPromise = executeWorkspaceTool({
+      root, name: "workspace.search", input: { query: "second" }
+    });
+    const [check, search] = await Promise.all([checkPromise, searchPromise]);
+    assert.equal(check.ok, true);
+    assert.equal(check.output.passed, true);
+    assert.equal(search.ok, true);
+
+    const events = (await readAudit(root))
+      .filter(event => event.action === "tool_runtime_event");
+    assert.deepEqual(events.map(event => [event.tool, event.status]), [
+      ["workspace.check", "started"],
+      ["workspace.check", "completed"],
+      ["workspace.search", "started"],
+      ["workspace.search", "completed"]
+    ]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("tool input schemas reject unknown fields and unsafe file paths", async () => {
   const root = await createProject();
   try {
     await assert.rejects(
       () => executeWorkspaceTool({ root, name: "workspace.search", input: { query: "value", command: "whoami" } }),
       /Unknown input field/
+    );
+    await assert.rejects(
+      () => executeWorkspaceTool({
+        root, name: "workspace.read",
+        input: { path: "src/value.js", startLine: 1, endLine: 10_000_001 }
+      }),
+      /allowed integer range/
     );
     const secret = await executeWorkspaceTool({
       root, name: "workspace.read", input: { path: ".env" }
