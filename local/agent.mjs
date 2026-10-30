@@ -1091,7 +1091,7 @@ export async function runAgentTask({
           message: resumingSavedPatch
             ? "Restored the saved patch checkpoint and revalidated every original source-file hash and exact anchor."
             : "Patch schema, candidate paths, file hashes and exact anchors validated for " + slice.id + ".",
-          recoveryPatch: patchPayload,
+          recoveryPatch: implementationSlices.length > 1 ? null : patchPayload,
           checkpoint: { stage: "patch_validated", iteration },
           planSteps: plan.steps,
           toolCalls,
