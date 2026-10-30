@@ -442,7 +442,7 @@ async function validateResumeCandidateCheckpoint(root, runId, goal, checkpoint, 
       acceptance: slice.acceptance
     }))
   }, goal, maxSlices);
-  if (checkpoint.nextSliceIndex < 1 || checkpoint.nextSliceIndex > planned.length) {
+  if (checkpoint.nextSliceIndex < 1 || checkpoint.nextSliceIndex >= planned.length) {
     throw new Error("Saved candidate checkpoint points to an invalid next slice.");
   }
   for (let index = 0; index < planned.length; index += 1) {
@@ -1491,7 +1491,8 @@ export async function runAgentTask({
         });
 
         if (allPassed) {
-          if (implementationSlices.length > 1 && runId && typeof onCandidateCheckpoint === "function") {
+          if (implementationSlices.length > 1 && sliceIndex < implementationSlices.length - 1
+            && runId && typeof onCandidateCheckpoint === "function") {
             const checkpointFiles = [...touchedPaths].sort().map(relative => {
               const original = originalByPath.get(relative);
               const content = expectedCandidateContents.get(relative);
