@@ -82,7 +82,7 @@ test("session collections and total stored text remain bounded", () => {
     title: "Session " + index,
     createdAt: "2026-10-30T10:00:00.000Z",
     updatedAt: new Date(Date.UTC(2026, 9, 30, 10, index)).toISOString(),
-    messages: [{ role: "user", content: "x".repeat(20_000) }]
+    messages: [{ role: "user", content: "x".repeat(5_000) }]
   }));
   const state = normalizeSessionState({ version: 1, activeSessionId: "session-0", sessions });
   const totalChars = state.sessions.reduce((sum, session) =>
@@ -90,6 +90,18 @@ test("session collections and total stored text remain bounded", () => {
   assert.equal(state.sessions.length, MAX_CHAT_SESSIONS);
   assert.ok(totalChars <= MAX_SESSION_TEXT_CHARS);
   assert.ok(serializeSessionState(state).length < 600_000);
+
+  const oversizedSessions = sessions.map(session => ({
+    ...session,
+    messages: [{ role: "user", content: "x".repeat(20_000) }]
+  }));
+  const bounded = normalizeSessionState({
+    version: 1, activeSessionId: "session-0", sessions: oversizedSessions
+  });
+  const boundedChars = bounded.sessions.reduce((sum, session) =>
+    sum + session.messages.reduce((sub, message) => sub + message.content.length, 0), 0);
+  assert.ok(bounded.sessions.length < MAX_CHAT_SESSIONS, "the global text budget may prune sessions before the session-count limit");
+  assert.ok(boundedChars <= MAX_SESSION_TEXT_CHARS);
 });
 
 test("automatic titles are based on the first user prompt and remain compact", () => {
