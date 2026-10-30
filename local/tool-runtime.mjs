@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   applyFileProposal,
+  applyFileProposals,
   createProjectPlan,
   discardFileProposals,
   inspectWorkspace,
@@ -94,6 +95,22 @@ const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object", required: ["proposalId"],
       properties: { proposalId: { type: "string", pattern: "^[a-f0-9-]{36}$" } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "workspace.proposals.apply-many",
+    description: "Apply multiple saved proposals as one transaction after explicit user approval. Every source hash is preflighted and backups are created before writes.",
+    permission: "source_write",
+    approvalRequired: true,
+    inputSchema: {
+      type: "object", required: ["proposalIds"],
+      properties: {
+        proposalIds: {
+          type: "array", minItems: 1, maxItems: 24,
+          items: { type: "string", pattern: "^[a-f0-9-]{36}$" }
+        }
+      },
       additionalProperties: false
     }
   },
@@ -250,6 +267,8 @@ async function invokeTool(root, name, input) {
       return proposeFileChange(root, input.path, input.content, input.expectedBaseHash);
     case "workspace.proposals.apply":
       return applyFileProposal(root, input.proposalId, true);
+    case "workspace.proposals.apply-many":
+      return applyFileProposals(root, input.proposalIds, true);
     case "workspace.proposals.discard":
       return discardFileProposals(root, input.proposalIds, true);
     case "workspace.check":
@@ -284,6 +303,8 @@ function summarizeOutput(name, output) {
       return { proposalId: output.id, path: output.path, afterHash: output.afterHash };
     case "workspace.proposals.apply":
       return { proposalId: output.id, path: output.path, applied: output.applied };
+    case "workspace.proposals.apply-many":
+      return { appliedCount: output.applied?.length || 0, paths: (output.applied || []).map(item => item.path) };
     case "workspace.proposals.discard":
       return { discardedCount: output.discarded.length };
     case "workspace.check":
