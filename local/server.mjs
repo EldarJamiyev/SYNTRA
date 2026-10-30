@@ -14,6 +14,8 @@ import {
   getAgentRun,
   listAgentRuns,
   listPendingProposals,
+  getWorkspaceExclusions,
+  updateWorkspaceExclusions,
   readWorkspaceFile,
   recoverInterruptedAgentRuns,
   requestAgentRunCancellation,
@@ -802,6 +804,8 @@ const routeHandlers = {
     approval: body.approval === true
   }),
   "GET /local-api/workspace/status": async () => readWorkspaceStatus(),
+  "GET /local-api/workspace/exclusions": async () => getWorkspaceExclusions(activeWorkspace),
+  "POST /local-api/workspace/exclusions": async body => updateWorkspaceExclusions(activeWorkspace, body),
   "POST /local-api/workspace/switch": switchWorkspace,
   "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
   "GET /local-api/ai/train/status": async () => aiRequest("GET", "/model/train/status"),

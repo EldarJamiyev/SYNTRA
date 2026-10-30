@@ -27,6 +27,11 @@ const MAX_TEXT_BYTES = 512 * 1024;
 const MAX_FILES = 5000;
 const MAX_DEPTH = 10;
 const MAX_OUTPUT = 50000;
+const WORKSPACE_EXCLUSIONS_FILENAME = "workspace-exclusions-v1.json";
+const WORKSPACE_EXCLUSIONS_SCHEMA_VERSION = 1;
+const MAX_WORKSPACE_EXCLUSIONS = 100;
+const MAX_WORKSPACE_EXCLUSION_LENGTH = 160;
+const workspaceExclusionsCache = new Map();
 
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -98,6 +103,9 @@ async function resolveFile(root, relativePath, options = {}) {
   if (isSensitiveRelativePath(rel)) {
     throw new Error("SYNTRA blocks access to likely secret/credential files: " + rel);
   }
+  if (await isWorkspacePathExcludedForRoot(root, rel)) {
+    throw new Error("SYNTRA excludes this path from agent access: " + rel);
+  }
   const target = path.resolve(root, rel.split("/").join(path.sep));
   if (!isWithinRoot(root, target) || target === root) {
     throw new Error("Path escapes the selected workspace.");
@@ -142,6 +150,7 @@ function isTextCandidate(filePath) {
 
 async function walkFiles(root) {
   const files = [];
+  const { patterns } = await readWorkspaceExclusionsState(root);
   async function walk(directory, depth) {
     if (depth > MAX_DEPTH || files.length >= MAX_FILES) return;
     let entries;
@@ -155,13 +164,16 @@ async function walkFiles(root) {
       if (files.length >= MAX_FILES) break;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (!IGNORED_DIRS.has(entry.name.toLowerCase())) await walk(path.join(directory, entry.name), depth + 1);
+        const relativeDirectory = path.relative(root, path.join(directory, entry.name)).split(path.sep).join("/");
+        if (!IGNORED_DIRS.has(entry.name.toLowerCase()) && !matchesWorkspaceExclusion(relativeDirectory, patterns)) {
+          await walk(path.join(directory, entry.name), depth + 1);
+        }
         continue;
       }
       if (!entry.isFile()) continue;
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(root, absolute).split(path.sep).join("/");
-      if (!isTextCandidate(relative)) continue;
+      if (matchesWorkspaceExclusion(relative, patterns) || !isTextCandidate(relative)) continue;
       let stat;
       try { stat = await fs.stat(absolute); } catch { continue; }
       if (stat.size <= 0 || stat.size > MAX_TEXT_BYTES) continue;
@@ -424,6 +436,166 @@ async function writeFileAtomic(target, content) {
     await fs.rm(temporary, { force: true });
     throw error;
   }
+}
+
+
+function normalizeWorkspaceExclusionPatterns(values) {
+  if (!Array.isArray(values) || values.length > MAX_WORKSPACE_EXCLUSIONS) {
+    throw new Error("Workspace exclusions must contain no more than 100 path patterns.");
+  }
+  const patterns = [];
+  const seen = new Set();
+  for (const value of values) {
+    if (typeof value !== "string" || value.length > MAX_WORKSPACE_EXCLUSION_LENGTH) {
+      throw new Error("Each workspace exclusion must be a string of at most 160 characters.");
+    }
+    let pattern = value.trim();
+    if (!pattern || pattern.startsWith("#")) continue;
+    if (pattern.startsWith("./")) pattern = pattern.slice(2);
+    if (!pattern || pattern.startsWith("!") || pattern.includes("\\") || pattern.includes("\0")
+      || pattern.startsWith("/") || /^[a-zA-Z]:/.test(pattern)) {
+      throw new Error("Workspace exclusions must be relative glob patterns; negation and absolute paths are not supported.");
+    }
+    const segments = pattern.split("/");
+    if (segments.some(segment => !segment || segment === "." || segment === "..")) {
+      throw new Error("Workspace exclusions cannot contain empty, '.' or '..' path segments.");
+    }
+    if (segments[0].toLowerCase() === ".syntra") {
+      throw new Error("The .syntra state directory is reserved and cannot be excluded or targeted by a pattern.");
+    }
+    if (!/^[\p{L}\p{N} ._@+*?()\[\]-]+$/u.test(pattern.replaceAll("/", ""))) {
+      throw new Error("Workspace exclusions contain unsupported characters. Use path names with *, ?, and ** wildcards.");
+    }
+    if (seen.has(pattern)) continue;
+    seen.add(pattern);
+    patterns.push(pattern);
+  }
+  return patterns;
+}
+
+function globPatternRegExp(pattern) {
+  const normalized = pattern.endsWith("/**") ? pattern.slice(0, -3) : pattern;
+  let source = "^";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const character = normalized[index];
+    if (character === "*" && normalized[index + 1] === "*") {
+      if (normalized[index + 2] === "/") {
+        source += "(?:.*/)?";
+        index += 2;
+      } else {
+        source += ".*";
+        index += 1;
+      }
+    } else if (character === "*") {
+      source += "[^/]*";
+    } else if (character === "?") {
+      source += "[^/]";
+    } else {
+      source += character.replace(/[|\\{}()[\]^$+?.]/g, "\\async function appendAudit(root, entry) {
+");
+    }
+  }
+  return new RegExp(source + "$", "i");
+}
+
+function matchesWorkspaceExclusion(relativePath, patterns) {
+  if (!patterns?.length) return false;
+  const segments = relativePath.split("/");
+  for (const pattern of patterns) {
+    const matcher = globPatternRegExp(pattern);
+    if (!pattern.includes("/")) {
+      if (segments.some(segment => matcher.test(segment))) return true;
+      continue;
+    }
+    for (let index = 1; index <= segments.length; index += 1) {
+      if (matcher.test(segments.slice(0, index).join("/"))) return true;
+    }
+  }
+  return false;
+}
+
+async function readWorkspaceExclusionsState(root) {
+  const stateRoot = stateDirectory(root);
+  const target = path.join(stateRoot, WORKSPACE_EXCLUSIONS_FILENAME);
+  let info;
+  try {
+    info = await fs.lstat(target);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      workspaceExclusionsCache.delete(root);
+      return { patterns: [], updatedAt: null };
+    }
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error("The workspace exclusions file must be a regular file, not a symbolic link.");
+  }
+  if (info.size > 24 * 1024) {
+    throw new Error("The workspace exclusions file exceeds its 24 KB size limit.");
+  }
+  const cacheKey = info.mtimeMs + ":" + info.size;
+  const cached = workspaceExclusionsCache.get(root);
+  if (cached?.cacheKey === cacheKey) return cached.state;
+
+  let data;
+  try {
+    data = JSON.parse(await fs.readFile(target, "utf8"));
+  } catch {
+    throw new Error("The workspace exclusions file contains invalid JSON and was not changed.");
+  }
+  if (!data || data.schemaVersion !== WORKSPACE_EXCLUSIONS_SCHEMA_VERSION || data.root !== root
+    || typeof data.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt))) {
+    throw new Error("The workspace exclusions file is invalid or belongs to a different workspace.");
+  }
+  const patterns = normalizeWorkspaceExclusionPatterns(data.patterns);
+  const state = { patterns, updatedAt: data.updatedAt };
+  workspaceExclusionsCache.set(root, { cacheKey, state });
+  return state;
+}
+
+async function isWorkspacePathExcludedForRoot(root, relativePath) {
+  const state = await readWorkspaceExclusionsState(root);
+  return matchesWorkspaceExclusion(relativePath, state.patterns);
+}
+
+export async function isWorkspacePathExcluded(inputRoot, relativePath) {
+  const root = await resolveWorkspace(inputRoot);
+  const normalized = normalizeRelativePath(relativePath);
+  return isWorkspacePathExcludedForRoot(root, normalized);
+}
+
+export async function getWorkspaceExclusions(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const state = await readWorkspaceExclusionsState(root);
+  return { root, patterns: state.patterns, updatedAt: state.updatedAt };
+}
+
+export async function updateWorkspaceExclusions(inputRoot, options = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("Workspace exclusion settings must be a JSON object.");
+  }
+  const patterns = normalizeWorkspaceExclusionPatterns(options.patterns);
+  const current = await readWorkspaceExclusionsState(root);
+  if (Object.hasOwn(options, "expectedUpdatedAt") && options.expectedUpdatedAt !== current.updatedAt) {
+    throw new Error("Workspace exclusions changed after they were loaded. Reload the settings and try again.");
+  }
+  const stateRoot = await ensureWorkspaceStateDirectory(root);
+  const target = path.join(stateRoot, WORKSPACE_EXCLUSIONS_FILENAME);
+  await assertRegularStateFile(target, "The workspace exclusions file");
+  const next = {
+    schemaVersion: WORKSPACE_EXCLUSIONS_SCHEMA_VERSION,
+    root,
+    updatedAt: new Date().toISOString(),
+    patterns
+  };
+  await writeFileAtomic(target, JSON.stringify(next, null, 2) + "\n");
+  const info = await fs.lstat(target);
+  workspaceExclusionsCache.set(root, {
+    cacheKey: info.mtimeMs + ":" + info.size,
+    state: { patterns, updatedAt: next.updatedAt }
+  });
+  return { root, patterns, updatedAt: next.updatedAt };
 }
 
 async function appendAudit(root, entry) {

@@ -5,6 +5,7 @@ import {
   ensureWorkspaceStateDirectory,
   getWorkspaceStateDirectory,
   listWorkspaceIndexCandidates,
+  isWorkspacePathExcluded,
   readWorkspaceFile,
   resolveWorkspace
 } from "./workspace.mjs";
@@ -695,6 +696,11 @@ export async function searchWorkspaceSymbols(inputRoot, query, limit = 10) {
       return false;
     }
     try {
+      if (await isWorkspacePathExcluded(root, relativePath)) {
+        validatedPaths.set(relativePath, false);
+        staleFiles += 1;
+        return false;
+      }
       const current = await readWorkspaceFile(root, relativePath);
       const matches = current.sha256 === indexed.sha256 && current.bytes === indexed.size;
       validatedPaths.set(relativePath, matches);
