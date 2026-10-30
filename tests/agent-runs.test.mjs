@@ -192,7 +192,7 @@ test("verified candidate checkpoints persist bounded slice state separately from
     const payload = {
       schemaVersion: 1,
       runId: run.id,
-      root,
+      root: run.root,
       stage: "slice_verified",
       nextSliceIndex: 1,
       slices: [
@@ -233,7 +233,7 @@ test("candidate checkpoint storage rejects stale schemas, unsafe paths, invalid 
     const baseHash = createHash("sha256").update(original).digest("hex");
     const contentHash = createHash("sha256").update(candidate).digest("hex");
     const base = {
-      schemaVersion: 1, runId: run.id, root, stage: "slice_verified", nextSliceIndex: 1,
+      schemaVersion: 1, runId: run.id, root: run.root, stage: "slice_verified", nextSliceIndex: 1,
       slices: [
         { id: "slice-1", goal: "Update the exported value.", acceptance: "The value regression test passes.", status: "completed" },
         { id: "slice-2", goal: "Add the exported metadata helper.", acceptance: "The helper is added and checked.", status: "pending" }
@@ -402,7 +402,7 @@ test("run history preserves live tasks and a new service process recovers them",
     await saveAgentCandidateCheckpoint(root, run.id, {
       schemaVersion: 1,
       runId: run.id,
-      root,
+      root: run.root,
       stage: "slice_verified",
       nextSliceIndex: 1,
       slices: [
