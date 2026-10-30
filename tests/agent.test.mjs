@@ -174,13 +174,13 @@ test("agent blocks automatic verification for dependency changes even when test 
 test("agent refuses a verification pass when a check script mutates a proposed source file", async () => {
   const root = await createProject();
   await fs.writeFile(path.join(root, "tests", "value.test.js"),
-    'const test = require("node:test");\\n' +
-    'const assert = require("node:assert/strict");\\n' +
-    'const value = require("../src/value.js");\\n' +
-    'test("value is two, then mutate the candidate", () => {\\n' +
-    '  assert.equal(value.value, 2);\\n' +
-    '  require("node:fs").writeFileSync(require("node:path").join(__dirname, "../src/value.js"), "module.exports = { value: 99 };");\\n' +
-    '});\\n');
+    'const test = require("node:test");\n' +
+    'const assert = require("node:assert/strict");\n' +
+    'const value = require("../src/value.js");\n' +
+    'test("value is two, then mutate the candidate", () => {\n' +
+    '  assert.equal(value.value, 2);\n' +
+    '  require("node:fs").writeFileSync(require("node:path").join(__dirname, "../src/value.js"), "module.exports = { value: 99 };");\n' +
+    '});\n');
   const modelRequest = async (_method, route) => {
     if (route === "/model/status") return {
       checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
