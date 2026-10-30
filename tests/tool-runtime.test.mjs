@@ -35,11 +35,12 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 11);
+  assert.equal(tools.length, 12);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
   assert.equal(byName.get("workspace.search").permission, "read_only");
   assert.equal(byName.get("workspace.proposals.stage").permission, "local_state_write");
   assert.equal(byName.get("workspace.proposals.apply").approvalRequired, true);
+  assert.equal(byName.get("workspace.proposals.apply-many").approvalRequired, true);
   assert.equal(byName.get("workspace.proposals.apply").permission, "source_write");
   assert.equal(byName.get("workspace.proposals.discard").approvalRequired, true);
   assert.equal(byName.get("workspace.check").approvalRequired, true);
@@ -79,7 +80,7 @@ test("inspection, search, and line-range reads return structured output and dura
     assert.equal(toolEvents.length, 6, "each call has a start and completion audit event");
     assert.equal(new Set(toolEvents.map(event => event.runId)).size, 3);
     assert.ok(toolEvents.every(event => ["started", "completed"].includes(event.status)));
-    assert.ok(toolEvents.every(event => event.permission === "read_only" || event.permission === "read_only"));
+    assert.ok(toolEvents.every(event => event.permission === "read_only"));
     assert.ok(events.every(event => !JSON.stringify(event).includes("export const second")));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -156,6 +157,42 @@ test("execution and source-writing tools are blocked until explicit approval", a
     assert.equal(approvalEvents.length, 3);
     assert.ok(events.some(event => event.tool === "workspace.check" && event.status === "completed" && event.approved));
     assert.ok(events.every(event => !JSON.stringify(event).includes("export const safe = false")));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("multi-file apply is approval-gated and remains transactional", async () => {
+  const root = await createProject();
+  try {
+    const first = await executeWorkspaceTool({
+      root, name: "workspace.proposals.stage",
+      input: { path: "src/value.js", content: "export const first = 'updated';\\n" }
+    });
+    const second = await executeWorkspaceTool({
+      root, name: "workspace.proposals.stage",
+      input: { path: "src/added.js", content: "export const added = true;\\n" }
+    });
+    const before = await fs.readFile(path.join(root, "src", "value.js"), "utf8");
+    const denied = await executeWorkspaceTool({
+      root, name: "workspace.proposals.apply-many",
+      input: { proposalIds: [first.output.id, second.output.id] }
+    });
+    assert.equal(denied.status, "approval_required");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), before);
+    await assert.rejects(() => fs.stat(path.join(root, "src", "added.js")), { code: "ENOENT" });
+
+    const applied = await executeWorkspaceTool({
+      root, name: "workspace.proposals.apply-many",
+      input: { proposalIds: [first.output.id, second.output.id] },
+      approval: true
+    });
+    assert.equal(applied.ok, true);
+    assert.equal(applied.output.applied.length, 2);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "export const first = 'updated';\\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "added.js"), "utf8"), "export const added = true;\\n");
+    const events = await readAudit(root);
+    assert.ok(events.some(event => event.tool === "workspace.proposals.apply-many" && event.status === "completed" && event.approved));
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
