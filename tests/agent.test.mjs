@@ -149,6 +149,70 @@ test("agent implements and verifies multiple slices against one cumulative candi
   }
 });
 
+test("an incomplete later slice cannot inherit an earlier passing verification status", async () => {
+  const root = await createProject();
+  let patchCalls = 0;
+  const modelRequest = async (method, route, body) => {
+    if (method === "GET" && route === "/model/status") {
+      return {
+        checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_IMPLEMENTATION_SLICE_PLAN")) {
+        return {
+          text: JSON.stringify({
+            slices: [
+              { goal: "Update the exported value from one to two.", acceptance: "The existing value test passes." },
+              { goal: "Add a description helper module.", acceptance: "The helper exists and the full suite passes." }
+            ]
+          }),
+          generated_tokens: 40, trained_steps: null
+        };
+      }
+      patchCalls += 1;
+      if (patchCalls === 1) {
+        return {
+          text: JSON.stringify({
+            summary: "Update exported value.",
+            edits: [{
+              path: "src/value.js", find: "value: 1", replace: "value: 2",
+              reason: "First slice implementation."
+            }]
+          }),
+          generated_tokens: 30, trained_steps: null
+        };
+      }
+      return { text: '{"summary":"unfinished"', generated_tokens: 4, trained_steps: null };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Update the exported value and add a description helper.",
+      maxIterations: 1,
+      maxSlices: 2,
+      runChecks: true,
+      modelRequest
+    });
+    assert.equal(patchCalls, 2);
+    assert.equal(result.implementationSlices[0].status, "completed");
+    assert.equal(result.implementationSlices[1].status, "blocked");
+    assert.equal(result.verification.status, "slice_incomplete");
+    assert.equal(result.verification.passed, false);
+    assert.deepEqual(result.verification.incompleteSlices, ["slice-2"]);
+    assert.equal(result.status, "proposals_ready_unverified");
+    assert.equal(result.proposals.length, 1);
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("model-selected context plans allow only bounded search and safe listed-file reads", () => {
   const valid = validateReadOnlyToolPlan({
     calls: [
