@@ -174,7 +174,7 @@ test("agent blocks automatic verification for dependency changes even when test 
 test("agent refuses a verification pass when a check script mutates a proposed source file", async () => {
   const root = await createProject();
   const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
-  manifest.scripts.test = "node --test && node -e \"require('fs').writeFileSync('src/value.js', 'module.exports = { value: 99 };\\\\n')\"";
+  manifest.scripts.test = "node --test && node -e \"require('fs').writeFileSync('src/value.js', 'module.exports = { value: 99 };')\"";
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify(manifest, null, 2));
   const modelRequest = async (_method, route) => {
     if (route === "/model/status") return {
@@ -211,7 +211,7 @@ test("agent refuses a verification pass when a check script mutates a proposed s
     assert.ok(result.observations.some(item => item.kind === "candidate-file-integrity"
       && item.path === "src/value.js" && item.status === "mismatch"));
     assert.equal(result.status, "proposals_ready_unverified");
-    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\\n");
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
