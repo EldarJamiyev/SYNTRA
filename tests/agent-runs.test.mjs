@@ -274,8 +274,14 @@ test("candidate checkpoint storage rejects stale schemas, unsafe paths, invalid 
       })
     }), /512 KB/);
     await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
-      ...base, slices: [{ ...base.slices[0], status: "running" }]
+      ...base, slices: [
+        base.slices[0],
+        { ...base.slices[1], status: "running" }
+      ]
     }), /slice statuses do not match/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...base, nextSliceIndex: 2
+    }), /slice progression is invalid/);
     assert.equal(await getAgentCandidateCheckpoint(root, run.id), null);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
