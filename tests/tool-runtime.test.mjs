@@ -35,8 +35,12 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 13);
+  assert.equal(tools.length, 16);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
+  assert.equal(byName.get("workspace.index.status").permission, "read_only");
+  assert.equal(byName.get("workspace.index.refresh").permission, "local_state_write");
+  assert.equal(byName.get("workspace.index.refresh").approvalRequired, false);
+  assert.equal(byName.get("workspace.symbols.search").permission, "read_only");
   assert.equal(byName.get("workspace.checks.discover").permission, "read_only");
   assert.equal(byName.get("workspace.checks.discover").approvalRequired, false);
   assert.equal(byName.get("workspace.search").permission, "read_only");
@@ -51,6 +55,45 @@ test("tool registry exposes structured schemas and explicit permission metadata"
   assert.equal(byName.get("git.diff-summary").permission, "read_only");
   assert.ok(tools.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(!tools.some(item => /shell|terminal|powershell/i.test(item.name)));
+});
+
+test("workspace index tools refresh, search, and report status through the audit registry", async () => {
+  const root = await createProject();
+  try {
+    await fs.writeFile(path.join(root, "src", "value.js"), [
+      "export function calculateRoute(host) { return host; }",
+      "export class RouteResolver {}",
+      ""
+    ].join("\n"), "utf8");
+
+    const status = await executeWorkspaceTool({ root, name: "workspace.index.status" });
+    assert.equal(status.ok, true);
+    assert.equal(status.output.available, false);
+
+    const refresh = await executeWorkspaceTool({ root, name: "workspace.index.refresh" });
+    assert.equal(refresh.ok, true);
+    assert.equal(refresh.permission, "local_state_write");
+    assert.equal(refresh.output.parsedFiles, 1);
+    assert.ok(refresh.output.symbolCount >= 2);
+
+    const search = await executeWorkspaceTool({
+      root, name: "workspace.symbols.search", input: { query: "RouteResolver", limit: 5 }
+    });
+    assert.equal(search.ok, true);
+    assert.equal(search.output.results[0].name, "RouteResolver");
+    assert.equal(search.output.results[0].path, "src/value.js");
+
+    const events = await readAudit(root);
+    const indexedEvents = events.filter(event =>
+      ["workspace.index.status", "workspace.index.refresh", "workspace.symbols.search"].includes(event.tool)
+    );
+    assert.equal(indexedEvents.length, 6);
+    assert.ok(indexedEvents.some(event => event.tool === "workspace.index.refresh" && event.permission === "local_state_write"));
+    assert.ok(indexedEvents.every(event => ["started", "completed"].includes(event.status)));
+    assert.ok(events.every(event => !JSON.stringify(event).includes("calculateRoute(host)")));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("check discovery is read-only, auditable, and reports supported runners", async () => {

@@ -16,6 +16,11 @@ import {
   runProjectCheck,
   searchWorkspace
 } from "./workspace.mjs";
+import {
+  getWorkspaceIndexStatus,
+  refreshWorkspaceIndex,
+  searchWorkspaceSymbols
+} from "./workspace-index.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_READ_LINES = 1000;
@@ -28,6 +33,31 @@ const TOOL_DEFINITIONS = [
     permission: "read_only",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.index.status",
+    description: "Read the current workspace's local symbol-index status without refreshing it.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.index.refresh",
+    description: "Refresh the local metadata-only source symbol index, reusing unchanged file hashes and pruning deleted files.",
+    permission: "local_state_write",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.symbols.search",
+    description: "Search the current workspace's refreshed source symbol index and validate result files against their indexed hashes.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: {
+      type: "object", required: ["query"],
+      properties: { query: { type: "string", minLength: 2, maxLength: 160 }, limit: { type: "integer", minimum: 1, maximum: 20 } },
+      additionalProperties: false
+    }
   },
   {
     name: "workspace.checks.discover",
@@ -223,6 +253,7 @@ function validateInput(definition, input) {
 
 function summarizeInput(name, input) {
   switch (name) {
+    case "workspace.symbols.search": return { queryLength: input.query.length, limit: input.limit || 10 };
     case "workspace.search": return { queryLength: input.query.length, limit: input.limit || 20 };
     case "workspace.read": return { path: input.path, startLine: input.startLine || 1, endLine: input.endLine || null };
     case "workspace.plan": return { goalLength: input.goal.length };
@@ -254,6 +285,12 @@ async function invokeTool(root, name, input, signal) {
   switch (name) {
     case "workspace.inspect":
       return inspectWorkspace(root);
+    case "workspace.index.status":
+      return getWorkspaceIndexStatus(root);
+    case "workspace.index.refresh":
+      return refreshWorkspaceIndex(root);
+    case "workspace.symbols.search":
+      return searchWorkspaceSymbols(root, input.query, input.limit || 10);
     case "workspace.checks.discover":
       return discoverProjectChecks(root);
     case "workspace.search":
@@ -309,6 +346,23 @@ function summarizeOutput(name, output) {
   switch (name) {
     case "workspace.inspect":
       return { name: output.name, fileCount: output.fileCount, frameworks: output.frameworks };
+    case "workspace.index.status":
+      return {
+        available: output.available, fileCount: output.fileCount,
+        symbolCount: output.symbolCount, truncated: output.truncated
+      };
+    case "workspace.index.refresh":
+      return {
+        fileCount: output.fileCount, symbolCount: output.symbolCount,
+        parsedFiles: output.parsedFiles, reusedFiles: output.reusedFiles,
+        removedFiles: output.removedFiles, skippedFiles: output.skippedFiles,
+        truncated: output.truncated
+      };
+    case "workspace.symbols.search":
+      return {
+        available: output.available, resultCount: output.results.length,
+        staleFiles: output.staleFiles, topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))]
+      };
     case "workspace.checks.discover":
       return {
         supportedTasks: output.checks.map(check => check.task),

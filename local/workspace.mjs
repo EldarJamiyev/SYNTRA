@@ -172,6 +172,24 @@ async function walkFiles(root) {
   return files;
 }
 
+const WORKSPACE_INDEX_EXTENSIONS = new Set([
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".go", ".rs"
+]);
+
+export async function listWorkspaceIndexCandidates(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const files = await walkFiles(root);
+  return {
+    root,
+    truncated: files.length >= MAX_FILES,
+    files: files.filter(file => WORKSPACE_INDEX_EXTENSIONS.has(file.extension)).map(file => ({
+      path: file.relative,
+      size: file.size,
+      language: detectLanguage(file.extension, path.basename(file.relative))
+    }))
+  };
+}
+
 function detectLanguage(extension, filename) {
   if (filename.toLowerCase() === "dockerfile") return "Docker";
   const mapping = {
@@ -364,6 +382,18 @@ function stateDirectory(root) {
     if (error && error.code !== "ENOENT") throw error;
   }
   return directory;
+}
+
+export async function getWorkspaceStateDirectory(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  return stateDirectory(root);
+}
+
+export async function ensureWorkspaceStateDirectory(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const directory = stateDirectory(root);
+  await fs.mkdir(directory, { recursive: true });
+  return stateDirectory(root);
 }
 
 async function assertRegularStateFile(target, label) {
