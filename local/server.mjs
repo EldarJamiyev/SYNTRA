@@ -725,6 +725,7 @@ async function runChatTurn(jobId, message, history, signal) {
   } catch (error) {
     const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
     if (agentRunId) {
+      try { await saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, null); } catch {}
       try {
         await updateAgentRun(activeWorkspace, agentRunId, {
           status: cancelled ? "cancelled" : "failed",
