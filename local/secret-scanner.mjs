@@ -23,7 +23,7 @@ const SECRET_RULES = [
   {
     type: "generic_secret_assignment",
     severity: "high",
-    expression: /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|aws_secret_access_key)\b\s*[:=]\s*(?:"(?!your\b|change[ _-]?me\b|changeme\b|example\b|placeholder\b|process\.env\b|env\(|\$\{|<)[^"\r\n]{12,}"|'(?!your\b|change[ _-]?me\b|changeme\b|example\b|placeholder\b|process\.env\b|env\(|\$\{|<)[^'\r\n]{12,}'|(?!your\b|change[ _-]?me\b|changeme\b|example\b|placeholder\b|process\.env\b|env\(|\$\{|<|%[A-Z_]+%)[A-Za-z0-9_./+=-]{16,})/i
+    expression: /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|aws_secret_access_key)\b\s*[:=]\s*(?:"(?!your(?:[_ -]|\b)|change[ _-]?me\b|changeme\b|example\b|placeholder\b|process\.env\b|env\(|\$\{|<)[^"\r\n]{12,}"|'(?!your(?:[_ -]|\b)|change[ _-]?me\b|changeme\b|example\b|placeholder\b|process\.env\b|env\(|\$\{|<)[^'\r\n]{12,}'|(?!your(?:[_ -]|\b)|change[ _-]?me\b|changeme\b|example\b|placeholder\b|process\.env\b|env\(|\$\{|<|%[A-Z_]+%)[A-Za-z0-9_./+=-]{16,})/i
   }
 ];
 
@@ -86,6 +86,6 @@ export async function scanWorkspaceSecrets(inputRoot) {
     findingCount, returnedFindings: findings.length, findings, typeCounts,
     severityCounts, truncated,
     limits: { maxFiles: MAX_SCAN_FILES, maxBytes: MAX_SCAN_BYTES, maxReturnedFindings: MAX_RETURNED_FINDINGS },
-    notice: "Potential matches only. Secret values and matching source lines are never returned or logged. Review findings locally; this scanner does not prove that a workspace is secret-free."
+    notice: "Best-effort pattern detection only. Secret values and matching source lines are never returned or logged. Review findings locally; this scanner does not prove that a workspace is secret-free."
   };
 }
