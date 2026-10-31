@@ -1,13 +1,13 @@
 {
   "version": "1.0.0",
-  "description": "Versioned local coding-agent benchmark. Each fixture intentionally starts with failing tests; SYNTRA must patch only the declared source file and pass the candidate test suite.",
+  "description": "Versioned local coding-agent benchmark. Each fixture includes an intentionally failing Node.js assertion script; SYNTRA must patch only the declared source file and pass its candidate checks.",
   "tasks": [
     {
       "id": "utility-clamp",
       "category": "utility",
       "title": "Implement a bounded numeric clamp helper",
       "fixture": "fixtures/utility-clamp",
-      "baselineCheck": "node-test",
+      "baselineCheck": "node-script",
       "testEntry": "checks/math.test.mjs",
       "expectedChangedPaths": [
         "src/math.mjs"
@@ -21,7 +21,7 @@
       "category": "string-processing",
       "title": "Normalize strings into URL-safe slugs",
       "fixture": "fixtures/string-slugify",
-      "baselineCheck": "node-test",
+      "baselineCheck": "node-script",
       "testEntry": "checks/strings.test.mjs",
       "expectedChangedPaths": [
         "src/strings.mjs"
@@ -35,7 +35,7 @@
       "category": "configuration",
       "title": "Merge nested configuration objects safely",
       "fixture": "fixtures/config-deep-merge",
-      "baselineCheck": "node-test",
+      "baselineCheck": "node-script",
       "testEntry": "checks/config.test.mjs",
       "expectedChangedPaths": [
         "src/config.mjs"

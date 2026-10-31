@@ -12,7 +12,7 @@ test("versioned benchmark manifest contains representative coding tasks", async 
   assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 3);
 });
 test("suite validation rejects duplicate IDs and fixture path traversal", () => {
-  const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-test", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
+  const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-script", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
   assert.throws(() => validateBenchmarkSuite({ version: "1.0.0", tasks: [task, { ...task }] }), /unique/i);
   assert.throws(() => validateBenchmarkSuite({ version: "1.0.0", tasks: [{ ...task, fixture: "../outside" }] }), /unsafe fixture/i);
 });
@@ -60,12 +60,11 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
   await fs.mkdir(testDir, { recursive: true });
   await fs.writeFile(path.join(sourceDir, "target.mjs"), original);
   await fs.writeFile(path.join(testDir, "baseline.test.mjs"), [
-    'import assert from "node:assert/strict";', 'import test from "node:test";',
-    'test("intentionally red baseline", () => assert.equal(1, 2));'
+    'import assert from "node:assert/strict";', 'assert.equal(1, 2);'
   ].join("\n"));
   const suite = { version: "1.0.0", tasks: [{
     id: "fixture-task", category: "test", title: "Disposable fixture test",
-    fixture: "fixture", baselineCheck: "node-test", testEntry: "checks/baseline.test.mjs", expectedChangedPaths: ["src/target.mjs"],
+    fixture: "fixture", baselineCheck: "node-script", testEntry: "checks/baseline.test.mjs", expectedChangedPaths: ["src/target.mjs"],
     goal: "Implement the expected source behavior without changing tests.", maxIterations: 1, maxSlices: 1
   }] };
   try {

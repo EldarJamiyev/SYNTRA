@@ -16,11 +16,11 @@ The default suite is benchmarks/suite.v1.json, currently version 1.0.0. It conta
 
 | Task | Capability | Acceptance |
 | --- | --- | --- |
-| utility-clamp | Add a bounded numeric helper | Exact expected source-file change and passing Node tests |
-| string-slugify | Correct string normalization | Punctuation/separator behavior and passing Node tests |
+| utility-clamp | Add a bounded numeric helper | Exact expected source-file change and passing Node.js assertions |
+| string-slugify | Correct string normalization | Punctuation/separator behavior and passing Node.js assertions |
 | config-deep-merge | Merge nested configuration | Recursive object merge, array replacement, input immutability |
 
-Each fixture must fail its baseline Node test run before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing tests or package files invalidates the patch score.
+Each fixture must fail its baseline Node.js assertion run before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
 
 ## Measurements
 

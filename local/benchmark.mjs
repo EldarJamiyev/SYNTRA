@@ -27,7 +27,7 @@ export function validateBenchmarkSuite(suite) {
     if (typeof task.title !== "string" || !task.title.trim() || task.title.length > 120) throw new Error("Benchmark task " + task.id + " has an invalid title.");
     if (typeof task.goal !== "string" || !task.goal.trim() || task.goal.length > 5000) throw new Error("Benchmark task " + task.id + " has an invalid goal.");
     if (typeof task.fixture !== "string" || !task.fixture.trim() || path.isAbsolute(task.fixture) || task.fixture.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " has an unsafe fixture path.");
-    if (task.baselineCheck !== "node-test") throw new Error("Benchmark task " + task.id + " must use the supported node-test baseline check.");
+    if (task.baselineCheck !== "node-script") throw new Error("Benchmark task " + task.id + " must use the supported node-script baseline check.");
     if (typeof task.testEntry !== "string" || !task.testEntry.trim() || path.isAbsolute(task.testEntry)
       || task.testEntry.split(/[\\/]+/).some(part => part === ".." || part === ".")) {
       throw new Error("Benchmark task " + task.id + " has an unsafe test-entry path.");
@@ -65,7 +65,7 @@ export async function runNodeBaselineCheck(cwd, testEntry, timeoutMs = 30000) {
   return new Promise(resolve => {
     let stdout = "", stderr = "", timedOut = false, settled = false, child;
     try {
-      child = spawn(process.execPath, ["--test", entryRelative], { cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(process.execPath, [entryRelative], { cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       resolve({ passed: false, timedOut: false, exitCode: null, error: error instanceof Error ? error.message : String(error) });
       return;
@@ -172,7 +172,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
     try {
       fixture = await createFixtureWorkspace(suiteDir, task);
       const baseline = await runNodeBaselineCheck(fixture.workspace, task.testEntry);
-      if (baseline.timedOut || baseline.passed || baseline.exitCode === null) throw new Error("Fixture baseline is invalid: tests must fail before the requested change and finish within 30 seconds.");
+      if (baseline.timedOut || baseline.passed || baseline.exitCode === null) throw new Error("Fixture baseline is invalid: its Node.js assertion script must fail before the requested change and finish within 30 seconds.");
       await onProgress({ taskId: task.id, phase: "started", message: "Running the actual local coding agent against an isolated fixture." });
       agentResult = await agentRunner({
         root: fixture.workspace, goal: task.goal, requestedPath: task.expectedChangedPaths[0],
