@@ -17,6 +17,7 @@ import {
   runProjectCheck,
   searchWorkspace
 } from "./workspace.mjs";
+import { scanWorkspaceSecrets } from "./secret-scanner.mjs";
 import {
   getWorkspaceIndexStatus,
   refreshWorkspaceIndex,
@@ -38,6 +39,13 @@ const TOOL_DEFINITIONS = [
   {
     name: "workspace.inspect",
     description: "Inspect project metadata, supported languages, manifests, scripts, frameworks, and bounded file inventory.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.secrets.scan",
+    description: "Scan bounded readable workspace text files for common credential patterns. Returns file paths, line numbers, and rule types only; never returns secret values.",
     permission: "read_only",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
@@ -428,6 +436,8 @@ async function invokeTool(root, name, input, signal) {
   switch (name) {
     case "workspace.inspect":
       return inspectWorkspace(root);
+    case "workspace.secrets.scan":
+      return scanWorkspaceSecrets(root);
     case "workspace.index.status":
       return getWorkspaceIndexStatus(root);
     case "workspace.index.refresh":
@@ -499,6 +509,18 @@ function summarizeOutput(name, output) {
   switch (name) {
     case "workspace.inspect":
       return { name: output.name, fileCount: output.fileCount, frameworks: output.frameworks };
+    case "workspace.secrets.scan":
+      return {
+        scannedFiles: output.scannedFiles,
+        skippedFiles: output.skippedFiles,
+        unreadableFiles: output.unreadableFiles,
+        scannedBytes: output.scannedBytes,
+        findingCount: output.findingCount,
+        returnedFindings: output.returnedFindings,
+        typeCounts: output.typeCounts,
+        severityCounts: output.severityCounts,
+        truncated: output.truncated
+      };
     case "workspace.index.status":
       return {
         available: output.available, fileCount: output.fileCount,

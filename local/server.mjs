@@ -363,6 +363,31 @@ function compactAgentReply(result, applied) {
   return lines.join("\n");
 }
 
+
+function formatSecretScan(result) {
+  const lines = [
+    "**Workspace secret scan**",
+    "",
+    "Scanned " + result.scannedFiles.toLocaleString() + " readable text file(s) (" +
+      (result.scannedBytes / 1024).toFixed(1) + " KB).",
+    "Potential findings: " + result.findingCount + "."
+  ];
+  if (result.findings.length) {
+    lines.push("", "**Findings** (matching values are intentionally hidden):");
+    for (const finding of result.findings) {
+      const safePath = String(finding.path || "unknown").replace(/[`\\r\\n]/g, "");
+      lines.push("- `" + safePath + ":" + finding.line + "` — " +
+        finding.type.replaceAll("_", " ") + " (" + finding.severity + ")");
+    }
+  } else {
+    lines.push("", "No supported secret patterns were detected in the scanned files.");
+  }
+  if (result.skippedFiles) lines.push("", "Skipped files: " + result.skippedFiles + " (" + result.unreadableFiles + " unreadable or no longer accessible).");
+  if (result.truncated) lines.push("Scan reached a file, byte, or finding limit; not every readable file may have been checked.");
+  lines.push("", "This is best-effort pattern detection, not proof that the workspace is secret-free. Rotate any exposed credential and remove it from source history where appropriate.");
+  return lines.join("\n");
+}
+
 async function runChatTurn(jobId, message, history, signal) {
   let agentRunId = null;
   try {
@@ -376,6 +401,22 @@ async function runChatTurn(jobId, message, history, signal) {
       }
       activeWorkspace = await resolveWorkspace(requested);
       finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
+      return;
+    }
+    if (/^\/secrets\s*$/i.test(message.trim())) {
+      updateChat(jobId, { phase: "scanning", message: "Scanning readable workspace files locally" });
+      const result = await executeWorkspaceTool({
+        root: activeWorkspace, auditRoot: activeWorkspace,
+        name: "workspace.secrets.scan", input: {}
+      });
+      if (!result.ok) throw new Error(result.error || result.message || "Workspace secret scan failed.");
+      finishChat(jobId, formatSecretScan(result.output), {
+        toolCalls: [{
+          runId: result.runId, name: result.name, status: result.status,
+          permission: result.permission, durationMs: result.durationMs,
+          auditRecorded: result.auditRecorded
+        }]
+      });
       return;
     }
     if (/^\/proposals\s*$/i.test(message.trim())
@@ -457,6 +498,7 @@ async function runChatTurn(jobId, message, history, signal) {
         "- Ask for a specific software change to invoke the repository-aware coding agent.",
         "- /workspace followed by an absolute folder path switches the active project.",
         "- /proposals lists saved proposals after a service restart.",
+        "- /secrets scans supported text files for common exposed credential patterns; secret values are never shown.",
         "- /apply applies pending proposals only after you review and explicitly request it.",
         "- /discard removes pending/stale proposal records without changing project files.",
         "- /status checks whether the local model backend is reachable.",
@@ -787,7 +829,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,

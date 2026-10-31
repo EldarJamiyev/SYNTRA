@@ -184,6 +184,16 @@ async function walkFiles(root) {
   return files;
 }
 
+export async function listWorkspaceTextFiles(inputRoot) {
+  const root = await resolveWorkspace(inputRoot);
+  const files = await walkFiles(root);
+  return {
+    root,
+    truncated: files.length >= MAX_FILES,
+    files: files.map(file => ({ path: file.relative, size: file.size, extension: file.extension }))
+  };
+}
+
 const WORKSPACE_INDEX_SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi", ".go", ".rs"
 ]);
