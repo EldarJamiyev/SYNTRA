@@ -47,7 +47,7 @@ jobs:
           }
           if (-not (Test-Path "Start-SYNTRA.bat")) { throw "Start-SYNTRA.bat is missing." }
           if (-not (Test-Path "tests/frontend.test.mjs")) { throw "Minimal chat frontend regression test is missing." }
-          node --test tests
+          node scripts/run-node-tests.mjs
           if ($LASTEXITCODE -ne 0) { throw "Node.js regression suite failed on Windows." }
           if (-not (Test-Path "local/model-provider.mjs")) { throw "Local model routing module is missing." }
           $package = Get-Content "package.json" -Raw | ConvertFrom-Json
