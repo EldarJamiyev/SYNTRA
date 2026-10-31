@@ -53,19 +53,19 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
   const suiteDir = path.join(parent, "suite");
   const fixtureDir = path.join(suiteDir, "fixture");
   const sourceDir = path.join(fixtureDir, "src");
-  const testDir = path.join(fixtureDir, "test");
+  const testDir = path.join(fixtureDir, "checks");
   const original = "export const value = 1;\n";
   const outputPath = path.join(parent, "report.json");
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.mkdir(testDir, { recursive: true });
   await fs.writeFile(path.join(sourceDir, "target.mjs"), original);
-  await fs.writeFile(path.join(testDir, "baseline.test.mjs"), [
+  await fs.writeFile(path.join(testDir, "baseline.check.mjs"), [
     'import assert from "node:assert/strict";', 'import test from "node:test";',
     'test("intentionally red baseline", () => assert.equal(1, 2));'
   ].join("\n"));
   const suite = { version: "1.0.0", tasks: [{
     id: "fixture-task", category: "test", title: "Disposable fixture test",
-    fixture: "fixture", baselineCheck: "node-test", expectedChangedPaths: ["src/target.mjs"],
+    fixture: "fixture", baselineCheck: "node-test", testEntry: "checks/baseline.check.mjs", expectedChangedPaths: ["src/target.mjs"],
     goal: "Implement the expected source behavior without changing tests.", maxIterations: 1, maxSlices: 1
   }] };
   try {
@@ -87,7 +87,7 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
     });
     assert.equal(savedPath, outputPath);
     assert.equal(report.model.name, "test-local-model");
-    assert.equal(report.summary.completedTaskCount, 1);
+    assert.equal(report.summary.completedTaskCount, 1, JSON.stringify(report.tasks));
     assert.equal(report.tasks[0].taskComplete, true);
     assert.deepEqual(JSON.parse(await fs.readFile(outputPath, "utf8")), report);
     assert.equal(await fs.readFile(path.join(sourceDir, "target.mjs"), "utf8"), original);

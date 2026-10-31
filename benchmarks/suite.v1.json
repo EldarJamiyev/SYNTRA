@@ -8,6 +8,9 @@
       "title": "Implement a bounded numeric clamp helper",
       "fixture": "fixtures/utility-clamp",
       "baselineCheck": "node-test",
+      "testEntry": "checks/config.check.mjs",
+      "testEntry": "checks/strings.check.mjs",
+      "testEntry": "checks/math.check.mjs",
       "expectedChangedPaths": [
         "src/math.mjs"
       ],

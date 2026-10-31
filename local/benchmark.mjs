@@ -28,6 +28,10 @@ export function validateBenchmarkSuite(suite) {
     if (typeof task.goal !== "string" || !task.goal.trim() || task.goal.length > 5000) throw new Error("Benchmark task " + task.id + " has an invalid goal.");
     if (typeof task.fixture !== "string" || !task.fixture.trim() || path.isAbsolute(task.fixture) || task.fixture.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " has an unsafe fixture path.");
     if (task.baselineCheck !== "node-test") throw new Error("Benchmark task " + task.id + " must use the supported node-test baseline check.");
+    if (typeof task.testEntry !== "string" || !task.testEntry.trim() || path.isAbsolute(task.testEntry)
+      || task.testEntry.split(/[\\/]+/).some(part => part === ".." || part === ".")) {
+      throw new Error("Benchmark task " + task.id + " has an unsafe test-entry path.");
+    }
     if (!Array.isArray(task.expectedChangedPaths) || task.expectedChangedPaths.length < 1 || task.expectedChangedPaths.length > 10) throw new Error("Benchmark task " + task.id + " must declare expected changed paths.");
     for (const value of task.expectedChangedPaths) {
       if (typeof value !== "string" || !value || path.isAbsolute(value) || value.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " contains an unsafe expected changed path.");
@@ -51,11 +55,17 @@ function boundedOutput(current, chunk) {
   const next = current + chunk.toString("utf8");
   return next.length > OUTPUT_LIMIT ? next.slice(0, OUTPUT_LIMIT) : next;
 }
-export function runNodeBaselineCheck(cwd, timeoutMs = 30000) {
+export async function runNodeBaselineCheck(cwd, testEntry, timeoutMs = 30000) {
+  const root = await fs.realpath(cwd);
+  const requestedEntry = path.resolve(root, testEntry);
+  if (!isInside(root, requestedEntry)) throw new Error("Benchmark test entry escapes its fixture workspace.");
+  const entry = await fs.realpath(requestedEntry);
+  if (!isInside(root, entry) || !(await fs.stat(entry)).isFile()) throw new Error("Benchmark test entry is missing or resolves outside its fixture workspace.");
+  const entryRelative = path.relative(root, entry);
   return new Promise(resolve => {
     let stdout = "", stderr = "", timedOut = false, settled = false, child;
     try {
-      child = spawn(process.execPath, ["--test"], { cwd, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(process.execPath, ["--test", entryRelative], { cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
       resolve({ passed: false, timedOut: false, exitCode: null, error: error instanceof Error ? error.message : String(error) });
       return;
@@ -161,7 +171,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
     const sampler = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss); }, 100);
     try {
       fixture = await createFixtureWorkspace(suiteDir, task);
-      const baseline = await runNodeBaselineCheck(fixture.workspace);
+      const baseline = await runNodeBaselineCheck(fixture.workspace, task.testEntry);
       if (baseline.timedOut || baseline.passed || baseline.exitCode === null) throw new Error("Fixture baseline is invalid: tests must fail before the requested change and finish within 30 seconds.");
       await onProgress({ taskId: task.id, phase: "started", message: "Running the actual local coding agent against an isolated fixture." });
       agentResult = await agentRunner({
