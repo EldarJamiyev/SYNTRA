@@ -10,7 +10,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 3000",
     "server": "node local/server.mjs",
     "cli": "node bin/syntra.mjs",
-    "test": "node --test",
+    "test": "node --test tests",
     "ai:install": "python scripts/setup_syntra_env.py",
     "ai:server": "python scripts/run_syntra_module.py server",
     "ai:cli": "python scripts/run_syntra_module.py cli",

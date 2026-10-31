@@ -8,15 +8,13 @@
       "title": "Implement a bounded numeric clamp helper",
       "fixture": "fixtures/utility-clamp",
       "baselineCheck": "node-test",
-      "testEntry": "checks/config.check.mjs",
-      "testEntry": "checks/strings.check.mjs",
-      "testEntry": "checks/math.check.mjs",
+      "testEntry": "checks/math.test.mjs",
       "expectedChangedPaths": [
         "src/math.mjs"
       ],
       "maxIterations": 2,
       "maxSlices": 1,
-      "goal": "Implement and export clamp(value, min, max) in src/math.mjs. Return min when value is below min, max when it is above max, and the original value when it is inside the inclusive range. Assume finite numeric arguments and min <= max. Do not mutate inputs. Do not edit tests or package files."
+      "goal": "Implement and export clamp(value, min, max) in src/math.mjs. Return min when value is below the range, max when it is above, and the original value when inside the inclusive range. Assume finite numeric arguments and min <= max. Do not mutate inputs. Do not edit tests or package files."
     },
     {
       "id": "string-slugify",
@@ -24,6 +22,7 @@
       "title": "Normalize strings into URL-safe slugs",
       "fixture": "fixtures/string-slugify",
       "baselineCheck": "node-test",
+      "testEntry": "checks/strings.test.mjs",
       "expectedChangedPaths": [
         "src/strings.mjs"
       ],
@@ -37,6 +36,7 @@
       "title": "Merge nested configuration objects safely",
       "fixture": "fixtures/config-deep-merge",
       "baselineCheck": "node-test",
+      "testEntry": "checks/config.test.mjs",
       "expectedChangedPaths": [
         "src/config.mjs"
       ],
