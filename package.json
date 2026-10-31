@@ -14,7 +14,8 @@
     "ai:install": "python scripts/setup_syntra_env.py",
     "ai:server": "python scripts/run_syntra_module.py server",
     "ai:cli": "python scripts/run_syntra_module.py cli",
-    "benchmark": "node scripts/benchmark-agent.mjs"
+    "benchmark": "node scripts/benchmark-agent.mjs",
+    "benchmark:reports": "node scripts/benchmark-report.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

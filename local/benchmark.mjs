@@ -209,6 +209,11 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
     schemaVersion: 1, suiteVersion: suite.version, runId: "bench-" + randomUUID(),
     startedAt, completedAt: new Date().toISOString(),
     runtime: { node: process.version, platform: process.platform, architecture: process.arch },
+    hardware: {
+      cpuModel: os.cpus()[0]?.model || "unknown",
+      logicalCores: os.cpus().length,
+      totalMemoryBytes: os.totalmem()
+    },
     model: {
       provider: String(selectedModel?.provider || modelStatus.provider || "local"),
       name: String(selectedModel?.name || modelStatus.model_name || modelStatus.model || "unknown"),

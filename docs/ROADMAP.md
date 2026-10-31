@@ -151,7 +151,15 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Record provider/model identity, task latency, prompt/output tokens, patch validity, verification outcomes, task completion, and benchmark-process peak RSS in JSON reports.
 - [x] Add regression coverage for suite validation, scoring, aggregation, fixture isolation, baseline checks, and report output.
 
-Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Prompt token counts may be unavailable from the provider. Cross-model comparison tooling and a broader language/framework fixture set remain future work.
+**Delivered reporting slice:**
+
+- [x] Preserve timestamped machine-readable run reports under a Git-ignored local history directory.
+- [x] Add a report-history command with bounded listing and corrupt/symlink report rejection.
+- [x] Compare runs only when suite version and exact task selection match; report task-level and aggregate quality/performance changes without a composite score.
+- [x] Capture CPU, memory, runtime, and architecture metadata and mark latency/RSS comparisons incomparable when environments differ.
+- [x] Test report validation, improvement/regression detection, task-set matching, and environment comparability.
+
+Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Prompt token counts may be unavailable from the provider. Hardware metadata cannot prove identical background load or power/thermal conditions. A broader language/framework fixture set remains future work.
 
 - [x] Create a versioned coding benchmark from representative local tasks and regression fixtures.
 - [x] Record patch validity, candidate-test verification, task completion, end-to-end latency, prompt/output tokens, and benchmark-process RSS with each model run.

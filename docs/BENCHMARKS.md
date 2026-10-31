@@ -34,4 +34,11 @@ This is not a whole-machine performance test. Peak RSS measures only the Node.js
 
 The benchmark does not call a hosted model API. It uses the locally configured Ollama provider when available, otherwise the local SYNTRA AI service. Each fixture is copied to a temporary directory and removed after its run. Agent changes are staged only inside that temporary copy; the active workspace and checked-in fixtures remain unchanged.
 
-Reports are written under benchmark-results by default and are ignored by Git. Keep reports from different model configurations to compare measured runs. Do not compare different suite versions as though they were the same workload.
+Reports are written under benchmark-results by default and are ignored by Git. Run history and report comparison are available locally:
+
+- List the latest saved runs: npm run benchmark:reports -- history
+- List more history entries: npm run benchmark:reports -- history --limit 50
+- Compare two model runs: npm run benchmark:reports -- compare --baseline benchmark-results/<baseline>.json --candidate benchmark-results/<candidate>.json
+- Save a machine-readable comparison: add --output benchmark-results/comparison.json
+
+Comparisons require the same benchmark suite version and the exact same task IDs. They show completion, patch validity, verification, latency, token use, and process RSS changes without collapsing them into an arbitrary weighted score. Runtime and hardware metadata are checked; when the environment differs, latency and RSS are marked incomparable. For meaningful performance comparisons, use the same computer, runtime, suite version, task selection, and as similar system-load conditions as possible.
