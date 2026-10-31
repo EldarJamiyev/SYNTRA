@@ -78,7 +78,7 @@ test("comparison rejects different suite versions or task selections", () => {
     verification: true, latency: 500, tokens: 500, rss: 100000, taskComplete: true
   });
   assert.throws(() => compareBenchmarkReports(baseline, { ...baseline, suiteVersion: "2.0.0" }), /suite versions/i);
-  assert.throws(() => compareBenchmarkReports(baseline, { ...baseline, tasks: [{ ...baseline.tasks[0], id: "different-task" }] }), /same task IDs/i);
+  assert.throws(() => compareBenchmarkReports(baseline, { ...baseline, tasks: [{ ...baseline.tasks[0], id: "different-task" }] }), /different task sets/i);
 });
 
 test("comparison marks latency and RSS incomparable when machine environments differ", () => {
