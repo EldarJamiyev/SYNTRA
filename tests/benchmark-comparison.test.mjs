@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { compareBenchmarkReports, validateBenchmarkReport } from "../local/benchmark-comparison.mjs";
 
@@ -115,4 +116,13 @@ test("comparison treats missing hardware metadata as unverified and avoids perfo
   assert.equal(result.environment.hardwareComparable, false);
   assert.equal(result.metrics.find(item => item.key === "meanLatencyMs").direction, "incomparable");
   assert.equal(result.metrics.find(item => item.key === "peakProcessRssBytes").direction, "incomparable");
+});
+
+test("benchmark report CLI accepts --help without requiring a subcommand", () => {
+  const result = spawnSync(process.execPath, ["scripts/benchmark-report.mjs", "--help"], {
+    cwd: process.cwd(), encoding: "utf8", windowsHide: true
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /SYNTRA benchmark reports/);
+  assert.match(result.stdout, /compare/);
 });

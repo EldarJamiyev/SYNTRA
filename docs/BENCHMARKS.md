@@ -36,6 +36,7 @@ The benchmark does not call a hosted model API. It uses the locally configured O
 
 Reports are written under benchmark-results by default and are ignored by Git. Run history and report comparison are available locally:
 
+- Show report-command usage: npm run benchmark:reports -- --help
 - List the latest saved runs: npm run benchmark:reports -- history
 - List more history entries: npm run benchmark:reports -- history --limit 50
 - Compare two model runs: npm run benchmark:reports -- compare --baseline benchmark-results/<baseline>.json --candidate benchmark-results/<candidate>.json

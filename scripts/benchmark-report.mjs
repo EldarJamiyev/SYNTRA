@@ -14,7 +14,8 @@ function parseArgs(argv) {
       const value = argv[index + 1];
       if (!value || value.startsWith("--")) throw new Error(arg + " requires a value.");
       result[arg.slice(2)] = value; index += 1;
-    } else if (arg.startsWith("--")) throw new Error("Unknown option: " + arg);
+    } else if (arg === "--help" || arg === "-h") result.help = true;
+    else if (arg.startsWith("--")) throw new Error("Unknown option: " + arg);
     else result.positional.push(arg);
   }
   return result;
@@ -107,7 +108,7 @@ function help() {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args.positional[0];
-  if (!command || command === "help" || command === "--help") return help();
+  if (args.help || !command || command === "help") return help();
   if (command === "history") {
     const limit = Math.max(1, Math.min(100, Math.floor(Number(args.limit) || 20)));
     await listHistory(args.directory || DEFAULT_REPORT_DIR, limit);
