@@ -32,6 +32,8 @@ test("report validation rejects malformed schema, duplicate tasks, and invalid m
   assert.equal(validateBenchmarkReport(valid), valid);
   assert.throws(() => validateBenchmarkReport({ ...valid, tasks: [...valid.tasks, valid.tasks[0]] }), /duplicate task/i);
   assert.throws(() => validateBenchmarkReport({ ...valid, tasks: [{ ...valid.tasks[0], latencyMs: -1 }] }), /latency/i);
+  assert.throws(() => validateBenchmarkReport({ ...valid, summary: { ...valid.summary, taskCompletionRate: 1.5 } }), /summary/i);
+  assert.throws(() => validateBenchmarkReport({ ...valid, tasks: [{ ...valid.tasks[0], taskComplete: false }] }), /inconsistent completion/i);
 });
 
 test("comparison identifies model improvements and task-level changes", () => {
@@ -96,4 +98,21 @@ test("comparison marks latency and RSS incomparable when machine environments di
   assert.equal(result.metrics.find(item => item.key === "meanLatencyMs").direction, "incomparable");
   assert.equal(result.metrics.find(item => item.key === "peakProcessRssBytes").direction, "incomparable");
   assert.ok(result.warnings.length >= 2);
+});
+
+test("comparison treats missing hardware metadata as unverified and avoids performance claims", () => {
+  const baseline = report({
+    runId: "baseline-no-hardware", model: "model-a", completion: 1, patch: true,
+    verification: true, latency: 500, tokens: 500, rss: 100000, taskComplete: true
+  });
+  const candidate = report({
+    runId: "candidate-no-hardware", model: "model-b", completion: 1, patch: true,
+    verification: true, latency: 300, tokens: 400, rss: 90000, taskComplete: true
+  });
+  delete baseline.hardware;
+  delete candidate.hardware;
+  const result = compareBenchmarkReports(baseline, candidate);
+  assert.equal(result.environment.hardwareComparable, false);
+  assert.equal(result.metrics.find(item => item.key === "meanLatencyMs").direction, "incomparable");
+  assert.equal(result.metrics.find(item => item.key === "peakProcessRssBytes").direction, "incomparable");
 });

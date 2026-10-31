@@ -35,13 +35,21 @@ export function validateBenchmarkReport(report) {
       || !finiteNonNegative(task.tokens.total)) {
       throw new Error("Benchmark task " + task.id + " has invalid token measurements.");
     }
+    if (task.taskComplete !== (task.patchValid && task.verificationPassed)) {
+      throw new Error("Benchmark task " + task.id + " has an inconsistent completion status.");
+    }
+    if (task.tokens.total !== task.tokens.prompt + task.tokens.output) {
+      throw new Error("Benchmark task " + task.id + " has inconsistent token totals.");
+    }
     if (!finiteNonNegative(task.peakProcessRssBytes)) {
       throw new Error("Benchmark task " + task.id + " has an invalid RSS measurement.");
     }
   }
   const summary = report.summary;
-  if (!summary || !finiteNonNegative(summary.taskCompletionRate)
-    || !finiteNonNegative(summary.patchValidityRate) || !finiteNonNegative(summary.verificationPassRate)
+  if (!summary || summary.taskCount !== report.tasks.length
+    || !finiteNonNegative(summary.taskCompletionRate) || summary.taskCompletionRate > 1
+    || !finiteNonNegative(summary.patchValidityRate) || summary.patchValidityRate > 1
+    || !finiteNonNegative(summary.verificationPassRate) || summary.verificationPassRate > 1
     || !summary.latencyMs || !finiteNonNegative(summary.latencyMs.mean)
     || !summary.tokens || !finiteNonNegative(summary.tokens.total)
     || !finiteNonNegative(summary.peakProcessRssBytes)) {
@@ -113,13 +121,19 @@ export function compareBenchmarkReports(baselineInput, candidateInput) {
   const runtimeComparable = baselineRuntime.platform === candidateRuntime.platform
     && baselineRuntime.architecture === candidateRuntime.architecture
     && String(baselineRuntime.node || "").split(".")[0] === String(candidateRuntime.node || "").split(".")[0];
-  const hardwareComparable = (!baselineHardware.cpuModel || !candidateHardware.cpuModel
-      || baselineHardware.cpuModel === candidateHardware.cpuModel)
-    && (!baselineHardware.totalMemoryBytes || !candidateHardware.totalMemoryBytes
-      || baselineHardware.totalMemoryBytes === candidateHardware.totalMemoryBytes);
+  const hardwareMetadataPresent = typeof baselineHardware.cpuModel === "string"
+    && baselineHardware.cpuModel.length > 0
+    && typeof candidateHardware.cpuModel === "string" && candidateHardware.cpuModel.length > 0
+    && finiteNonNegative(baselineHardware.totalMemoryBytes) && baselineHardware.totalMemoryBytes > 0
+    && finiteNonNegative(candidateHardware.totalMemoryBytes) && candidateHardware.totalMemoryBytes > 0
+    && finiteNonNegative(baselineHardware.logicalCores) && baselineHardware.logicalCores > 0
+    && finiteNonNegative(candidateHardware.logicalCores) && candidateHardware.logicalCores > 0;
+  const hardwareComparable = hardwareMetadataPresent
+    && baselineHardware.cpuModel === candidateHardware.cpuModel
+    && baselineHardware.totalMemoryBytes === candidateHardware.totalMemoryBytes
+    && baselineHardware.logicalCores === candidateHardware.logicalCores;
   if (!runtimeComparable) warnings.push("Runtime platforms, architectures, or Node.js major versions differ. Interpret latency and process-memory deltas cautiously.");
-  if (!hardwareComparable) warnings.push("Reported CPU model or installed memory differs. Latency and process-memory deltas are not a controlled hardware comparison.");
-  if (!baselineHardware.cpuModel || !candidateHardware.cpuModel) warnings.push("At least one report lacks CPU metadata; hardware equivalence cannot be verified.");
+  if (!hardwareComparable) warnings.push("CPU model, logical-core count, or installed-memory metadata is missing or differs. Latency and process-memory deltas are not a controlled hardware comparison.");
   const mixedEnvironment = !runtimeComparable || !hardwareComparable;
   if (mixedEnvironment) {
     for (const metric of metrics) {
