@@ -327,14 +327,14 @@ test("the /secrets chat command scans locally and reports only finding metadata"
   let service = null;
   try {
     await fs.mkdir(path.join(root, "src"), { recursive: true });
-    await fs.writeFile(path.join(root, "src", "credentials.ts"), "const token = '" + token + "';\\n", "utf8");
+    await fs.writeFile(path.join(root, "src", "credentials.ts"), "const token = '" + token + "';\n", "utf8");
     service = await startLocalServer(root);
 
     const result = await runChatCommand(service.base, "/secrets");
     assert.equal(result.status, "completed");
     assert.match(result.reply || "", /Workspace secret scan/);
     assert.match(result.reply || "", /Potential findings: 1/);
-    assert.match(result.reply || "", /src\\/credentials\\.ts:1/);
+    assert.match(result.reply || "", /src\/credentials\.ts:1/);
     assert.match(result.reply || "", /github token/);
     assert.doesNotMatch(result.reply || "", new RegExp(token));
     assert.ok(result.toolCalls?.some(call => call.name === "workspace.secrets.scan"));

@@ -375,7 +375,7 @@ function formatSecretScan(result) {
   if (result.findings.length) {
     lines.push("", "**Findings** (matching values are intentionally hidden):");
     for (const finding of result.findings) {
-      const safePath = String(finding.path || "unknown").replace(/[`\\r\\n]/g, "");
+      const safePath = String(finding.path || "unknown").replace(/[`\r\n]/g, "");
       lines.push("- `" + safePath + ":" + finding.line + "` — " +
         finding.type.replaceAll("_", " ") + " (" + finding.severity + ")");
     }
