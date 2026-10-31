@@ -86,6 +86,6 @@ export async function scanWorkspaceSecrets(inputRoot) {
     findingCount, returnedFindings: findings.length, findings, typeCounts,
     severityCounts, truncated,
     limits: { maxFiles: MAX_SCAN_FILES, maxBytes: MAX_SCAN_BYTES, maxReturnedFindings: MAX_RETURNED_FINDINGS },
-    notice: "Best-effort pattern detection only. Secret values and matching source lines are never returned or logged. Review findings locally; this scanner does not prove that a workspace is secret-free."
+    notice: "best-effort pattern detection only. Secret values and matching source lines are never returned or logged. Review findings locally; this scanner does not prove that a workspace is secret-free."
   };
 }
