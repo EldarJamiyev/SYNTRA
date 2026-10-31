@@ -143,8 +143,18 @@ Still outstanding in this phase: model-selected execution/source-modification to
 
 **Objective:** Measure engineering usefulness instead of assuming it.
 
-- Create a versioned coding benchmark from representative local tasks and regression fixtures.
-- Measure patch validity, build/test success, task completion, latency, token usage, and memory consumption by model.
+**Delivered evaluation slice (initial):**
+
+- [x] Add a versioned local coding benchmark suite with three intentionally failing Node.js regression fixtures.
+- [x] Run the real coding agent against disposable fixture copies using the selected local model; do not apply proposals to the active workspace.
+- [x] Require the exact expected changed-file set and passing candidate verification for task completion; extra test/configuration edits invalidate the patch score.
+- [x] Record provider/model identity, task latency, prompt/output tokens, patch validity, verification outcomes, task completion, and benchmark-process peak RSS in JSON reports.
+- [x] Add regression coverage for suite validation, scoring, aggregation, fixture isolation, baseline checks, and report output.
+
+Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Prompt token counts may be unavailable from the provider. Cross-model comparison tooling and a broader language/framework fixture set remain future work.
+
+- [x] Create a versioned coding benchmark from representative local tasks and regression fixtures.
+- [x] Record patch validity, candidate-test verification, task completion, end-to-end latency, prompt/output tokens, and benchmark-process RSS with each model run.
 - Add provider selection and clear model capability metadata.
 - Add failure recovery for provider disconnects, context exhaustion, and interrupted generations.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.

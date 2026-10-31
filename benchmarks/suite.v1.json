@@ -1,0 +1,45 @@
+{
+  "version": "1.0.0",
+  "description": "Versioned local coding-agent benchmark. Each fixture intentionally starts with failing tests; SYNTRA must patch only the declared source file and pass the candidate test suite.",
+  "tasks": [
+    {
+      "id": "utility-clamp",
+      "category": "utility",
+      "title": "Implement a bounded numeric clamp helper",
+      "fixture": "fixtures/utility-clamp",
+      "baselineCheck": "node-test",
+      "expectedChangedPaths": [
+        "src/math.mjs"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Implement and export clamp(value, min, max) in src/math.mjs. Return min when value is below min, max when it is above max, and the original value when it is inside the inclusive range. Assume finite numeric arguments and min <= max. Do not mutate inputs. Do not edit tests or package files."
+    },
+    {
+      "id": "string-slugify",
+      "category": "string-processing",
+      "title": "Normalize strings into URL-safe slugs",
+      "fixture": "fixtures/string-slugify",
+      "baselineCheck": "node-test",
+      "expectedChangedPaths": [
+        "src/strings.mjs"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Fix and export slugify(value) in src/strings.mjs. Preserve the existing null/undefined to empty-string behavior. Lowercase the string, replace every run of non-ASCII-alphanumeric characters with one hyphen, and trim hyphens from both ends. Do not edit tests or package files."
+    },
+    {
+      "id": "config-deep-merge",
+      "category": "configuration",
+      "title": "Merge nested configuration objects safely",
+      "fixture": "fixtures/config-deep-merge",
+      "baselineCheck": "node-test",
+      "expectedChangedPaths": [
+        "src/config.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Fix mergeConfig(base, override) in src/config.mjs. Recursively merge nested plain objects, preserve base keys not present in override, and replace arrays rather than merging their elements. Neither input object may be mutated. Keep the exported function name and do not edit tests or package files."
+    }
+  ]
+}

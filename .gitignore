@@ -36,3 +36,4 @@ Thumbs.db
 *.p12
 *.pfx
 *.keystore
+/benchmark-results/
