@@ -71,6 +71,8 @@ test("auto mode selects an installed local model and reports local-only status",
   assert.equal(status.external_ai_api, false);
   assert.equal(status.local_only, true);
   assert.equal(status.context_tokens, 8192);
+  assert.equal(status.tokenizer, "utf8-byte-ratio-estimate");
+  assert.equal(status.tokenizer_is_estimate, true);
 });
 
 test("local generation uses only loopback Ollama and JSON mode for structured patches", async () => {
