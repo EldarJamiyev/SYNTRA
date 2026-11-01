@@ -32,6 +32,8 @@ The aggregate section includes completion, patch-validity and verification-pass 
 
 This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate Ollama daemon, model runtime, GPU memory, or total system memory. Some provider responses may not include prompt-token counts; unavailable values are recorded as zero rather than presented as exact counts.
 
+The benchmark enables the same second-pass patch review as the normal coding workflow. Review is a same-model pass unless `SYNTRA_REVIEW_MODEL` names a different installed local Ollama model; reports should not be described as independent review when both passes use one model.
+
 The benchmark does not call a hosted model API. It uses the locally configured Ollama provider when available, otherwise the local SYNTRA AI service. Each fixture is copied to a temporary directory and removed after its run. Agent changes are staged only inside that temporary copy; the active workspace and checked-in fixtures remain unchanged.
 
 Reports are written under benchmark-results by default and are ignored by Git. Run history and report comparison are available locally:

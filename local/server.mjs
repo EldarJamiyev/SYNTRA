@@ -655,6 +655,10 @@ async function runChatTurn(jobId, message, history, signal) {
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
+        reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim()
+          ? (method, route, body, timeoutMs, options = {}) =>
+              aiRequest(method, route, { ...(body || {}), model: process.env.SYNTRA_REVIEW_MODEL.trim() }, timeoutMs, { ...options, signal })
+          : null,
         onProgress: async update => {
           const phase = update.phase || "working";
           const messageText = update.message || "Working on the requested change";
