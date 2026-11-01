@@ -266,12 +266,39 @@ function extractTypeSpecifiers(relativePath, content) {
   return result;
 }
 
+function extractImportedTypeBindings(relativePath, content) {
+  if (!JS_EXTENSIONS.has(path.posix.extname(relativePath).toLowerCase())) return [];
+  const sourceFile = createTypeScriptSourceFile(relativePath, content);
+  const bindings = [];
+  const seen = new Set();
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !statement.moduleSpecifier
+      || !ts.isStringLiteralLike(statement.moduleSpecifier)) continue;
+    const named = statement.importClause?.namedBindings;
+    if (!named || !ts.isNamedImports(named)) continue;
+    for (const element of named.elements) {
+      const localName = element.name.text;
+      const importedName = element.propertyName?.text || localName;
+      const key = [statement.moduleSpecifier.text, localName, importedName].join(":");
+      if (seen.has(key) || bindings.length >= MAX_SPECIFIERS_PER_FILE) continue;
+      seen.add(key);
+      bindings.push({
+        moduleSpecifier: statement.moduleSpecifier.text,
+        localName,
+        importedName
+      });
+    }
+  }
+  return bindings;
+}
+
 export function analyzeSourceFile(relativePath, content) {
   return {
     symbols: parseDeclarations(relativePath, content),
     importSpecifiers: extractImportSpecifiers(relativePath, content),
     callSpecifiers: extractCallSpecifiers(relativePath, content),
-    typeSpecifiers: extractTypeSpecifiers(relativePath, content)
+    typeSpecifiers: extractTypeSpecifiers(relativePath, content),
+    importedTypeBindings: extractImportedTypeBindings(relativePath, content)
   };
 }
 

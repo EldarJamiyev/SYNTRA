@@ -1080,9 +1080,9 @@ test("repository graph links local imports and agent repairs a failed test in a 
       ""
     ].join("\n"));
     await fs.writeFile(path.join(root, "src", "gateway-consumer.ts"), [
-      'import { GatewayBase, GatewayOptions, GatewayState } from "./gateway-contracts";',
-      "export class GatewayService extends GatewayBase {",
-      "  connect(options: GatewayOptions): GatewayState { return options.host ? \"ready\" : \"offline\"; }",
+      'import { GatewayBase as BaseGateway, GatewayOptions as ConnectionOptions, GatewayState as ConnectionState } from "./gateway-contracts";',
+      "export class GatewayService extends BaseGateway {",
+      "  connect(options: ConnectionOptions): ConnectionState { return options.host ? \"ready\" : \"offline\"; }",
       "}",
       ""
     ].join("\n"));

@@ -212,6 +212,7 @@ export async function buildRepositoryGraph(inputRoot) {
       symbols: astBacked ? analysis.symbols : [],
       callSpecifiers: analysis.callSpecifiers,
       typeSpecifiers: analysis.typeSpecifiers || [],
+      importedTypeBindings: analysis.importedTypeBindings || [],
       calls: [], calledBy: [], typeDependencies: [], referencedByTypes: [],
       content: file.content
     };
@@ -235,9 +236,14 @@ export async function buildRepositoryGraph(inputRoot) {
       if (!target.calledBy.includes(node.path)) target.calledBy.push(node.path);
     }
     for (const typeName of node.typeSpecifiers) {
-      const matches = node.imports.filter(target =>
+      const bindings = node.importedTypeBindings.filter(binding => binding.localName === typeName);
+      const targetName = bindings.length === 1 ? bindings[0].importedName : typeName;
+      const candidateImports = bindings.length === 1
+        ? resolveImport(node.path, bindings[0].moduleSpecifier, fileSet)
+        : node.imports;
+      const matches = candidateImports.filter(target =>
         nodes.get(target)?.symbols.some(symbol =>
-          symbol.name === typeName && ["interface", "type", "class", "enum", "trait", "struct"].includes(symbol.kind)
+          symbol.name === targetName && ["interface", "type", "class", "enum", "trait", "struct"].includes(symbol.kind)
         )
       );
       if (matches.length !== 1) continue;
@@ -247,7 +253,7 @@ export async function buildRepositoryGraph(inputRoot) {
     }
   }
   return {
-    root, nodes: [...nodes.values()].map(({ content, importSpecifiers, symbols, callSpecifiers, typeSpecifiers, ...node }) => node), contents: nodes,
+    root, nodes: [...nodes.values()].map(({ content, importSpecifiers, symbols, callSpecifiers, typeSpecifiers, importedTypeBindings, ...node }) => node), contents: nodes,
     totalFiles: walked.files.length, totalBytes: walked.totalBytes, truncated: walked.truncated
   };
 }
