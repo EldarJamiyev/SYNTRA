@@ -5,7 +5,9 @@ import {
   chooseLocalModel,
   detectLocalModel,
   getProviderStatus,
-  handleLocalModelRequest
+  handleLocalModelRequest,
+  getGeminiProviderStatus,
+  handleGeminiModelRequest
 } from "../local/model-provider.mjs";
 
 const GB = 1024 ** 3;
@@ -424,4 +426,57 @@ test("Ollama patch-review mode uses a strict reviewer-only JSON schema", async (
   );
   assert.match(capturedBody.messages[0].content, /independent patch reviewer/);
   assert.equal(JSON.parse(result.text).verdict, "accept");
+});
+
+test("Gemini provider requires repository-content consent and uses server-side API keys", async () => {
+  const previous = {
+    key: process.env.SYNTRA_GEMINI_API_KEY,
+    model: process.env.SYNTRA_GEMINI_MODEL,
+    allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT
+  };
+  process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_MODEL = "gemini-3.8-flash";
+  delete process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT;
+  try {
+    const status = getGeminiProviderStatus();
+    assert.equal(status.provider, "gemini-api");
+    assert.equal(status.local_only, false);
+    assert.equal(status.context_tokens, 1_048_576);
+    await assert.rejects(
+      () => handleGeminiModelRequest("POST", "/model/generate", {
+        prompt: "You are SYNTRA's repository-aware software engineering agent. Return one JSON patch."
+      }, { fetchImpl: async () => { throw new Error("must not be called"); } }),
+      /repository inference is disabled/
+    );
+    process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
+    let requestUrl = "", requestOptions = null, streamed = "";
+    const result = await handleGeminiModelRequest("POST", "/model/generate", {
+      prompt: "SYNTRA_READ_ONLY_TOOL_PLAN Return JSON.", max_new_tokens: 200
+    }, {
+      fetchImpl: async (url, options) => {
+        requestUrl = url; requestOptions = options;
+        return new Response(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"calls":[]}' }] } }],
+          usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 8 }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      },
+      onToken: text => { streamed = text; }, timeoutMs: 1000
+    });
+    assert.match(requestUrl, /models\/gemini-3\.8-flash:generateContent$/);
+    assert.equal(requestOptions.headers["x-goog-api-key"], "test-key");
+    assert.equal(requestOptions.headers.Authorization, undefined);
+    assert.equal(JSON.parse(requestOptions.body).generationConfig.responseMimeType, "application/json");
+    assert.equal(result.provider, "gemini-api");
+    assert.equal(result.prompt_tokens, 50);
+    assert.equal(result.generated_tokens, 8);
+    assert.equal(streamed, '{"calls":[]}');
+  } finally {
+    for (const [key, value] of Object.entries({
+      SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_MODEL: previous.model,
+      SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 });

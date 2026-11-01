@@ -750,7 +750,7 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
   }
   if (payload.stage !== "slice_verified") throw new Error("Only a verified slice boundary can be persisted for continuation.");
   if (!Number.isInteger(payload.nextSliceIndex) || !Array.isArray(payload.slices)
-    || payload.slices.length < 1 || payload.slices.length > 3
+    || payload.slices.length < 1 || payload.slices.length > 8
     || payload.nextSliceIndex < 1 || payload.nextSliceIndex >= payload.slices.length) {
     throw new Error("Candidate checkpoint slice progression is invalid.");
   }
@@ -1016,7 +1016,7 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
   }
   if (typeof patch.phase === "string") next.phase = patch.phase.slice(0, 64);
   if (typeof patch.message === "string") next.message = patch.message.replace(/[\r\n]+/g, " ").slice(0, 500);
-  if (Number.isInteger(patch.iteration)) next.iteration = Math.max(0, Math.min(20, patch.iteration));
+  if (Number.isInteger(patch.iteration)) next.iteration = Math.max(0, Math.min(128, patch.iteration));
   if (typeof patch.cancelRequested === "boolean") next.cancelRequested = patch.cancelRequested;
   if (typeof patch.error === "string" || patch.error === null) next.error = patch.error ? patch.error.slice(0, 1200) : null;
   if (Array.isArray(patch.planSteps)) next.planSteps = patch.planSteps.slice(0, 12).map(step => ({

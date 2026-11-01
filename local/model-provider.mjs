@@ -113,11 +113,12 @@ function modelNameOf(model) {
 function scoreModel(name) {
   const value = name.toLowerCase();
   const rules = [
-    [/qwen3-coder-next/, 130],
-    [/qwen3-coder/, 125],
-    [/qwen3\.8/, 120],
-    [/devstral-small-2/, 118],
-    [/devstral/, 115],
+    [/qwen3-coder-next/, 140],
+    [/qwen3-coder/, 135],
+    [/glm-4\.7-flash/, 132],
+    [/gpt-oss(?::|-)20b/, 130],
+    [/devstral-small-2/, 128],
+    [/devstral/, 120],
     [/qwen2\.5-coder/, 110],
     [/deepseek.*coder/, 108],
     [/codestral/, 106],
@@ -521,7 +522,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
             items: {
               type: "object",
               properties: {
-                tool: { type: "string", enum: ["workspace.search", "workspace.read", "workspace.symbols.search", "workspace.memory.search"] },
+                tool: { type: "string", enum: ["workspace.search", "workspace.read", "workspace.symbols.search", "workspace.memory.search", "workspace.semantic.search"] },
                 input: {
                   type: "object",
                   properties: {
@@ -549,7 +550,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
           slices: {
             type: "array",
             minItems: 1,
-            maxItems: 3,
+            maxItems: 8,
             items: {
               type: "object",
               properties: {
@@ -596,4 +597,85 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
   return null;
 }
 
-export const localModelInternals = { isCloudModel, modelNameOf, scoreModel, estimateTokens, contextLimit, MAX_MODEL_RAM_FRACTION };
+const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+const GEMINI_CONTEXT_TOKENS = 1_048_576;
+
+function isRepositoryPrompt(prompt) {
+  return /SYNTRA_READ_ONLY_TOOL_PLAN|SYNTRA_IMPLEMENTATION_SLICE_PLAN|SYNTRA_PATCH_REVIEW|You are SYNTRA's repository-aware software engineering agent|Schema: \{\\"summary\\"/i.test(prompt);
+}
+
+export function getGeminiProviderStatus(model = process.env.SYNTRA_GEMINI_MODEL || DEFAULT_GEMINI_MODEL) {
+  const configured = Boolean(String(process.env.SYNTRA_GEMINI_API_KEY || "").trim());
+  return {
+    service: "SYNTRA model router", status: configured ? "ok" : "not_configured",
+    provider: "gemini-api", model_name: model, checkpoint_exists: configured,
+    trained_steps: null, context_tokens: GEMINI_CONTEXT_TOKENS,
+    context_window_tokens: GEMINI_CONTEXT_TOKENS, tokenizer: "gemini-token-estimate",
+    config: { seq_len: GEMINI_CONTEXT_TOKENS }, pretrained_weights: true,
+    external_ai_api: true, local_only: false,
+    data_policy: "Unpaid Gemini API content may be used to improve Google products and may be reviewed by humans; do not submit confidential or personal data.",
+    note: "Hosted inference is explicit. Repository prompts additionally require SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1."
+  };
+}
+
+export async function handleGeminiModelRequest(method, route, body = {}, {
+  fetchImpl = globalThis.fetch, timeoutMs = 300000, onToken, signal
+} = {}) {
+  const apiKey = String(process.env.SYNTRA_GEMINI_API_KEY || "").trim();
+  const model = String(body?.model || process.env.SYNTRA_GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim();
+  if (!apiKey) throw new Error("Gemini provider is selected but SYNTRA_GEMINI_API_KEY is not configured.");
+  if (!/^[a-zA-Z0-9._-]{3,100}$/.test(model)) throw new Error("SYNTRA_GEMINI_MODEL contains an invalid model identifier.");
+  if (method === "GET" && route === "/model/status") return getGeminiProviderStatus(model);
+  if (method === "POST" && route === "/model/tokenize") {
+    const text = body?.text;
+    if (typeof text !== "string") throw new Error("Text must be a string.");
+    if (Buffer.byteLength(text, "utf8") > 300_000) throw new Error("Text exceeds the 300 KB token-count API limit.");
+    return { token_count: estimateTokens(text), context_window_tokens: GEMINI_CONTEXT_TOKENS,
+      tokenizer: "gemini-token-estimate", is_estimate: true, provider: "gemini-api", model_name: model };
+  }
+  if (method !== "POST" || route !== "/model/generate") return null;
+  const prompt = body?.prompt;
+  if (typeof prompt !== "string" || !prompt.trim()) throw new Error("A non-empty prompt is required.");
+  if (Buffer.byteLength(prompt, "utf8") > 600_000) throw new Error("Prompt exceeds the 600 KB cloud-model limit.");
+  if (isRepositoryPrompt(prompt) && process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT !== "1") {
+    throw new Error("Cloud repository inference is disabled. Set SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1 only after reviewing Google's Gemini API data-use terms and your workspace confidentiality requirements.");
+  }
+  if (signal?.aborted) throw cancellationError();
+  const maxTokens = Math.max(16, Math.min(8192, Math.floor(Number(body.max_new_tokens) || 1024)));
+  const temperature = Math.max(0, Math.min(2, Number.isFinite(Number(body.temperature)) ? Number(body.temperature) : 0.2));
+  const requestBody = {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens: maxTokens, temperature,
+      ...(isRepositoryPrompt(prompt) ? { responseMimeType: "application/json" } : {}) }
+  };
+  let response;
+  try {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs || 300000);
+    response = await fetchImpl(GEMINI_API_BASE + "/models/" + encodeURIComponent(model) + ":generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify(requestBody),
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+    });
+  } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError") throw cancellationError();
+    throw new Error("Gemini API request failed before a response was received: " + String(error?.message || error).slice(0, 300));
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = String(payload?.error?.message || "Gemini API returned HTTP " + response.status).slice(0, 600);
+    const error = new Error("Gemini API error (" + response.status + "): " + message);
+    error.code = response.status === 429 ? "PROVIDER_RATE_LIMIT" : response.status >= 500 ? "PROVIDER_TEMPORARY" : "PROVIDER_REJECTED";
+    throw error;
+  }
+  const text = (payload?.candidates?.[0]?.content?.parts || []).map(part => typeof part?.text === "string" ? part.text : "").join("");
+  if (!text) throw new Error("Gemini returned no text. Check model availability, safety filters, and API quota.");
+  if (typeof onToken === "function") onToken(text, text);
+  return { text, generated_tokens: Number(payload?.usageMetadata?.candidatesTokenCount || estimateTokens(text)),
+    prompt_tokens: Number(payload?.usageMetadata?.promptTokenCount || 0) || undefined,
+    trained_steps: null, provider: "gemini-api", model_name: model,
+    context_window_tokens: GEMINI_CONTEXT_TOKENS, is_model_output: true };
+}
+
+export const localModelInternals = { isCloudModel, modelNameOf, scoreModel, estimateTokens, contextLimit, MAX_MODEL_RAM_FRACTION, isRepositoryPrompt };

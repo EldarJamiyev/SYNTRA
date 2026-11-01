@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   buildRepositoryGraph,
+  deriveAgentBudget,
   parsePatchOutput,
   runAgentTask,
   validateImplementationSlicePlan,
@@ -1103,4 +1104,16 @@ test("repository graph links local imports and agent repairs a failed test in a 
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("agent execution budget expands with task complexity but respects hard ceilings", () => {
+  const simple = deriveAgentBudget("Fix one small typo.", { fileCount: 20 }, { maxSlices: 8, maxIterations: 6 });
+  const complex = deriveAgentBudget("Perform a repo-wide architecture refactor, migration, integration, security hardening, dependency modernization, and end-to-end regression work across multiple modules.", { fileCount: 2400 }, { maxSlices: 8, maxIterations: 6 });
+  assert.equal(simple.maxSlices, 1);
+  assert.equal(simple.maxIterations, 2);
+  assert.ok(complex.maxSlices > simple.maxSlices);
+  assert.ok(complex.maxIterations > simple.maxIterations);
+  assert.ok(complex.maxSlices <= 8);
+  assert.ok(complex.maxIterations <= 6);
+  assert.ok(complex.maxTotalAttempts <= 24);
 });
