@@ -502,7 +502,7 @@ test("model-selected context plans allow only bounded read-only retrieval includ
     calls: [{ tool: "workspace.semantic.search", input: { query: "x", limit: 20 } }]
   }, ["src/server.js"]), /2-300 character query and an optional limit from 1 to 8/);
   assert.throws(() => validateReadOnlyToolPlan({
-    calls: [{ tool: "workspace.read", input: { path: ".env" } }]  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.read", input: { path: ".env" } }]
     calls: [{ tool: "workspace.read", input: { path: ".env" } }]
   }, ["src/server.js"]), /safe file list/);
   assert.throws(() => validateReadOnlyToolPlan({
