@@ -119,8 +119,28 @@ export function summarizeBenchmarkResults(results) {
   const patchCount = results.filter(item => item.patchValid).length;
   const verificationCount = results.filter(item => item.verificationPassed).length;
   const completeCount = results.filter(item => item.taskComplete).length;
+  const categoryGroups = new Map();
+  for (const item of results) {
+    const category = String(item.category || "uncategorized").slice(0, 64);
+    const group = categoryGroups.get(category) || [];
+    group.push(item);
+    categoryGroups.set(category, group);
+  }
+  const categories = Object.fromEntries([...categoryGroups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([category, items]) => {
+    const total = items.length;
+    const valid = items.filter(item => item.patchValid).length;
+    const verified = items.filter(item => item.verificationPassed).length;
+    const complete = items.filter(item => item.taskComplete).length;
+    return [category, {
+      taskCount: total,
+      patchValidityRate: total ? Number((valid / total).toFixed(4)) : 0,
+      verificationPassRate: total ? Number((verified / total).toFixed(4)) : 0,
+      taskCompletionRate: total ? Number((complete / total).toFixed(4)) : 0
+    }];
+  }));
   return {
     taskCount: count, patchValidCount: patchCount, verificationPassedCount: verificationCount, completedTaskCount: completeCount,
+    categories,
     patchValidityRate: count ? Number((patchCount / count).toFixed(4)) : 0,
     verificationPassRate: count ? Number((verificationCount / count).toFixed(4)) : 0,
     taskCompletionRate: count ? Number((completeCount / count).toFixed(4)) : 0,

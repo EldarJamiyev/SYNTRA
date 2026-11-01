@@ -49,6 +49,9 @@ test("benchmark summary calculates rates, latency and token totals", () => {
   assert.deepEqual(summary.latencyMs, { mean: 200, median: 200, min: 100, max: 300 });
   assert.deepEqual(summary.tokens, { prompt: 60, output: 25, total: 85 });
   assert.equal(summary.peakProcessRssBytes, 250);
+  assert.deepEqual(summary.categories, {
+    uncategorized: { taskCount: 2, patchValidityRate: 1, verificationPassRate: 0.5, taskCompletionRate: 0.5 }
+  });
 });
 test("benchmark runner checks failing baseline in isolated copy and writes a report", async () => {
   const parent = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-benchmark-test-"));

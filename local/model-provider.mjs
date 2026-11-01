@@ -219,7 +219,9 @@ async function detectLocalModelUncached({
     model: modelNameOf(model),
     modelSizeBytes: Number(model.size || 0) || null,
     contextTokens: safeContext,
-    tokenizer: "ollama-local-tokenizer"
+    tokenizer: "ollama-local-tokenizer",
+    selection: requestedModel.trim() ? "explicit" : "automatic",
+    selectionScore: scoreModel(modelNameOf(model))
   };
 }
 
@@ -266,6 +268,21 @@ export async function detectLocalModel(options = {}) {
   return probe;
 }
 
+export function describeLocalModelCapabilities(provider) {
+  const model = String(provider?.model || "").toLowerCase();
+  return {
+    modelFamily: model.split(/[/:_-]/)[0] || "unknown",
+    codingSpecialized: /qwen.*coder|devstral|deepseek.*coder|codestral|starcoder|granite.*code|glm.*code/.test(model),
+    contextWindowTokens: Math.max(0, Number(provider?.contextTokens) || 0),
+    selectionMethod: provider?.selection === "explicit" ? "user_selected" : "heuristic_local_model_ranking",
+    selectionScore: Math.max(0, Number(provider?.selectionScore) || scoreModel(model)),
+    structuredJsonRequests: true,
+    incrementalTokenStreaming: true,
+    benchmarkStatus: "not_measured",
+    benchmarkWarning: "Model name and routing score are heuristics, not evidence of engineering task accuracy."
+  };
+}
+
 export function getProviderStatus(provider) {
   return {
     service: "SYNTRA local model router",
@@ -282,6 +299,7 @@ export function getProviderStatus(provider) {
     pretrained_weights: true,
     external_ai_api: false,
     local_only: true,
+    capabilities: describeLocalModelCapabilities(provider),
     note: "Inference is routed to the selected model installed on the local Ollama service at 127.0.0.1. No remote model endpoint is used."
   };
 }
@@ -615,6 +633,7 @@ export function getGeminiProviderStatus(model = process.env.SYNTRA_GEMINI_MODEL 
     config: { seq_len: GEMINI_CONTEXT_TOKENS }, pretrained_weights: true,
     external_ai_api: true, local_only: false,
     data_policy: "Unpaid Gemini API content may be used to improve Google products and may be reviewed by humans; do not submit confidential or personal data.",
+    capabilities: { hostedInference: true, contextWindowTokens: GEMINI_CONTEXT_TOKENS, tokenCountIsEstimate: true, incrementalTokenStreaming: false, benchmarkStatus: "not_measured" },
     note: "Hosted inference is explicit. Repository prompts additionally require SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1."
   };
 }

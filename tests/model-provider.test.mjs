@@ -5,6 +5,7 @@ import {
   chooseLocalModel,
   detectLocalModel,
   getProviderStatus,
+  describeLocalModelCapabilities,
   handleLocalModelRequest,
   getGeminiProviderStatus,
   handleGeminiModelRequest
@@ -479,4 +480,21 @@ test("Gemini provider requires repository-content consent and uses server-side A
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
   }
+});
+
+test("local model capability metadata distinguishes heuristic classification from benchmark evidence", () => {
+  const profile = describeLocalModelCapabilities({
+    model: "qwen2.5-coder:14b", contextTokens: 8192,
+    selection: "automatic", selectionScore: 110
+  });
+  assert.equal(profile.codingSpecialized, true);
+  assert.equal(profile.contextWindowTokens, 8192);
+  assert.equal(profile.selectionMethod, "heuristic_local_model_ranking");
+  assert.equal(profile.benchmarkStatus, "not_measured");
+  assert.match(profile.benchmarkWarning, /not evidence of engineering task accuracy/);
+  const explicit = describeLocalModelCapabilities({
+    model: "llama3.2", contextTokens: 4096, selection: "explicit", selectionScore: 75
+  });
+  assert.equal(explicit.selectionMethod, "user_selected");
+  assert.equal(explicit.codingSpecialized, false);
 });
