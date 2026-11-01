@@ -526,15 +526,15 @@ function summarizeOutput(name, output) {
         available: output.available, fileCount: output.fileCount,
         symbolCount: output.symbolCount,
         documentationFileCount: output.documentationFileCount,
-        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount,
+        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount, callEdgeCount: output.callEdgeCount,
         documentationReferenceCount: output.documentationReferenceCount,
-        testOwnershipCount: output.testOwnershipCount, truncated: output.truncated
+        testOwnershipCount: output.testOwnershipCount, callEdgeCount: output.callEdgeCount, truncated: output.truncated
       };
     case "workspace.index.refresh":
       return {
         fileCount: output.fileCount, symbolCount: output.symbolCount,
         documentationFileCount: output.documentationFileCount,
-        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount,
+        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount, callEdgeCount: output.callEdgeCount,
         documentationReferenceCount: output.documentationReferenceCount,
         testOwnershipCount: output.testOwnershipCount,
         parsedFiles: output.parsedFiles, reusedFiles: output.reusedFiles,

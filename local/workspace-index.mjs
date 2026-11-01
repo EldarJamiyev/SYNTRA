@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import ts from "typescript";
 import {
   ensureWorkspaceStateDirectory,
   getWorkspaceStateDirectory,
@@ -10,8 +11,8 @@ import {
   resolveWorkspace
 } from "./workspace.mjs";
 
-const INDEX_FILENAME = "workspace-index-v2.json";
-const INDEX_SCHEMA_VERSION = 2;
+const INDEX_FILENAME = "workspace-index-v3.json";
+const INDEX_SCHEMA_VERSION = 3;
 const MAX_INDEX_CANDIDATES = 2000;
 const MAX_INDEX_SCAN_BYTES = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES = 4 * 1024 * 1024;
@@ -73,13 +74,19 @@ function isLocalSpecifier(value) {
     && !value.startsWith("//") && !value.startsWith("/");
 }
 
+function createTypeScriptSourceFile(relativePath, content) {
+  const extension = path.posix.extname(relativePath).toLowerCase();
+  const scriptKind = extension === ".tsx" ? ts.ScriptKind.TSX
+    : extension === ".jsx" ? ts.ScriptKind.JSX
+      : [".js", ".mjs", ".cjs"].includes(extension) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+  return ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true, scriptKind);
+}
+
 function parseDeclarations(relativePath, content) {
   const extension = path.posix.extname(relativePath).toLowerCase();
   if (!SOURCE_EXTENSIONS.has(extension)) return [];
   const symbols = [];
   const seen = new Set();
-  const lines = content.split(/\r?\n/);
-
   function add(kind, name, line) {
     if (!SYMBOL_KINDS.has(kind) || !IDENTIFIER_PATTERN.test(name) || symbols.length >= MAX_SYMBOLS_PER_FILE) return;
     const key = kind + ":" + name + ":" + line;
@@ -88,26 +95,45 @@ function parseDeclarations(relativePath, content) {
     symbols.push({ name, kind, line, signature: kind + " " + name });
   }
 
+  if (JS_EXTENSIONS.has(extension)) {
+    const sourceFile = createTypeScriptSourceFile(relativePath, content);
+    function addNamedNode(node, kind) {
+      if (node.name && ts.isIdentifier(node.name)) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        add(kind, node.name.text, line);
+      }
+    }
+    function visit(node) {
+      if (ts.isFunctionDeclaration(node)) addNamedNode(node, "function");
+      else if (ts.isClassDeclaration(node)) addNamedNode(node, "class");
+      else if (ts.isInterfaceDeclaration(node)) addNamedNode(node, "interface");
+      else if (ts.isTypeAliasDeclaration(node)) addNamedNode(node, "type");
+      else if (ts.isEnumDeclaration(node)) addNamedNode(node, "enum");
+      else if (ts.isModuleDeclaration(node)) addNamedNode(node, "module");
+      else if (ts.isMethodDeclaration(node) || ts.isMethodSignature(node)
+        || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
+        addNamedNode(node, "function");
+      } else if (ts.isVariableDeclaration(node) && node.initializer) {
+        const initializer = node.initializer;
+        if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) addNamedNode(node, "function");
+        else if (ts.isClassExpression(initializer)) addNamedNode(node, "class");
+      } else if (ts.isPropertyDeclaration(node) && node.initializer
+        && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+        addNamedNode(node, "function");
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(sourceFile);
+    return symbols;
+  }
+
+  const lines = content.split(/\r?\n/);
   for (let index = 0; index < lines.length && symbols.length < MAX_SYMBOLS_PER_FILE; index += 1) {
     const line = lines[index];
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;
     let match;
-
-    if (JS_EXTENSIONS.has(extension)) {
-      match = /^\s*(?:(?:export|declare|default|abstract)\s+)*(?:async\s+)?function\s*\*?\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("function", match[1], index + 1);
-      match = /^\s*(?:(?:export|default|abstract|declare)\s+)*class\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("class", match[1], index + 1);
-      match = /^\s*(?:(?:export|declare)\s+)*interface\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("interface", match[1], index + 1);
-      match = /^\s*(?:(?:export|declare)\s+)*type\s+([A-Za-z_$][\w$]*)\s*=/.exec(line);
-      if (match) add("type", match[1], index + 1);
-      match = /^\s*(?:(?:export|declare)\s+)*enum\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("enum", match[1], index + 1);
-      match = /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/.exec(line);
-      if (match) add("function", match[1], index + 1);
-    } else if (extension === ".py" || extension === ".pyi") {
+    if (extension === ".py" || extension === ".pyi") {
       match = /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/.exec(line);
       if (match) add("function", match[1], index + 1);
       match = /^\s*class\s+([A-Za-z_]\w*)\b/.exec(line);
@@ -122,8 +148,7 @@ function parseDeclarations(relativePath, content) {
     } else if (extension === ".rs") {
       match = /^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|extern(?:\s+"[^"]+")?)\s+)*(fn|struct|enum|trait|type|mod)\s+([A-Za-z_]\w*)\b/.exec(line);
       if (match) {
-        const kind = match[1] === "fn" ? "function"
-          : match[1] === "mod" ? "module" : match[1];
+        const kind = match[1] === "fn" ? "function" : match[1] === "mod" ? "module" : match[1];
         add(kind, match[2], index + 1);
       }
     }
@@ -151,21 +176,27 @@ function extractImportSpecifiers(relativePath, content) {
   };
 
   if (JS_EXTENSIONS.has(extension)) {
-    const pattern = /\bfrom\s*["']([^"']+)["']|\bimport\s*(?:\(\s*)?["']([^"']+)["']|\brequire\s*\(\s*["']([^"']+)["']/g;
-    for (const match of content.matchAll(pattern)) {
-      const specifier = match[1] || match[2] || match[3];
-      if (specifier?.startsWith(".")) add(specifier);
+    const sourceFile = createTypeScriptSourceFile(relativePath, content);
+    function visit(node) {
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+        && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+        add(node.moduleSpecifier.text);
+      } else if (ts.isCallExpression(node)) {
+        const expression = node.expression;
+        const isRequire = ts.isIdentifier(expression) && expression.text === "require";
+        const isDynamicImport = expression.kind === ts.SyntaxKind.ImportKeyword;
+        const argument = node.arguments[0];
+        if ((isRequire || isDynamicImport) && argument && ts.isStringLiteralLike(argument)) add(argument.text);
+      }
+      ts.forEachChild(node, visit);
     }
-    const css = /@import\s+(?:url\()?["']([^"']+)["']/g;
-    for (const match of content.matchAll(css)) if (match[1]?.startsWith(".")) add(match[1]);
+    visit(sourceFile);
   } else if (extension === ".py" || extension === ".pyi") {
-    const pattern = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([\w.]+))/gm;
+    const pattern = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([\w.]+)/gm;
     for (const match of content.matchAll(pattern)) add(match[1] || match[2]);
   } else if (extension === ".go") {
     const blocks = content.match(/\bimport\s*\([\s\S]*?\)/g) || [];
-    for (const block of blocks) {
-      for (const match of block.matchAll(/["']([^"']+)["']/g)) add(match[1]);
-    }
+    for (const block of blocks) for (const match of block.matchAll(/["']([^"']+)["']/g)) add(match[1]);
     const single = /^\s*import\s+(?:[A-Za-z_]\w*\s+)?["']([^"']+)["']/gm;
     for (const match of content.matchAll(single)) add(match[1]);
   } else if (extension === ".rs") {
@@ -177,6 +208,27 @@ function extractImportSpecifiers(relativePath, content) {
       if (specifier) add(specifier);
     }
   }
+  return result;
+}
+
+function extractCallSpecifiers(relativePath, content) {
+  if (!JS_EXTENSIONS.has(path.posix.extname(relativePath).toLowerCase())) return [];
+  const sourceFile = createTypeScriptSourceFile(relativePath, content);
+  const result = [];
+  const seen = new Set();
+  function visit(node) {
+    if (ts.isCallExpression(node)) {
+      const expression = node.expression;
+      const name = ts.isIdentifier(expression) ? expression.text
+        : ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.name) ? expression.name.text : "";
+      if (IDENTIFIER_PATTERN.test(name) && !seen.has(name) && result.length < MAX_SPECIFIERS_PER_FILE) {
+        seen.add(name);
+        result.push(name);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
   return result;
 }
 
@@ -329,20 +381,23 @@ function validIndexedFile(item) {
   }
 
   const importSpecifiers = uniqueStrings(item.importSpecifiers, MAX_SPECIFIERS_PER_FILE, 300);
+  const callSpecifiers = uniqueStrings(item.callSpecifiers, MAX_SPECIFIERS_PER_FILE, 120);
   const imports = uniqueStrings(item.imports, MAX_RELATIONS_PER_FILE);
   const importedBy = uniqueStrings(item.importedBy, MAX_RELATIONS_PER_FILE);
+  const calls = uniqueStrings(item.calls, MAX_RELATIONS_PER_FILE);
+  const calledBy = uniqueStrings(item.calledBy, MAX_RELATIONS_PER_FILE);
   const docLinkTargets = uniqueStrings(item.docLinkTargets, MAX_RELATIONS_PER_FILE, 300);
   const documentationReferences = uniqueStrings(item.documentationReferences, MAX_RELATIONS_PER_FILE);
   const referencedByDocs = uniqueStrings(item.referencedByDocs, MAX_RELATIONS_PER_FILE);
   const testOwners = uniqueStrings(item.testOwners, 8);
   const ownedTests = uniqueStrings(item.ownedTests, MAX_RELATIONS_PER_FILE);
-  if (!importSpecifiers || !imports || !importedBy || !docLinkTargets
+  if (!importSpecifiers || !callSpecifiers || !imports || !importedBy || !calls || !calledBy || !docLinkTargets
     || !documentationReferences || !referencedByDocs || !testOwners || !ownedTests
     || importSpecifiers.some(value => !isLocalSpecifier(value))
     || docLinkTargets.some(value => !isLocalSpecifier(value))) return null;
   return {
     path: item.path, size: item.size, sha256: item.sha256, role: item.role, symbols,
-    importSpecifiers, imports, importedBy, docLinkTargets, documentationReferences,
+    importSpecifiers, callSpecifiers, imports, importedBy, calls, calledBy, docLinkTargets, documentationReferences,
     referencedByDocs, testOwners, ownedTests
   };
 }
@@ -370,6 +425,8 @@ function validateLoadedIndex(root, value) {
     const relations = [
       ...file.imports.map(target => [target, ["source", "test"]]),
       ...file.importedBy.map(target => [target, ["source", "test"]]),
+      ...file.calls.map(target => [target, ["source"]]),
+      ...file.calledBy.map(target => [target, ["source", "test"]]),
       ...file.documentationReferences.map(target => [target, null]),
       ...file.referencedByDocs.map(target => [target, ["documentation"]]),
       ...file.testOwners.map(target => [target, ["source"]]),
@@ -461,7 +518,7 @@ export async function getWorkspaceIndexStatus(inputRoot) {
     return {
       available: false, root, indexedAt: null, fileCount: 0, symbolCount: 0,
       documentationFileCount: 0, testFileCount: 0, importEdgeCount: 0,
-      documentationReferenceCount: 0, testOwnershipCount: 0,
+      documentationReferenceCount: 0, testOwnershipCount: 0, callEdgeCount: 0,
       indexedBytes: 0, truncated: false, reason: "not_built_or_invalid"
     };
   }
@@ -473,6 +530,7 @@ export async function getWorkspaceIndexStatus(inputRoot) {
     importEdgeCount: countRelations(index.files, "imports"),
     documentationReferenceCount: countRelations(index.files, "documentationReferences"),
     testOwnershipCount: countRelations(index.files, "testOwners"),
+    callEdgeCount: countRelations(index.files, "calls"),
     indexedBytes: index.files.reduce((sum, file) => sum + file.size, 0),
     truncated: index.truncated
   };
@@ -526,15 +584,18 @@ export async function refreshWorkspaceIndex(inputRoot) {
     const cached = previousByPath.get(candidate.path);
     let symbols = [];
     let importSpecifiers = [];
+    let callSpecifiers = [];
     let docLinkTargets = [];
     if (cached && cached.sha256 === source.sha256 && cached.size === source.bytes && cached.role === role) {
       symbols = cached.symbols;
       importSpecifiers = cached.importSpecifiers;
+      callSpecifiers = cached.callSpecifiers || [];
       docLinkTargets = cached.docLinkTargets;
       reusedFiles += 1;
     } else {
       symbols = role === "documentation" ? [] : parseDeclarations(candidate.path, source.content);
       importSpecifiers = role === "documentation" ? [] : extractImportSpecifiers(candidate.path, source.content);
+      callSpecifiers = role === "documentation" ? [] : extractCallSpecifiers(candidate.path, source.content);
       docLinkTargets = role === "documentation" ? extractDocumentationTargets(source.content) : [];
       parsedFiles += 1;
     }
@@ -545,7 +606,7 @@ export async function refreshWorkspaceIndex(inputRoot) {
     totalSymbols += symbols.length;
     nextFiles.push({
       path: candidate.path, size: source.bytes, sha256: source.sha256, role, symbols,
-      importSpecifiers, imports: [], importedBy: [],
+      importSpecifiers, callSpecifiers, imports: [], importedBy: [], calls: [], calledBy: [],
       docLinkTargets, documentationReferences: [], referencedByDocs: [],
       testOwners: [], ownedTests: []
     });
@@ -586,6 +647,19 @@ export async function refreshWorkspaceIndex(inputRoot) {
         linked.importedBy.push(file.path);
       }
     }
+    for (const callName of file.callSpecifiers) {
+      const matchingImports = file.imports.filter(target =>
+        fileByPath.get(target)?.symbols.some(symbol => symbol.name === callName)
+      );
+      if (matchingImports.length === 1) {
+        const target = matchingImports[0];
+        if (!file.calls.includes(target) && file.calls.length < MAX_RELATIONS_PER_FILE) file.calls.push(target);
+        const linked = fileByPath.get(target);
+        if (linked && !linked.calledBy.includes(file.path) && linked.calledBy.length < MAX_RELATIONS_PER_FILE) {
+          linked.calledBy.push(file.path);
+        }
+      }
+    }
     for (const target of file.documentationReferences) {
       const linked = fileByPath.get(target);
       if (linked && !linked.referencedByDocs.includes(file.path) && linked.referencedByDocs.length < MAX_RELATIONS_PER_FILE) {
@@ -611,6 +685,8 @@ export async function refreshWorkspaceIndex(inputRoot) {
 
   for (const file of nextFiles) {
     file.importedBy.sort();
+    file.calls.sort();
+    file.calledBy.sort();
     file.documentationReferences.sort();
     file.referencedByDocs.sort();
     file.testOwners.sort();
@@ -634,6 +710,7 @@ export async function refreshWorkspaceIndex(inputRoot) {
     importEdgeCount: countRelations(nextFiles, "imports"),
     documentationReferenceCount: countRelations(nextFiles, "documentationReferences"),
     testOwnershipCount: countRelations(nextFiles, "testOwners"),
+    callEdgeCount: countRelations(nextFiles, "calls"),
     parsedFiles, reusedFiles, removedFiles, skippedFiles, indexedBytes,
     truncated, rebuilt: !previous
   };
@@ -728,6 +805,8 @@ export async function searchWorkspaceSymbols(inputRoot, query, limit = 10) {
     const relations = {
       imports: await currentRelations(file.imports, 6),
       importedBy: await currentRelations(file.importedBy, 6),
+      calls: await currentRelations(file.calls, 6),
+      calledBy: await currentRelations(file.calledBy, 6),
       documentationReferences: await currentRelations(file.documentationReferences, 6),
       referencedByDocs: await currentRelations(file.referencedByDocs, 6),
       testOwners: await currentRelations(file.testOwners, 4),
