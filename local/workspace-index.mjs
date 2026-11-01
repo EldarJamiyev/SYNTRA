@@ -232,6 +232,14 @@ function extractCallSpecifiers(relativePath, content) {
   return result;
 }
 
+export function analyzeSourceFile(relativePath, content) {
+  return {
+    symbols: parseDeclarations(relativePath, content),
+    importSpecifiers: extractImportSpecifiers(relativePath, content),
+    callSpecifiers: extractCallSpecifiers(relativePath, content)
+  };
+}
+
 function extractDocumentationTargets(content) {
   const targets = [];
   const seen = new Set();

@@ -1066,7 +1066,18 @@ test("repository graph links local imports and agent repairs a failed test in a 
     throw new Error("Unexpected model route: " + route);
   };
   try {
+    await fs.writeFile(path.join(root, "src", "service.js"),
+      "export function calculateValue(input) { return input + 1; }\n");
+    await fs.writeFile(path.join(root, "src", "consumer.js"),
+      "import {\n  calculateValue\n} from \"./service.js\";\nexport function consume() { return calculateValue(1); }\n");
     const graph = await buildRepositoryGraph(root);
+    const consumerNode = graph.nodes.find(node => node.path === "src/consumer.js");
+    const serviceNode = graph.nodes.find(node => node.path === "src/service.js");
+    assert.ok(consumerNode.imports.includes("src/service.js"),
+      "multiline imports should resolve in the main agent graph");
+    assert.ok(consumerNode.calls.includes("src/service.js"),
+      "statically imported calls should create a caller relationship");
+    assert.ok(serviceNode.calledBy.includes("src/consumer.js"));
     const valueNode = graph.nodes.find(node => node.path === "src/value.js");
     const testNode = graph.nodes.find(node => node.path === "tests/value.test.js");
     const workflowNode = graph.nodes.find(node => node.path === ".github/workflows/checks.yml");

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { analyzeSourceFile } from "./workspace-index.mjs";
 import { readWorkspaceFile, resolveWorkspace } from "./workspace.mjs";
 import { executeWorkspaceTool } from "./tool-runtime.mjs";
 
@@ -152,20 +153,17 @@ async function walkSourceFiles(root) {
 function parseImports(relative, content) {
   const result = [];
   const extension = path.posix.extname(relative).toLowerCase();
-  if ([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro"].includes(extension)) {
+  if ([".vue", ".svelte", ".astro"].includes(extension)) {
     const pattern = /\bfrom\s*["']([^"']+)["']|\bimport\s*(?:\(\s*)?["']([^"']+)["']|\brequire\s*\(\s*["']([^"']+)["']/g;
     for (const match of content.matchAll(pattern)) {
       const specifier = match[1] || match[2] || match[3];
       if (specifier && specifier.startsWith(".")) result.push(specifier);
     }
+  } else if (extension === ".css" || extension === ".scss") {
     const css = /@import\s+(?:url\()?["']([^"']+)["']/g;
-    for (const match of content.matchAll(css)) if (match[1] && match[1].startsWith(".")) result.push(match[1]);
-  } else if (extension === ".py" || extension === ".pyi") {
-    const pattern = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([\w.]+))/gm;
-    for (const match of content.matchAll(pattern)) {
-      const specifier = match[1] || match[2];
-      if (specifier) result.push(specifier);
-    }
+    for (const match of content.matchAll(css)) if (match[1]?.startsWith(".")) result.push(match[1]);
+  } else {
+    result.push(...analyzeSourceFile(relative, content).importSpecifiers);
   }
   return [...new Set(result)].slice(0, 80);
 }
@@ -204,21 +202,39 @@ export async function buildRepositoryGraph(inputRoot) {
   for (const item of walked.files) {
     let file;
     try { file = await readWorkspaceFile(root, item.path); } catch { continue; }
+    const analysis = analyzeSourceFile(item.path, file.content);
+    const astBacked = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+      ".py", ".pyi", ".go", ".rs"].includes(item.extension);
     const node = {
       path: item.path, size: file.bytes, sha256: file.sha256,
-      language: item.extension.slice(1) || "text", imports: [], importedBy: [], content: file.content
+      language: item.extension.slice(1) || "text", imports: [], importedBy: [],
+      importSpecifiers: astBacked ? analysis.importSpecifiers : parseImports(item.path, file.content),
+      symbols: astBacked ? analysis.symbols : [],
+      callSpecifiers: analysis.callSpecifiers,
+      calls: [], calledBy: [], content: file.content
     };
     nodes.set(item.path, node);
   }
   for (const node of nodes.values()) {
-    for (const specifier of parseImports(node.path, node.content)) {
+    for (const specifier of node.importSpecifiers) {
       const resolved = resolveImport(node.path, specifier, fileSet);
       if (resolved && resolved !== node.path && nodes.has(resolved)) node.imports.push(resolved);
     }
   }
   for (const node of nodes.values()) for (const imported of node.imports) nodes.get(imported)?.importedBy.push(node.path);
+  for (const node of nodes.values()) {
+    for (const callName of node.callSpecifiers) {
+      const matches = node.imports.filter(target =>
+        nodes.get(target)?.symbols.some(symbol => symbol.name === callName)
+      );
+      if (matches.length !== 1) continue;
+      const target = nodes.get(matches[0]);
+      if (!node.calls.includes(target.path)) node.calls.push(target.path);
+      if (!target.calledBy.includes(node.path)) target.calledBy.push(node.path);
+    }
+  }
   return {
-    root, nodes: [...nodes.values()].map(({ content, ...node }) => node), contents: nodes,
+    root, nodes: [...nodes.values()].map(({ content, importSpecifiers, symbols, callSpecifiers, ...node }) => node), contents: nodes,
     totalFiles: walked.files.length, totalBytes: walked.totalBytes, truncated: walked.truncated
   };
 }
@@ -279,7 +295,7 @@ function rankGraph(graph, goal, requestedPath = "") {
   for (const node of graph.nodes) {
     const score = scores.get(node.path) || 0;
     if (score <= 0) continue;
-    for (const related of [...node.imports, ...node.importedBy]) scores.set(related, (scores.get(related) || 0) + Math.min(8, score * 0.22));
+    for (const related of [...node.imports, ...node.importedBy, ...node.calls, ...node.calledBy]) scores.set(related, (scores.get(related) || 0) + Math.min(8, score * 0.22));
   }
   return [...scores.entries()].map(([filePath, score]) => ({
     ...byPath.get(filePath), score, content: graph.contents.get(filePath)?.content || ""
@@ -298,7 +314,7 @@ function createPlan(goal, inventory, ranked, graph, repositoryState = {}) {
       workingTreeObserved: dirty
     },
     steps: [
-      { id: "discover", title: "Discover architecture and repository state", status: "completed", detail: "Inspected " + inventory.fileCount + " workspace files; import graph contains " + graph.nodes.length + " readable source/config files." },
+      { id: "discover", title: "Discover architecture and repository state", status: "completed", detail: "Inspected " + inventory.fileCount + " workspace files; import graph contains " + graph.nodes.length + " readable source/config files and " + graph.nodes.reduce((sum, node) => sum + node.calls.length, 0) + " static call edges." },
       { id: "scope", title: "Select change surfaces", status: "completed", detail: likelyFiles.length ? likelyFiles.join(", ") : "No relevant source files ranked yet." },
       { id: "patch", title: "Generate structured edits", status: "pending", detail: "Request exact find/replace operations; validate paths, unique anchors, and source hashes." },
       { id: "verify", title: "Discover and run supported checks", status: "pending", detail: "Discover executable runners from the candidate workspace, run only supported checks, then re-read changed candidate files to detect script side effects." },
@@ -312,11 +328,13 @@ function createPlan(goal, inventory, ranked, graph, repositoryState = {}) {
 function makePatchPrompt(goal, inventory, plan, graph, ranked, feedback, repositoryState = {}, supplementalContext = "") {
   const map = ranked.slice(0, 12).map(node => ({
     path: node.path, imports: node.imports.slice(0, 10),
-    importedBy: node.importedBy.slice(0, 10), score: Number(node.score.toFixed(2))
+    importedBy: node.importedBy.slice(0, 10), calls: node.calls.slice(0, 10),
+    calledBy: node.calledBy.slice(0, 10), score: Number(node.score.toFixed(2))
   }));
   const snippets = ranked.slice(0, 12).map(node => ({
     path: node.path, sha256: node.sha256, imports: node.imports.slice(0, 10),
-    importedBy: node.importedBy.slice(0, 10), source: makeExcerpt(node.content, goal)
+    importedBy: node.importedBy.slice(0, 10), calls: node.calls.slice(0, 10),
+    calledBy: node.calledBy.slice(0, 10), source: makeExcerpt(node.content, goal)
   }));
   return [
     MODEL_PROMPT,
@@ -401,7 +419,8 @@ export function validateImplementationSlicePlan(payload, taskGoal, maxSlices = 3
 function makeImplementationSlicePlanPrompt(goal, inventory, ranked) {
   const context = ranked.slice(0, 8).map(item => ({
     path: item.path, language: item.language, imports: item.imports.slice(0, 5),
-    importedBy: item.importedBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 360)
+    importedBy: item.importedBy.slice(0, 5), calls: item.calls.slice(0, 5),
+    calledBy: item.calledBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 360)
   }));
   return [
     "SYNTRA_IMPLEMENTATION_SLICE_PLAN",
