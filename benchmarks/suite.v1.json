@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
-  "description": "Deterministic local coding-agent baseline across JavaScript utilities, input handling, asynchronous control flow, HTTP header semantics, and a multi-file module integration task. Fixtures begin with failing assertions; passing means exact patch paths and candidate verification.",
+  "version": "1.3.0",
+  "description": "Deterministic coding-agent baseline across JavaScript utilities, multi-file changes, asynchronous control flow, Python unittest projects, Go packages and Rust crates. Each available-runtime fixture begins with failing assertions; unavailable non-JavaScript runtimes are explicitly skipped.",
   "tasks": [
     {
       "id": "utility-clamp",
@@ -114,6 +114,48 @@
       "maxIterations": 4,
       "maxSlices": 2,
       "goal": "Implement createCache() in src/cache.mjs and export it from src/index.mjs. The returned cache must use Map semantics and expose set(key,value) returning the cache, get(key), has(key), delete(key), clear(), and a read-only size getter. Preserve arbitrary key identity and values including undefined. Do not edit tests or package files."
+    },
+    {
+      "id": "python-slugify",
+      "category": "python",
+      "title": "Implement deterministic Python slug normalization",
+      "fixture": "fixtures/python-slugify",
+      "baselineCheck": "python-unittest",
+      "testEntry": "checks/test_slug.py",
+      "expectedChangedPaths": [
+        "src/slug.py"
+      ],
+      "maxIterations": 4,
+      "maxSlices": 1,
+      "goal": "Implement slugify(value: str) in src/slug.py. Return a lowercase ASCII slug. Replace each run of non-alphanumeric characters with one hyphen, trim leading and trailing hyphens, and treat characters outside [a-zA-Z0-9] as separators. Do not edit tests or pyproject.toml."
+    },
+    {
+      "id": "go-clamp",
+      "category": "go",
+      "title": "Implement integer clamp in a Go package",
+      "fixture": "fixtures/go-clamp",
+      "baselineCheck": "go-test",
+      "testEntry": "clamp_test.go",
+      "expectedChangedPaths": [
+        "clamp.go"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement Clamp(value, minimum, maximum int) int in clamp.go. Return minimum when value is smaller, maximum when greater, and value otherwise. Assume minimum is less than or equal to maximum. Do not edit tests or go.mod."
+    },
+    {
+      "id": "rust-key-normalize",
+      "category": "rust",
+      "title": "Implement normalized cache-key handling in Rust",
+      "fixture": "fixtures/rust-key-normalize",
+      "baselineCheck": "rust-test",
+      "testEntry": "tests/normalize.rs",
+      "expectedChangedPaths": [
+        "src/lib.rs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement normalize_key(value: &str) -> String in src/lib.rs. Return the input trimmed of leading and trailing Unicode whitespace and converted to lowercase using Rust's Unicode-aware lowercase conversion. Do not edit tests or Cargo.toml."
     }
   ]
 }
