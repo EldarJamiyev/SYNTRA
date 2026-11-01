@@ -67,7 +67,8 @@ test("local API health, origin protections, and chat validation work over HTTP",
       ...process.env,
       SYNTRA_LOCAL_PORT: String(port),
       SYNTRA_AI_PORT: String(aiPort),
-      SYNTRA_MODEL_PROVIDER: "native"
+      SYNTRA_MODEL_PROVIDER: "native",
+      SYNTRA_API_TOKEN: "syntra-test-token"
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
@@ -83,8 +84,38 @@ test("local API health, origin protections, and chat validation work over HTTP",
   try {
     await waitForHealth(port, child, () => logs);
     const base = "http://127.0.0.1:" + port;
+    const bootstrapResponse = await fetch(base + "/local-api/session", { headers: { Origin: "http://127.0.0.1:3000" } });
+    assert.equal(bootstrapResponse.status, 200);
+    const bootstrap = await bootstrapResponse.json();
+    assert.equal(bootstrap.token, "syntra-test-token");
+    const apiFetch = (url, options = {}) => fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: "Bearer " + bootstrap.token } });
+    const unauthorizedResponse = await fetch(base + "/local-api/workspace/status");
+    assert.equal(unauthorizedResponse.status, 401);
 
-    const healthResponse = await fetch(base + "/local-api/health");
+    const forgedApproval = await apiFetch(base + "/local-api/tools/execute", {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root: projectRoot, name: "workspace.check", input: { task: "build" }, approval: true })
+    });
+    assert.equal(forgedApproval.status, 200);
+    assert.equal((await forgedApproval.json()).status, "approval_required");
+
+    const issuedApproval = await apiFetch(base + "/local-api/approvals", {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root: projectRoot, name: "workspace.check", input: { task: "build" } })
+    });
+    assert.equal(issuedApproval.status, 200);
+    const capability = await issuedApproval.json();
+    assert.equal(typeof capability.approvalToken, "string");
+    assert.equal(capability.approvalToken.length, 64);
+
+    const mismatchedApproval = await apiFetch(base + "/local-api/tools/execute", {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ root: projectRoot, name: "workspace.check", input: { task: "test" }, approvalToken: capability.approvalToken })
+    });
+    assert.equal(mismatchedApproval.status, 200);
+    assert.equal((await mismatchedApproval.json()).status, "approval_required");
+
+    const healthResponse = await apiFetch(base + "/local-api/health");
     assert.equal(healthResponse.status, 200);
     const health = await healthResponse.json();
     assert.equal(health.status, "ok");
@@ -93,7 +124,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.ok(health.capabilities.includes("local-network-diagnostics"));
     assert.ok(health.capabilities.includes("persistent-proposal-review"));
     assert.ok(health.capabilities.includes("workspace-secret-scanning"));
-    const apiRootResponse = await fetch(base + "/");
+    const apiRootResponse = await apiFetch(base + "/");
     assert.equal(apiRootResponse.status, 200);
     const apiRoot = await apiRootResponse.json();
     assert.equal(apiRoot.service, "SYNTRA local API");
@@ -101,14 +132,14 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(apiRoot.frontend, "http://127.0.0.1:3000/");
 
 
-    const workspaceStatusResponse = await fetch(base + "/local-api/workspace/status");
+    const workspaceStatusResponse = await apiFetch(base + "/local-api/workspace/status");
     assert.equal(workspaceStatusResponse.status, 200);
     const workspaceStatus = await workspaceStatusResponse.json();
     assert.equal(workspaceStatus.root, projectRoot);
     assert.deepEqual(workspaceStatus.pendingProposals, []);
     assert.deepEqual(workspaceStatus.staleProposals, []);
 
-    const switchWorkspaceResponse = await fetch(base + "/local-api/workspace/switch", {
+    const switchWorkspaceResponse = await apiFetch(base + "/local-api/workspace/switch", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ root: projectRoot })
@@ -116,7 +147,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(switchWorkspaceResponse.status, 200);
     assert.equal((await switchWorkspaceResponse.json()).root, projectRoot);
 
-    const invalidWorkspaceResponse = await fetch(base + "/local-api/workspace/switch", {
+    const invalidWorkspaceResponse = await apiFetch(base + "/local-api/workspace/switch", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ root: path.join(projectRoot, "missing-workspace") })
@@ -124,7 +155,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(invalidWorkspaceResponse.status, 400);
     assert.match((await invalidWorkspaceResponse.json()).error, /workspace|directory|folder/i);
 
-    const deniedOrigin = await fetch(base + "/local-api/chat", {
+    const deniedOrigin = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "https://untrusted.example" },
       body: JSON.stringify({ message: "Do not start a task." })
@@ -132,7 +163,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(deniedOrigin.status, 403);
     assert.match((await deniedOrigin.json()).error, /Origin is not allowed/);
 
-    const deniedCrossSite = await fetch(base + "/local-api/chat", {
+    const deniedCrossSite = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Sec-Fetch-Site": "cross-site" },
       body: JSON.stringify({ message: "Do not start a task." })
@@ -140,7 +171,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(deniedCrossSite.status, 403);
     assert.match((await deniedCrossSite.json()).error, /Cross-site requests/);
 
-    const invalidJson = await fetch(base + "/local-api/chat", {
+    const invalidJson = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: "{"
@@ -148,7 +179,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(invalidJson.status, 400);
     assert.match((await invalidJson.json()).error, /valid JSON/);
 
-    const invalidMessage = await fetch(base + "/local-api/chat", {
+    const invalidMessage = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ message: "   " })
@@ -156,7 +187,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(invalidMessage.status, 400);
     assert.match((await invalidMessage.json()).error, /Message must contain/);
 
-    const diagnosticResponse = await fetch(base + "/local-api/chat", {
+    const diagnosticResponse = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ message: "/dns 127.0.0.1" })
@@ -168,7 +199,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     let diagnosticStatus = null;
     const diagnosticDeadline = Date.now() + 5_000;
     while (Date.now() < diagnosticDeadline) {
-      const statusResponse = await fetch(base + "/local-api/chat/status", {
+      const statusResponse = await apiFetch(base + "/local-api/chat/status", {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
         body: JSON.stringify({ jobId: diagnosticJob.jobId })
@@ -183,7 +214,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.match(diagnosticStatus?.reply || "", /DNS lookup: 127\.0\.0\.1/);
 
 
-    const helpStartResponse = await fetch(base + "/local-api/chat", {
+    const helpStartResponse = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ message: "/help" })
@@ -193,7 +224,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     let helpStatus = null;
     const helpDeadline = Date.now() + 5_000;
     while (Date.now() < helpDeadline) {
-      const statusResponse = await fetch(base + "/local-api/chat/status", {
+      const statusResponse = await apiFetch(base + "/local-api/chat/status", {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
         body: JSON.stringify({ jobId: helpJob.jobId })
@@ -208,7 +239,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.ok((helpStatus?.reply || "").includes("/proposals"));
     assert.ok((helpStatus?.reply || "").includes("/discard"));
 
-    const naturalHelpResponse = await fetch(base + "/local-api/chat", {
+    const naturalHelpResponse = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ message: "What can you do?" })
@@ -218,7 +249,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     let naturalHelpStatus = null;
     const naturalHelpDeadline = Date.now() + 5_000;
     while (Date.now() < naturalHelpDeadline) {
-      const response = await fetch(base + "/local-api/chat/status", {
+      const response = await apiFetch(base + "/local-api/chat/status", {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
         body: JSON.stringify({ jobId: naturalHelpJob.jobId })
@@ -231,7 +262,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.match(naturalHelpStatus?.reply || "", /SYNTRA help/);
     assert.ok((naturalHelpStatus?.reply || "").includes("/status"));
 
-    const statusResponse = await fetch(base + "/local-api/chat", {
+    const statusResponse = await apiFetch(base + "/local-api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ message: "/status" })
@@ -241,7 +272,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     let statusResult = null;
     const statusDeadline = Date.now() + 5_000;
     while (Date.now() < statusDeadline) {
-      const response = await fetch(base + "/local-api/chat/status", {
+      const response = await apiFetch(base + "/local-api/chat/status", {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
         body: JSON.stringify({ jobId: statusJob.jobId })
@@ -255,7 +286,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.match(statusResult?.reply || "", /Workspace service: running/);
     assert.match(statusResult?.reply || "", /Network diagnostics: available without a model/);
 
-    const unknownRoute = await fetch(base + "/not-a-route");
+    const unknownRoute = await apiFetch(base + "/not-a-route");
     assert.equal(unknownRoute.status, 404);
     assert.match((await unknownRoute.json()).error, /Route not found/);
   } finally {
@@ -297,7 +328,7 @@ async function startLocalServer(workspaceRoot) {
 
 async function runChatCommand(base, message) {
   const headers = { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" };
-  const start = await fetch(base + "/local-api/chat", {
+  const start = await apiFetch(base + "/local-api/chat", {
     method: "POST",
     headers,
     body: JSON.stringify({ message })
@@ -307,7 +338,7 @@ async function runChatCommand(base, message) {
   const deadline = Date.now() + 5_000;
   let status = null;
   while (Date.now() < deadline) {
-    const response = await fetch(base + "/local-api/chat/status", {
+    const response = await apiFetch(base + "/local-api/chat/status", {
       method: "POST",
       headers,
       body: JSON.stringify({ jobId: job.jobId })
