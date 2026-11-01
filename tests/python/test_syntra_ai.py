@@ -245,6 +245,55 @@ class TransformerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "512 KiB field limit"):
                 load_instruction_examples(huge_field, seq_len=32, tokenizer=tokenizer)
 
+    def test_instruction_split_is_deterministic_and_keeps_repeated_prompts_together(self):
+        from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
+
+        rows = [
+            {"prompt": "Describe addition", "completion": "Add two numeric values."},
+            {"prompt": "Explain maximum", "completion": "Return the larger value."},
+            {"prompt": "  describe   ADDITION  ", "completion": "Add two numeric values."},
+            {"prompt": "Explain minimum", "completion": "Return the smaller value."},
+        ]
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-split-") as temp:
+            dataset = Path(temp) / "instructions.jsonl"
+            dataset.write_text("\\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
+            training, validation, quality = split_instruction_examples(examples)
+            training_groups = {item["prompt_group_id"] for item in training}
+            validation_groups = {item["prompt_group_id"] for item in validation}
+
+            self.assertTrue(training)
+            self.assertTrue(validation)
+            self.assertFalse(training_groups & validation_groups, "normalized prompts must not cross train/validation")
+            self.assertEqual(quality["unique_prompt_count"], 3)
+            self.assertEqual(quality["repeated_prompt_example_count"], 1)
+            self.assertEqual(quality["exact_duplicate_example_count"], 1)
+            self.assertEqual(quality["prompt_leakage_groups"], 0)
+            self.assertTrue(any("Low prompt diversity" in warning for warning in quality["warnings"]))
+            self.assertTrue(any("exact prompt/completion duplicate" in warning for warning in quality["warnings"]))
+
+            _, repeated_validation, repeated_quality = split_instruction_examples(examples)
+            self.assertEqual(
+                {item["prompt_group_id"] for item in repeated_validation},
+                validation_groups,
+                "the same dataset and seed must produce the same held-out prompt groups",
+            )
+            self.assertEqual(repeated_quality, quality)
+
+    def test_instruction_split_rejects_datasets_with_only_one_unique_prompt(self):
+        from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
+
+        rows = [
+            {"prompt": "Explain addition", "completion": "Add values."},
+            {"prompt": "  EXPLAIN   ADDITION ", "completion": "Sum values."},
+        ]
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-one-prompt-") as temp:
+            dataset = Path(temp) / "instructions.jsonl"
+            dataset.write_text("\\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
+            with self.assertRaisesRegex(ValueError, "two distinct normalized prompts"):
+                split_instruction_examples(examples)
+
     def test_checkpoint_file_budget_rejects_oversized_loads(self):
         from syntra_ai.resources import validate_checkpoint_load_budget
 
