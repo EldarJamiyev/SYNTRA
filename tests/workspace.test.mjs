@@ -7,6 +7,9 @@ import path from "node:path";
 import {
   applyFileProposal,
   applyFileProposals,
+  buildDockerCheckArgs,
+  createAgentRun,
+  updateAgentRun,
   chooseCheck,
   createProjectPlan,
   discoverProjectChecks,
@@ -453,4 +456,38 @@ test("AI-generated proposal rejects a source file that changed after generation"
     () => proposeFileChange(root, "src/network.ts", proposalContent, loaded.sha256),
     /changed after SYNTRA read it for generation/
   );
+});
+
+test("Docker verification arguments enforce a restricted candidate-only container", () => {
+  const root = path.resolve("candidate-workspace");
+  const args = buildDockerCheckArgs(root, "node:20-bookworm-slim", "npm test");
+  const required = [
+    "--init", "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
+    "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g",
+    "--memory-swap=2g", "--cpus=2", "nofile=1024:1024", "noexec,nosuid",
+    "type=bind,source=" + root + ",target=/workspace"
+  ];
+  for (const value of required) assert.ok(args.includes(value), "missing Docker restriction: " + value);
+  assert.ok(!args.includes("--privileged"));
+  assert.throws(() => buildDockerCheckArgs(root, "unknown:latest", "npm test"), /allowlist/);
+  assert.throws(() => buildDockerCheckArgs(root, "node:20-bookworm-slim", ""), /command is invalid/);
+});
+
+test("agent run iteration and checkpoint counters survive values above the legacy limit", async () => {
+  const root = await createTempProject();
+  try {
+    const run = await createAgentRun(root, "Run a long bounded engineering task.");
+    const updated = await updateAgentRun(root, run.id, {
+      iteration: 96,
+      checkpoint: { stage: "slice_started", iteration: 96 },
+      model: { provider: "ollama", name: "test", contextWindowTokens: 4096,
+        contextBudgetTokens: 2800, outputBudgetTokens: 900,
+        executionBudget: { complexityScore: 12, maxSlices: 8, maxIterations: 3, maxTotalAttempts: 24 } }
+    });
+    assert.equal(updated.iteration, 96);
+    assert.equal(updated.checkpoint.iteration, 96);
+    assert.equal(updated.model.executionBudget.maxTotalAttempts, 24);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });

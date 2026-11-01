@@ -1011,7 +1011,15 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
       contextBudgetTokens: Number.isFinite(patch.model.contextBudgetTokens)
         ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextBudgetTokens))) : 0,
       outputBudgetTokens: Number.isFinite(patch.model.outputBudgetTokens)
-        ? Math.max(0, Math.min(100_000, Math.floor(patch.model.outputBudgetTokens))) : 0
+        ? Math.max(0, Math.min(100_000, Math.floor(patch.model.outputBudgetTokens))) : 0,
+      ...(patch.model.executionBudget && typeof patch.model.executionBudget === "object" ? {
+        executionBudget: {
+          complexityScore: Math.max(0, Math.min(100, Math.floor(Number(patch.model.executionBudget.complexityScore) || 0))),
+          maxSlices: Math.max(1, Math.min(8, Math.floor(Number(patch.model.executionBudget.maxSlices) || 1))),
+          maxIterations: Math.max(1, Math.min(6, Math.floor(Number(patch.model.executionBudget.maxIterations) || 1))),
+          maxTotalAttempts: Math.max(1, Math.min(24, Math.floor(Number(patch.model.executionBudget.maxTotalAttempts) || 1)))
+        }
+      } : {})
     };
   }
   if (typeof patch.phase === "string") next.phase = patch.phase.slice(0, 64);
@@ -1067,7 +1075,7 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
     next.checkpoint = {
       stage: String(patch.checkpoint.stage || next.checkpoint?.stage || "unknown").slice(0, 64),
       iteration: Number.isInteger(patch.checkpoint.iteration)
-        ? Math.max(0, Math.min(20, patch.checkpoint.iteration))
+        ? Math.max(0, Math.min(128, patch.checkpoint.iteration))
         : next.iteration
     };
   }
@@ -1768,6 +1776,27 @@ export async function discoverProjectChecks(inputRoot) {
   return { root, checks, unavailable };
 }
 
+export function buildDockerCheckArgs(root, image, command) {
+  const allowedImages = new Set([
+    "node:20-bookworm-slim", "python:3.11-slim", "golang:1.23",
+    "rust:1.84", "mcr.microsoft.com/dotnet/sdk:8.0"
+  ]);
+  if (typeof root !== "string" || !path.isAbsolute(root)) throw new Error("Docker candidate workspace path must be absolute.");
+  if (!allowedImages.has(image)) throw new Error("Docker verification image is not in SYNTRA's allowlist.");
+  if (typeof command !== "string" || !command.trim() || command.length > 12000 || command.includes("\\0")) {
+    throw new Error("Docker verification command is invalid.");
+  }
+  return [
+    "run", "--rm", "--init", "--network=none", "--ipc=private",
+    "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+    "--pids-limit=128", "--memory=2g", "--memory-swap=2g", "--cpus=2",
+    "--ulimit", "nofile=1024:1024",
+    "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m", "--env", "HOME=/tmp",
+    "--mount", "type=bind,source=" + root + ",target=/workspace",
+    "--workdir", "/workspace", image, "/bin/sh", "-lc", command
+  ];
+}
+
 export async function runProjectCheck(inputRoot, task, options = {}) {
   const root = await resolveWorkspace(inputRoot);
   const packageJson = await readJsonIfPresent(root, "package.json");
@@ -1811,13 +1840,7 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
         let command = selected.command;
         if (selected.kind === "python-pytest" || selected.kind === "python-unittest") command = "python " + selected.args.map(value => JSON.stringify(value)).join(" ");
         else if (selected.kind === "node-test") command = "node --test";
-        const dockerArgs = [
-          "run", "--rm", "--network=none", "--read-only", "--cap-drop=ALL",
-          "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g", "--cpus=2",
-          "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m", "--env", "HOME=/tmp",
-          "--mount", "type=bind,source=" + root + ",target=/workspace",
-          "--workdir", "/workspace", image, "/bin/sh", "-lc", command
-        ];
+        const dockerArgs = buildDockerCheckArgs(root, image, command);
         child = spawn("docker", dockerArgs, spawnOptions);
       } else if (selected.kind === "npm-script" && process.platform === "win32") {
         child = spawn("cmd.exe", ["/d", "/s", "/c", selected.command], spawnOptions);

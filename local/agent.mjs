@@ -428,7 +428,7 @@ async function planImplementationSlices({
     throw new Error("Implementation slice plan exceeds the bounded planning context.");
   }
   const generated = await modelJson(modelRequest, "/model/generate", {
-    prompt, max_new_tokens: 384, temperature: 0.1, top_k: 20, device: "auto"
+    prompt, max_new_tokens: 768, temperature: 0.1, top_k: 20, device: "auto"
   }, 120000, signal);
   return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
 }
@@ -1252,7 +1252,7 @@ export async function runAgentTask({
   const executionBudget = deriveAgentBudget(goal, inventory, { maxIterations, maxSlices });
   maxIterations = executionBudget.maxIterations;
   maxSlices = executionBudget.maxSlices;
-  let totalPatchAttempts = 0;
+  let totalPatchAttempts = Math.max(0, Math.floor(Number(resumeIteration) || 1) - 1);
   let resumeCandidateState = null;
   if (resumeCandidate) {
     try {
@@ -1353,10 +1353,8 @@ export async function runAgentTask({
 
   try {
     let savedPatch = resumePatch && typeof resumePatch === "object" ? resumePatch : null;
-    const firstIteration = Math.max(1, Math.min(MAX_ITERATIONS, Number(resumeIteration) || 1));
-    let iteration = resumeCandidateState
-      ? Math.max(0, Number(attempts.at(-1)?.iteration) || 0)
-      : firstIteration - 1;
+    const firstIteration = Math.max(1, Math.min(128, Number(resumeIteration) || 1));
+    let iteration = Math.max(firstIteration - 1, Number(attempts.at(-1)?.iteration) || 0);
     let activePatchRoot = root;
     let stopAfterSlice = false;
     const touchedPaths = new Set();

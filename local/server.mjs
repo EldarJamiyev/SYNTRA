@@ -645,7 +645,9 @@ async function runChatTurn(jobId, message, history, signal) {
         runChecks: true,
         signal,
         resumePatch: resumeRecord?.recoveryPatch || null,
-        resumeIteration: resumeRecord?.checkpoint?.iteration || 1,
+        resumeIteration: resumeRecord
+          ? Math.max(1, Number(resumeRecord.iteration || resumeRecord.checkpoint?.iteration || 0) + 1)
+          : 1,
         resumeBaseHashes: resumeRecord?.recoveryPatch
           ? Object.fromEntries((resumeRecord.changedFiles || []).map(change => [change.path, change.baseHash ?? null]))
           : null,
