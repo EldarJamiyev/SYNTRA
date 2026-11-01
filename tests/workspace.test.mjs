@@ -81,6 +81,27 @@ test("check discovery reports only runners that are actually configured", async 
   }
 });
 
+test("mixed Python and Node test ecosystems produce one complete multi-runner plan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-mixed-runners-"));
+  try {
+    await fs.writeFile(path.join(root, "requirements.txt"), "\n");
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "tests", "test_python.py"), "def test_python(): pass\n");
+    await fs.writeFile(path.join(root, "tests", "node.test.mjs"),
+      "import test from 'node:test'; test('node runner', () => {});\n");
+    const selected = await chooseCheck(root, "test", null);
+    assert.equal(selected.kind, "multi-runner");
+    assert.deepEqual(selected.runners.map(item => item.kind), ["python-unittest", "node-test"]);
+    const commands = buildVerificationCommand(root, selected, {
+      platform: "linux", environment: { PATH: "/usr/bin" }
+    });
+    assert.equal(commands.length, 2);
+    assert.deepEqual(commands.map(item => item.image), ["python:3.11-slim", "node:20-bookworm-slim"]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("search returns matching paths and line numbers", async () => {
   const root = await createTempProject();
   const results = await searchWorkspace(root, "resolveGateway");

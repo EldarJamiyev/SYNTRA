@@ -559,6 +559,7 @@ function summarizeOutput(name, output) {
       return {
         supportedTasks: output.checks.map(check => check.task),
         runnerKinds: output.checks.map(check => check.kind),
+        runnerLabels: output.checks.map(check => check.label),
         unavailableTasks: output.unavailable.map(item => item.task),
         executionMode: output.executionMode
       };

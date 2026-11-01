@@ -1664,7 +1664,7 @@ export async function chooseCheck(root, task, packageJson) {
     if (dotnetSolution) builders.push(executableCheck("command", "dotnet", ["build"], ".NET solution"));
     else if (dotnetProjects.length === 1) builders.push(executableCheck("command", "dotnet", ["build", dotnetProjects[0]], ".NET project"));
     if (builders.length === 1) return builders[0];
-    if (builders.length > 1) throw new Error("Multiple build systems were detected. Add an explicit build script to package.json so SYNTRA can run the intended build.");
+    if (builders.length > 1) return { kind: "multi-runner", command: "multiple build runners", label: "Multiple build systems", runners: builders };
   }
 
   if (task === "test") {
@@ -1709,9 +1709,7 @@ export async function chooseCheck(root, task, packageJson) {
     if (jsFiles.length > 0) testRunners.push(executableCheck("node-test", "node", ["--test"], "Node.js"));
 
     if (testRunners.length === 1) return testRunners[0];
-    if (testRunners.length > 1) {
-      throw new Error("Multiple test ecosystems were detected without a configured test script. Add a package.json test script or specify one test runner to avoid reporting a partial test pass as full verification.");
-    }
+    if (testRunners.length > 1) return { kind: "multi-runner", command: "multiple test runners", label: "Multiple test ecosystems", runners: testRunners };
     if (isPythonProject && pythonFiles.length === 0) {
       throw new Error("A Python project was detected, but no test_*.py or *_test.py files were found. SYNTRA cannot call this a verified test pass.");
     }
@@ -1791,6 +1789,12 @@ export function buildVerificationCommand(root, selected, {
   environment = process.env
 } = {}) {
   if (!selected || typeof selected !== "object") throw new Error("A supported verification runner is required.");
+  if (selected.kind === "multi-runner") {
+    if (!Array.isArray(selected.runners) || selected.runners.length < 1 || selected.runners.length > 8) {
+      throw new Error("The multi-runner verification plan is invalid.");
+    }
+    return selected.runners.map(runner => buildVerificationCommand(root, runner, { allowUntrustedHost, platform, environment }));
+  }
   if (allowUntrustedHost) {
     let executable;
     let args;
@@ -1846,13 +1850,7 @@ export function buildVerificationCommand(root, selected, {
   };
 }
 
-export async function runProjectCheck(inputRoot, task, options = {}) {
-  const root = await resolveWorkspace(inputRoot);
-  const packageJson = await readJsonIfPresent(root, "package.json");
-  const selected = await chooseCheck(root, task, packageJson);
-  const execution = buildVerificationCommand(root, selected, {
-    allowUntrustedHost: process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS === "true"
-  });
+async function runVerificationExecution(root, task, selected, execution, options = {}) {
   const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
   if (options.signal?.aborted) {
     const error = new Error("Project check was cancelled before it started.");
@@ -1934,6 +1932,54 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
     });
   });
 }
+
+
+export async function runProjectCheck(inputRoot, task, options = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  const packageJson = await readJsonIfPresent(root, "package.json");
+  const selected = await chooseCheck(root, task, packageJson);
+  const runners = selected.kind === "multi-runner" ? selected.runners : [selected];
+  const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
+  const startedAt = Date.now();
+  const checks = [];
+  const allowUntrustedHost = process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS === "true";
+
+  for (const runner of runners) {
+    const remaining = timeoutMs - (Date.now() - startedAt);
+    const execution = buildVerificationCommand(root, runner, { allowUntrustedHost });
+    if (remaining <= 0) {
+      checks.push({
+        root, task, command: execution.command, executionMode: execution.mode,
+        image: execution.image || null, exitCode: null, passed: false,
+        timedOut: true, durationMs: 0,
+        output: "The overall verification time budget was exhausted before this runner started."
+      });
+      continue;
+    }
+    checks.push(await runVerificationExecution(root, task, runner, execution, {
+      ...options, timeoutMs: remaining
+    }));
+  }
+
+  const passed = checks.length === runners.length && checks.every(item => item.passed);
+  const firstFailure = checks.find(item => !item.passed);
+  const modes = [...new Set(checks.map(item => item.executionMode))];
+  const labels = runners.map(item => item.label || item.command || item.kind);
+  const output = checks.map((item, index) => "[" + labels[index] + "]\n" + item.output)
+    .join("\n\n").slice(0, MAX_OUTPUT);
+  return {
+    root, task,
+    command: checks.map(item => item.command).join(" && "),
+    executionMode: modes.length === 1 ? modes[0] : "mixed",
+    exitCode: passed ? 0 : (firstFailure?.exitCode ?? 1),
+    passed,
+    timedOut: checks.some(item => item.timedOut),
+    durationMs: Date.now() - startedAt,
+    output,
+    checks
+  };
+}
+
 
 export const workspaceLimits = {
   maxFileBytes: MAX_TEXT_BYTES,
