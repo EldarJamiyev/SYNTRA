@@ -681,7 +681,7 @@ async function runModelSelectedReadOnlyTools({
       priorContext: fragments.join("\n"),
       previousCalls: selectedCalls
     });
-    const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+    const tokenInfo = await modelJson(reviewerRequest, "/model/tokenize", { text: prompt }, 30000, signal);
     if (Number(tokenInfo.token_count) > Math.min(contextBudget, 1800)) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
@@ -1495,7 +1495,7 @@ export async function runAgentTask({
         }
 
         let patchReview = null;
-        if (modelSelfReview && !resumingSavedPatch) {
+        if (modelSelfReview) {
           try {
             await emitProgress({
               phase: "patch-self-review",
@@ -1574,7 +1574,7 @@ export async function runAgentTask({
           }
         }
 
-        if (modelSelfReview && !resumingSavedPatch && patchReview?.status !== "accepted") {
+        if (modelSelfReview && patchReview?.status !== "accepted") {
           const detail = patchReview?.detail || "The reviewer did not return a validated accepted verdict.";
           feedback = "Patch review is required before verification. The review was unavailable or incomplete, so this candidate will not be verified or proposed. " + detail;
           attempts.push({

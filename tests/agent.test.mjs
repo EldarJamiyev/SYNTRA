@@ -160,6 +160,7 @@ test("agent implements and verifies multiple slices against one cumulative candi
     assert.ok(result.implementationSlices.every(slice => slice.status === "completed"));
     assert.equal(result.verification.status, "passed");
     assert.equal(result.verification.passed, true);
+    assert.equal(separateReviewerRequests, 4, "review tokenization and generation must both use the separate reviewer bridge");
     assert.equal(result.proposals.length, 2);
     assert.deepEqual(result.changedFiles.map(file => file.path).sort(), ["src/description.js", "src/value.js"]);
     assert.ok(result.observations.some(item =>
@@ -721,6 +722,7 @@ test("independent patch review rejects an incomplete patch and feeds findings in
   const root = await createProject();
   let patchCalls = 0;
   let reviewCalls = 0;
+  let separateReviewerRequests = 0;
   const patchPrompts = [];
   const modelRequest = async (method, route, body) => {
     if (method === "GET" && route === "/model/status") {
@@ -808,7 +810,14 @@ test("independent patch review rejects an incomplete patch and feeds findings in
       maxIterations: 2,
       runChecks: false,
       modelSelfReview: true,
-      modelRequest
+      modelRequest,
+      reviewModelRequest: async (method, route, body, timeoutMs, options) => {
+        separateReviewerRequests += 1;
+        const result = await modelRequest(method, route, body, timeoutMs, options);
+        return route === "/model/generate"
+          ? { ...result, provider: "ollama-local", model_name: "syntra-test-reviewer:latest" }
+          : { ...result, provider: "ollama-local", model_name: "syntra-test-reviewer:latest", context_window_tokens: 4096 };
+      }
     });
     assert.equal(patchCalls, 2, JSON.stringify({
       reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
@@ -822,7 +831,8 @@ test("independent patch review rejects an incomplete patch and feeds findings in
     assert.deepEqual(result.proposals.map(item => item.path).sort(), ["src/value.js", "tests/value.test.js"]);
     assert.ok(result.attempts.some(item => item.status === "self_review_rejected"));
     assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "rejected"));
-    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted_same_model"));
+    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted_separate_model"));
+    assert.ok(result.attempts.some(item => item.reviewUsedSeparateModel === true));
     assert.ok(patchPrompts[1].includes("tests/value.test.js"));
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     assert.match(await fs.readFile(path.join(root, "tests", "value.test.js"), "utf8"), /value is two/);

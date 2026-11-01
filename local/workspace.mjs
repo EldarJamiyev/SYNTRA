@@ -620,7 +620,6 @@ async function rotateAuditLog(auditPath) {
     throw error;
   }
   if (info.isSymbolicLink() || !info.isFile()) throw new Error("Workspace audit log must be a regular file.");
-  if (info.size <= MAX_AUDIT_LOG_BYTES) return;
   for (let index = MAX_AUDIT_LOG_ARCHIVES; index >= 1; index -= 1) {
     const source = index === 1 ? auditPath : auditPath + "." + (index - 1);
     const target = auditPath + "." + index;

@@ -38,7 +38,7 @@ function createModelRequest(requestedModel = null) {
   let providerPromise = null;
   const aiBase = process.env.SYNTRA_BENCHMARK_AI_BASE || "http://127.0.0.1:" + Number(process.env.SYNTRA_AI_PORT || 3002);
   return async (method, route, body, timeoutMs, options = {}) => {
-    if (!providerPromise) providerPromise = detectLocalModel(requestedModel ? { requestedModel } : undefined);
+    if (!providerPromise) providerPromise = detectLocalModel(requestedModel ? { mode: "ollama", requestedModel } : undefined);
     const provider = await providerPromise;
     if (requestedModel && !provider) throw new Error("SYNTRA_REVIEW_MODEL must name an installed local Ollama model.");
     if (provider) return handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, signal: options.signal });

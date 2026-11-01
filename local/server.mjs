@@ -73,7 +73,7 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
     let provider = await detectLocalModel();
     let modelBody = body || {};
     if (typeof modelBody.model === "string" && modelBody.model.trim()) {
-      const requested = await detectLocalModel({ requestedModel: modelBody.model.trim() });
+      const requested = await detectLocalModel({ mode: "ollama", requestedModel: modelBody.model.trim() });
       if (!requested) throw new Error("The configured SYNTRA_REVIEW_MODEL is not installed locally or exceeds the safe memory-selection limit.");
       provider = requested;
       modelBody = { ...modelBody };
