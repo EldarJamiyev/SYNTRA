@@ -4,6 +4,7 @@ export const CHAT_SESSIONS_KEY = "syntra-chat-sessions-v1";
 export const MAX_CHAT_SESSIONS = 24;
 export const MAX_SESSION_MESSAGES = 60;
 export const MAX_SESSION_TEXT_CHARS = 280_000;
+export const MAX_SESSION_AGE_DAYS = 30;
 
 function resolveStorage(storage) {
   if (storage) return storage;
@@ -55,17 +56,20 @@ export function normalizeSessionState(value) {
     && value.version === 1 && Array.isArray(value.sessions)
     ? value.sessions
     : [];
+  const fallbackTimestamp = new Date().toISOString();
+  const retentionCutoff = Date.now() - MAX_SESSION_AGE_DAYS * 86400000;
   const candidates = rawSessions
     .filter(item => item && typeof item === "object" && !Array.isArray(item) && validId(item.id))
     .map(item => ({
       id: item.id,
-      createdAt: validTimestamp(item.createdAt, new Date(0).toISOString()),
-      updatedAt: validTimestamp(item.updatedAt, validTimestamp(item.createdAt, new Date(0).toISOString())),
+      createdAt: validTimestamp(item.createdAt, fallbackTimestamp),
+      updatedAt: validTimestamp(item.updatedAt, validTimestamp(item.createdAt, fallbackTimestamp)),
       title: typeof item.title === "string" && item.title.trim()
         ? item.title.trim().slice(0, 80)
         : titleFromMessages(item.messages),
       messages: normalizeMessages(item.messages)
     }))
+    .filter(item => Date.parse(item.updatedAt) >= retentionCutoff)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   const sessions = [];
@@ -130,7 +134,10 @@ export function loadSessionState(storage) {
 
   try {
     const stored = parseStoredSessionState(target.getItem(CHAT_SESSIONS_KEY));
-    if (stored) return stored;
+    if (stored) {
+      saveSessionState(stored, target);
+      return stored;
+    }
   } catch {}
 
   // One-time migration from the original single-thread history key.
