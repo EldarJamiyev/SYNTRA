@@ -223,7 +223,7 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "what is add?", "completion": "def add(a, b): return a+b"},
                 {"prompt": "what is max?", "completion": "def max2(a, b): return max(a, b)"},
             ]
-            dataset.write_text("\\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "max_examples must be between"):
                 load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_examples=MAX_INSTRUCTION_EXAMPLES + 1)
             with self.assertRaisesRegex(ValueError, "max_tokens must be between"):
@@ -256,7 +256,7 @@ class TransformerTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory(prefix="syntra-instruction-split-") as temp:
             dataset = Path(temp) / "instructions.jsonl"
-            dataset.write_text("\\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
             examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
             training, validation, quality = split_instruction_examples(examples)
             training_groups = {item["prompt_group_id"] for item in training}
@@ -289,7 +289,7 @@ class TransformerTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory(prefix="syntra-instruction-one-prompt-") as temp:
             dataset = Path(temp) / "instructions.jsonl"
-            dataset.write_text("\\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
             examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
             with self.assertRaisesRegex(ValueError, "two distinct normalized prompts"):
                 split_instruction_examples(examples)
