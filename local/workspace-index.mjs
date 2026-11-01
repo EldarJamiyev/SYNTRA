@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+let typescriptParser = null;
+try { typescriptParser = require("typescript"); } catch {}
 import {
   ensureWorkspaceStateDirectory,
   getWorkspaceStateDirectory,
