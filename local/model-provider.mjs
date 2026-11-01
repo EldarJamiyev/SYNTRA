@@ -286,9 +286,8 @@ export function getProviderStatus(provider) {
 }
 
 function estimateTokens(text) {
-  // Deliberately conservative byte-based estimate for budgeting only; the local
-  // runtime's tokenizer remains the source of exact token counts for native mode.
-  return Math.max(1, Math.ceil(Buffer.byteLength(text, "utf8") / 3));
+  // Conservative budgeting estimate only; this is not the active model tokenizer.
+  return Math.max(1, Math.ceil((Buffer.byteLength(text, "utf8") / 3) * 1.2));
 }
 
 async function readOllamaStream(response, onToken) {
