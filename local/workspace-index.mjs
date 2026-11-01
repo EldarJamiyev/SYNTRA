@@ -8,11 +8,17 @@ import {
   listWorkspaceIndexCandidates,
   isWorkspacePathExcluded,
   readWorkspaceFile,
-  resolveWorkspace
+  resolveWorkspace,
+  searchWorkspace
 } from "./workspace.mjs";
 
 const INDEX_FILENAME = "workspace-index-v3.json";
 const INDEX_SCHEMA_VERSION = 3;
+const SEMANTIC_CACHE_FILENAME = "workspace-semantic-v1.json";
+const MAX_SEMANTIC_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_SEMANTIC_FILES = 48;
+const MAX_SEMANTIC_TEXT_CHARS = 3600;
+const MAX_EMBEDDING_BATCH = 32;
 const MAX_INDEX_CANDIDATES = 2000;
 const MAX_INDEX_SCAN_BYTES = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES = 4 * 1024 * 1024;
@@ -828,4 +834,300 @@ export async function searchWorkspaceSymbols(inputRoot, query, limit = 10) {
     truncated: index.truncated || validationLimitReached || ranked.length > selected.length && validationLimitReached,
     indexedAt: index.indexedAt
   };
+}
+
+
+function semanticEmbeddingText(file, content) {
+  const symbols = file.symbols.slice(0, 40).map(symbol => symbol.kind + " " + symbol.name).join("\n");
+  const relations = [
+    "Imports: " + file.imports.slice(0, 12).join(", "),
+    "Callers: " + file.calledBy.slice(0, 12).join(", "),
+    "Tests: " + file.ownedTests.slice(0, 8).join(", ")
+  ].join("\n");
+  return [
+    "Path: " + file.path,
+    "Role: " + file.role,
+    "Language: " + path.posix.extname(file.path).slice(1),
+    "Symbols: " + symbols,
+    relations,
+    "Source:\n" + content.slice(0, MAX_SEMANTIC_TEXT_CHARS)
+  ].join("\n");
+}
+
+function validSemanticVector(value, dimension = null) {
+  return Array.isArray(value)
+    && value.length >= 8 && value.length <= 4096
+    && (dimension === null || value.length === dimension)
+    && value.every(item => typeof item === "number" && Number.isFinite(item));
+}
+
+function semanticTextHash(value) {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+async function semanticCachePath(root, create = false) {
+  const directory = create
+    ? await ensureWorkspaceStateDirectory(root)
+    : await getWorkspaceStateDirectory(root);
+  return path.join(directory, SEMANTIC_CACHE_FILENAME);
+}
+
+async function readSemanticCache(root, model) {
+  const target = await semanticCachePath(root, false);
+  let info;
+  try { info = await fs.lstat(target); }
+  catch (error) {
+    if (error?.code === "ENOENT") return { dimension: null, entries: [] };
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error("The semantic source cache must be a regular file, not a symbolic link.");
+  }
+  if (info.size > MAX_SEMANTIC_CACHE_BYTES) {
+    throw new Error("The semantic source cache exceeds its 8 MB storage limit.");
+  }
+  let value;
+  try { value = JSON.parse(await fs.readFile(target, "utf8")); }
+  catch {
+    throw new Error("The semantic source cache contains invalid JSON and was not overwritten.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || value.schemaVersion !== 1 || value.root !== root
+    || typeof value.model !== "string" || !Array.isArray(value.entries)
+    || value.entries.length > MAX_SEMANTIC_FILES) {
+    throw new Error("The semantic source cache is invalid or belongs to another workspace.");
+  }
+  if (value.model !== model) return { dimension: null, entries: [] };
+  const dimension = Number.isInteger(value.dimension) && value.dimension >= 8 && value.dimension <= 4096
+    ? value.dimension : null;
+  const seen = new Set();
+  const entries = [];
+  for (const entry of value.entries) {
+    if (!entry || typeof entry !== "object" || !safeIndexedPath(entry.path)
+      || seen.has(entry.path) || !HASH_PATTERN.test(entry.sha256 || "")
+      || !validSemanticVector(entry.embedding, dimension)) {
+      throw new Error("The semantic source cache contains an invalid vector entry.");
+    }
+    seen.add(entry.path);
+    entries.push({ path: entry.path, sha256: entry.sha256, embedding: entry.embedding });
+  }
+  return { dimension, entries };
+}
+
+async function writeSemanticCache(root, model, dimension, entries) {
+  const target = await semanticCachePath(root, true);
+  let existing;
+  try {
+    existing = await fs.lstat(target);
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      throw new Error("The semantic source cache must be a regular file, not a symbolic link.");
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const serialized = JSON.stringify({
+    schemaVersion: 1, root, model, dimension,
+    updatedAt: new Date().toISOString(), entries
+  });
+  if (Buffer.byteLength(serialized, "utf8") > MAX_SEMANTIC_CACHE_BYTES) {
+    throw new Error("The semantic source cache exceeded its 8 MB storage limit.");
+  }
+  const temporary = target + "." + process.pid + "." + crypto.randomBytes(4).toString("hex") + ".tmp";
+  await fs.writeFile(temporary, serialized + "\n", { encoding: "utf8", flag: "wx" });
+  try { await fs.rename(temporary, target); }
+  catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+async function requestSourceEmbeddings(fetchImpl, model, inputs) {
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > MAX_EMBEDDING_BATCH) {
+    throw new Error("Local semantic embedding batches must contain 1-32 texts.");
+  }
+  const response = await fetchImpl("http://127.0.0.1:11434/api/embed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, input: inputs, truncate: false }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) throw new Error("Local Ollama semantic embedding request failed with HTTP " + response.status + ".");
+  const payload = await response.json();
+  if (!payload || !Array.isArray(payload.embeddings) || payload.embeddings.length !== inputs.length) {
+    throw new Error("Local Ollama returned an invalid semantic embedding response.");
+  }
+  const dimension = payload.embeddings[0]?.length;
+  if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
+    || !payload.embeddings.every(vector => validSemanticVector(vector, dimension))) {
+    throw new Error("Local Ollama returned invalid or inconsistent semantic vectors.");
+  }
+  return { dimension, embeddings: payload.embeddings };
+}
+
+function semanticCosineSimilarity(left, right) {
+  if (!validSemanticVector(left) || !validSemanticVector(right) || left.length !== right.length) return null;
+  let dot = 0, leftNorm = 0, rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftNorm += left[index] * left[index];
+    rightNorm += right[index] * right[index];
+  }
+  if (!leftNorm || !rightNorm) return null;
+  return dot / Math.sqrt(leftNorm * rightNorm);
+}
+
+function lexicalSourceScore(file, query) {
+  const words = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_$-]{2,}/gu) || [])].slice(0, 16);
+  if (!words.length) return 0;
+  const haystack = [
+    file.path, ...file.symbols.map(symbol => symbol.name + " " + symbol.signature),
+    ...file.imports, ...file.importedBy, ...file.calls, ...file.calledBy
+  ].join(" ").toLowerCase();
+  return words.reduce((score, word) => score + Math.min(5, haystack.split(word).length - 1), 0);
+}
+
+function semanticMetadata(file) {
+  return {
+    path: file.path,
+    role: file.role,
+    language: path.posix.extname(file.path).slice(1) || "text",
+    symbols: file.symbols.slice(0, 12).map(symbol => ({
+      name: symbol.name, kind: symbol.kind, line: symbol.line
+    })),
+    imports: file.imports.slice(0, 8),
+    importedBy: file.importedBy.slice(0, 8),
+    calls: file.calls.slice(0, 8),
+    calledBy: file.calledBy.slice(0, 8),
+    ownedTests: file.ownedTests.slice(0, 6),
+    testOwners: file.testOwners.slice(0, 4)
+  };
+}
+
+export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, options = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  if (typeof query !== "string" || query.trim().length < 2 || query.length > 300) {
+    throw new Error("Semantic source search query must contain 2-300 characters.");
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+    throw new Error("Semantic source search limit must be an integer from 1 to 20.");
+  }
+  const normalized = query.trim();
+  const model = String(options.embedModel ?? process.env.SYNTRA_EMBED_MODEL ?? "").trim();
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (!model) {
+    const lexical = await searchWorkspace(root, normalized, limit);
+    return {
+      available: true, root, query: normalized, retrievalMode: "lexical_fallback",
+      embeddingModel: null, semanticCoverage: 0, results: lexical.results.map(item => ({
+        ...item, role: path.posix.extname(item.path).toLowerCase() === ".test" ? "test" : "source"
+      }))
+    };
+  }
+  const index = await readIndex(root);
+  if (!index) {
+    const lexical = await searchWorkspace(root, normalized, limit);
+    return {
+      available: false, root, query: normalized, retrievalMode: "lexical_fallback",
+      embeddingModel: model, semanticCoverage: 0, reason: "workspace_index_unavailable",
+      results: lexical.results
+    };
+  }
+
+  const sourceFiles = index.files.filter(file => file.role === "source" || file.role === "test");
+  const candidates = [...sourceFiles].sort((left, right) => {
+    const leftStructure = left.symbols.length + left.imports.length * 2 + left.calledBy.length * 2 + left.ownedTests.length;
+    const rightStructure = right.symbols.length + right.imports.length * 2 + right.calledBy.length * 2 + right.ownedTests.length;
+    return rightStructure - leftStructure || left.path.localeCompare(right.path);
+  }).slice(0, MAX_SEMANTIC_FILES);
+  if (!candidates.length) {
+    return {
+      available: true, root, query: normalized, retrievalMode: "semantic",
+      embeddingModel: model, semanticCoverage: 0, results: [], truncated: false
+    };
+  }
+
+  try {
+    const currentFiles = [];
+    let staleFiles = 0;
+    for (const indexed of candidates) {
+      if (!(await safeIndexedPath(indexed.path)) || await isWorkspacePathExcluded(root, indexed.path)) {
+        staleFiles += 1;
+        continue;
+      }
+      try {
+        const current = await readWorkspaceFile(root, indexed.path);
+        if (current.sha256 !== indexed.sha256 || current.bytes !== indexed.size) {
+          staleFiles += 1;
+          continue;
+        }
+        const embeddingText = semanticEmbeddingText(indexed, current.content);
+        currentFiles.push({
+          indexed, content: current.content, sha256: current.sha256,
+          textHash: semanticTextHash(embeddingText), embeddingText
+        });
+      } catch {
+        staleFiles += 1;
+      }
+    }
+
+    const cache = await readSemanticCache(root, model);
+    const cacheByPath = new Map(cache.entries.map(entry => [entry.path, entry]));
+    const vectorsByPath = new Map();
+    const missing = [];
+    for (const item of currentFiles) {
+      const cached = cacheByPath.get(item.indexed.path);
+      if (cached && cached.sha256 === item.sha256 && cache.dimension
+        && validSemanticVector(cached.embedding, cache.dimension)) {
+        vectorsByPath.set(item.indexed.path, cached.embedding);
+      } else {
+        missing.push(item);
+      }
+    }
+
+    const inputs = [...missing.map(item => item.embeddingText), normalized];
+    const generated = [];
+    let dimension = cache.dimension;
+    for (let offset = 0; offset < inputs.length; offset += MAX_EMBEDDING_BATCH) {
+      const batch = await requestSourceEmbeddings(fetchImpl, model, inputs.slice(offset, offset + MAX_EMBEDDING_BATCH));
+      if (dimension !== null && dimension !== batch.dimension) {
+        throw new Error("The local semantic model returned a different vector dimension than the cached workspace index.");
+      }
+      dimension = batch.dimension;
+      generated.push(...batch.embeddings);
+    }
+    if (generated.length !== inputs.length) throw new Error("Local semantic embedding generation returned an incomplete vector set.");
+
+    missing.forEach((item, index) => vectorsByPath.set(item.indexed.path, generated[index]));
+    const queryEmbedding = generated[generated.length - 1];
+    const serializedEntries = currentFiles.filter(item => vectorsByPath.has(item.indexed.path)).map(item => ({
+      path: item.indexed.path, sha256: item.sha256, embedding: vectorsByPath.get(item.indexed.path)
+    }));
+    await writeSemanticCache(root, model, dimension, serializedEntries);
+
+    const results = currentFiles.map(item => {
+      const cosine = semanticCosineSimilarity(queryEmbedding, vectorsByPath.get(item.indexed.path));
+      return {
+        ...semanticMetadata(item.indexed),
+        sha256: item.sha256,
+        score: cosine === null ? 0 : Number(cosine.toFixed(6)),
+        excerpt: item.content.slice(0, 1600)
+      };
+    }).filter(item => item.score > 0)
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+      .slice(0, limit);
+    return {
+      available: true, root, query: normalized, retrievalMode: "semantic",
+      embeddingModel: model, semanticCoverage: serializedEntries.length,
+      indexedCandidates: sourceFiles.length, staleFiles,
+      truncated: sourceFiles.length > candidates.length,
+      results
+    };
+  } catch (error) {
+    const lexical = await searchWorkspace(root, normalized, limit);
+    return {
+      available: true, root, query: normalized, retrievalMode: "lexical_fallback",
+      embeddingModel: model, semanticCoverage: 0, semanticError: (error instanceof Error ? error.message : String(error)).slice(0, 240),
+      results: lexical.results
+    };
+  }
 }
