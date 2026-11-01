@@ -426,7 +426,7 @@ async function planImplementationSlices({
   if (Number(tokens.token_count) > Math.min(contextBudget, 1600)) {
     throw new Error("Implementation slice plan exceeds the bounded planning context.");
   }
-  const generated = await modelJson(reviewerRequest, "/model/generate", {
+  const generated = await modelJson(modelRequest, "/model/generate", {
     prompt, max_new_tokens: 384, temperature: 0.1, top_k: 20, device: "auto"
   }, 120000, signal);
   return validateImplementationSlicePlan(extractJsonObject(generated.text), goal, maxSlices);
