@@ -227,7 +227,10 @@ test("an incomplete later slice cannot inherit an earlier passing verification s
       runChecks: true,
       modelRequest
     });
-    assert.equal(patchCalls, 2);
+    assert.equal(patchCalls, 2, JSON.stringify({
+      reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
+      attempts: result.attempts
+    }));
     assert.equal(result.implementationSlices[0].status, "completed");
     assert.equal(result.implementationSlices[1].status, "blocked");
     assert.equal(result.verification.status, "slice_incomplete");
