@@ -9,7 +9,7 @@ test("versioned benchmark manifest contains representative coding tasks", async 
   const { suite } = await loadBenchmarkSuite();
   assert.equal(suite.version, "1.3.0");
   assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp","string-slugify","config-deep-merge","positive-integer","array-chunk","multi-file-request-validation","python-duration-format","typescript-contract-consistency"]);
-  assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 6);
+  assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 7);
   assert.equal(suite.tasks.find(task => task.id === "multi-file-request-validation").expectedChangedPaths.length, 2);
   assert.equal(suite.tasks.find(task => task.id === "python-duration-format").baselineCheck, "python-unittest");
   assert.equal(suite.tasks.find(task => task.id === "typescript-contract-consistency").baselineCheck, "typescript");
@@ -35,7 +35,7 @@ test("TypeScript baseline invokes the installed compiler and detects then clears
     const failing = await runTypeScriptBaselineCheck(root, "tsconfig.json");
     assert.equal(failing.passed, false);
     assert.notEqual(failing.exitCode, 0);
-    assert.match(failing.stdout + failing.stderr, /name/);
+    assert.match(failing.stdout + failing.stderr, /Type 'number' is not assignable to type 'string'/);
     await fs.writeFile(sourcePath, "export interface Profile { name: string }\nexport const profile: Profile = { name: \"SYNTRA\" };\n");
     const passing = await runTypeScriptBaselineCheck(root, "tsconfig.json");
     assert.equal(passing.passed, true, passing.stdout + passing.stderr);
