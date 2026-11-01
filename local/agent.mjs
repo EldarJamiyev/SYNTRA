@@ -1784,7 +1784,16 @@ export async function runAgentTask({
         finalVerification = {
           status: verificationStatus,
           passed: allPassed, checks,
-          sandbox: { filesCopied: snapshot.filesCopied, bytesCopied: snapshot.bytesCopied },
+          checkCoverage: {
+            scope: "available_project_checks_only",
+            executed: checks.map(item => item.task),
+            unavailable: unavailableChecks.map(item => ({ task: item.task, reason: String(item.reason || "").slice(0, 400) })),
+            complete: unavailableChecks.length === 0
+          },
+          ...(unavailableChecks.length ? {
+            note: "Only available project checks were executed. Missing or unsupported checks remain unverified; a passing result does not imply full build, lint, type, or security coverage."
+          } : {}),
+          sandbox: { filesCopied: snapshot.filesCopied, bytesCopied: snapshot.bytesCopied, isolation: process.env.SYNTRA_CHECK_ISOLATION === "docker" ? "docker-network-disabled" : "trusted-host-opt-in" },
           ...(reviewReasons.length ? { reviewRequiredReasons: reviewReasons } : {})
         };
         attempts[attempts.length - 1].status = allPassed
