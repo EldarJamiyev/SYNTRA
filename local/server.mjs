@@ -70,9 +70,17 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
   if (modelRoute) {
-    const provider = await detectLocalModel();
+    let provider = await detectLocalModel();
+    let modelBody = body || {};
+    if (typeof modelBody.model === "string" && modelBody.model.trim()) {
+      const requested = await detectLocalModel({ requestedModel: modelBody.model.trim() });
+      if (!requested) throw new Error("The configured SYNTRA_REVIEW_MODEL is not installed locally or exceeds the safe memory-selection limit.");
+      provider = requested;
+      modelBody = { ...modelBody };
+      delete modelBody.model;
+    }
     if (provider) {
-      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken, signal });
+      const localResult = await handleLocalModelRequest(provider, method, route, modelBody, { timeoutMs, onToken, signal });
       if (localResult) return localResult;
     }
   }
@@ -933,7 +941,7 @@ const routeHandlers = {
 const server = http.createServer(async (request, response) => {
   const parsed = new URL(request.url || "/", "http://" + HOST + ":" + PORT);
   const key = (request.method || "GET") + " " + parsed.pathname;
-  const hostRejection = getHostRejection(request);
+  const hostRejection = getHostRejection(request, request.socket?.localPort || PORT);
   if (hostRejection) { sendJson(response, 403, { error: hostRejection }); return; }
   const originRejection = getOriginRejection(request);
   if (originRejection) { sendJson(response, 403, { error: originRejection }); return; }
