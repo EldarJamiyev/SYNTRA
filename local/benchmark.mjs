@@ -36,8 +36,8 @@ export function validateBenchmarkSuite(suite) {
     for (const value of task.expectedChangedPaths) {
       if (typeof value !== "string" || !value || path.isAbsolute(value) || value.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " contains an unsafe expected changed path.");
     }
-    task.maxIterations = Math.max(1, Math.min(5, Number(task.maxIterations) || 2));
-    task.maxSlices = Math.max(1, Math.min(3, Number(task.maxSlices) || 1));
+    task.maxIterations = Math.max(1, Math.min(6, Number(task.maxIterations) || 2));
+    task.maxSlices = Math.max(1, Math.min(8, Number(task.maxSlices) || 1));
   }
   return suite;
 }

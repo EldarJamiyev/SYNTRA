@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
-  "description": "Expanded local coding-agent baseline covering independent JavaScript utility, configuration, and input-validation tasks. Fixtures start with failing assertions.",
+  "version": "1.2.0",
+  "description": "Deterministic local coding-agent baseline across JavaScript utilities, input handling, asynchronous control flow, HTTP header semantics, and a multi-file module integration task. Fixtures begin with failing assertions; passing means exact patch paths and candidate verification.",
   "tasks": [
     {
       "id": "utility-clamp",
@@ -71,6 +71,49 @@
       "maxIterations": 2,
       "maxSlices": 1,
       "goal": "Implement and export chunkArray(values, size) in src/array.mjs. Return ordered consecutive chunks with no chunk larger than size. Preserve the original values. Return an empty array for non-arrays and sizes that are not positive safe integers. Do not mutate inputs or edit tests."
+    },
+    {
+      "id": "http-header-lookup",
+      "category": "api-semantics",
+      "title": "Implement case-insensitive safe HTTP header lookup",
+      "fixture": "fixtures/case-insensitive-header",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/headers.test.mjs",
+      "expectedChangedPaths": [
+        "src/headers.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement getHeader(headers, name) in src/headers.mjs. Look up HTTP header names case-insensitively without mutating the supplied object. Accept only a non-empty string name and a plain object or null-prototype object. Return undefined for invalid inputs, missing names, and inherited properties. Preserve the original header value. Do not edit tests or package files."
+    },
+    {
+      "id": "async-retry",
+      "category": "async-control",
+      "title": "Implement bounded asynchronous retry with selective retry policy",
+      "fixture": "fixtures/async-retry",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/retry.test.mjs",
+      "expectedChangedPaths": [
+        "src/retry.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement and export async retry(operation, options={}) in src/retry.mjs. operation must be a function. Support maxAttempts (default 3, positive safe integer), shouldRetry(error, attempt) (default true), and delayMs (default 0, finite non-negative number). Call operation with a 1-based attempt number, return the first successful result, immediately rethrow when shouldRetry returns false, and throw the final error after maxAttempts. Use Promise-based delay without blocking the event loop. Do not edit tests or package files."
+    },
+    {
+      "id": "multi-file-cache",
+      "category": "multi-file",
+      "title": "Implement and export a reusable in-memory cache across modules",
+      "fixture": "fixtures/multi-file-cache",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/cache.test.mjs",
+      "expectedChangedPaths": [
+        "src/cache.mjs",
+        "src/index.mjs"
+      ],
+      "maxIterations": 4,
+      "maxSlices": 2,
+      "goal": "Implement createCache() in src/cache.mjs and export it from src/index.mjs. The returned cache must use Map semantics and expose set(key,value) returning the cache, get(key), has(key), delete(key), clear(), and a read-only size getter. Preserve arbitrary key identity and values including undefined. Do not edit tests or package files."
     }
   ]
 }

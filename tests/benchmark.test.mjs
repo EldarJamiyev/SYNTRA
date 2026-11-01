@@ -7,9 +7,11 @@ import { evaluateBenchmarkTask, loadBenchmarkSuite, runBenchmarkSuite, summarize
 
 test("versioned benchmark manifest contains representative coding tasks", async () => {
   const { suite } = await loadBenchmarkSuite();
-  assert.equal(suite.version, "1.0.0");
-  assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp", "string-slugify", "config-deep-merge"]);
-  assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 3);
+  assert.equal(suite.version, "1.2.0");
+  assert.equal(suite.tasks.length, 8);
+  assert.ok(suite.tasks.some(task => task.category === "multi-file"));
+  assert.ok(suite.tasks.some(task => task.category === "async-control"));
+  assert.equal(new Set(suite.tasks.flatMap(task => task.expectedChangedPaths)).size, 9);
 });
 test("suite validation rejects duplicate IDs and fixture path traversal", () => {
   const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-script", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
