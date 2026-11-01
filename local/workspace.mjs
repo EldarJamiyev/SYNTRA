@@ -607,10 +607,47 @@ export async function updateWorkspaceExclusions(inputRoot, options = {}) {
   return { root, patterns, updatedAt: next.updatedAt };
 }
 
+const MAX_AUDIT_LOG_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIT_LOG_ARCHIVES = 3;
+const auditWriteQueues = new Map();
+
+async function rotateAuditLog(auditPath) {
+  let info;
+  try {
+    info = await fs.lstat(auditPath);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error("Workspace audit log must be a regular file.");
+  if (info.size <= MAX_AUDIT_LOG_BYTES) return;
+  for (let index = MAX_AUDIT_LOG_ARCHIVES; index >= 1; index -= 1) {
+    const source = index === 1 ? auditPath : auditPath + "." + (index - 1);
+    const target = auditPath + "." + index;
+    if (!(await assertRegularStateFile(source, "Workspace audit archive"))) continue;
+    if (await assertRegularStateFile(target, "Workspace audit archive")) await fs.rm(target);
+    await fs.rename(source, target);
+  }
+}
+
 async function appendAudit(root, entry) {
   const auditPath = path.join(stateDirectory(root), "actions.jsonl");
-  await fs.mkdir(path.dirname(auditPath), { recursive: true });
-  await fs.appendFile(auditPath, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n", "utf8");
+  const serialized = JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n";
+  const previous = auditWriteQueues.get(root) || Promise.resolve();
+  const current = previous.catch(() => {}).then(async () => {
+    await fs.mkdir(path.dirname(auditPath), { recursive: true });
+    let info;
+    try { info = await fs.lstat(auditPath); }
+    catch (error) { if (!error || error.code !== "ENOENT") throw error; }
+    if (info && (info.isSymbolicLink() || !info.isFile())) throw new Error("Workspace audit log must be a regular file.");
+    if (info && info.size + Buffer.byteLength(serialized, "utf8") > MAX_AUDIT_LOG_BYTES) {
+      await rotateAuditLog(auditPath);
+    }
+    await fs.appendFile(auditPath, serialized, "utf8");
+  });
+  auditWriteQueues.set(root, current);
+  try { await current; }
+  finally { if (auditWriteQueues.get(root) === current) auditWriteQueues.delete(root); }
 }
 
 export async function recordWorkspaceToolEvent(inputRoot, event) {
