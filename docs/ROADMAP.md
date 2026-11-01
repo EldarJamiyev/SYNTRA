@@ -177,7 +177,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Add optional local semantic retrieval using Ollama embeddings; persist only vectors, path/line metadata and source hashes; revalidate hashes before returning excerpts.
 - [x] Expand orchestration to a complexity-derived maximum of eight slices, six attempts per slice and a 24-attempt total ceiling. Persist the global attempt counter and execution budget across local-service restarts.
 - [x] Harden Docker check containers with init, private IPC, bounded swap and an open-file limit; retain no-network, read-only root, dropped capabilities, no-new-privileges and candidate-only write mount.
-- [ ] Add resumable checkpoints for an unverified in-progress slice. Recovery still resumes from the last verified slice boundary; in-flight candidate code is regenerated and reverified.
+- [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
 - [ ] Add provider-calibrated context sizing and a cross-language empirical model capability matrix. Hosted-provider token counts remain estimates.
 - Publish a reproducible release checklist and migration notes.
 

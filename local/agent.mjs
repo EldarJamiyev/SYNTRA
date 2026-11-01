@@ -435,31 +435,36 @@ async function planImplementationSlices({
 
 async function validateResumeCandidateCheckpoint(root, runId, goal, checkpoint, maxSlices) {
   if (!isPlainToolInput(checkpoint) || checkpoint.schemaVersion !== 1
-    || checkpoint.runId !== runId || checkpoint.root !== root || checkpoint.stage !== "slice_verified"
+    || checkpoint.runId !== runId || checkpoint.root !== root
+    || !["slice_verified", "slice_unverified"].includes(checkpoint.stage)
     || !Array.isArray(checkpoint.slices) || !Array.isArray(checkpoint.files)
     || !Number.isInteger(checkpoint.nextSliceIndex)) {
     throw new Error("Saved candidate checkpoint metadata is invalid.");
   }
+  const verifiedBoundary = checkpoint.stage === "slice_verified";
+  const unverifiedCandidate = checkpoint.stage === "slice_unverified";
   const planned = validateImplementationSlicePlan({
     slices: checkpoint.slices.map(slice => ({
       goal: slice.goal,
       acceptance: slice.acceptance
     }))
   }, goal, maxSlices);
-  if (checkpoint.nextSliceIndex < 1 || checkpoint.nextSliceIndex >= planned.length) {
+  if (checkpoint.nextSliceIndex < (verifiedBoundary ? 1 : 0) || checkpoint.nextSliceIndex >= planned.length) {
     throw new Error("Saved candidate checkpoint points to an invalid next slice.");
   }
   for (let index = 0; index < planned.length; index += 1) {
-    const expected = index < checkpoint.nextSliceIndex ? "completed" : "pending";
+    const expected = index < checkpoint.nextSliceIndex ? "completed"
+      : unverifiedCandidate && index === checkpoint.nextSliceIndex ? "running" : "pending";
     if (checkpoint.slices[index]?.id !== planned[index].id
       || checkpoint.slices[index]?.status !== expected) {
       throw new Error("Saved candidate checkpoint slice progression is inconsistent.");
     }
     planned[index].status = expected;
   }
-  if (!checkpoint.verification || checkpoint.verification.passed !== true
-    || !["passed", "passed_review_required"].includes(checkpoint.verification.status)) {
-    throw new Error("Saved candidate checkpoint has no successful verification evidence.");
+  if (!checkpoint.verification || (verifiedBoundary
+    ? checkpoint.verification.passed !== true || !["passed", "passed_review_required"].includes(checkpoint.verification.status)
+    : checkpoint.verification.passed !== false || checkpoint.verification.status !== "candidate_ready")) {
+    throw new Error("Saved candidate checkpoint verification state does not match its stage.");
   }
   if (!Array.isArray(checkpoint.files) || checkpoint.files.length < 1
     || checkpoint.files.length > 24) {
@@ -501,12 +506,13 @@ async function validateResumeCandidateCheckpoint(root, runId, goal, checkpoint, 
     });
   }
   return {
+    stage: checkpoint.stage,
     nextSliceIndex: checkpoint.nextSliceIndex,
     slices: planned,
     files,
     verification: {
       status: checkpoint.verification.status,
-      passed: true,
+      passed: verifiedBoundary,
       checks: Array.isArray(checkpoint.verification.checks) ? checkpoint.verification.checks.slice(0, 8) : []
     }
   };
@@ -1426,6 +1432,85 @@ export async function runAgentTask({
           });
         }
       }
+      if (resumeCandidateState.stage === "slice_unverified") {
+        const slice = implementationSlices[firstSliceIndex];
+        const checks = [];
+        const discovery = await executeWorkspaceTool({
+          root: snapshot.root, auditRoot: root, name: "workspace.checks.discover", input: {}, signal
+        });
+        toolCalls.push(toolCallSummary(discovery));
+        const discovered = discovery.ok && Array.isArray(discovery.output?.checks) ? discovery.output.checks : [];
+        const unavailable = discovery.ok && Array.isArray(discovery.output?.unavailable) ? discovery.output.unavailable : [];
+        for (const item of discovered) {
+          try {
+            const checked = await executeWorkspaceTool({
+              root: snapshot.root, auditRoot: root, name: "workspace.check",
+              input: { task: item.task, timeoutMs: CHECK_TIMEOUT_MS }, approval: true, signal
+            });
+            toolCalls.push(toolCallSummary(checked));
+            if (!checked.ok) throw new Error(checked.error || "Candidate check failed.");
+            checks.push({ task: item.task, passed: checked.output.passed, timedOut: checked.output.timedOut,
+              exitCode: checked.output.exitCode, durationMs: checked.output.durationMs,
+              command: checked.output.command, output: truncateOutput(checked.output.output) });
+          } catch (error) {
+            checks.push({ task: item.task, passed: false, error: String(error?.message || error), output: "" });
+            break;
+          }
+          if (checks.at(-1)?.passed !== true) break;
+        }
+        const integrityFailures = [];
+        for (const [changedPath, expectedContent] of expectedCandidateContents) {
+          const readRun = await executeWorkspaceTool({
+            root: snapshot.root, auditRoot: root, name: "workspace.read", input: { path: changedPath }, signal
+          });
+          toolCalls.push(toolCallSummary(readRun));
+          if (!readRun.ok || readRun.output.sha256 !== sha256(expectedContent)) integrityFailures.push(changedPath);
+        }
+        const passed = discovered.length > 0 && checks.length === discovered.length
+          && checks.every(item => item.passed === true) && integrityFailures.length === 0;
+        finalVerification = {
+          status: passed ? "passed" : !discovery.ok ? "discovery_failed" : discovered.length ? "failed" : "no_checks_configured",
+          passed, checks,
+          checkCoverage: { scope: "available_project_checks_only", executed: checks.map(item => item.task),
+            unavailable: unavailable.map(item => ({ task: item.task, reason: String(item.reason || "").slice(0, 400) })),
+            complete: unavailable.length === 0 },
+          ...(integrityFailures.length ? { integrityFailures } : {}),
+          sandbox: { filesCopied: snapshot.filesCopied, bytesCopied: snapshot.bytesCopied,
+            isolation: process.env.SYNTRA_CHECK_ISOLATION === "docker" ? "docker-network-disabled" : "trusted-host-opt-in" }
+        };
+        observations.push({
+          kind: "candidate-resume-verification", stage: slice.id, status: passed ? "passed" : "failed",
+          detail: passed ? "The restored in-flight candidate passed the discovered checks and source-integrity verification."
+            : "The restored in-flight candidate did not pass verification and will enter the bounded repair loop."
+        });
+        if (passed) {
+          slice.status = "completed";
+          const step = plan.steps.find(item => item.id === slice.id);
+          if (step) step.status = "completed";
+          sliceSummaries.push(slice.goal + " — " + slice.acceptance);
+          firstSliceIndex += 1;
+          if (firstSliceIndex < implementationSlices.length) {
+            const verifiedFiles = [...touchedPaths].sort().map(relative => {
+              const original = originalByPath.get(relative), content = expectedCandidateContents.get(relative);
+              if (!original || typeof content !== "string") throw new Error("Cannot checkpoint restored candidate.");
+              return { path: relative, existedBefore: original.existedBefore, baseHash: original.beforeHash,
+                content, contentHash: sha256(content), reason: original.reason || "" };
+            });
+            await onCandidateCheckpoint({
+              schemaVersion: 1, runId, root, stage: "slice_verified", nextSliceIndex: firstSliceIndex,
+              slices: implementationSlices.map(({ id, goal: sliceGoal, acceptance, status }) => ({ id, goal: sliceGoal, acceptance, status })),
+              files: verifiedFiles, verification: finalVerification
+            });
+          }
+          feedback = "";
+        } else {
+          feedback = "The restored candidate for implementation slice '" + slice.goal +
+            "' did not pass verification. Correct the candidate using the observed results; preserve completed earlier slices and do not claim success:\n" +
+            (checks.map(item => "[" + item.task + "] passed=" + item.passed + "\n" + (item.error || "") + "\n" + (item.output || "")).join("\n\n")
+              || String(discovery.error || "No supported verification runner was discovered.")) +
+            (integrityFailures.length ? "\nCandidate integrity failures: " + integrityFailures.join(", ") : "");
+        }
+      }
       const patchStep = plan.steps.find(step => step.id === "patch");
       if (patchStep && firstSliceIndex >= implementationSlices.length) patchStep.status = "completed";
       const verifyStep = plan.steps.find(step => step.id === "verify");
@@ -1734,6 +1819,31 @@ export async function runAgentTask({
           candidateWritten = true;
         }
         activePatchRoot = snapshot.root;
+
+        if (runId && typeof onCandidateCheckpoint === "function") {
+          try {
+            const checkpointFiles = [...touchedPaths].sort().map(relative => {
+              const original = originalByPath.get(relative), content = expectedCandidateContents.get(relative);
+              if (!original || typeof content !== "string") throw new Error("Cannot persist an incomplete in-flight candidate checkpoint for " + relative + ".");
+              return { path: relative, existedBefore: original.existedBefore, baseHash: original.beforeHash,
+                content, contentHash: sha256(content), reason: original.reason || "" };
+            });
+            if (checkpointFiles.length) {
+              await onCandidateCheckpoint({
+                schemaVersion: 1, runId, root, stage: "slice_unverified", nextSliceIndex: sliceIndex,
+                slices: implementationSlices.map(({ id, goal: sliceGoal, acceptance, status }) => ({ id, goal: sliceGoal, acceptance, status })),
+                files: checkpointFiles,
+                verification: { status: "candidate_ready", passed: false, checks: [] }
+              });
+              observations.push({ kind: "candidate-checkpoint", stage: slice.id, status: "unverified_candidate_persisted",
+                detail: "Persisted the candidate and original-file hashes before running checks; resume will restore and reverify it before repair." });
+            }
+          } catch (error) {
+            if (signal?.aborted || error?.name === "AbortError") throw error;
+            observations.push({ kind: "candidate-checkpoint", stage: slice.id, status: "unverified_candidate_not_persisted",
+              detail: String(error?.message || error).slice(0, 400) });
+          }
+        }
 
         const checks = [];
         const discoveryRun = await executeWorkspaceTool({
