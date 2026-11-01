@@ -822,7 +822,7 @@ test("independent patch review rejects an incomplete patch and feeds findings in
     assert.deepEqual(result.proposals.map(item => item.path).sort(), ["src/value.js", "tests/value.test.js"]);
     assert.ok(result.attempts.some(item => item.status === "self_review_rejected"));
     assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "rejected"));
-    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted"));
+    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted_same_model"));
     assert.ok(patchPrompts[1].includes("tests/value.test.js"));
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     assert.match(await fs.readFile(path.join(root, "tests", "value.test.js"), "utf8"), /value is two/);

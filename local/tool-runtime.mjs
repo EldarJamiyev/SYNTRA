@@ -252,7 +252,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workspace.check",
-    description: "Run one discovered project check with a hard timeout. This may execute repository-defined code and always requires explicit approval.",
+    description: "Run one discovered project check with a hard timeout. Project code runs in a restricted offline Docker container by default; direct host execution requires the explicit SYNTRA_ALLOW_UNSANDBOXED_CHECKS=true setting. Always requires explicit approval.",
     permission: "execute",
     approvalRequired: true,
     inputSchema: {
@@ -528,7 +528,7 @@ function summarizeOutput(name, output) {
         documentationFileCount: output.documentationFileCount,
         testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount, callEdgeCount: output.callEdgeCount,
         documentationReferenceCount: output.documentationReferenceCount,
-        testOwnershipCount: output.testOwnershipCount, callEdgeCount: output.callEdgeCount, truncated: output.truncated
+        testOwnershipCount: output.testOwnershipCount, truncated: output.truncated
       };
     case "workspace.index.refresh":
       return {
@@ -559,7 +559,8 @@ function summarizeOutput(name, output) {
       return {
         supportedTasks: output.checks.map(check => check.task),
         runnerKinds: output.checks.map(check => check.kind),
-        unavailableTasks: output.unavailable.map(item => item.task)
+        unavailableTasks: output.unavailable.map(item => item.task),
+        executionMode: output.executionMode
       };
     case "workspace.search":
       return { searchedFiles: output.searchedFiles, resultCount: output.results.length, topPaths: output.results.slice(0, 8).map(item => item.path) };
@@ -578,7 +579,7 @@ function summarizeOutput(name, output) {
     case "workspace.proposals.discard":
       return { discardedCount: output.discarded.length };
     case "workspace.check":
-      return { task: output.task, passed: output.passed, exitCode: output.exitCode, timedOut: output.timedOut };
+      return { task: output.task, passed: output.passed, exitCode: output.exitCode, timedOut: output.timedOut, executionMode: output.executionMode };
     case "git.status":
       return { statusCharacters: output.status.length };
     case "git.diff-summary":

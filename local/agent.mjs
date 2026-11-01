@@ -1573,6 +1573,32 @@ export async function runAgentTask({
           }
         }
 
+        if (modelSelfReview && !resumingSavedPatch && patchReview?.status !== "accepted") {
+          const detail = patchReview?.detail || "The reviewer did not return a validated accepted verdict.";
+          feedback = "Patch review is required before verification. The review was unavailable or incomplete, so this candidate will not be verified or proposed. " + detail;
+          attempts.push({
+            iteration, sliceId: slice.id, status: "self_review_unavailable",
+            summary: candidate.summary,
+            changedFiles: candidate.changes.map(change => change.path),
+            reviewModel: patchReview?.reviewerModel || null,
+            feedback
+          });
+          observations.push({
+            kind: "patch-self-review",
+            stage: slice.id + "-attempt-" + sliceAttempt,
+            status: "blocked",
+            detail: feedback.slice(0, 400)
+          });
+          await emitProgress({
+            phase: "patch-review-unavailable",
+            iteration,
+            message: feedback,
+            attempts, observations, planSteps: plan.steps,
+            checkpoint: { stage: "patch_review_unavailable", iteration }
+          });
+          continue;
+        }
+
         attempts.push({
           iteration, sliceId: slice.id,
           status: runChecks ? (patchReview?.status === "accepted" ? "patch_reviewed" : "patch_validated")

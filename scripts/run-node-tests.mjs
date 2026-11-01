@@ -22,6 +22,7 @@ async function main() {
     cwd: repositoryRoot,
     shell: false,
     windowsHide: true,
+    env: { ...process.env, SYNTRA_ALLOW_UNSANDBOXED_CHECKS: "true" },
     stdio: "inherit"
   });
 

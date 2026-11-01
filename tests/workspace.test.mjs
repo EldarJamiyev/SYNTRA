@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   applyFileProposal,
   applyFileProposals,
+  buildVerificationCommand,
   chooseCheck,
   createProjectPlan,
   discoverProjectChecks,
@@ -40,6 +41,30 @@ test("inspect workspace reports project metadata and source files", async () => 
   assert.ok(info.fileCount >= 3);
   assert.ok(info.frameworks.includes("React"));
   assert.ok(info.scripts.build);
+});
+
+test("verification defaults to an offline Docker container and filters host environment variables", () => {
+  const root = path.join(os.tmpdir(), "syntra-verification");
+  const selected = { kind: "npm-script", command: "npm run test", script: "test" };
+  const isolated = buildVerificationCommand(root, selected, {
+    platform: "linux",
+    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+  });
+  assert.equal(isolated.mode, "docker");
+  assert.equal(isolated.executable, "docker");
+  for (const flag of ["--network=none", "--read-only", "--cap-drop=ALL",
+    "--pids-limit=128", "--memory=2g", "node:20-bookworm-slim"]) {
+    assert.ok(isolated.args.includes(flag), "expected Docker flag " + flag);
+  }
+  assert.equal(isolated.env.SYNTRA_API_TOKEN, undefined);
+
+  const host = buildVerificationCommand(root, selected, {
+    allowUntrustedHost: true,
+    platform: "linux",
+    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+  });
+  assert.equal(host.mode, "host_opt_in");
+  assert.equal(host.env.SYNTRA_API_TOKEN, undefined);
 });
 
 test("check discovery reports only runners that are actually configured", async () => {
