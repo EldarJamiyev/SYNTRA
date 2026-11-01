@@ -414,6 +414,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.proposals.apply-many" && tool.approvalRequired));
     assert.ok(catalogue.tools.some(tool => tool.name === "git.diff-summary" && tool.permission === "read_only"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.check" && tool.approvalRequired));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.verify" && tool.permission === "execute" && tool.approvalRequired));
 
     const headers = { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" };
     const inspectResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
