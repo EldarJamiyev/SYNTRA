@@ -57,7 +57,7 @@ test("resource profile estimates KV-cache demand and reports loaded runtime memo
   assert.equal(profile.kvCacheBytesPerToken, 40 * 8 * 128 * 4);
   assert.equal(profile.estimatedKvCacheBytes, profile.kvCacheBytesPerToken * 8192);
   assert.equal(profile.estimatedHostWorkingSetBytes, 7 * GB + profile.estimatedKvCacheBytes);
-  assert.equal(profile.conservativeBudgetBytes, 32 * GB * 0.55);
+  assert.equal(profile.conservativeBudgetBytes, Math.floor(32 * GB * 0.55));
   assert.equal(profile.confidence, "estimated");
   assert.match(profile.limitation, /GPU offload/);
 });
