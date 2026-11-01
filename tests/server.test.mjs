@@ -397,12 +397,15 @@ test("local tool catalogue and API enforce permissions and record execution", as
     const catalogueResponse = await service.apiFetch(service.base + "/local-api/tools");
     assert.equal(catalogueResponse.status, 200);
     const catalogue = await catalogueResponse.json();
-    assert.equal(catalogue.tools.length, 22);
+    assert.equal(catalogue.tools.length, 25);
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.search"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.secrets.scan" && tool.permission === "read_only"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.index.status" && tool.permission === "read_only"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.index.refresh" && tool.permission === "local_state_write" && !tool.approvalRequired));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.symbols.search" && tool.permission === "read_only"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.semantic.status" && tool.permission === "read_only"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.semantic.refresh" && tool.permission === "local_state_write"));
+    assert.ok(catalogue.tools.some(tool => tool.name === "workspace.semantic.search" && tool.permission === "read_only"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.list" && tool.permission === "read_only"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.search" && tool.permission === "read_only"));
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.memory.add" && tool.permission === "local_state_write" && tool.approvalRequired));

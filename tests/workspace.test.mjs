@@ -464,7 +464,7 @@ test("Docker verification arguments enforce a restricted candidate-only containe
   const required = [
     "--init", "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
     "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g",
-    "--memory-swap=2g", "--cpus=2", "nofile=1024:1024", "noexec,nosuid",
+    "--memory-swap=2g", "--cpus=2", "nofile=1024:1024", "/tmp:rw,noexec,nosuid,size=512m",
     "type=bind,source=" + root + ",target=/workspace"
   ];
   for (const value of required) assert.ok(args.includes(value), "missing Docker restriction: " + value);

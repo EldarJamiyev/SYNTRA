@@ -1204,8 +1204,7 @@ export async function runAgentTask({
     name: String(modelStatus.model_name || modelStatus.model || "unknown").slice(0, 120),
     contextWindowTokens: contextWindow,
     contextBudgetTokens: contextBudget,
-    outputBudgetTokens: outputBudget,
-    executionBudget
+    outputBudgetTokens: outputBudget
   };
   await emitProgress({ phase: "tool-execution", iteration: 0, message: "Tool: workspace.inspect — collecting project metadata and file inventory." });
   const inspectionRun = await executeWorkspaceTool({
@@ -1268,6 +1267,7 @@ export async function runAgentTask({
   } : derivedBudget;
   maxIterations = executionBudget.maxIterations;
   maxSlices = executionBudget.maxSlices;
+  modelMetadata.executionBudget = executionBudget;
   let totalPatchAttempts = Math.max(0, Math.floor(Number(resumeIteration) || 1) - 1);
   let resumeCandidateState = null;
   if (resumeCandidate) {
