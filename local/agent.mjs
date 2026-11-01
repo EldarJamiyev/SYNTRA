@@ -681,7 +681,9 @@ async function runModelSelectedReadOnlyTools({
       priorContext: fragments.join("\n"),
       previousCalls: selectedCalls
     });
-    const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+    const reviewerModel = String(process.env.SYNTRA_REVIEW_MODEL || "").trim();
+  const reviewerOptions = reviewerModel ? { model: reviewerModel } : {};
+  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt, ...reviewerOptions }, 30000, signal);
     if (Number(tokenInfo.token_count) > Math.min(contextBudget, 1800)) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
@@ -905,7 +907,7 @@ async function reviewCandidatePatch({
     };
   }
   const generated = await modelJson(modelRequest, "/model/generate", {
-    prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto"
+    prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto", ...reviewerOptions
   }, 120000, signal);
   const review = validatePatchReview(
     extractJsonObject(generated.text),
@@ -1485,7 +1487,7 @@ export async function runAgentTask({
         }
 
         let patchReview = null;
-        if (modelSelfReview && !resumingSavedPatch) {
+        if (modelSelfReview) {
           try {
             await emitProgress({
               phase: "patch-self-review",
@@ -1558,6 +1560,15 @@ export async function runAgentTask({
               detail: String(error instanceof Error ? error.message : error).slice(0, 400)
             });
           }
+        }
+
+        if (modelSelfReview && patchReview?.status !== "accepted") {
+          const detail = patchReview?.detail || "The reviewer failed, returned an invalid result, or did not fit the model context.";
+          feedback = "Self-review did not produce an accepted verdict. The candidate will not be verified or proposed until a review succeeds. " + detail;
+          attempts.push({ iteration, sliceId: slice.id, status: "self_review_unavailable", summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path), feedback });
+          observations.push({ kind: "patch-self-review", stage: slice.id + "-attempt-" + sliceAttempt, status: "blocked", detail: feedback.slice(0, 400) });
+          await emitProgress({ phase: "patch-review-unavailable", iteration, message: feedback, attempts, observations, planSteps: plan.steps, checkpoint: { stage: "patch_review_unavailable", iteration } });
+          continue;
         }
 
         attempts.push({
