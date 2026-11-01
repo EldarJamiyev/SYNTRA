@@ -1483,7 +1483,11 @@ export async function runAgentTask({
           detail: passed ? "The restored in-flight candidate passed the discovered checks and source-integrity verification."
             : "The restored in-flight candidate did not pass verification and will enter the bounded repair loop."
         });
-        if (passed) {
+        if (integrityFailures.length) {
+          slice.status = "blocked_integrity";
+          stopAfterSlice = true;
+          feedback = "The restored candidate failed source-integrity verification. Stop and inspect the candidate before continuing: " + integrityFailures.join(", ");
+        } else if (passed) {
           slice.status = "completed";
           const step = plan.steps.find(item => item.id === slice.id);
           if (step) step.status = "completed";
@@ -1515,8 +1519,10 @@ export async function runAgentTask({
       if (patchStep && firstSliceIndex >= implementationSlices.length) patchStep.status = "completed";
       const verifyStep = plan.steps.find(step => step.id === "verify");
       if (verifyStep) {
-        verifyStep.status = "completed";
-        verifyStep.detail = "Previous slices were verified before restart; the next slice will be checked independently.";
+        verifyStep.status = resumeCandidateState.stage === "slice_unverified" ? "running" : "completed";
+        verifyStep.detail = resumeCandidateState.stage === "slice_unverified"
+          ? "Restored an in-flight candidate; the current slice is being re-verified before repair or continuation."
+          : "Previous slices were verified before restart; the next slice will be checked independently.";
       }
       observations.push({
         kind: "candidate-checkpoint", stage: "resume-restore", status: "restored",
@@ -1526,7 +1532,9 @@ export async function runAgentTask({
       await emitProgress({
         phase: "candidate-restored",
         iteration: Math.max(0, Number(resumeCandidate?.iteration) || 0),
-        message: "Restored the last verified candidate snapshot and re-inspected it before continuing.",
+        message: resumeCandidateState.stage === "slice_unverified"
+          ? "Restored an unverified candidate snapshot; SYNTRA is rechecking it before continuing."
+          : "Restored the last verified candidate snapshot and re-inspected it before continuing.",
         planSteps: plan.steps, observations, toolCalls, verification: finalVerification,
         checkpoint: { stage: "candidate_restored", iteration: Math.max(0, Number(resumeCandidate?.iteration) || 0) }
       });
