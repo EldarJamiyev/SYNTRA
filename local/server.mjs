@@ -639,6 +639,7 @@ async function runChatTurn(jobId, message, history, signal) {
         previousAttempts: resumeRecord?.attempts || [],
         previousToolCalls: resumeRecord?.toolCalls || [],
         modelToolSelection: true,
+        modelSelfReview: true,
         runId: agentRunId,
         resumeCandidate,
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),

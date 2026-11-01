@@ -384,3 +384,44 @@ test("user cancellation prevents the Ollama request and bypasses retries", async
   );
   assert.equal(calls, 0);
 });
+
+
+test("Ollama patch-review mode uses a strict reviewer-only JSON schema", async () => {
+  const provider = {
+    provider: "ollama-local",
+    baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b",
+    modelSizeBytes: 9 * GB,
+    contextTokens: 8192,
+    tokenizer: "ollama-local-tokenizer"
+  };
+  let capturedBody = null;
+  const fetchImpl = async (_url, options) => {
+    capturedBody = JSON.parse(options.body);
+    return new Response(JSON.stringify({
+      message: {
+        role: "assistant",
+        content: JSON.stringify({
+          verdict: "accept",
+          rationale: "The patch matches the request.",
+          findings: []
+        })
+      },
+      prompt_eval_count: 100,
+      eval_count: 20
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const result = await handleLocalModelRequest(provider, "POST", "/model/generate", {
+    prompt: "SYNTRA_PATCH_REVIEW\nReturn exactly one JSON object with verdict, rationale, and findings.",
+    max_new_tokens: 256, temperature: 0.05
+  }, { fetchImpl, timeoutMs: 1000 });
+  assert.equal(capturedBody.format.type, "object");
+  assert.deepEqual(capturedBody.format.required, ["verdict", "rationale", "findings"]);
+  assert.deepEqual(capturedBody.format.properties.verdict.enum, ["accept", "revise"]);
+  assert.deepEqual(
+    Object.keys(capturedBody.format.properties.findings.items.properties).sort(),
+    ["issue", "path", "recommendation", "severity"]
+  );
+  assert.match(capturedBody.messages[0].content, /independent patch reviewer/);
+  assert.equal(JSON.parse(result.text).verdict, "accept");
+});

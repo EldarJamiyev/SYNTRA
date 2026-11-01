@@ -100,6 +100,11 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Constrain Ollama tool-plan output with JSON schema and fall back to deterministic context ranking when the plan is invalid or exceeds the context budget.
 - [x] Add bounded iterative repository investigation: the model reviews prior search/symbol/read results before selecting targeted follow-up reads, with three planning rounds and eight unique read-only calls maximum.
 - [x] Persist each retrieval round as an auditable observation and stop early when the model reports that the evidence is sufficient.
+- [x] Add an independent pre-verification patch reviewer that compares candidate changes with the user request, slice scope, and retrieved repository evidence.
+- [x] Feed concrete blocking review findings into a bounded patch-correction attempt; record advisory findings without blocking.
+- [x] Constrain reviewer output to a strict JSON schema and validate every referenced path against the inspected workspace.
+- [x] Keep the reviewer read-only: it cannot call tools, execute commands, or modify candidate/workspace files.
+- [x] Cover reject-correct-accept behavior, malformed review decisions, workspace-path validation, and reviewer schema output with tests.
 - [x] Cover allowed retrieval plans, disallowed execution tools, path/range violations, evidence-driven follow-up selection, early stopping, and end-to-end retrieval-to-patch context flow with tests.
 - [x] Let the local model propose up to three ordered implementation slices with explicit acceptance criteria; validate each slice and fall back to one slice if planning fails.
 - [x] Reuse one cumulative temporary candidate across slices, re-inspect and rebuild context after each verified slice, and re-inspect before bounded repair attempts after failed verification.

@@ -10,6 +10,7 @@ import {
   parsePatchOutput,
   runAgentTask,
   validateImplementationSlicePlan,
+  validatePatchReview,
   validateReadOnlyToolPlan,
   validateStructuredPatch
 } from "../local/agent.mjs";
@@ -659,6 +660,163 @@ test("iterative retrieval enforces the eight-call global limit and stops without
     const investigation = result.observations.find(item => item.kind === "model-readonly-investigation");
     assert.match(investigation.detail, /2 evidence-driven planning round\(s\), 8 unique read-only retrieval call/);
     assert.equal(result.proposals.length, 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("patch review validation requires evidence-backed blockers and workspace-local paths", () => {
+  const accepted = validatePatchReview({
+    verdict: "accept",
+    rationale: "The proposed change matches the request and the supplied source contract.",
+    findings: [{
+      severity: "advisory",
+      path: "src/value.js",
+      issue: "The exported object could be documented more explicitly.",
+      recommendation: "Consider adding a short API note in the project documentation."
+    }]
+  }, ["src/value.js"], []);
+  assert.equal(accepted.verdict, "accept");
+  assert.equal(accepted.advisoryCount, 1);
+  assert.equal(accepted.blockingCount, 0);
+
+  const rejected = validatePatchReview({
+    verdict: "revise",
+    rationale: "A directly requested change is missing.",
+    findings: [{
+      severity: "blocking",
+      path: "tests/value.test.js",
+      issue: "The requested test description change is missing from the patch.",
+      recommendation: "Update the existing test title to match the wording specified in the user request."
+    }]
+  }, ["src/value.js", "tests/value.test.js"], []);
+  assert.equal(rejected.verdict, "revise");
+  assert.equal(rejected.blockingCount, 1);
+
+  assert.throws(() => validatePatchReview({
+    verdict: "revise", rationale: "No concrete issue.", findings: []
+  }), /at least one concrete blocking finding/);
+  assert.throws(() => validatePatchReview({
+    verdict: "accept", rationale: "Contradictory verdict.",
+    findings: [{
+      severity: "blocking", path: "src/value.js",
+      issue: "A required behavior is missing from the patch.",
+      recommendation: "Implement the missing requested behavior before verification."
+    }]
+  }), /cannot contain blocking findings/);
+  assert.throws(() => validatePatchReview({
+    verdict: "revise", rationale: "Invalid path.",
+    findings: [{
+      severity: "blocking", path: "../outside.js",
+      issue: "A required behavior is missing from the patch.",
+      recommendation: "Implement the missing requested behavior before verification."
+    }]
+  }, ["src/value.js"]), /outside the inspected workspace/);
+});
+
+test("independent patch review rejects an incomplete patch and feeds findings into a correction attempt", async () => {
+  const root = await createProject();
+  let patchCalls = 0;
+  let reviewCalls = 0;
+  const patchPrompts = [];
+  const modelRequest = async (method, route, body) => {
+    if (method === "GET" && route === "/model/status") {
+      return {
+        checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_PATCH_REVIEW")) {
+        reviewCalls += 1;
+        if (reviewCalls === 1) {
+          assert.match(body.prompt, /Change the exported value from 1 to 2 and rename the test title/);
+          assert.match(body.prompt, /value is two/);
+          return {
+            text: JSON.stringify({
+              verdict: "revise",
+              rationale: "The patch implements the value update but omits the requested test-title change.",
+              findings: [{
+                severity: "blocking",
+                path: "tests/value.test.js",
+                issue: "The requested test description change is missing from the patch.",
+                recommendation: "Change the existing test title from value is two to value is exactly two."
+              }]
+            }),
+            generated_tokens: 40, trained_steps: null
+          };
+        }
+        return {
+          text: JSON.stringify({
+            verdict: "accept",
+            rationale: "Both requested changes are present and remain within the inspected project scope.",
+            findings: []
+          }),
+          generated_tokens: 28, trained_steps: null
+        };
+      }
+
+      patchCalls += 1;
+      patchPrompts.push(body.prompt);
+      if (patchCalls === 1) {
+        return {
+          text: JSON.stringify({
+            summary: "Update the exported value.",
+            edits: [{
+              path: "src/value.js",
+              find: "value: 1",
+              replace: "value: 2",
+              reason: "Implement the requested exported value."
+            }]
+          }),
+          generated_tokens: 30, trained_steps: null
+        };
+      }
+      assert.match(body.prompt, /Independent patch review found concrete blocking issues/);
+      return {
+        text: JSON.stringify({
+          summary: "Update the value and the requested test title.",
+          edits: [
+            {
+              path: "src/value.js",
+              find: "value: 1",
+              replace: "value: 2",
+              reason: "Implement the requested exported value."
+            },
+            {
+              path: "tests/value.test.js",
+              find: 'test("value is two"',
+              replace: 'test("value is exactly two"',
+              reason: "Keep the test title aligned with the user request."
+            }
+          ]
+        }),
+        generated_tokens: 55, trained_steps: null
+      };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Change the exported value from 1 to 2 and rename the test title to value is exactly two.",
+      maxIterations: 2,
+      runChecks: false,
+      modelSelfReview: true,
+      modelRequest
+    });
+    assert.equal(patchCalls, 2);
+    assert.equal(reviewCalls, 2);
+    assert.equal(result.proposals.length, 2);
+    assert.deepEqual(result.proposals.map(item => item.path).sort(), ["src/value.js", "tests/value.test.js"]);
+    assert.ok(result.attempts.some(item => item.status === "self_review_rejected"));
+    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "rejected"));
+    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted"));
+    assert.ok(patchPrompts[1].includes("tests/value.test.js"));
+    assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
+    assert.match(await fs.readFile(path.join(root, "tests", "value.test.js"), "utf8"), /value is two/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
