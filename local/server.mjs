@@ -2,7 +2,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
-import { getOriginRejection } from "./origin-policy.mjs";
+import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
@@ -32,6 +32,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 let activeWorkspace = process.env.SYNTRA_WORKSPACE ? path.resolve(process.env.SYNTRA_WORKSPACE) : REPO_ROOT;
 const chatJobs = new Map();
 let activeChatJobId = null;
+const API_TOKEN = String(process.env.SYNTRA_API_TOKEN || crypto.randomBytes(32).toString("hex"));
 
 
 function sendJson(response, status, data) {
@@ -817,7 +818,15 @@ function readChatStatus(body) {
   return visible;
 }
 
+function hasValidApiToken(request) {
+  const value = String(request.headers?.authorization || "");
+  const supplied = Buffer.from(value.startsWith("Bearer ") ? value.slice(7) : "", "utf8");
+  const expected = Buffer.from(API_TOKEN, "utf8");
+  return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+}
+
 const routeHandlers = {
+  "GET /local-api/session": async () => ({ token: API_TOKEN }),
   "GET /": async () => ({
     status: "ok",
     service: "SYNTRA local API",
@@ -891,26 +900,22 @@ const routeHandlers = {
 const server = http.createServer(async (request, response) => {
   const parsed = new URL(request.url || "/", "http://" + HOST + ":" + PORT);
   const key = (request.method || "GET") + " " + parsed.pathname;
+  const hostRejection = getHostRejection(request);
+  if (hostRejection) { sendJson(response, 403, { error: hostRejection }); return; }
+  const originRejection = getOriginRejection(request);
+  if (originRejection) { sendJson(response, 403, { error: originRejection }); return; }
+  const publicRoute = key === "GET /" || key === "GET /local-api/health" || key === "GET /local-api/session";
+  if (!publicRoute && !hasValidApiToken(request)) {
+    sendJson(response, 401, { error: "A valid SYNTRA local session token is required." }); return;
+  }
   const handler = routeHandlers[key];
-  if (!handler) {
-    sendJson(response, 404, { error: "Route not found." });
-    return;
-  }
-  if (request.method !== "GET") {
-    const originRejection = getOriginRejection(request);
-    if (originRejection) {
-      sendJson(response, 403, { error: originRejection });
-      return;
-    }
-  }
+  if (!handler) { sendJson(response, 404, { error: "Route not found." }); return; }
   try {
     const body = request.method === "GET" ? {} : await parseBody(request);
     const result = await handler(body);
     sendJson(response, 200, result);
   } catch (error) {
-    sendJson(response, 400, {
-      error: error instanceof Error ? error.message : "Unknown local workspace error."
-    });
+    sendJson(response, 400, { error: error instanceof Error ? error.message : "Unknown local workspace error." });
   }
 });
 
