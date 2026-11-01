@@ -810,7 +810,10 @@ test("independent patch review rejects an incomplete patch and feeds findings in
       modelSelfReview: true,
       modelRequest
     });
-    assert.equal(patchCalls, 2);
+    assert.equal(patchCalls, 2, JSON.stringify({
+      reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
+      attempts: result.attempts
+    }));
     assert.equal(reviewCalls, 2, JSON.stringify({
       reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
       attempts: result.attempts
