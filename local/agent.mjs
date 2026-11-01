@@ -239,7 +239,7 @@ export async function buildRepositoryGraph(inputRoot) {
       const bindings = node.importedTypeBindings.filter(binding => binding.localName === typeName);
       const targetName = bindings.length === 1 ? bindings[0].importedName : typeName;
       const candidateImports = bindings.length === 1
-        ? resolveImport(node.path, bindings[0].moduleSpecifier, fileSet)
+        ? [resolveImport(node.path, bindings[0].moduleSpecifier, fileSet)].filter(Boolean)
         : node.imports;
       const matches = candidateImports.filter(target =>
         nodes.get(target)?.symbols.some(symbol =>
