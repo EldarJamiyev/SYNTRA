@@ -3,15 +3,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { evaluateBenchmarkTask, loadBenchmarkSuite, runBenchmarkSuite, summarizeBenchmarkResults, validateBenchmarkSuite } from "../local/benchmark.mjs";
+import { evaluateBenchmarkTask, loadBenchmarkSuite, runBenchmarkSuite, runBenchmarkBaselineCheck, summarizeBenchmarkResults, validateBenchmarkSuite } from "../local/benchmark.mjs";
 
 test("versioned benchmark manifest contains representative coding tasks", async () => {
   const { suite } = await loadBenchmarkSuite();
-  assert.equal(suite.version, "1.2.0");
-  assert.equal(suite.tasks.length, 8);
+  assert.equal(suite.version, "1.3.0");
+  assert.equal(suite.tasks.length, 11);
   assert.ok(suite.tasks.some(task => task.category === "multi-file"));
   assert.ok(suite.tasks.some(task => task.category === "async-control"));
-  assert.equal(new Set(suite.tasks.flatMap(task => task.expectedChangedPaths)).size, 9);
+  assert.ok(suite.tasks.some(task => task.baselineCheck === "python-unittest"));
+  assert.ok(suite.tasks.some(task => task.baselineCheck === "go-test"));
+  assert.ok(suite.tasks.some(task => task.baselineCheck === "rust-test"));
+  assert.equal(new Set(suite.tasks.flatMap(task => task.expectedChangedPaths)).size, 12);
 });
 test("suite validation rejects duplicate IDs and fixture path traversal", () => {
   const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-script", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
@@ -40,9 +43,12 @@ test("task evaluator requires exact changed paths and successful verification", 
 test("benchmark summary calculates rates, latency and token totals", () => {
   const summary = summarizeBenchmarkResults([
     { patchValid: true, verificationPassed: true, taskComplete: true, latencyMs: 100, tokens: { prompt: 20, output: 10, total: 30 }, peakProcessRssBytes: 200 },
-    { patchValid: true, verificationPassed: false, taskComplete: false, latencyMs: 300, tokens: { prompt: 40, output: 15, total: 55 }, peakProcessRssBytes: 250 }
+    { patchValid: true, verificationPassed: false, taskComplete: false, latencyMs: 300, tokens: { prompt: 40, output: 15, total: 55 }, peakProcessRssBytes: 250 },
+    { skipped: true, patchValid: false, verificationPassed: false, taskComplete: false, latencyMs: 0, tokens: { prompt: 0, output: 0, total: 0 }, peakProcessRssBytes: 0 }
   ]);
-  assert.equal(summary.taskCount, 2);
+  assert.equal(summary.taskCount, 3);
+  assert.equal(summary.executedTaskCount, 2);
+  assert.equal(summary.skippedTaskCount, 1);
   assert.equal(summary.patchValidityRate, 1);
   assert.equal(summary.verificationPassRate, 0.5);
   assert.equal(summary.taskCompletionRate, 0.5);
