@@ -164,7 +164,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Create a versioned coding benchmark from representative local tasks and regression fixtures.
 - [x] Record patch validity, candidate-test verification, task completion, end-to-end latency, prompt/output tokens, and benchmark-process RSS with each model run.
 - Add provider selection and clear model capability metadata.
-- Add failure recovery for provider disconnects, context exhaustion, and interrupted generations.
+- [x] Add bounded Ollama retries for transient transport/server failures; classify context-window and model-memory exhaustion; reject incomplete streams and never replay partial streamed output.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
 - Publish a reproducible release checklist and migration notes.
 

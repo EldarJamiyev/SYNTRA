@@ -8,6 +8,92 @@ const LOCAL_TIMEOUT_MS = 1200;
 // and other applications. Installed file size is only a conservative first-pass proxy.
 const MAX_MODEL_RAM_FRACTION = 0.70;
 
+const DEFAULT_OLLAMA_RETRIES = 1;
+const MAX_OLLAMA_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_MS = 250;
+
+function providerError(message, code, retryable = false, status = undefined) {
+  const error = new Error(message);
+  error.code = code;
+  error.retryable = retryable;
+  if (status !== undefined) error.status = status;
+  return error;
+}
+
+function classifyOllamaFailure(message, status = undefined) {
+  const detail = String(message || "Local Ollama inference failed.").trim();
+  const normalized = detail.toLowerCase();
+
+  if (/context(?: length| window)?|too many tokens|prompt.{0,20}too long|input.{0,20}too long|num_ctx|maximum context/.test(normalized)) {
+    return providerError(
+      "The prompt exceeded the selected model's context window. Reduce the task or retrieved workspace context, or set SYNTRA_LOCAL_CONTEXT to a supported value up to 32768 and restart SYNTRA.",
+      "CONTEXT_EXHAUSTED",
+      false,
+      status
+    );
+  }
+  if (/out of memory|insufficient memory|requires more system memory|cuda.{0,20}out of memory|failed to allocate/.test(normalized)) {
+    return providerError(
+      "The local model ran out of available memory. Use a smaller or more heavily quantized model, or lower SYNTRA_LOCAL_CONTEXT before restarting SYNTRA.",
+      "MODEL_MEMORY",
+      false,
+      status
+    );
+  }
+  if (status === 404 && /model|manifest|pull/.test(normalized)) {
+    return providerError(
+      "The selected Ollama model is no longer available. Pull the configured model again or choose an installed local model, then restart SYNTRA.",
+      "MODEL_NOT_FOUND",
+      false,
+      status
+    );
+  }
+  if (status === 429 || status === 502 || status === 503 || status === 504 || (status >= 500 && status <= 599)) {
+    return providerError("Local Ollama is temporarily unable to serve this request (HTTP " + status + "). SYNTRA will retry within its bounded retry limit.", "PROVIDER_TEMPORARY", true, status);
+  }
+  return providerError(detail, status ? "PROVIDER_REJECTED" : "PROVIDER_FAILURE", false, status);
+}
+
+function retryLimit(value = process.env.SYNTRA_OLLAMA_RETRIES) {
+  if (value === undefined || value === null || value === "") return DEFAULT_OLLAMA_RETRIES;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_OLLAMA_RETRIES;
+  return Math.max(0, Math.min(MAX_OLLAMA_RETRIES, Math.floor(parsed)));
+}
+
+function classifyTransportFailure(error) {
+  const message = error instanceof Error ? error.message : String(error || "Local Ollama connection failed.");
+  const causeCode = error?.cause?.code || error?.code;
+  const retryableCode = ["ECONNREFUSED", "ECONNRESET", "EPIPE", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "EAI_AGAIN", "ENOTFOUND"].includes(causeCode);
+  const retryableMessage = /fetch failed|network|socket|connection (?:refused|reset|closed|lost)|timed? ?out|ECONN(?:REFUSED|RESET)|EPIPE|EAI_AGAIN|ENOTFOUND/i.test(message);
+  if (error?.name === "TimeoutError" || retryableCode || retryableMessage) {
+    return providerError("The connection to local Ollama failed or timed out. SYNTRA will retry within its bounded retry limit.", "PROVIDER_CONNECTION", true);
+  }
+  return providerError(message, "PROVIDER_FAILURE", false);
+}
+
+function cancellationError() {
+  return providerError("Generation was cancelled.", "GENERATION_CANCELLED", false);
+}
+
+function waitBeforeRetry(milliseconds, signal) {
+  if (signal?.aborted) return Promise.reject(cancellationError());
+  if (milliseconds <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(cancellationError());
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 function normalizeMode(value = process.env.SYNTRA_MODEL_PROVIDER || "auto") {
   const mode = String(value).trim().toLowerCase();
   if (!["auto", "native", "ollama"].includes(mode)) {
@@ -189,7 +275,7 @@ function estimateTokens(text) {
 
 async function readOllamaStream(response, onToken) {
   if (!response.body || typeof response.body.getReader !== "function") {
-    throw new Error("The local model did not provide a readable token stream.");
+    throw providerError("The local model did not provide a readable token stream.", "INVALID_MODEL_STREAM");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -204,9 +290,9 @@ async function readOllamaStream(response, onToken) {
     try {
       chunk = JSON.parse(trimmed);
     } catch {
-      throw new Error("The local model returned malformed streaming data. Check the Ollama logs.");
+      throw providerError("The local model returned malformed streaming data. Check the Ollama logs.", "MALFORMED_MODEL_STREAM");
     }
-    if (chunk.error) throw new Error(String(chunk.error));
+    if (chunk.error) throw classifyOllamaFailure(chunk.error);
     const delta = chunk.message?.content;
     if (typeof delta === "string" && delta) {
       content += delta;
@@ -232,58 +318,102 @@ async function readOllamaStream(response, onToken) {
     reader.releaseLock();
   }
 
-  if (!content) {
-    throw new Error("The local model returned no text. Try a different installed model or check its Ollama logs.");
+  if (!finalChunk) {
+    throw providerError(
+      "The local model stream closed before Ollama signalled completion.",
+      "STREAM_INTERRUPTED",
+      true
+    );
   }
-  return { content, finalChunk: finalChunk || {} };
+  if (!content) {
+    throw providerError("The local model returned no text. Try a different installed model or check its Ollama logs.", "EMPTY_MODEL_RESPONSE");
+  }
+  return { content, finalChunk };
 }
 
-async function ollamaFetch(provider, body, timeoutMs, fetchImpl, onToken, signal) {
+async function ollamaFetch(provider, body, timeoutMs, fetchImpl, onToken, signal, {
+  maxRetries,
+  retryDelayMs = DEFAULT_RETRY_DELAY_MS
+} = {}) {
   const streaming = typeof onToken === "function";
   const requestBody = { ...body, stream: streaming };
-  const response = await fetchImpl(provider.baseUrl + "/api/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestBody),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || 300000)]) : AbortSignal.timeout(timeoutMs || 300000)
-  });
+  const retries = retryLimit(maxRetries);
+  const requestTimeout = timeoutMs || 300000;
+  let attempts = 0;
+  let emittedCharacters = 0;
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || "Local Ollama inference failed with HTTP " + response.status + ".");
-  }
+  while (true) {
+    if (signal?.aborted) throw cancellationError();
+    try {
+      const timeoutSignal = AbortSignal.timeout(requestTimeout);
+      const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+      const response = await fetchImpl(provider.baseUrl + "/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+        signal: requestSignal
+      });
 
-  let content;
-  let payload;
-  if (streaming) {
-    const streamed = await readOllamaStream(response, onToken);
-    content = streamed.content;
-    payload = streamed.finalChunk;
-  } else {
-    payload = await response.json().catch(() => ({}));
-    content = payload.message?.content;
-    if (typeof content !== "string") {
-      throw new Error("The local model returned no text. Try a different installed model or check its Ollama logs.");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw classifyOllamaFailure(payload.error || "Local Ollama inference failed with HTTP " + response.status + ".", response.status);
+      }
+
+      let content;
+      let payload;
+      if (streaming) {
+        const streamed = await readOllamaStream(response, (delta, fullText) => {
+          emittedCharacters += delta.length;
+          onToken(delta, fullText);
+        });
+        content = streamed.content;
+        payload = streamed.finalChunk;
+      } else {
+        payload = await response.json().catch(() => ({}));
+        content = payload.message?.content;
+        if (typeof content !== "string") {
+          throw providerError("The local model returned no text. Try a different installed model or check its Ollama logs.", "EMPTY_MODEL_RESPONSE");
+        }
+      }
+
+      return {
+        text: content,
+        generated_tokens: Number(payload.eval_count || estimateTokens(content)),
+        prompt_tokens: Number(payload.prompt_eval_count || 0) || undefined,
+        trained_steps: null,
+        provider: provider.provider,
+        model_name: provider.model,
+        context_window_tokens: provider.contextTokens,
+        is_model_output: true
+      };
+    } catch (error) {
+      if (signal?.aborted) throw cancellationError();
+      const failure = error?.code ? error : classifyTransportFailure(error);
+      const canRetry = failure.retryable === true
+        && attempts < retries
+        && (!streaming || emittedCharacters === 0);
+      if (!canRetry) {
+        if (streaming && emittedCharacters > 0 && failure.retryable) {
+          throw providerError(
+            "The local model connection was interrupted after partial output. SYNTRA did not replay the request because that would duplicate streamed text. Retry the request.",
+            "STREAM_INTERRUPTED"
+          );
+        }
+        throw failure;
+      }
+      attempts += 1;
+      await waitBeforeRetry(Math.max(0, retryDelayMs) * attempts, signal);
     }
   }
-
-  return {
-    text: content,
-    generated_tokens: Number(payload.eval_count || estimateTokens(content)),
-    prompt_tokens: Number(payload.prompt_eval_count || 0) || undefined,
-    trained_steps: null,
-    provider: provider.provider,
-    model_name: provider.model,
-    context_window_tokens: provider.contextTokens,
-    is_model_output: true
-  };
 }
 
 export async function handleLocalModelRequest(provider, method, route, body = {}, {
   fetchImpl = globalThis.fetch,
   timeoutMs,
   onToken,
-  signal
+  signal,
+  maxRetries,
+  retryDelayMs
 } = {}) {
   if (method === "GET" && route === "/model/status") return getProviderStatus(provider);
 
@@ -415,7 +545,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
         additionalProperties: false
       };
     }
-    return ollamaFetch(provider, requestBody, timeoutMs || 300000, fetchImpl, onToken, signal);
+    return ollamaFetch(provider, requestBody, timeoutMs || 300000, fetchImpl, onToken, signal, { maxRetries, retryDelayMs });
   }
 
   return null;

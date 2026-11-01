@@ -270,3 +270,117 @@ test("default model discovery caches short-lived misses to avoid repeated Ollama
     else process.env.SYNTRA_MODEL_PROVIDER = previousMode;
   }
 });
+
+
+test("an incomplete Ollama stream is retried only before any text has been emitted", async () => {
+  const provider = {
+    provider: "ollama-local", baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b", modelSizeBytes: 9 * GB,
+    contextTokens: 8192, tokenizer: "ollama-local-tokenizer"
+  };
+  let calls = 0;
+  const lines = [
+    JSON.stringify({ message: { role: "assistant", content: "Recovered answer" }, done: false }),
+    JSON.stringify({ message: { role: "assistant", content: "" }, done: true, eval_count: 2 })
+  ].join("\n") + "\n";
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response(JSON.stringify({ message: { role: "assistant", content: "" }, done: false }) + "\n", {
+        status: 200, headers: { "Content-Type": "application/x-ndjson" }
+      });
+    }
+    return new Response(lines, { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+  };
+  const updates = [];
+  const result = await handleLocalModelRequest(provider, "POST", "/model/generate", { prompt: "Recover" }, {
+    fetchImpl, onToken: (delta, fullText) => updates.push({ delta, fullText }),
+    timeoutMs: 1000, retryDelayMs: 0
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.text, "Recovered answer");
+  assert.deepEqual(updates, [{ delta: "Recovered answer", fullText: "Recovered answer" }]);
+});
+
+test("an interrupted Ollama stream with partial text is not replayed", async () => {
+  const provider = {
+    provider: "ollama-local", baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b", modelSizeBytes: 9 * GB,
+    contextTokens: 8192, tokenizer: "ollama-local-tokenizer"
+  };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({
+      message: { role: "assistant", content: "Partial answer" }, done: false
+    }) + "\n", { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
+  };
+  const updates = [];
+  await assert.rejects(
+    () => handleLocalModelRequest(provider, "POST", "/model/generate", { prompt: "Recover" }, {
+      fetchImpl, onToken: (delta, fullText) => updates.push({ delta, fullText }),
+      timeoutMs: 1000, retryDelayMs: 0
+    }),
+    error => error.code === "STREAM_INTERRUPTED" && /did not replay/.test(error.message)
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(updates, [{ delta: "Partial answer", fullText: "Partial answer" }]);
+});
+
+test("transient Ollama HTTP failures receive one bounded retry", async () => {
+  const provider = {
+    provider: "ollama-local", baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b", modelSizeBytes: 9 * GB,
+    contextTokens: 8192, tokenizer: "ollama-local-tokenizer"
+  };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls === 1) return new Response(JSON.stringify({ error: "service unavailable" }), { status: 503 });
+    return new Response(JSON.stringify({ message: { role: "assistant", content: "Recovered" }, eval_count: 1 }), { status: 200 });
+  };
+  const result = await handleLocalModelRequest(provider, "POST", "/model/generate", { prompt: "Recover" }, {
+    fetchImpl, timeoutMs: 1000, retryDelayMs: 0
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.text, "Recovered");
+});
+
+test("context exhaustion is actionable and never retried", async () => {
+  const provider = {
+    provider: "ollama-local", baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b", modelSizeBytes: 9 * GB,
+    contextTokens: 8192, tokenizer: "ollama-local-tokenizer"
+  };
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ error: "prompt is too long for the context window" }), { status: 400 });
+  };
+  await assert.rejects(
+    () => handleLocalModelRequest(provider, "POST", "/model/generate", { prompt: "Too much context" }, {
+      fetchImpl, timeoutMs: 1000, retryDelayMs: 0
+    }),
+    error => error.code === "CONTEXT_EXHAUSTED" && /Reduce the task or retrieved workspace context/.test(error.message)
+  );
+  assert.equal(calls, 1);
+});
+
+test("user cancellation prevents the Ollama request and bypasses retries", async () => {
+  const provider = {
+    provider: "ollama-local", baseUrl: "http://127.0.0.1:11434",
+    model: "qwen2.5-coder:14b", modelSizeBytes: 9 * GB,
+    contextTokens: 8192, tokenizer: "ollama-local-tokenizer"
+  };
+  const controller = new AbortController();
+  controller.abort();
+  let calls = 0;
+  await assert.rejects(
+    () => handleLocalModelRequest(provider, "POST", "/model/generate", { prompt: "Cancel" }, {
+      fetchImpl: async () => { calls += 1; throw new Error("must not be called"); },
+      signal: controller.signal, timeoutMs: 1000, retryDelayMs: 0
+    }),
+    error => error.code === "GENERATION_CANCELLED"
+  );
+  assert.equal(calls, 0);
+});
