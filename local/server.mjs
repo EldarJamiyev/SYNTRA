@@ -825,8 +825,39 @@ function hasValidApiToken(request) {
   return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
 }
 
+
+function canonicalApprovalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalApprovalValue);
+  if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalApprovalValue(value[key])]));
+  return value;
+}
+function approvalFingerprint(root, name, input) {
+  return crypto.createHash("sha256").update(JSON.stringify(canonicalApprovalValue({ root, name, input }))).digest("hex");
+}
+async function issueApprovalCapability(body) {
+  const name = typeof body.name === "string" ? body.name : "";
+  const input = body.input && typeof body.input === "object" && !Array.isArray(body.input) ? body.input : {};
+  const root = await resolveWorkspace(body.root || activeWorkspace);
+  const definition = listWorkspaceTools().find(item => item.name === name);
+  if (!definition || definition.approvalRequired !== true) throw new Error("An approval capability can only be issued for a tool that requires approval.");
+  const now = Date.now();
+  for (const [key, value] of approvalCapabilities) if (value.expiresAt <= now) approvalCapabilities.delete(key);
+  while (approvalCapabilities.size >= 128) approvalCapabilities.delete(approvalCapabilities.keys().next().value);
+  const token = crypto.randomBytes(32).toString("hex");
+  approvalCapabilities.set(token, { root, name, fingerprint: approvalFingerprint(root, name, input), expiresAt: now + 60000 });
+  return { approvalToken: token, expiresInSeconds: 60, name };
+}
+function consumeApprovalCapability(token, root, name, input) {
+  if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) return false;
+  const capability = approvalCapabilities.get(token);
+  approvalCapabilities.delete(token);
+  return Boolean(capability && capability.expiresAt > Date.now() && capability.root === root && capability.name === name
+    && capability.fingerprint === approvalFingerprint(root, name, input));
+}
+
 const routeHandlers = {
   "GET /local-api/session": async () => ({ token: API_TOKEN }),
+  "POST /local-api/approvals": issueApprovalCapability,
   "GET /": async () => ({
     status: "ok",
     service: "SYNTRA local API",
@@ -848,13 +879,12 @@ const routeHandlers = {
   "POST /local-api/agent/runs/get": readCurrentAgentRun,
   "POST /local-api/agent/runs/resume": resumeAgentRun,
   "GET /local-api/tools": async () => ({ tools: listWorkspaceTools() }),
-  "POST /local-api/tools/execute": async body => executeWorkspaceTool({
-    root: body.root || activeWorkspace,
-    auditRoot: body.root || activeWorkspace,
-    name: body.name,
-    input: body.input || {},
-    approval: body.approval === true
-  }),
+  "POST /local-api/tools/execute": async body => {
+    const root = await resolveWorkspace(body.root || activeWorkspace);
+    const input = body.input || {};
+    const approved = consumeApprovalCapability(body.approvalToken, root, body.name, input);
+    return executeWorkspaceTool({ root, auditRoot: root, name: body.name, input, approval: approved });
+  },
   "GET /local-api/workspace/status": async () => readWorkspaceStatus(),
   "GET /local-api/workspace/exclusions": async () => getWorkspaceExclusions(activeWorkspace),
   "POST /local-api/workspace/exclusions": async body => updateWorkspaceExclusions(activeWorkspace, body),
