@@ -1551,8 +1551,9 @@ export async function runAgentTask({
               observations.push({
                 kind: "patch-self-review",
                 stage: slice.id + "-attempt-" + sliceAttempt,
-                status: "accepted",
-                detail: patchReview.review.rationale.slice(0, 400)
+                status: patchReview.separateRequest && patchReview.reviewerModel !== modelMetadata.name
+                  ? "accepted_separate_model" : "accepted_same_model",
+                detail: (patchReview.reviewerModel + ": " + patchReview.review.rationale).slice(0, 400)
               });
             } else {
               observations.push({

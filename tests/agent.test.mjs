@@ -776,7 +776,7 @@ test("independent patch review rejects an incomplete patch and feeds findings in
           generated_tokens: 30, trained_steps: null
         };
       }
-      assert.match(body.prompt, /Independent patch review found concrete blocking issues/);
+      assert.match(body.prompt, /Second-pass patch review found concrete blocking issues/);
       return {
         text: JSON.stringify({
           summary: "Update the value and the requested test title.",
