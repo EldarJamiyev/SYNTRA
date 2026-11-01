@@ -192,7 +192,7 @@ function extractImportSpecifiers(relativePath, content) {
     }
     visit(sourceFile);
   } else if (extension === ".py" || extension === ".pyi") {
-    const pattern = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([\w.]+)/gm;
+    const pattern = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([\w.]+))/gm;
     for (const match of content.matchAll(pattern)) add(match[1] || match[2]);
   } else if (extension === ".go") {
     const blocks = content.match(/\bimport\s*\([\s\S]*?\)/g) || [];
