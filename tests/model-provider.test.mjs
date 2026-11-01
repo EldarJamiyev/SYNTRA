@@ -18,7 +18,7 @@ test("model selection prefers local coding models and excludes cloud-only or ove
     { name: "qwen3-coder:480b-cloud", size: 290 * GB },
     { name: "qwen3-coder-next:latest", size: 44 * GB }
   ];
-  assert.equal(chooseLocalModel(models, "", 32 * GB)?.name, "qwen3-coder:30b");
+  assert.equal(chooseLocalModel(models, "", 32 * GB)?.name, "qwen2.5-coder:14b");
   assert.equal(chooseLocalModel(models, "qwen2.5-coder:14b", 32 * GB)?.name, "qwen2.5-coder:14b");
   assert.equal(chooseLocalModel(models, "qwen3-coder:480b-cloud", 512 * GB), null);
   assert.equal(chooseLocalModel(models, "", 8 * GB)?.name, "llama3.2:latest");
@@ -30,11 +30,11 @@ test("model selection leaves memory headroom and applies the same limit to expli
     { name: "giant-coder:latest", size: 23 * GB },
     { name: "llama3.2:latest", size: 4 * GB }
   ];
-  assert.equal(chooseLocalModel(models, "", 32 * GB)?.name, "qwen3-coder:30b");
+  assert.equal(chooseLocalModel(models, "", 32 * GB)?.name, "llama3.2:latest");
   assert.equal(chooseLocalModel(models, "giant-coder:latest", 32 * GB), null,
     "an explicit preference must never bypass the memory safety threshold");
-  assert.equal(chooseLocalModel([{ name: "exact-limit:latest", size: 22.4 * GB }], "", 32 * GB)?.name, "exact-limit:latest");
-  assert.equal(chooseLocalModel([{ name: "just-over-limit:latest", size: 22.41 * GB }], "", 32 * GB), null);
+  assert.equal(chooseLocalModel([{ name: "exact-limit:latest", size: 17.6 * GB }], "", 32 * GB)?.name, "exact-limit:latest");
+  assert.equal(chooseLocalModel([{ name: "just-over-limit:latest", size: 17.61 * GB }], "", 32 * GB), null);
 });
 
 test("native mode never probes Ollama; auto mode safely falls back if it is offline", async () => {

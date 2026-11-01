@@ -6,7 +6,7 @@ const MAX_CONTEXT = 32768;
 const LOCAL_TIMEOUT_MS = 1200;
 // Reserve at least 30% of physical RAM for the OS, model runtime, context cache,
 // and other applications. Installed file size is only a conservative first-pass proxy.
-const MAX_MODEL_RAM_FRACTION = 0.45;
+const MAX_MODEL_RAM_FRACTION = 0.55;
 
 const DEFAULT_OLLAMA_RETRIES = 1;
 const MAX_OLLAMA_RETRIES = 2;
