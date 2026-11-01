@@ -31,12 +31,12 @@ test("TypeScript baseline invokes the installed compiler and detects then clears
       include: ["src/**/*.ts"]
     }, null, 2));
     const sourcePath = path.join(root, "src", "contract.ts");
-    await fs.writeFile(sourcePath, "export interface Profile { name: string }\\nexport const profile: Profile = { name: 42 };\\n");
+    await fs.writeFile(sourcePath, "export interface Profile { name: string }\nexport const profile: Profile = { name: 42 };\n");
     const failing = await runTypeScriptBaselineCheck(root, "tsconfig.json");
     assert.equal(failing.passed, false);
     assert.notEqual(failing.exitCode, 0);
     assert.match(failing.stdout + failing.stderr, /name/);
-    await fs.writeFile(sourcePath, "export interface Profile { name: string }\\nexport const profile: Profile = { name: \"SYNTRA\" };\\n");
+    await fs.writeFile(sourcePath, "export interface Profile { name: string }\nexport const profile: Profile = { name: \"SYNTRA\" };\n");
     const passing = await runTypeScriptBaselineCheck(root, "tsconfig.json");
     assert.equal(passing.passed, true, passing.stdout + passing.stderr);
     assert.equal(passing.exitCode, 0);
