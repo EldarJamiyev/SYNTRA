@@ -117,7 +117,7 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Cover two-slice verification, candidate-context refresh, cumulative proposal hashes, and incomplete-slice failure handling with tests.
 - [x] Cover durable storage, lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
 
-Still outstanding in this phase: model-selected execution/source-modification tool choice, durable resume of a partially verified slice (the recovery point remains the last verified slice boundary), and optional parallel execution of independent read-only tasks. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
+Still outstanding in this phase: model-selected execution/source-modification tool choice, serialization of arbitrary intermediate model/tool operations within a slice, and optional parallel execution of independent read-only tasks. A bounded candidate snapshot is now persisted before project checks; after restart SYNTRA validates original hashes and re-runs checks before resuming from that candidate. The current workflow remains bounded and permissioned; model-selected source writes and arbitrary shell execution are not claimed as delivered.
 
 **Acceptance:** A complex task can complete multiple verified slices, resume after interruption, and explain which evidence supports its final status. Retries are bounded and cannot bypass safety checks.
 
@@ -152,7 +152,7 @@ Still outstanding in this phase: model-selected execution/source-modification to
 
 **Delivered evaluation slice (initial):**
 
-- [x] Add a versioned local coding benchmark suite with three intentionally failing Node.js regression fixtures.
+- [x] Add a versioned local coding benchmark suite with eleven deterministic fixtures spanning JavaScript utilities, async/API behavior, multi-file changes, Python unittest, Go test and Rust Cargo test; non-JavaScript tasks are skipped when their required runtime is unavailable.
 - [x] Run the real coding agent against disposable fixture copies using the selected local model; do not apply proposals to the active workspace.
 - [x] Require the exact expected changed-file set and passing candidate verification for task completion; extra test/configuration edits invalidate the patch score.
 - [x] Record provider/model identity, task latency, prompt/output tokens, patch validity, verification outcomes, task completion, and benchmark-process peak RSS in JSON reports.
@@ -166,11 +166,11 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Capture CPU, memory, runtime, and architecture metadata and mark latency/RSS comparisons incomparable when environments differ.
 - [x] Test report validation, improvement/regression detection, task-set matching, and environment comparability.
 
-Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Prompt token counts may be unavailable from the provider. Hardware metadata cannot prove identical background load or power/thermal conditions. The current eight-task deterministic suite broadens JavaScript task coverage but does not yet provide equivalent Python, Rust, Go or framework coverage and cannot prove parity with frontier engineering agents.
+Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Some provider token counts may be unavailable or estimated. Hardware metadata cannot prove identical background load or power/thermal conditions. The eleven-task deterministic suite now includes Python, Go and Rust tasks, but the non-JavaScript fixtures are small language-smoke tasks, not broad framework coverage. The suite is not evidence of parity with frontier engineering agents until real model runs and a larger, versioned benchmark corpus have been measured.
 
 - [x] Create a versioned coding benchmark from representative local tasks and regression fixtures.
 - [x] Record patch validity, candidate-test verification, task completion, end-to-end latency, prompt/output tokens, and benchmark-process RSS with each model run.
-- Add provider selection and clear model capability metadata.
+- [x] Add provider selection and capability metadata that distinguishes locally measured/heuristic attributes from unmeasured engineering task performance. Local model selection scores remain heuristics; no model is labeled frontier-equivalent.
 - [x] Add bounded Ollama retries for transient transport/server failures; classify context-window and model-memory exhaustion; reject incomplete streams and never replay partial streamed output.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
 - [x] Add an explicitly opt-in Gemini API provider with server-side API-key handling, request cancellation, provider metadata, and a separate consent gate before repository context is sent to the cloud.
