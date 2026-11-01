@@ -33,6 +33,7 @@ let activeWorkspace = process.env.SYNTRA_WORKSPACE ? path.resolve(process.env.SY
 const chatJobs = new Map();
 let activeChatJobId = null;
 const API_TOKEN = String(process.env.SYNTRA_API_TOKEN || crypto.randomBytes(32).toString("hex"));
+const approvalCapabilities = new Map();
 
 
 function sendJson(response, status, data) {

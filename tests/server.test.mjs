@@ -273,7 +273,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     let statusResult = null;
     const statusDeadline = Date.now() + 5_000;
     while (Date.now() < statusDeadline) {
-      const response = await apiFetch(base + "/local-api/chat/status", {
+      const response = await service.apiFetch(base + "/local-api/chat/status", {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
         body: JSON.stringify({ jobId: statusJob.jobId })
