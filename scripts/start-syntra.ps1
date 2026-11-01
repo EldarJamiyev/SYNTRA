@@ -134,9 +134,9 @@ try {
 
     $UseOllama = $false
     $UsableOllamaModels = @()
-    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "auto" }
-    if (@("auto", "native", "ollama") -notcontains $providerMode) {
-        throw "SYNTRA_MODEL_PROVIDER must be auto, native, or ollama."
+    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "ollama" }
+    if (@("native", "ollama") -notcontains $providerMode) {
+        throw "SYNTRA_MODEL_PROVIDER must be native or ollama. Ollama is the default production backend."
     }
 
     if ($providerMode -ne "native") {
@@ -174,7 +174,7 @@ try {
             }
         }
         if ($providerMode -eq "ollama" -and -not $UseOllama) {
-            throw "SYNTRA is set to use Ollama, but no suitable local model is ready. Start Ollama and install a model such as qwen3-coder:30b, or set SYNTRA_MODEL_PROVIDER=auto."
+            throw "SYNTRA is set to use pretrained Ollama inference, but no suitable local model is ready. Start Ollama and install a local model, or explicitly set SYNTRA_MODEL_PROVIDER=native to use the experimental from-scratch research model."
         }
     }
 

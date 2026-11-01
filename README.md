@@ -6,7 +6,7 @@ See [the staged product roadmap](docs/ROADMAP.md) for the planned path from the 
 
 ## Windows launch
 
-Requirements: Node.js 20+ and Git. The test suite includes an HTTP smoke test for the local API's origin guards and request validation. Python 3.11+ is required only for the native model fallback. A compatible local model in Ollama is preferred automatically.
+Requirements: Node.js 20+, Git, and a compatible pretrained local model installed in Ollama (the production default). Python 3.11+ is required only when you explicitly select the experimental native research model with `SYNTRA_MODEL_PROVIDER=native`. The local API tests include origin-guard and request-validation coverage.
 
 In your existing SYNTRA repository folder, run:
 
@@ -46,9 +46,9 @@ SYNTRA's local tool runtime exposes a structured catalogue at `GET /local-api/to
 
 ## Local model
 
-SYNTRA prefers an installed local Ollama model and does not call a hosted AI API. Its model selection excludes cloud-only models and rejects weights larger than 70% of physical RAM, leaving room for the OS and inference context/cache. That is a conservative file-size filter, not a guarantee that every remaining model will fit in practice. Model discovery is briefly cached between the status, token-count, and generation stages to avoid repeating the same probe. Inference speed and answer quality still depend on your hardware and the installed model. Ollama generation retries transient transport and server failures at most once by default (up to two retries with SYNTRA_OLLAMA_RETRIES=2). Set SYNTRA_OLLAMA_RETRIES=0 to disable retries. A streamed answer is never replayed after text has reached the chat, preventing duplicate output. Context-window and model-memory failures are reported separately with corrective guidance; they are not retried.
+SYNTRA uses a pretrained local Ollama model by default and does not call a hosted AI API. Set `SYNTRA_LOCAL_MODEL` to select an exact installed model; otherwise SYNTRA ranks the installed local models and chooses one that passes its conservative memory filter. Cloud-tagged models are excluded. The filter uses model artifact size and runtime metadata where available, but remains an estimate rather than a guarantee that every remaining model will fit in practice. Model discovery is briefly cached between status, token-count, and generation stages. Inference speed and answer quality still depend on your hardware and selected model. Ollama generation retries transient transport and server failures at most once by default (up to two retries with `SYNTRA_OLLAMA_RETRIES=2`). Set `SYNTRA_OLLAMA_RETRIES=0` to disable retries. A streamed answer is never replayed after text has reached the chat, preventing duplicate output. Context-window and model-memory failures are reported separately with corrective guidance; they are not retried.
 
-If Ollama is unavailable, SYNTRA can use its own local PyTorch runtime. The native model starts with randomly initialized weights: training it from scratch on a small local corpus does not make it comparable to Claude or other frontier models.
+The native PyTorch Transformer is available only by explicitly setting `SYNTRA_MODEL_PROVIDER=native` before starting SYNTRA. It starts from randomly initialized weights and is a separate research implementation for experimenting with tokenization, training, and checkpoint mechanics. It is not an automatic fallback, a pretrained coding model, or a substitute for Ollama. Training it from scratch on a small local corpus does not make it comparable to a modern coding model.
 
 ## Important boundary
 

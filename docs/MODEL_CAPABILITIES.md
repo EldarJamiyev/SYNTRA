@@ -2,7 +2,7 @@
 
 ## Local inference
 
-SYNTRA can route inference to an installed local Ollama model or to its experimental native model service. Ollama model files remain local; the application does not need a hosted LLM API for this path.
+The production coding backend is a pretrained local Ollama model. `SYNTRA_MODEL_PROVIDER=ollama` is the default and fails closed when Ollama or the configured local model is unavailable; SYNTRA does not silently substitute its scratch-trained model. Set `SYNTRA_MODEL_PROVIDER=native` only when deliberately experimenting with the native Transformer research backend. The native mode requires its own Python environment and checkpoint. Ollama model files remain local; no hosted LLM API is used.
 
 The native model is a small, randomly initialized decoder-only research model trained from local source text. It is useful for experimentation with tokenization, training, inference, and checkpoint mechanics. It is not a pretrained coding model and should not be represented as comparable to a modern 7B/14B coding model or Claude Code.
 

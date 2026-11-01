@@ -94,10 +94,10 @@ function waitBeforeRetry(milliseconds, signal) {
   });
 }
 
-function normalizeMode(value = process.env.SYNTRA_MODEL_PROVIDER || "auto") {
+function normalizeMode(value = process.env.SYNTRA_MODEL_PROVIDER || "ollama") {
   const mode = String(value).trim().toLowerCase();
-  if (!["auto", "native", "ollama"].includes(mode)) {
-    throw new Error("SYNTRA_MODEL_PROVIDER must be auto, native, or ollama.");
+  if (!["native", "ollama"].includes(mode)) {
+    throw new Error("SYNTRA_MODEL_PROVIDER must be native or ollama. Ollama is the default production backend.");
   }
   return mode;
 }
@@ -226,7 +226,7 @@ async function detectLocalModelUncached({
     response = await fetchImpl(OLLAMA_BASE + "/api/tags", { signal: AbortSignal.timeout(timeoutMs) });
   } catch (error) {
     if (mode === "ollama") {
-      throw new Error("SYNTRA is configured for a local Ollama model, but Ollama is not responding at http://127.0.0.1:11434. Start Ollama or set SYNTRA_MODEL_PROVIDER=auto.");
+      throw new Error("SYNTRA is configured for the pretrained Ollama backend, but Ollama is not responding at http://127.0.0.1:11434. Start Ollama, or explicitly set SYNTRA_MODEL_PROVIDER=native to use the experimental from-scratch research model.");
     }
     return null;
   }

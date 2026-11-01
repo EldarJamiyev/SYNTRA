@@ -74,23 +74,34 @@ test("resource profile stays honest when Ollama metadata is incomplete", () => {
   assert.equal(profile.confidence, "partial");
 });
 
-test("native mode never probes Ollama; auto mode safely falls back if it is offline", async () => {
+test("native mode is explicit; the default Ollama mode fails closed instead of falling back", async () => {
+  const originalMode = process.env.SYNTRA_MODEL_PROVIDER;
   let calls = 0;
   const failingFetch = async () => {
     calls += 1;
     throw new Error("connection refused");
   };
-  assert.equal(await detectLocalModel({ mode: "native", fetchImpl: failingFetch }), null);
-  assert.equal(calls, 0);
-  assert.equal(await detectLocalModel({ mode: "auto", fetchImpl: failingFetch }), null);
-  assert.equal(calls, 1);
-  await assert.rejects(
-    () => detectLocalModel({ mode: "ollama", fetchImpl: failingFetch }),
-    /Ollama is not responding at http:\/\/127\.0\.0\.1:11434/
-  );
+  try {
+    delete process.env.SYNTRA_MODEL_PROVIDER;
+    assert.equal(await detectLocalModel({ mode: "native", fetchImpl: failingFetch }), null);
+    assert.equal(calls, 0);
+    await assert.rejects(
+      () => detectLocalModel({ fetchImpl: failingFetch }),
+      /pretrained Ollama backend.*Ollama is not responding/
+    );
+    assert.equal(calls, 1);
+    await assert.rejects(
+      () => detectLocalModel({ mode: "auto", fetchImpl: failingFetch }),
+      /SYNTRA_MODEL_PROVIDER must be native or ollama/
+    );
+    assert.equal(calls, 1, "an unsupported auto mode must not probe or fall back");
+  } finally {
+    if (originalMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
+    else process.env.SYNTRA_MODEL_PROVIDER = originalMode;
+  }
 });
 
-test("auto mode selects an installed local model and reports local-only status", async () => {
+test("Ollama mode selects an installed local model and reports local-only status", async () => {
   const fetchImpl = async url => {
     assert.equal(url, "http://127.0.0.1:11434/api/tags");
     return new Response(JSON.stringify({
@@ -100,7 +111,7 @@ test("auto mode selects an installed local model and reports local-only status",
       ]
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
-  const provider = await detectLocalModel({ mode: "auto", fetchImpl, totalMemoryBytes: 32 * GB });
+  const provider = await detectLocalModel({ mode: "ollama", fetchImpl, totalMemoryBytes: 32 * GB });
   assert.equal(provider.provider, "ollama-local");
   assert.equal(provider.model, "qwen2.5-coder:14b");
   const status = getProviderStatus(provider);
@@ -286,23 +297,37 @@ test("local token estimate is bounded and clearly marked as an estimate", async 
 });
 
 
-test("default model discovery caches short-lived misses to avoid repeated Ollama probes", async () => {
+test("default model discovery caches successful Ollama selection", async () => {
   const originalFetch = globalThis.fetch;
   const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
-  let calls = 0;
+  let tagCalls = 0;
   globalThis.fetch = async url => {
-    calls += 1;
-    assert.equal(url, "http://127.0.0.1:11434/api/tags");
-    return new Response(JSON.stringify({ models: [] }), {
-      status: 200, headers: { "Content-Type": "application/json" }
-    });
+    if (url === "http://127.0.0.1:11434/api/tags") {
+      tagCalls += 1;
+      return new Response(JSON.stringify({ models: [{ name: "syntra-cache-regression-test", size: 1024 }] }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url === "http://127.0.0.1:11434/api/show") {
+      return new Response(JSON.stringify({ model_info: {} }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url === "http://127.0.0.1:11434/api/ps") {
+      return new Response(JSON.stringify({ models: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    }
+    throw new Error("Unexpected Ollama URL: " + url);
   };
   try {
     delete process.env.SYNTRA_MODEL_PROVIDER;
     const options = { requestedModel: "syntra-cache-regression-test" };
-    assert.equal(await detectLocalModel(options), null);
-    assert.equal(await detectLocalModel(options), null);
-    assert.equal(calls, 1, "a repeated miss inside the short cache window should not probe Ollama twice");
+    const first = await detectLocalModel(options);
+    const second = await detectLocalModel(options);
+    assert.equal(first?.model, "syntra-cache-regression-test");
+    assert.equal(second?.model, first.model);
+    assert.equal(tagCalls, 1, "a repeated successful selection inside the short cache window should reuse the cached provider");
   } finally {
     globalThis.fetch = originalFetch;
     if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
