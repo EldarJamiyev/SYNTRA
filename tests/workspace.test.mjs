@@ -15,6 +15,8 @@ import {
   listPendingProposals,
   proposeFileChange,
   readWorkspaceFile,
+  recordWorkspaceToolEvent,
+  workspaceLimits,
   runProjectCheck,
   searchWorkspace
 } from "../local/workspace.mjs";
@@ -33,6 +35,41 @@ async function createTempProject() {
   return root;
 }
 
+test("project checks are blocked until an isolation mode is explicitly selected", async () => {
+  const root = await createTempProject();
+  const previousMode = process.env.SYNTRA_CHECK_ISOLATION;
+  const previousOptIn = process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS;
+  process.env.SYNTRA_CHECK_ISOLATION = "disabled";
+  delete process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS;
+  try {
+    await assert.rejects(() => runProjectCheck(root, "build"), /Host execution is disabled by default/);
+  } finally {
+    if (previousMode === undefined) delete process.env.SYNTRA_CHECK_ISOLATION; else process.env.SYNTRA_CHECK_ISOLATION = previousMode;
+    if (previousOptIn === undefined) delete process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS; else process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS = previousOptIn;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("audit logs rotate and retain a bounded number of archives", async () => {
+  const root = await createTempProject();
+  try {
+    const state = path.join(root, ".syntra");
+    await fs.mkdir(state, { recursive: true });
+    const current = path.join(state, "actions.jsonl");
+    await fs.writeFile(current, "x".repeat(workspaceLimits.maxAuditLogBytes - 8), "utf8");
+    await recordWorkspaceToolEvent(root, {
+      runId: "12345678-1234-1234-1234-123456789abc",
+      tool: "workspace.check", permission: "execute", status: "completed", approved: true,
+      inputSummary: { task: "build" }, outputSummary: { passed: true }, durationMs: 12
+    });
+    const names = await fs.readdir(state);
+    assert.ok(names.includes("actions.jsonl.1"));
+    assert.ok((await fs.stat(current)).size < 1024);
+    assert.equal(workspaceLimits.maxAuditArchives, 5);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 test("inspect workspace reports project metadata and source files", async () => {
   const root = await createTempProject();
   const info = await inspectWorkspace(root);
