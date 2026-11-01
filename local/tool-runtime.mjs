@@ -22,7 +22,8 @@ import { scanWorkspaceSecrets } from "./secret-scanner.mjs";
 import {
   getWorkspaceIndexStatus,
   refreshWorkspaceIndex,
-  searchWorkspaceSymbols
+  searchWorkspaceSymbols,
+  searchWorkspaceSemantic
 } from "./workspace-index.mjs";
 import {
   addWorkspaceMemory,
@@ -95,6 +96,18 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: "workspace.semantic.search",
+    description: "Search current source and test files by local Ollama semantic similarity. It embeds only bounded indexed workspace files, validates file hashes before returning excerpts, and falls back to lexical search when SYNTRA_EMBED_MODEL is unset or unavailable.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: {
+      type: "object", required: ["query"],
+      properties: { query: { type: "string", minLength: 2, maxLength: 300 }, limit: { type: "integer", minimum: 1, maximum: 20 } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "workspace.memory.add",  {
     name: "workspace.memory.add",
     description: "Save a note explicitly supplied by the user to this workspace's local project memory.",
     permission: "local_state_write",
@@ -348,6 +361,7 @@ function validateInput(definition, input) {
 function summarizeInput(name, input) {
   switch (name) {
     case "workspace.symbols.search": return { queryLength: input.query.length, limit: input.limit || 10 };
+    case "workspace.semantic.search": return { queryLength: input.query.length, limit: input.limit || 8 };
     case "workspace.memory.search": return { queryLength: input.query.length, limit: input.limit || 6 };
     case "workspace.memory.add": return { category: input.category, titleLength: input.title.length, contentCharacters: input.content.length, tagCount: input.tags?.length || 0 };
     case "workspace.memory.update": return { noteId: input.id, fieldsUpdated: ["title", "content", "category", "tags"].filter(key => input[key] !== undefined) };
@@ -457,6 +471,8 @@ async function invokeTool(root, name, input, signal) {
       return refreshWorkspaceIndex(root);
     case "workspace.symbols.search":
       return searchWorkspaceSymbols(root, input.query, input.limit || 10);
+    case "workspace.semantic.search":
+      return searchWorkspaceSemantic(root, input.query, input.limit || 8);
     case "workspace.memory.list":
       return listWorkspaceMemory(root);
     case "workspace.memory.search":
@@ -560,6 +576,13 @@ function summarizeOutput(name, output) {
       return {
         available: output.available, resultCount: output.results.length,
         staleFiles: output.staleFiles, topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))]
+      };
+    case "workspace.semantic.search":
+      return {
+        retrievalMode: output.retrievalMode, embeddingModel: output.embeddingModel || null,
+        resultCount: output.results.length, semanticCoverage: output.semanticCoverage || 0,
+        staleFiles: output.staleFiles || 0,
+        topPaths: output.results.slice(0, 8).map(item => item.path)
       };
     case "workspace.memory.list":
       return { noteCount: output.total, categories: [...new Set(output.notes.map(note => note.category))] };
