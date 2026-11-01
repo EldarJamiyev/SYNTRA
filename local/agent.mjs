@@ -899,7 +899,9 @@ async function reviewCandidatePatch({
   contextBudget, modelRequest, signal
 }) {
   const prompt = makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext, relatedSources });
-  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+  const reviewerModel = String(process.env.SYNTRA_REVIEW_MODEL || "").trim();
+  const reviewerOptions = reviewerModel ? { model: reviewerModel } : {};
+  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt, ...reviewerOptions }, 30000, signal);
   if (Number(tokenInfo.token_count) > contextBudget) {
     return {
       status: "skipped_context_budget",
