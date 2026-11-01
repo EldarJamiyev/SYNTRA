@@ -1078,14 +1078,14 @@ test("repository graph links local imports and agent repairs a failed test in a 
       "export type GatewayState = \"ready\" | \"offline\";",
       "export class GatewayBase {}",
       ""
-    ].join("\\n"));
+    ].join("\n"));
     await fs.writeFile(path.join(root, "src", "gateway-consumer.ts"), [
       'import { GatewayBase, GatewayOptions, GatewayState } from "./gateway-contracts";',
       "export class GatewayService extends GatewayBase {",
       "  connect(options: GatewayOptions): GatewayState { return options.host ? \"ready\" : \"offline\"; }",
       "}",
       ""
-    ].join("\\n"));
+    ].join("\n"));
     const graph = await buildRepositoryGraph(root);
     const consumerNode = graph.nodes.find(node => node.path === "src/consumer.js");
     const serviceNode = graph.nodes.find(node => node.path === "src/service.js");
