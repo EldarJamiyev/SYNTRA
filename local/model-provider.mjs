@@ -6,7 +6,7 @@ const MAX_CONTEXT = 32768;
 const LOCAL_TIMEOUT_MS = 1200;
 // Reserve at least 30% of physical RAM for the OS, model runtime, context cache,
 // and other applications. Installed file size is only a conservative first-pass proxy.
-const MAX_MODEL_RAM_FRACTION = 0.70;
+const MAX_MODEL_RAM_FRACTION = 0.45;
 
 const DEFAULT_OLLAMA_RETRIES = 1;
 const MAX_OLLAMA_RETRIES = 2;
@@ -194,12 +194,30 @@ async function detectLocalModelUncached({
     }
     return null;
   }
+  let discoveredContext = 0;
+  if (fetchImpl === globalThis.fetch) {
+    try {
+      const detailResponse = await fetchImpl(OLLAMA_BASE + "/api/show", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: modelNameOf(model) }),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (detailResponse.ok) {
+        const detail = await detailResponse.json();
+        const candidates = Object.entries(detail.model_info || {}).filter(([key, value]) => /context_length$/i.test(key) && Number.isFinite(Number(value))).map(([, value]) => Number(value));
+        discoveredContext = candidates.length ? Math.max(...candidates) : 0;
+      }
+    } catch {}
+  }
+  const configuredContext = contextLimit();
+  const safeContext = discoveredContext > 0 ? Math.max(1024, Math.min(configuredContext, discoveredContext, MAX_CONTEXT)) : configuredContext;
   return {
     provider: "ollama-local",
     baseUrl: OLLAMA_BASE,
     model: modelNameOf(model),
     modelSizeBytes: Number(model.size || 0) || null,
-    contextTokens: contextLimit(),
+    contextTokens: safeContext,
     tokenizer: "ollama-local-tokenizer"
   };
 }
