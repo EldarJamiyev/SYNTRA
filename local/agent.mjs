@@ -211,7 +211,9 @@ export async function buildRepositoryGraph(inputRoot) {
       importSpecifiers: astBacked ? analysis.importSpecifiers : parseImports(item.path, file.content),
       symbols: astBacked ? analysis.symbols : [],
       callSpecifiers: analysis.callSpecifiers,
-      calls: [], calledBy: [], content: file.content
+      typeSpecifiers: analysis.typeSpecifiers || [],
+      calls: [], calledBy: [], typeDependencies: [], referencedByTypes: [],
+      content: file.content
     };
     nodes.set(item.path, node);
   }
@@ -232,9 +234,20 @@ export async function buildRepositoryGraph(inputRoot) {
       if (!node.calls.includes(target.path)) node.calls.push(target.path);
       if (!target.calledBy.includes(node.path)) target.calledBy.push(node.path);
     }
+    for (const typeName of node.typeSpecifiers) {
+      const matches = node.imports.filter(target =>
+        nodes.get(target)?.symbols.some(symbol =>
+          symbol.name === typeName && ["interface", "type", "class", "enum", "trait", "struct"].includes(symbol.kind)
+        )
+      );
+      if (matches.length !== 1) continue;
+      const target = nodes.get(matches[0]);
+      if (!node.typeDependencies.includes(target.path)) node.typeDependencies.push(target.path);
+      if (!target.referencedByTypes.includes(node.path)) target.referencedByTypes.push(node.path);
+    }
   }
   return {
-    root, nodes: [...nodes.values()].map(({ content, importSpecifiers, symbols, callSpecifiers, ...node }) => node), contents: nodes,
+    root, nodes: [...nodes.values()].map(({ content, importSpecifiers, symbols, callSpecifiers, typeSpecifiers, ...node }) => node), contents: nodes,
     totalFiles: walked.files.length, totalBytes: walked.totalBytes, truncated: walked.truncated
   };
 }
@@ -295,7 +308,10 @@ function rankGraph(graph, goal, requestedPath = "") {
   for (const node of graph.nodes) {
     const score = scores.get(node.path) || 0;
     if (score <= 0) continue;
-    for (const related of [...node.imports, ...node.importedBy, ...node.calls, ...node.calledBy]) scores.set(related, (scores.get(related) || 0) + Math.min(8, score * 0.22));
+    for (const related of [
+      ...node.imports, ...node.importedBy, ...node.calls, ...node.calledBy,
+      ...node.typeDependencies, ...node.referencedByTypes
+    ]) scores.set(related, (scores.get(related) || 0) + Math.min(10, score * 0.28));
   }
   return [...scores.entries()].map(([filePath, score]) => ({
     ...byPath.get(filePath), score, content: graph.contents.get(filePath)?.content || ""
@@ -314,7 +330,7 @@ function createPlan(goal, inventory, ranked, graph, repositoryState = {}) {
       workingTreeObserved: dirty
     },
     steps: [
-      { id: "discover", title: "Discover architecture and repository state", status: "completed", detail: "Inspected " + inventory.fileCount + " workspace files; import graph contains " + graph.nodes.length + " readable source/config files and " + graph.nodes.reduce((sum, node) => sum + node.calls.length, 0) + " static call edges." },
+      { id: "discover", title: "Discover architecture and repository state", status: "completed", detail: "Inspected " + inventory.fileCount + " workspace files; the repository graph contains " + graph.nodes.length + " readable source/config files, " + graph.nodes.reduce((sum, node) => sum + node.calls.length, 0) + " static call edges, and " + graph.nodes.reduce((sum, node) => sum + node.typeDependencies.length, 0) + " AST-derived type dependency edges." },
       { id: "scope", title: "Select change surfaces", status: "completed", detail: likelyFiles.length ? likelyFiles.join(", ") : "No relevant source files ranked yet." },
       { id: "patch", title: "Generate structured edits", status: "pending", detail: "Request exact find/replace operations; validate paths, unique anchors, and source hashes." },
       { id: "verify", title: "Discover and run supported checks", status: "pending", detail: "Discover executable runners from the candidate workspace, run only supported checks, then re-read changed candidate files to detect script side effects." },
@@ -329,12 +345,18 @@ function makePatchPrompt(goal, inventory, plan, graph, ranked, feedback, reposit
   const map = ranked.slice(0, 12).map(node => ({
     path: node.path, imports: node.imports.slice(0, 10),
     importedBy: node.importedBy.slice(0, 10), calls: node.calls.slice(0, 10),
-    calledBy: node.calledBy.slice(0, 10), score: Number(node.score.toFixed(2))
+    calledBy: node.calledBy.slice(0, 10),
+    typeDependencies: node.typeDependencies.slice(0, 10),
+    referencedByTypes: node.referencedByTypes.slice(0, 10),
+    score: Number(node.score.toFixed(2))
   }));
   const snippets = ranked.slice(0, 12).map(node => ({
     path: node.path, sha256: node.sha256, imports: node.imports.slice(0, 10),
     importedBy: node.importedBy.slice(0, 10), calls: node.calls.slice(0, 10),
-    calledBy: node.calledBy.slice(0, 10), source: makeExcerpt(node.content, goal)
+    calledBy: node.calledBy.slice(0, 10),
+    typeDependencies: node.typeDependencies.slice(0, 10),
+    referencedByTypes: node.referencedByTypes.slice(0, 10),
+    source: makeExcerpt(node.content, goal)
   }));
   return [
     MODEL_PROMPT,

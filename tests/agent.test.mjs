@@ -1073,6 +1073,19 @@ test("repository graph links local imports and agent repairs a failed test in a 
       "export function calculateValue(input) { return input + 1; }\n");
     await fs.writeFile(path.join(root, "src", "consumer.js"),
       "import {\n  calculateValue\n} from \"./service.js\";\nexport function consume() { return calculateValue(1); }\n");
+    await fs.writeFile(path.join(root, "src", "gateway-contracts.ts"), [
+      "export interface GatewayOptions { host: string; port: number }",
+      "export type GatewayState = \"ready\" | \"offline\";",
+      "export class GatewayBase {}",
+      ""
+    ].join("\\n"));
+    await fs.writeFile(path.join(root, "src", "gateway-consumer.ts"), [
+      'import { GatewayBase, GatewayOptions, GatewayState } from "./gateway-contracts";',
+      "export class GatewayService extends GatewayBase {",
+      "  connect(options: GatewayOptions): GatewayState { return options.host ? \"ready\" : \"offline\"; }",
+      "}",
+      ""
+    ].join("\\n"));
     const graph = await buildRepositoryGraph(root);
     const consumerNode = graph.nodes.find(node => node.path === "src/consumer.js");
     const serviceNode = graph.nodes.find(node => node.path === "src/service.js");
@@ -1081,6 +1094,13 @@ test("repository graph links local imports and agent repairs a failed test in a 
     assert.ok(consumerNode.calls.includes("src/service.js"),
       "statically imported calls should create a caller relationship");
     assert.ok(serviceNode.calledBy.includes("src/consumer.js"));
+    const contractNode = graph.nodes.find(node => node.path === "src/gateway-contracts.ts");
+    const typedConsumerNode = graph.nodes.find(node => node.path === "src/gateway-consumer.ts");
+    assert.ok(contractNode && typedConsumerNode);
+    assert.ok(typedConsumerNode.typeDependencies.includes("src/gateway-contracts.ts"),
+      "type references and class heritage should link the consumer to its contract declarations");
+    assert.ok(contractNode.referencedByTypes.includes("src/gateway-consumer.ts"),
+      "the contract should retain reverse type-consumer relationships");
     const valueNode = graph.nodes.find(node => node.path === "src/value.js");
     const testNode = graph.nodes.find(node => node.path === "tests/value.test.js");
     const workflowNode = graph.nodes.find(node => node.path === ".github/workflows/checks.yml");
