@@ -539,7 +539,6 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
           assert.match(body.prompt, /PREVIOUS RETRIEVAL EVIDENCE/);
           assert.match(body.prompt, /src\/value\.js/,
             "the second planning round must use paths discovered in round one");
-            "the second planning round must use paths discovered in round one");
           return {
             text: JSON.stringify({
               calls: [
