@@ -1745,10 +1745,114 @@ export async function discoverProjectChecks(inputRoot) {
   return { root, checks, unavailable };
 }
 
+function restrictedVerificationEnvironment(source = process.env) {
+  const allowed = [
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
+    "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "SYSTEMDRIVE"
+  ];
+  const result = {};
+  for (const key of allowed) {
+    const value = source[key];
+    if (typeof value === "string" && value.length <= 4096) result[key] = value;
+  }
+  result.CI = "true";
+  result.NODE_ENV = "test";
+  return result;
+}
+
+function verificationContainerImage(selected, environment) {
+  let runtime;
+  if (selected.kind === "npm-script" || selected.kind === "node-test") runtime = "NODE";
+  else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") runtime = "PYTHON";
+  else if (selected.kind === "command") {
+    const executable = path.basename(String(selected.executable || "")).toLowerCase().replace(/\.exe$/, "");
+    if (executable === "cargo") runtime = "RUST";
+    else if (executable === "go") runtime = "GO";
+    else if (executable === "dotnet") runtime = "DOTNET";
+  }
+  if (!runtime) throw new Error("No isolated container runtime is configured for verification runner " + String(selected.kind) + ".");
+  const defaults = {
+    NODE: "node:20-bookworm-slim",
+    PYTHON: "python:3.11-slim",
+    RUST: "rust:1-slim",
+    GO: "golang:1.23-bookworm",
+    DOTNET: "mcr.microsoft.com/dotnet/sdk:8.0"
+  };
+  const image = String(environment["SYNTRA_" + runtime + "_SANDBOX_IMAGE"] || defaults[runtime]);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,180}$/.test(image)) {
+    throw new Error("The configured " + runtime + " sandbox image name is invalid.");
+  }
+  return image;
+}
+
+export function buildVerificationCommand(root, selected, {
+  allowUntrustedHost = false,
+  platform = process.platform,
+  environment = process.env
+} = {}) {
+  if (!selected || typeof selected !== "object") throw new Error("A supported verification runner is required.");
+  if (allowUntrustedHost) {
+    let executable;
+    let args;
+    if (selected.kind === "npm-script" && platform === "win32") {
+      executable = "cmd.exe";
+      args = ["/d", "/s", "/c", selected.command];
+    } else if (selected.kind === "npm-script") {
+      executable = "npm";
+      args = ["run", selected.script];
+    } else if (["python-pytest", "python-unittest", "node-test", "command"].includes(selected.kind)) {
+      executable = selected.executable;
+      args = selected.args;
+    } else {
+      throw new Error("Unsupported verification runner: " + String(selected.kind));
+    }
+    return {
+      executable, args, env: restrictedVerificationEnvironment(environment),
+      mode: "host_opt_in", command: selected.command || [executable, ...args].join(" ")
+    };
+  }
+
+  const workspacePath = path.resolve(root);
+  if (workspacePath.includes(",")) throw new Error("The workspace path contains a comma and cannot be mounted safely into a Docker container.");
+  const image = verificationContainerImage(selected, environment);
+  let command;
+  if (selected.kind === "npm-script") command = ["npm", "run", selected.script];
+  else if (selected.kind === "node-test") command = ["node", ...selected.args];
+  else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") command = ["python", ...selected.args];
+  else if (selected.kind === "command") command = [selected.executable, ...selected.args];
+  else throw new Error("Unsupported verification runner: " + String(selected.kind));
+
+  const mountSource = platform === "win32" ? workspacePath.replace(/\\/g, "/") : workspacePath;
+  const args = [
+    "run", "--rm", "--pull=missing",
+    "--network=none", "--read-only", "--cap-drop=ALL",
+    "--security-opt=no-new-privileges:true",
+    "--pids-limit=128", "--memory=2g", "--cpus=2",
+    "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m",
+    "--mount", "type=bind,source=" + mountSource + ",target=/workspace",
+    "--workdir", "/workspace",
+    "--env", "CI=true", "--env", "NODE_ENV=test",
+    "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
+    "--env", "NPM_CONFIG_CACHE=/tmp/.npm",
+    image, ...command
+  ];
+  return {
+    executable: String(environment.SYNTRA_DOCKER_BIN || "docker"),
+    args,
+    env: restrictedVerificationEnvironment(environment),
+    mode: "docker",
+    image,
+    command: "docker run " + image + " " + command.join(" ")
+  };
+}
+
 export async function runProjectCheck(inputRoot, task, options = {}) {
   const root = await resolveWorkspace(inputRoot);
   const packageJson = await readJsonIfPresent(root, "package.json");
   const selected = await chooseCheck(root, task, packageJson);
+  const execution = buildVerificationCommand(root, selected, {
+    allowUntrustedHost: process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS === "true"
+  });
   const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
   if (options.signal?.aborted) {
     const error = new Error("Project check was cancelled before it started.");
@@ -1763,23 +1867,10 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
   return await new Promise((resolve, reject) => {
     let child;
     try {
-      const spawnOptions = {
-        cwd: root,
-        windowsHide: true,
+      child = spawn(execution.executable, execution.args, {
+        cwd: root, env: execution.env, windowsHide: true,
         detached: process.platform !== "win32"
-      };
-      if (selected.kind === "npm-script" && process.platform === "win32") {
-        child = spawn("cmd.exe", ["/d", "/s", "/c", selected.command], spawnOptions);
-      } else if (selected.kind === "npm-script") {
-        child = spawn("npm", ["run", selected.script], spawnOptions);
-      } else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") {
-        child = spawn(selected.executable, selected.args, spawnOptions);
-      } else if (selected.kind === "node-test" || selected.kind === "command") {
-        child = spawn(selected.executable, selected.args, spawnOptions);
-      } else {
-        reject(new Error("Unsupported verification runner: " + String(selected.kind)));
-        return;
-      }
+      });
     } catch (error) {
       reject(error);
       return;
@@ -1817,7 +1908,9 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
     else signal?.addEventListener("abort", abortProcess, { once: true });
     child.on("error", error => {
       cleanup();
-      reject(error);
+      if (execution.mode === "docker" && error?.code === "ENOENT") {
+        reject(new Error("Docker is required for isolated project checks. Start Docker Desktop or install Docker Engine. To run checks directly on the host, explicitly set SYNTRA_ALLOW_UNSANDBOXED_CHECKS=true; host mode can access your user files and network."));
+      } else reject(error);
     });
     child.on("close", code => {
       cleanup();
@@ -1828,13 +1921,14 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
         return;
       }
       const result = {
-        root, task, command: selected.command, exitCode: code,
+        root, task, command: execution.command, executionMode: execution.mode,
+        image: execution.image || null, exitCode: code,
         passed: code === 0 && !timedOut, timedOut,
         durationMs: Date.now() - startedAt, output: outputParts.join("")
       };
       appendAudit(root, {
-        action: "run_project_check", task,
-        command: selected.command, exitCode: code, timedOut
+        action: "run_project_check", task, command: execution.command,
+        executionMode: execution.mode, exitCode: code, timedOut
       }).catch(() => {});
       resolve(result);
     });
