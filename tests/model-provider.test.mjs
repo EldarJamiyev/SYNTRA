@@ -424,6 +424,7 @@ test("Ollama patch-review mode uses a strict reviewer-only JSON schema", async (
     Object.keys(capturedBody.format.properties.findings.items.properties).sort(),
     ["issue", "path", "recommendation", "severity"]
   );
-  assert.match(capturedBody.messages[0].content, /independent patch reviewer/);
+  assert.match(capturedBody.messages[0].content, /critical second-pass patch reviewer/);
+  assert.match(capturedBody.messages[0].content, /same model that generated the candidate/);
   assert.equal(JSON.parse(result.text).verdict, "accept");
 });
