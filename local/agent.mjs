@@ -802,6 +802,22 @@ async function runModelSelectedReadOnlyTools({
           status: results.length ? "observed" : "empty",
           detail: "Retrieved " + results.length + " user-approved project note(s) for '" + call.input.query + "'."
         });
+      } else if (call.tool === "workspace.semantic.search") {
+        const results = (toolRun.output.results || []).slice(0, 8).map(item => ({
+          path: item.path, startLine: item.startLine, endLine: item.endLine,
+          score: item.score, sha256: item.sha256, excerpt: String(item.excerpt || "").slice(0, 1800)
+        }));
+        fragment = JSON.stringify({
+          tool: call.tool, query: call.input.query, available: toolRun.output.available,
+          embeddingModel: toolRun.output.embeddingModel, staleResults: toolRun.output.staleResults, results
+        });
+        observations.push({
+          kind: call.tool, stage: "model-selected-context",
+          status: toolRun.output.available ? results.length ? "observed" : "empty" : "unavailable",
+          detail: toolRun.output.available
+            ? "Semantic search returned " + results.length + " hash-validated code excerpt(s) for '" + call.input.query + "'."
+            : "Semantic index is unavailable; lexical and symbol retrieval remain available."
+        });
       } else {
         fragment = JSON.stringify({
           tool: call.tool, path: toolRun.output.path, sha256: toolRun.output.sha256,

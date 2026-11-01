@@ -534,7 +534,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       generated.push(body.prompt);
       if (body.prompt.includes("SYNTRA_READ_ONLY_TOOL_PLAN")) {
         retrievalPrompts.push(body.prompt);
-        if (body.prompt.includes("round 1 of 3")) {
+        if (body.prompt.includes("round 1 of 5")) {
           return {
             text: JSON.stringify({
               calls: [
@@ -545,7 +545,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
             generated_tokens: 35, trained_steps: null
           };
         }
-        if (body.prompt.includes("round 2 of 3")) {
+        if (body.prompt.includes("round 2 of 5")) {
           assert.match(body.prompt, /PREVIOUS RETRIEVAL EVIDENCE/);
           assert.match(body.prompt, /src\/value\.js/,
             "the second planning round must use paths discovered in round one");
@@ -664,10 +664,10 @@ test("iterative retrieval enforces the eight-call global limit and stops without
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(planningRounds, 2, "the eight-call budget should stop planning before a third round");
-    assert.equal(result.toolCalls.filter(call => call.name === "workspace.search").length, 8);
+    assert.equal(planningRounds, 3, "the twelve-call budget should stop planning after three rounds of four unique calls");
+    assert.equal(result.toolCalls.filter(call => call.name === "workspace.search").length, 12);
     const investigation = result.observations.find(item => item.kind === "model-readonly-investigation");
-    assert.match(investigation.detail, /2 evidence-driven planning round\(s\), 8 unique read-only retrieval call/);
+    assert.match(investigation.detail, /3 evidence-driven planning round\(s\), 12 unique read-only retrieval call/);
     assert.equal(result.proposals.length, 1);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
