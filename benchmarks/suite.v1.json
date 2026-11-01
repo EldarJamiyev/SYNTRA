@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "description": "Versioned local coding-agent benchmark. Each fixture includes an intentionally failing Node.js assertion script; SYNTRA must patch only the declared source file and pass its candidate checks.",
+  "version": "1.1.0",
+  "description": "Expanded local coding-agent baseline covering independent JavaScript utility, configuration, and input-validation tasks. Fixtures start with failing assertions.",
   "tasks": [
     {
       "id": "utility-clamp",
@@ -43,6 +43,20 @@
       "maxIterations": 3,
       "maxSlices": 1,
       "goal": "Fix mergeConfig(base, override) in src/config.mjs. Recursively merge nested plain objects, preserve base keys not present in override, and replace arrays rather than merging their elements. Neither input object may be mutated. Keep the exported function name and do not edit tests or package files."
+    },
+    {
+      "id": "positive-integer",
+      "category": "input-validation",
+      "title": "Validate positive safe integers",
+      "fixture": "fixtures/positive-integer",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/validation.test.mjs",
+      "expectedChangedPaths": [
+        "src/validation.mjs"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Implement and export parsePositiveInteger(value) in src/validation.mjs. Accept a number or a non-empty numeric string only when its parsed value is a positive safe integer. Return the integer value when valid and null for zero, negative, fractional, non-finite, unsafe, empty, or unsupported input. Do not mutate input or edit tests."
     }
   ]
 }
