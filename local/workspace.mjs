@@ -31,6 +31,9 @@ const WORKSPACE_EXCLUSIONS_FILENAME = "workspace-exclusions-v1.json";
 const WORKSPACE_EXCLUSIONS_SCHEMA_VERSION = 1;
 const MAX_WORKSPACE_EXCLUSIONS = 100;
 const MAX_WORKSPACE_EXCLUSION_LENGTH = 160;
+const MAX_AUDIT_LOG_BYTES = 5 * 1024 * 1024;
+const MAX_AUDIT_ARCHIVES = 5;
+const auditWriteQueues = new Map();
 const workspaceExclusionsCache = new Map();
 
 function sha256(value) {
@@ -609,8 +612,28 @@ export async function updateWorkspaceExclusions(inputRoot, options = {}) {
 
 async function appendAudit(root, entry) {
   const auditPath = path.join(stateDirectory(root), "actions.jsonl");
-  await fs.mkdir(path.dirname(auditPath), { recursive: true });
-  await fs.appendFile(auditPath, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n", "utf8");
+  const previous = auditWriteQueues.get(auditPath) || Promise.resolve();
+  const write = previous.catch(() => {}).then(async () => {
+    await fs.mkdir(path.dirname(auditPath), { recursive: true });
+    const record = { timestamp: new Date().toISOString(), ...entry };
+    let line = JSON.stringify(record) + "\n";
+    if (Buffer.byteLength(line, "utf8") > 32 * 1024) {
+      line = JSON.stringify({ timestamp: record.timestamp, action: typeof record.action === "string" ? record.action : "audit_entry", truncated: true, note: "Original audit entry exceeded the 32 KB record limit." }) + "\n";
+    }
+    const lineBytes = Buffer.byteLength(line, "utf8");
+    const current = await fs.stat(auditPath).catch(error => error?.code === "ENOENT" ? null : Promise.reject(error));
+    if (current && current.size + lineBytes > MAX_AUDIT_LOG_BYTES) {
+      for (let index = MAX_AUDIT_ARCHIVES; index >= 1; index -= 1) {
+        const destination = auditPath + "." + index;
+        const source = index === 1 ? auditPath : auditPath + "." + (index - 1);
+        if (index === MAX_AUDIT_ARCHIVES) await fs.rm(destination, { force: true });
+        await fs.rename(source, destination).catch(error => { if (error?.code !== "ENOENT") throw error; });
+      }
+    }
+    await fs.appendFile(auditPath, line, "utf8");
+  });
+  auditWriteQueues.set(auditPath, write);
+  try { await write; } finally { if (auditWriteQueues.get(auditPath) === write) auditWriteQueues.delete(auditPath); }
 }
 
 export async function recordWorkspaceToolEvent(inputRoot, event) {
@@ -1845,5 +1868,7 @@ export const workspaceLimits = {
   maxFileBytes: MAX_TEXT_BYTES,
   maxFiles: MAX_FILES,
   maxDepth: MAX_DEPTH,
+  maxAuditLogBytes: MAX_AUDIT_LOG_BYTES,
+  maxAuditArchives: MAX_AUDIT_ARCHIVES,
   ignoredDirectories: [...IGNORED_DIRS]
 };
