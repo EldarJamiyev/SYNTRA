@@ -629,11 +629,11 @@ export function getGeminiProviderStatus(model = process.env.SYNTRA_GEMINI_MODEL 
     service: "SYNTRA model router", status: configured ? "ok" : "not_configured",
     provider: "gemini-api", model_name: model, checkpoint_exists: configured,
     trained_steps: null, context_tokens: GEMINI_CONTEXT_TOKENS,
-    context_window_tokens: GEMINI_CONTEXT_TOKENS, tokenizer: "gemini-token-estimate",
+    context_window_tokens: GEMINI_CONTEXT_TOKENS, tokenizer: "gemini-api-countTokens",
     config: { seq_len: GEMINI_CONTEXT_TOKENS }, pretrained_weights: true,
     external_ai_api: true, local_only: false,
     data_policy: "Unpaid Gemini API content may be used to improve Google products and may be reviewed by humans; do not submit confidential or personal data.",
-    capabilities: { hostedInference: true, contextWindowTokens: GEMINI_CONTEXT_TOKENS, tokenCountIsEstimate: true, incrementalTokenStreaming: false, benchmarkStatus: "not_measured" },
+    capabilities: { hostedInference: true, contextWindowTokens: GEMINI_CONTEXT_TOKENS, tokenCountIsEstimate: false, incrementalTokenStreaming: true, benchmarkStatus: "not_measured" },
     note: "Hosted inference is explicit. Repository prompts additionally require SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1."
   };
 }
@@ -650,8 +650,26 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
     const text = body?.text;
     if (typeof text !== "string") throw new Error("Text must be a string.");
     if (Buffer.byteLength(text, "utf8") > 300_000) throw new Error("Text exceeds the 300 KB token-count API limit.");
-    return { token_count: estimateTokens(text), context_window_tokens: GEMINI_CONTEXT_TOKENS,
-      tokenizer: "gemini-token-estimate", is_estimate: true, provider: "gemini-api", model_name: model };
+    if (signal?.aborted) throw cancellationError();
+    const timeoutSignal = AbortSignal.timeout(Math.min(timeoutMs || 30000, 30000));
+    let response;
+    try {
+      response = await fetchImpl(GEMINI_API_BASE + "/models/" + encodeURIComponent(model) + ":countTokens", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text }] }] }),
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+      });
+    } catch (error) {
+      if (signal?.aborted || error?.name === "AbortError") throw cancellationError();
+      throw new Error("Gemini token-count request failed: " + String(error?.message || error).slice(0, 300));
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(String(payload?.error?.message || "Gemini countTokens returned HTTP " + response.status).slice(0, 600));
+    const tokenCount = Number(payload.totalTokens);
+    if (!Number.isSafeInteger(tokenCount) || tokenCount < 0) throw new Error("Gemini countTokens returned an invalid totalTokens value.");
+    return { token_count: tokenCount, context_window_tokens: GEMINI_CONTEXT_TOKENS,
+      tokenizer: "gemini-api-countTokens", is_estimate: false, provider: "gemini-api", model_name: model };
   }
   if (method !== "POST" || route !== "/model/generate") return null;
   const prompt = body?.prompt;
@@ -669,9 +687,12 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
       ...(isRepositoryPrompt(prompt) ? { responseMimeType: "application/json" } : {}) }
   };
   let response;
+  const streaming = typeof onToken === "function";
+  const endpoint = GEMINI_API_BASE + "/models/" + encodeURIComponent(model)
+    + (streaming ? ":streamGenerateContent?alt=sse" : ":generateContent");
   try {
     const timeoutSignal = AbortSignal.timeout(timeoutMs || 300000);
-    response = await fetchImpl(GEMINI_API_BASE + "/models/" + encodeURIComponent(model) + ":generateContent", {
+    response = await fetchImpl(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
       body: JSON.stringify(requestBody),
@@ -681,20 +702,68 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
     if (signal?.aborted || error?.name === "AbortError") throw cancellationError();
     throw new Error("Gemini API request failed before a response was received: " + String(error?.message || error).slice(0, 300));
   }
-  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
     const message = String(payload?.error?.message || "Gemini API returned HTTP " + response.status).slice(0, 600);
     const error = new Error("Gemini API error (" + response.status + "): " + message);
     error.code = response.status === 429 ? "PROVIDER_RATE_LIMIT" : response.status >= 500 ? "PROVIDER_TEMPORARY" : "PROVIDER_REJECTED";
     throw error;
   }
-  const text = (payload?.candidates?.[0]?.content?.parts || []).map(part => typeof part?.text === "string" ? part.text : "").join("");
+  let text = "";
+  let usage = {};
+  if (streaming) {
+    if (!response.body || typeof response.body.getReader !== "function") {
+      throw new Error("Gemini streaming response did not expose a readable event stream.");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const consumeLine = line => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) return;
+      const payloadText = trimmed.slice(5).trim();
+      if (!payloadText || payloadText === "[DONE]") return;
+      let chunk;
+      try { chunk = JSON.parse(payloadText); }
+      catch { throw new Error("Gemini returned malformed Server-Sent Events data."); }
+      if (chunk.error) throw new Error(String(chunk.error.message || "Gemini streaming failed."));
+      const delta = (chunk?.candidates?.[0]?.content?.parts || [])
+        .map(part => typeof part?.text === "string" ? part.text : "").join("");
+      if (delta) {
+        text += delta;
+        onToken(delta, text);
+      }
+      if (chunk.usageMetadata && typeof chunk.usageMetadata === "object") usage = chunk.usageMetadata;
+    };
+    try {
+      while (true) {
+        if (signal?.aborted) throw cancellationError();
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        let newline;
+        while ((newline = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newline).replace(/\r$/, "");
+          buffer = buffer.slice(newline + 1);
+          consumeLine(line);
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) consumeLine(buffer);
+    } finally {
+      reader.releaseLock();
+    }
+  } else {
+    const payload = await response.json().catch(() => ({}));
+    text = (payload?.candidates?.[0]?.content?.parts || []).map(part => typeof part?.text === "string" ? part.text : "").join("");
+    usage = payload?.usageMetadata || {};
+  }
   if (!text) throw new Error("Gemini returned no text. Check model availability, safety filters, and API quota.");
-  if (typeof onToken === "function") onToken(text, text);
-  return { text, generated_tokens: Number(payload?.usageMetadata?.candidatesTokenCount || estimateTokens(text)),
-    prompt_tokens: Number(payload?.usageMetadata?.promptTokenCount || 0) || undefined,
+  return {
+    text, generated_tokens: Number(usage.candidatesTokenCount || estimateTokens(text)),
+    prompt_tokens: Number(usage.promptTokenCount || 0) || undefined,
     trained_steps: null, provider: "gemini-api", model_name: model,
-    context_window_tokens: GEMINI_CONTEXT_TOKENS, is_model_output: true };
+    context_window_tokens: GEMINI_CONTEXT_TOKENS, is_model_output: true
+  };
 }
 
 export const localModelInternals = { isCloudModel, modelNameOf, scoreModel, estimateTokens, contextLimit, MAX_MODEL_RAM_FRACTION, isRepositoryPrompt };

@@ -443,6 +443,8 @@ test("Gemini provider requires repository-content consent and uses server-side A
     assert.equal(status.provider, "gemini-api");
     assert.equal(status.local_only, false);
     assert.equal(status.context_tokens, 1_048_576);
+    assert.equal(status.capabilities.tokenCountIsEstimate, false);
+    assert.equal(status.capabilities.incrementalTokenStreaming, true);
     await assert.rejects(
       () => handleGeminiModelRequest("POST", "/model/generate", {
         prompt: "You are SYNTRA's repository-aware software engineering agent. Return one JSON patch."
@@ -450,27 +452,49 @@ test("Gemini provider requires repository-content consent and uses server-side A
       /repository inference is disabled/
     );
     process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
-    let requestUrl = "", requestOptions = null, streamed = "";
+    let requestUrl = "", requestOptions = null;
+    const received = [];
     const result = await handleGeminiModelRequest("POST", "/model/generate", {
       prompt: "SYNTRA_READ_ONLY_TOOL_PLAN Return JSON.", max_new_tokens: 200
     }, {
       fetchImpl: async (url, options) => {
         requestUrl = url; requestOptions = options;
-        return new Response(JSON.stringify({
-          candidates: [{ content: { parts: [{ text: '{"calls":[]}' }] } }],
-          usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 8 }
-        }), { status: 200, headers: { "Content-Type": "application/json" } });
+        const events = [
+          { candidates: [{ content: { parts: [{ text: '{"calls":' }] } }] },
+          { candidates: [{ content: { parts: [{ text: '[]}' }] } }],
+            usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 8 } }
+        ];
+        const stream = new ReadableStream({
+          start(controller) {
+            for (const event of events) controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(event) + "\\n\\n"));
+            controller.close();
+          }
+        });
+        return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
       },
-      onToken: text => { streamed = text; }, timeoutMs: 1000
+      onToken: (delta, fullText) => received.push({ delta, fullText }), timeoutMs: 1000
     });
-    assert.match(requestUrl, /models\/gemini-3\.8-flash:generateContent$/);
+    assert.match(requestUrl, /models\/gemini-3\.8-flash:streamGenerateContent\?alt=sse$/);
     assert.equal(requestOptions.headers["x-goog-api-key"], "test-key");
     assert.equal(requestOptions.headers.Authorization, undefined);
     assert.equal(JSON.parse(requestOptions.body).generationConfig.responseMimeType, "application/json");
     assert.equal(result.provider, "gemini-api");
     assert.equal(result.prompt_tokens, 50);
     assert.equal(result.generated_tokens, 8);
-    assert.equal(streamed, '{"calls":[]}');
+    assert.deepEqual(received, [
+      { delta: '{"calls":', fullText: '{"calls":' },
+      { delta: '[]}', fullText: '{"calls":[]}' }
+    ]);
+    const tokenCount = await handleGeminiModelRequest("POST", "/model/tokenize", { text: "count this prompt" }, {
+      fetchImpl: async (url, options) => {
+        assert.match(url, /models\/gemini-3\.8-flash:countTokens$/);
+        assert.equal(options.headers["x-goog-api-key"], "test-key");
+        return new Response(JSON.stringify({ totalTokens: 17 }), { status: 200 });
+      }
+    });
+    assert.equal(tokenCount.token_count, 17);
+    assert.equal(tokenCount.is_estimate, false);
+    assert.equal(tokenCount.tokenizer, "gemini-api-countTokens");
   } finally {
     for (const [key, value] of Object.entries({
       SYNTRA_GEMINI_API_KEY: previous.key,
