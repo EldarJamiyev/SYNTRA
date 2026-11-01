@@ -1773,6 +1773,11 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
   const packageJson = await readJsonIfPresent(root, "package.json");
   const selected = await chooseCheck(root, task, packageJson);
   const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
+  const isolationMode = String(process.env.SYNTRA_CHECK_ISOLATION || "disabled").trim().toLowerCase();
+  const allowHostExecution = process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS === "1";
+  if (isolationMode !== "docker" && !(isolationMode === "host" && allowHostExecution)) {
+    throw new Error("Project checks execute repository-defined code. Host execution is disabled by default. Configure SYNTRA_CHECK_ISOLATION=docker for container execution, or explicitly set SYNTRA_CHECK_ISOLATION=host and SYNTRA_ALLOW_UNSANDBOXED_CHECKS=1 only for a workspace you trust.");
+  }
   if (options.signal?.aborted) {
     const error = new Error("Project check was cancelled before it started.");
     error.name = "AbortError";
@@ -1789,9 +1794,32 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
       const spawnOptions = {
         cwd: root,
         windowsHide: true,
-        detached: process.platform !== "win32"
+        detached: process.platform !== "win32",
+        ...(isolationMode === "host" ? {
+          env: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+            ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"].includes(key.toUpperCase())
+          ))
+        } : {})
       };
-      if (selected.kind === "npm-script" && process.platform === "win32") {
+      if (isolationMode === "docker") {
+        const image = selected.kind === "npm-script" || selected.kind === "node-test" ? "node:20-bookworm-slim"
+          : selected.kind === "python-pytest" || selected.kind === "python-unittest" ? "python:3.11-slim"
+            : selected.executable === "go" ? "golang:1.23"
+              : selected.executable === "cargo" ? "rust:1.84"
+                : selected.executable === "dotnet" ? "mcr.microsoft.com/dotnet/sdk:8.0" : null;
+        if (!image) { reject(new Error("No isolated Docker image is configured for this verification runner.")); return; }
+        let command = selected.command;
+        if (selected.kind === "python-pytest" || selected.kind === "python-unittest") command = "python " + selected.args.map(value => JSON.stringify(value)).join(" ");
+        else if (selected.kind === "node-test") command = "node --test";
+        const dockerArgs = [
+          "run", "--rm", "--network=none", "--read-only", "--cap-drop=ALL",
+          "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g", "--cpus=2",
+          "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m", "--env", "HOME=/tmp",
+          "--mount", "type=bind,source=" + root + ",target=/workspace",
+          "--workdir", "/workspace", image, "/bin/sh", "-lc", command
+        ];
+        child = spawn("docker", dockerArgs, spawnOptions);
+      } else if (selected.kind === "npm-script" && process.platform === "win32") {
         child = spawn("cmd.exe", ["/d", "/s", "/c", selected.command], spawnOptions);
       } else if (selected.kind === "npm-script") {
         child = spawn("npm", ["run", selected.script], spawnOptions);
