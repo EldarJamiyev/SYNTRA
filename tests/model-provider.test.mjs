@@ -466,7 +466,7 @@ test("Gemini provider requires repository-content consent and uses server-side A
         ];
         const stream = new ReadableStream({
           start(controller) {
-            for (const event of events) controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(event) + "\\n\\n"));
+            for (const event of events) controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(event) + "\n\n"));
             controller.close();
           }
         });
