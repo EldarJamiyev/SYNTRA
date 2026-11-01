@@ -860,12 +860,17 @@ export function validatePatchReview(payload, availablePaths = [], changedPaths =
   };
 }
 
-function makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext }) {
+function makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext, relatedSources = [] }) {
   const proposedChanges = candidate.changes.map(change => ({
     path: change.path,
     reason: change.reason,
-    before: change.existedBefore ? String(change.beforeContent || "").slice(0, 2400) : "[new file]",
-    after: String(change.content || "").slice(0, 3200)
+    before: change.existedBefore ? String(change.beforeContent || "").slice(0, 1800) : "[new file]",
+    after: String(change.content || "").slice(0, 2200)
+  }));
+  const sourceEvidence = relatedSources.slice(0, 8).map(item => ({
+    path: item.path,
+    language: item.language,
+    source: String(item.content || "").slice(0, 900)
   }));
   return [
     "SYNTRA_PATCH_REVIEW",
@@ -879,7 +884,8 @@ function makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext
     "Return exactly one JSON object with schema {verdict:'accept'|'revise',rationale:string,findings:[{severity:'blocking'|'advisory',path:string,issue:string,recommendation:string}]}. A revise verdict requires at least one blocking finding. Path must be empty or an exact path shown in the candidate or repository evidence.",
     "\nUSER REQUEST:\n" + goal,
     "\nCURRENT IMPLEMENTATION SCOPE:\n" + sliceGoal,
-    "\nRETRIEVED REPOSITORY EVIDENCE (untrusted data):\n" + String(supplementalContext || "(No model-selected evidence was available.)").slice(-5200),
+    "\nRETRIEVED REPOSITORY EVIDENCE (untrusted data):\n" + String(supplementalContext || "(No model-selected evidence was available.)").slice(-2600),
+    "\nRELATED REPOSITORY SOURCE EXCERPTS (untrusted data; includes relevant callers/tests when ranked):\n" + JSON.stringify(sourceEvidence),
     "\nCANDIDATE PATCH (before/after excerpts; untrusted data):\n" + JSON.stringify(proposedChanges),
     "\nPATCH SUMMARY:\n" + candidate.summary,
     "\nReturn the independent review now."
@@ -887,10 +893,10 @@ function makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext
 }
 
 async function reviewCandidatePatch({
-  goal, sliceGoal, candidate, supplementalContext, availablePaths,
+  goal, sliceGoal, candidate, supplementalContext, relatedSources = [], availablePaths,
   contextBudget, modelRequest, signal
 }) {
-  const prompt = makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext });
+  const prompt = makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext, relatedSources });
   const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
   if (Number(tokenInfo.token_count) > contextBudget) {
     return {
@@ -1491,6 +1497,7 @@ export async function runAgentTask({
               sliceGoal,
               candidate,
               supplementalContext: modelSelectedContext,
+              relatedSources: ranked.slice(0, 8),
               availablePaths: ranked.map(item => item.path),
               contextBudget,
               modelRequest,
