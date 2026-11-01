@@ -8,6 +8,7 @@ import {
   applyFileProposal,
   applyFileProposals,
   buildVerificationCommand,
+  buildVerificationLevels,
   chooseCheck,
   createProjectPlan,
   discoverProjectChecks,
@@ -35,6 +36,27 @@ async function createTempProject() {
   await fs.writeFile(path.join(root, "tests", "network.test.mjs"), "import test from 'node:test'; test('ok', () => {});\n", "utf8");
   return root;
 }
+
+test("verification evidence distinguishes executed checks from unclassified and unrun levels", () => {
+  const discovery = {
+    checks: [{ task: "build" }, { task: "test" }, { task: "lint" }],
+    unavailable: [{ task: "typecheck", reason: "No type checker configured." }]
+  };
+  const evidence = buildVerificationLevels(discovery, [
+    { task: "build", passed: true, timedOut: false },
+    { task: "test", passed: true, timedOut: false },
+    { task: "lint", passed: false, timedOut: false }
+  ]);
+  assert.equal(evidence.levels.build_passed, "passed");
+  assert.equal(evidence.levels.test_suites_passed, "passed");
+  assert.equal(evidence.levels.static_analysis_passed, "failed");
+  assert.equal(evidence.levels.unit_tests_passed, "not_classified");
+  assert.equal(evidence.levels.integration_tests_passed, "not_classified");
+  assert.equal(evidence.levels.security_checks_passed, "not_run");
+  assert.equal(evidence.levels.fully_verified, false);
+  assert.equal(evidence.fullyVerified, false);
+  assert.equal(evidence.allDiscoveredChecksPassed, false);
+});
 
 test("audit logs rotate and retain a bounded number of archives", async () => {
   const root = await createTempProject();

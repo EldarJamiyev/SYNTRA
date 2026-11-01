@@ -2060,6 +2060,86 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
 }
 
 
+export function buildVerificationLevels(discovery, results) {
+  const discovered = new Set((discovery?.checks || []).map(item => item.task));
+  const byTask = new Map((results || []).map(item => [item.task, item]));
+  const status = task => {
+    if (!discovered.has(task)) return "unavailable";
+    const result = byTask.get(task);
+    if (!result) return "not_run";
+    if (result.timedOut) return "timed_out";
+    return result.passed ? "passed" : "failed";
+  };
+  const staticTasks = ["lint", "typecheck"].filter(task => discovered.has(task));
+  const staticStatus = staticTasks.length
+    ? staticTasks.map(status).some(value => value === "failed" || value === "timed_out") ? "failed"
+      : staticTasks.every(task => status(task) === "passed") ? "passed" : "partial"
+    : "not_run";
+  const taskStatuses = Object.fromEntries(["build", "test", "lint", "typecheck"].map(task => [task, status(task)]));
+  const discoveredTasks = [...discovered];
+  const allDiscoveredChecksPassed = discoveredTasks.length > 0
+    && discoveredTasks.every(task => status(task) === "passed");
+  return {
+    levels: {
+      syntax_validated: "not_run",
+      unit_tests_passed: "not_classified",
+      integration_tests_passed: "not_classified",
+      test_suites_passed: status("test"),
+      build_passed: status("build"),
+      static_analysis_passed: staticStatus,
+      security_checks_passed: "not_run",
+      fully_verified: false
+    },
+    taskStatuses,
+    allDiscoveredChecksPassed,
+    fullyVerified: false,
+    limitations: [
+      "The repository does not currently classify test suites as unit versus integration tests.",
+      "No workspace-local security verification runner was executed.",
+      "A complete syntax-only pass across every detected language was not executed."
+    ]
+  };
+}
+
+export async function runWorkspaceVerification(inputRoot, options = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  const discovery = await discoverProjectChecks(root);
+  const availableTasks = discovery.checks.map(item => item.task);
+  const totalTimeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 180000));
+  const startedAt = Date.now();
+  const results = [];
+  for (const task of ["build", "test", "lint", "typecheck"]) {
+    if (!availableTasks.includes(task)) continue;
+    const remaining = totalTimeoutMs - (Date.now() - startedAt);
+    if (remaining <= 0) {
+      results.push({
+        task, passed: false, timedOut: true, exitCode: null,
+        executionMode: "not_started", durationMs: 0,
+        output: "Overall verification time budget was exhausted before this check started.",
+        checks: []
+      });
+      continue;
+    }
+    results.push(await runProjectCheck(root, task, {
+      timeoutMs: remaining, signal: options.signal
+    }));
+  }
+  const evidence = buildVerificationLevels(discovery, results);
+  const passed = results.length > 0 && results.every(item => item.passed);
+  const modes = [...new Set(results.map(item => item.executionMode))];
+  return {
+    root,
+    status: passed ? "all_discovered_checks_passed" : results.some(item => item.passed) ? "partial" : "failed",
+    passed,
+    fullyVerified: false,
+    executionMode: modes.length === 1 ? modes[0] : modes.length ? "mixed" : "not_run",
+    durationMs: Date.now() - startedAt,
+    verification: evidence,
+    checks: results,
+    unavailable: discovery.unavailable
+  };
+}
+
 export const workspaceLimits = {
   maxFileBytes: MAX_TEXT_BYTES,
   maxFiles: MAX_FILES,

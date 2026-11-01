@@ -15,6 +15,7 @@ import {
   resolveWorkspace,
   isWorkspacePathExcluded,
   runProjectCheck,
+  runWorkspaceVerification,
   searchWorkspace
 } from "./workspace.mjs";
 import { scanWorkspaceSecrets } from "./secret-scanner.mjs";
@@ -251,6 +252,17 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: "workspace.verify",
+    description: "Run every discovered build, test, lint, and type-check runner in sequence using restricted offline Docker containers by default. Returns explicit per-level evidence and never claims fully_verified when integration or security coverage is not established. Requires one explicit approval for the complete verification plan.",
+    permission: "execute",
+    approvalRequired: true,
+    inputSchema: {
+      type: "object",
+      properties: { timeoutMs: { type: "integer", minimum: 1000, maximum: 180000 } },
+      additionalProperties: false
+    }
+  },
+  {
     name: "workspace.check",
     description: "Run one discovered project check with a hard timeout. Project code runs in a restricted offline Docker container by default; direct host execution requires the explicit SYNTRA_ALLOW_UNSANDBOXED_CHECKS=true setting. Always requires explicit approval.",
     permission: "execute",
@@ -350,6 +362,7 @@ function summarizeInput(name, input) {
     case "workspace.proposals.apply": return { proposalId: input.proposalId };
     case "workspace.proposals.discard": return { proposalCount: input.proposalIds.length };
     case "workspace.check": return { task: input.task, timeoutMs: input.timeoutMs || 120000 };
+    case "workspace.verify": return { timeoutMs: input.timeoutMs || 180000, scope: "all_discovered_checks" };
     default: return {};
   }
 }
@@ -491,6 +504,8 @@ async function invokeTool(root, name, input, signal) {
       return discardFileProposals(root, input.proposalIds, true);
     case "workspace.check":
       return runProjectCheck(root, input.task, { timeoutMs: input.timeoutMs || 120000, signal });
+    case "workspace.verify":
+      return runWorkspaceVerification(root, { timeoutMs: input.timeoutMs || 180000, signal });
     case "git.status":
       return { root, status: await readFilteredGitStatus(root) };
     case "git.diff-summary": {
@@ -581,6 +596,14 @@ function summarizeOutput(name, output) {
       return { discardedCount: output.discarded.length };
     case "workspace.check":
       return { task: output.task, passed: output.passed, exitCode: output.exitCode, timedOut: output.timedOut, executionMode: output.executionMode };
+    case "workspace.verify":
+      return {
+        status: output.status, passed: output.passed, fullyVerified: output.fullyVerified,
+        executionMode: output.executionMode, completedChecks: output.checks.length,
+        taskStatuses: output.verification.taskStatuses,
+        levels: output.verification.levels,
+        unavailableTasks: output.unavailable.map(item => item.task)
+      };
     case "git.status":
       return { statusCharacters: output.status.length };
     case "git.diff-summary":

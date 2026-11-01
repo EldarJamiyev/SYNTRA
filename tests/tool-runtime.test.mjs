@@ -36,7 +36,7 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 22);
+  assert.equal(tools.length, 23);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
   assert.equal(byName.get("workspace.secrets.scan").permission, "read_only");
   assert.equal(byName.get("workspace.secrets.scan").approvalRequired, false);
@@ -60,6 +60,8 @@ test("tool registry exposes structured schemas and explicit permission metadata"
   assert.equal(byName.get("workspace.proposals.apply-many").approvalRequired, true);
   assert.equal(byName.get("workspace.proposals.apply").permission, "source_write");
   assert.equal(byName.get("workspace.proposals.discard").approvalRequired, true);
+  assert.equal(byName.get("workspace.verify").approvalRequired, true);
+  assert.equal(byName.get("workspace.verify").permission, "execute");
   assert.equal(byName.get("workspace.check").approvalRequired, true);
   assert.equal(byName.get("workspace.check").permission, "execute");
   assert.equal(byName.get("git.status").approvalRequired, false);
