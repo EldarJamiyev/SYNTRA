@@ -160,7 +160,6 @@ test("agent implements and verifies multiple slices against one cumulative candi
     assert.ok(result.implementationSlices.every(slice => slice.status === "completed"));
     assert.equal(result.verification.status, "passed");
     assert.equal(result.verification.passed, true);
-    assert.equal(separateReviewerRequests, 4, "review tokenization and generation must both use the separate reviewer bridge");
     assert.equal(result.proposals.length, 2);
     assert.deepEqual(result.changedFiles.map(file => file.path).sort(), ["src/description.js", "src/value.js"]);
     assert.ok(result.observations.some(item =>
@@ -718,7 +717,7 @@ test("patch review validation requires evidence-backed blockers and workspace-lo
   }, ["src/value.js"]), /outside the inspected workspace/);
 });
 
-test("independent patch review rejects an incomplete patch and feeds findings into a correction attempt", async () => {
+test("second-pass patch review rejects an incomplete patch and feeds findings into a correction attempt", async () => {
   const root = await createProject();
   let patchCalls = 0;
   let reviewCalls = 0;
@@ -827,6 +826,8 @@ test("independent patch review rejects an incomplete patch and feeds findings in
       reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
       attempts: result.attempts
     }));
+    assert.equal(separateReviewerRequests, 4,
+      "review tokenization and generation must both use the separate reviewer bridge");
     assert.equal(result.proposals.length, 2);
     assert.deepEqual(result.proposals.map(item => item.path).sort(), ["src/value.js", "tests/value.test.js"]);
     assert.ok(result.attempts.some(item => item.status === "self_review_rejected"));

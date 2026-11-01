@@ -422,7 +422,7 @@ async function planImplementationSlices({
   goal, inventory, ranked, modelRequest, contextBudget, maxSlices, signal
 }) {
   const prompt = makeImplementationSlicePlanPrompt(goal, inventory, ranked);
-  const tokens = await modelJson(reviewerRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+  const tokens = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
   if (Number(tokens.token_count) > Math.min(contextBudget, 1600)) {
     throw new Error("Implementation slice plan exceeds the bounded planning context.");
   }
@@ -681,7 +681,7 @@ async function runModelSelectedReadOnlyTools({
       priorContext: fragments.join("\n"),
       previousCalls: selectedCalls
     });
-    const tokenInfo = await modelJson(reviewerRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+    const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
     if (Number(tokenInfo.token_count) > Math.min(contextBudget, 1800)) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
@@ -898,7 +898,7 @@ async function reviewCandidatePatch({
 }) {
   const reviewerRequest = reviewModelRequest || modelRequest;
   const prompt = makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext, relatedSources });
-  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+  const tokenInfo = await modelJson(reviewerRequest, "/model/tokenize", { text: prompt }, 30000, signal);
   const reviewerContextBudget = Number(tokenInfo.context_window_tokens) > 0
     ? Math.min(contextBudget, Math.floor(Number(tokenInfo.context_window_tokens) * 0.68))
     : contextBudget;
@@ -908,7 +908,7 @@ async function reviewCandidatePatch({
       detail: "The review prompt exceeded the selected reviewer model context budget; no review completion is claimed."
     };
   }
-  const generated = await modelJson(modelRequest, "/model/generate", {
+  const generated = await modelJson(reviewerRequest, "/model/generate", {
     prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto"
   }, 120000, signal);
   const review = validatePatchReview(
