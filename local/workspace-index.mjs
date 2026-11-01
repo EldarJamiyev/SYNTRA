@@ -92,6 +92,29 @@ function parseDeclarations(relativePath, content) {
     symbols.push({ name, kind, line, signature: kind + " " + name });
   }
 
+  if (JS_EXTENSIONS.has(extension) && typescriptParser) {
+    const source = typescriptParser.createSourceFile(relativePath, content, typescriptParser.ScriptTarget.Latest, true);
+    const visit = node => {
+      const name = node.name && typescriptParser.isIdentifier(node.name) ? node.name.text : null;
+      const kind = typescriptParser.isFunctionDeclaration(node) ? "function"
+        : typescriptParser.isClassDeclaration(node) ? "class"
+          : typescriptParser.isInterfaceDeclaration(node) ? "interface"
+            : typescriptParser.isTypeAliasDeclaration(node) ? "type"
+              : typescriptParser.isEnumDeclaration(node) ? "enum" : null;
+      if (kind && name) add(kind, name, source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1);
+      if (typescriptParser.isVariableStatement(node)) {
+        for (const declaration of node.declarationList.declarations) {
+          const init = declaration.initializer;
+          if (typescriptParser.isIdentifier(declaration.name) && init && (typescriptParser.isArrowFunction(init) || typescriptParser.isFunctionExpression(init))) {
+            add("function", declaration.name.text, source.getLineAndCharacterOfPosition(declaration.getStart(source)).line + 1);
+          }
+        }
+      }
+      typescriptParser.forEachChild(node, visit);
+    };
+    visit(source);
+    return symbols;
+  }
   for (let index = 0; index < lines.length && symbols.length < MAX_SYMBOLS_PER_FILE; index += 1) {
     const line = lines[index];
     const trimmed = line.trim();
