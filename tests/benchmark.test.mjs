@@ -3,21 +3,48 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { evaluateBenchmarkTask, loadBenchmarkSuite, runBenchmarkSuite, summarizeBenchmarkResults, validateBenchmarkSuite } from "../local/benchmark.mjs";
+import { evaluateBenchmarkTask, loadBenchmarkSuite, runBenchmarkSuite, runTypeScriptBaselineCheck, summarizeBenchmarkResults, validateBenchmarkSuite } from "../local/benchmark.mjs";
 
 test("versioned benchmark manifest contains representative coding tasks", async () => {
   const { suite } = await loadBenchmarkSuite();
-  assert.equal(suite.version, "1.2.0");
-  assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp","string-slugify","config-deep-merge","positive-integer","array-chunk","multi-file-request-validation","python-duration-format"]);
+  assert.equal(suite.version, "1.3.0");
+  assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp","string-slugify","config-deep-merge","positive-integer","array-chunk","multi-file-request-validation","python-duration-format","typescript-contract-consistency"]);
   assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 6);
   assert.equal(suite.tasks.find(task => task.id === "multi-file-request-validation").expectedChangedPaths.length, 2);
   assert.equal(suite.tasks.find(task => task.id === "python-duration-format").baselineCheck, "python-unittest");
+  assert.equal(suite.tasks.find(task => task.id === "typescript-contract-consistency").baselineCheck, "typescript");
 });
 test("suite validation rejects duplicate IDs and fixture path traversal", () => {
   const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-script", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
   assert.throws(() => validateBenchmarkSuite({ version: "1.0.0", tasks: [task, { ...task }] }), /unique/i);
   assert.throws(() => validateBenchmarkSuite({ version: "1.0.0", tasks: [{ ...task, fixture: "../outside" }] }), /unsafe fixture/i);
 });
+test("TypeScript baseline invokes the installed compiler and detects then clears type errors", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-typescript-baseline-"));
+  try {
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, "tsconfig.json"), JSON.stringify({
+      compilerOptions: {
+        target: "ES2022", module: "commonjs", moduleResolution: "node",
+        strict: true, noEmit: true, skipLibCheck: true
+      },
+      include: ["src/**/*.ts"]
+    }, null, 2));
+    const sourcePath = path.join(root, "src", "contract.ts");
+    await fs.writeFile(sourcePath, "export interface Profile { name: string }\\nexport const profile: Profile = { name: 42 };\\n");
+    const failing = await runTypeScriptBaselineCheck(root, "tsconfig.json");
+    assert.equal(failing.passed, false);
+    assert.notEqual(failing.exitCode, 0);
+    assert.match(failing.stdout + failing.stderr, /name/);
+    await fs.writeFile(sourcePath, "export interface Profile { name: string }\\nexport const profile: Profile = { name: \"SYNTRA\" };\\n");
+    const passing = await runTypeScriptBaselineCheck(root, "tsconfig.json");
+    assert.equal(passing.passed, true, passing.stdout + passing.stderr);
+    assert.equal(passing.exitCode, 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("task evaluator requires exact changed paths and successful verification", () => {
   const task = { id: "sample-task", category: "utility", title: "Sample task", expectedChangedPaths: ["src/math.mjs"] };
   const good = evaluateBenchmarkTask(task, {

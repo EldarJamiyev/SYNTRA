@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
-  "description": "Expanded local coding-agent evaluation suite covering JavaScript, Python, multi-file API changes, and configuration tasks. Each fixture has failing baseline assertions and explicit expected changed paths.",
+  "version": "1.3.0",
+  "description": "Local coding-agent development suite covering JavaScript, TypeScript contracts, Python, multi-file API changes, and configuration tasks. Each fixture has a failing language-appropriate baseline and explicit expected changed paths.",
   "tasks": [
     {
       "id": "utility-clamp",
@@ -100,6 +100,20 @@
       "maxIterations": 3,
       "maxSlices": 1,
       "goal": "Implement format_duration(seconds) in src/duration.py. Accept only non-negative integers but reject booleans; raise TypeError for non-integers and ValueError for negative integers. Format values below one hour as MM:SS with zero-padded minutes and seconds, and values of one hour or more as H:MM:SS where hours are not padded. Do not edit tests or add dependencies."
+    },
+    {
+      "id": "typescript-contract-consistency",
+      "category": "typescript",
+      "title": "Repair an imported TypeScript contract implementation",
+      "fixture": "fixtures/typescript-contract-consistency",
+      "baselineCheck": "typescript",
+      "testEntry": "tsconfig.json",
+      "expectedChangedPaths": [
+        "src/normalizer.ts"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Fix normalizeAccount in src/normalizer.ts so its returned object satisfies the imported Account contract. The module imports Account as UserAccount and AccountState as UserAccountState; preserve these aliases, trim email and displayName, and return the original state value under the required state property. The current code incorrectly returns a status property, which is not part of Account. Do not modify contracts, the type-check configuration, or the consumer check."
     }
   ]
 }

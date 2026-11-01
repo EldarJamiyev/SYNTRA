@@ -12,7 +12,7 @@ Start a local Ollama model that SYNTRA can select, or start SYNTRA's native AI s
 - Run selected tasks: npm run benchmark -- --task utility-clamp --task string-slugify
 - Choose a report path: npm run benchmark -- --output reports/local-model-run.json
 
-The default suite is benchmarks/suite.v1.json, currently version 1.2.0. It contains seven intentionally failing regression fixtures:
+The default suite is benchmarks/suite.v1.json, currently version 1.3.0. It contains eight intentionally failing regression fixtures:
 
 | Task | Capability | Acceptance |
 | --- | --- | --- |
@@ -23,8 +23,9 @@ The default suite is benchmarks/suite.v1.json, currently version 1.2.0. It conta
 | config-deep-merge | Merge nested configuration | Recursive object merge, array replacement, input immutability |
 | multi-file-request-validation | API request validation | Two-file implementation and invalid/valid payload behavior |
 | python-duration-format | Python utility implementation | Input validation and MM:SS/H:MM:SS formatting through unittest |
+| typescript-contract-consistency | TypeScript API contracts | Aliased imports, interface conformance, and a real tsc noEmit baseline |
 
-Each fixture must fail its language-appropriate baseline assertion run (Node.js or Python unittest) before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
+Each fixture must fail its language-appropriate baseline check (Node.js assertions, Python unittest, or the installed TypeScript compiler in noEmit mode) before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
 
 ## Measurements
 
