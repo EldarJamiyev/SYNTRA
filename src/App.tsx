@@ -49,6 +49,19 @@ type WorkspaceToolResponse<T> = {
 type Message = ChatMessage;
 const MAX_VISIBLE_MESSAGES = 60;
 
+let localApiTokenPromise: Promise<string> | null = null;
+async function getLocalApiToken(): Promise<string> {
+  if (!localApiTokenPromise) {
+    localApiTokenPromise = (async () => {
+      const response = await fetch("/local-api/session", { method: "GET", headers: { Accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(8000) });
+      const payload = await response.json().catch(() => ({})) as { token?: string; error?: string };
+      if (!response.ok || typeof payload.token !== "string" || payload.token.length < 32) throw new Error(payload.error || "SYNTRA could not establish a secure local API session. Refresh and try again.");
+      return payload.token;
+    })().catch(error => { localApiTokenPromise = null; throw error; });
+  }
+  return localApiTokenPromise;
+}
+
 type ChatJob = {
   jobId: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
@@ -72,9 +85,10 @@ type AgentRunSummary = {
 };
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const token = await getLocalApiToken();
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(15_000),
   });
@@ -96,9 +110,10 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 }
 
 async function getJson<T>(url: string): Promise<T> {
+  const token = await getLocalApiToken();
   const response = await fetch(url, {
     method: 'GET',
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', Authorization: 'Bearer ' + token },
     signal: AbortSignal.timeout(8_000),
   });
   const raw = await response.text();
@@ -385,11 +400,12 @@ export default function App() {
     rootOverride?: string,
   ): Promise<T> => {
     const root = rootOverride || workspaceStatus?.root || workspacePath || undefined;
+    const approvalToken = approval
+      ? (await postJson<{ approvalToken: string }>('/local-api/approvals', { ...(root ? { root } : {}), name, input: toolInput })).approvalToken
+      : undefined;
     const result = await postJson<WorkspaceToolResponse<T>>('/local-api/tools/execute', {
-      ...(root ? { root } : {}),
-      name,
-      input: toolInput,
-      approval,
+      ...(root ? { root } : {}), name, input: toolInput,
+      ...(approvalToken ? { approvalToken } : {}),
     });
     if (!result.ok || result.output === undefined) {
       throw new Error(result.error || result.message || 'The workspace tool did not complete.');
