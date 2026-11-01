@@ -542,6 +542,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
           return {
             text: JSON.stringify({
               calls: [
+                { tool: "workspace.search", input: { query: "value", limit: 5 } },
                 { tool: "workspace.read", input: { path: "src/value.js", startLine: 1, endLine: 1 } }
               ]
             }),
@@ -599,6 +600,65 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
     assert.ok(result.observations.some(item => item.kind === "workspace.read" && item.path === "src/value.js"));
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
       "model-selected retrieval and patch staging must not write the original project file");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("iterative retrieval enforces the eight-call global limit and stops without a redundant planning round", async () => {
+  const root = await createProject();
+  let planningRounds = 0;
+  const modelRequest = async (method, route, body) => {
+    if (method === "GET" && route === "/model/status") {
+      return {
+        checkpoint_exists: true, context_tokens: 4096, tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258, config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") return { token_count: Math.ceil(body.text.length / 4) };
+    if (route === "/model/generate") {
+      if (body.prompt.includes("SYNTRA_READ_ONLY_TOOL_PLAN")) {
+        planningRounds += 1;
+        const first = (planningRounds - 1) * 4;
+        return {
+          text: JSON.stringify({
+            calls: Array.from({ length: 4 }, (_, index) => ({
+              tool: "workspace.search",
+              input: { query: "unique-term-" + (first + index), limit: 2 }
+            }))
+          }),
+          generated_tokens: 20, trained_steps: null
+        };
+      }
+      return {
+        text: JSON.stringify({
+          summary: "Update the exported value.",
+          edits: [{
+            path: "src/value.js",
+            find: "value: 1",
+            replace: "value: 2",
+            reason: "Update the value requested by the task."
+          }]
+        }),
+        generated_tokens: 30, trained_steps: null
+      };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Change the exported value from 1 to 2.",
+      maxIterations: 1,
+      runChecks: false,
+      modelToolSelection: true,
+      modelRequest
+    });
+    assert.equal(planningRounds, 2, "the eight-call budget should stop planning before a third round");
+    assert.equal(result.toolCalls.filter(call => call.name === "workspace.search").length, 8);
+    const investigation = result.observations.find(item => item.kind === "model-readonly-investigation");
+    assert.match(investigation.detail, /2 evidence-driven planning round\(s\), 8 unique read-only retrieval call/);
+    assert.equal(result.proposals.length, 1);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
