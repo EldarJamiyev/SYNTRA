@@ -346,7 +346,7 @@ async function runChatCommand(service, message) {
   const deadline = Date.now() + 5_000;
   let status = null;
   while (Date.now() < deadline) {
-    const response = await apiFetch(base + "/local-api/chat/status", {
+    const response = await service.apiFetch(base + "/local-api/chat/status", {
       method: "POST",
       headers,
       body: JSON.stringify({ jobId: job.jobId })
@@ -440,9 +440,15 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.equal(deniedMemoryWrite.ok, false);
     assert.equal(deniedMemoryWrite.status, "approval_required");
 
+    const memoryApprovalResponse = await service.apiFetch(service.base + "/local-api/approvals", {
+      method: "POST", headers,
+      body: JSON.stringify({ name: "workspace.memory.add", root, input: memoryInput })
+    });
+    assert.equal(memoryApprovalResponse.status, 200);
+    const memoryApproval = await memoryApprovalResponse.json();
     const approvedMemoryWriteResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
       method: "POST", headers,
-      body: JSON.stringify({ name: "workspace.memory.add", root, input: memoryInput, approval: true })
+      body: JSON.stringify({ name: "workspace.memory.add", root, input: memoryInput, approvalToken: memoryApproval.approvalToken })
     });
     const approvedMemoryWrite = await approvedMemoryWriteResponse.json();
     assert.equal(approvedMemoryWrite.ok, true);
