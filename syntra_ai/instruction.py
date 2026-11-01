@@ -105,8 +105,8 @@ def load_instruction_examples(
             total_tokens += example_tokens
             if len(examples) >= max_examples:
                 break
-    if len(examples) < 2:
-        raise ValueError("At least two non-empty prompt/completion examples are required for train/validation splits.")
+    if len(examples) < 1:
+        raise ValueError("Instruction dataset contains no non-empty prompt/completion examples.")
     return examples
 
 
@@ -196,6 +196,63 @@ def split_instruction_examples(
     }
     return training_examples, validation_examples, quality
 
+
+def audit_instruction_dataset(
+    dataset_path: str | Path,
+    seq_len: int = 4096,
+    tokenizer: ByteBPETokenizer | None = None,
+    max_examples: int = MAX_INSTRUCTION_EXAMPLES,
+    max_tokens: int = MAX_INSTRUCTION_TOKENS,
+) -> dict:
+    """Return a read-only structural audit of a local prompt/completion JSONL file."""
+    tokenizer_basis = "checkpoint-tokenizer" if tokenizer is not None else "byte-fallback"
+    try:
+        examples = load_instruction_examples(
+            dataset_path, seq_len, tokenizer=tokenizer,
+            max_examples=max_examples, max_tokens=max_tokens
+        )
+    except (OSError, ValueError) as error:
+        return {
+            "valid": False, "split_available": False, "example_count": 0,
+            "tokenizer_basis": tokenizer_basis, "error": str(error), "warnings": [],
+        }
+
+    unique_prompt_count = len({item["prompt_group_id"] for item in examples})
+    unique_example_count = len({item["example_id"] for item in examples})
+    repeated_prompt_count = len(examples) - unique_prompt_count
+    exact_duplicate_count = len(examples) - unique_example_count
+    warnings = []
+    if len(examples) < 100:
+        warnings.append("Small dataset: fewer than 100 examples; validation loss is weak evidence of generalization.")
+    if unique_prompt_count < 20:
+        warnings.append("Low prompt diversity: fewer than 20 distinct normalized prompts.")
+    if repeated_prompt_count:
+        warnings.append(f"{repeated_prompt_count} example(s) reuse an existing normalized prompt; all copies stay in one split.")
+    if exact_duplicate_count:
+        warnings.append(f"{exact_duplicate_count} exact prompt/completion duplicate(s) may overweight repeated examples during training.")
+
+    try:
+        _, _, split_quality = split_instruction_examples(examples)
+    except ValueError as error:
+        warnings.append(str(error))
+        return {
+            "valid": True, "split_available": False, "example_count": len(examples),
+            "unique_prompt_count": unique_prompt_count,
+            "repeated_prompt_example_count": repeated_prompt_count,
+            "exact_duplicate_example_count": exact_duplicate_count,
+            "training_examples": 0, "validation_examples": 0, "validation_fraction": 0.0,
+            "split_strategy": "deterministic-sha256-prompt-groups",
+            "split_seed": INSTRUCTION_SPLIT_SEED,
+            "prompt_leakage_groups": 0 if unique_prompt_count < 2 else None,
+            "tokenizer_basis": tokenizer_basis,
+            "tokenization_note": "Byte-level fallback used for audit unless a checkpoint tokenizer is supplied; fine-tuning uses the checkpoint tokenizer.",
+            "error": str(error), "warnings": warnings,
+        }
+    return {
+        "valid": True, "split_available": True, **split_quality,
+        "tokenizer_basis": tokenizer_basis,
+        "tokenization_note": "Byte-level fallback used for audit unless a checkpoint tokenizer is supplied; fine-tuning uses the checkpoint tokenizer.",
+    }
 
 def _instruction_batch(examples: list[dict], batch_size: int, device: torch.device):
     indices = torch.randint(0, len(examples), (batch_size,)).tolist()

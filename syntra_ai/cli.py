@@ -8,7 +8,7 @@ import sys
 from .config import ModelConfig
 from .data import load_corpus
 from .runtime import evaluate, generate, status, tokenize_text
-from .instruction import finetune
+from .instruction import audit_instruction_dataset, finetune
 from .training import train
 
 
@@ -43,6 +43,12 @@ def _parser() -> argparse.ArgumentParser:
     inference.add_argument("--max-new-tokens", type=int, default=256)
     inference.add_argument("--temperature", type=float, default=0.7)
     inference.add_argument("--top-k", type=int, default=40)
+
+    audit_fine = sub.add_parser("audit-instructions", help="Inspect a local instruction JSONL dataset before fine-tuning.")
+    audit_fine.add_argument("--dataset", required=True, help="Local prompt/completion JSONL dataset.")
+    audit_fine.add_argument("--seq-len", type=int, default=4096)
+    audit_fine.add_argument("--max-examples", type=int, default=10_000)
+    audit_fine.add_argument("--max-tokens", type=int, default=3_000_000)
 
     fine = sub.add_parser("finetune", help="Supervised fine-tune the local checkpoint on prompt/completion JSONL.")
     fine.add_argument("--dataset", required=True, help="Absolute path to a JSONL prompt/completion dataset.")
@@ -87,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(result, indent=2))
         return 0
+    if args.command == "audit-instructions":
+        result = audit_instruction_dataset(
+            dataset_path=args.dataset, seq_len=args.seq_len,
+            max_examples=args.max_examples, max_tokens=args.max_tokens,
+        )
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("valid") and result.get("split_available") else 2
     if args.command == "finetune":
         checkpoint = Path(os.environ.get("SYNTRA_CHECKPOINT", str(
             Path(__file__).resolve().parent.parent / "data" / "checkpoints" / "syntra.pt"
