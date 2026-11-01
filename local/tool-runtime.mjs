@@ -107,7 +107,6 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
-    name: "workspace.memory.add",  {
     name: "workspace.memory.add",
     description: "Save a note explicitly supplied by the user to this workspace's local project memory.",
     permission: "local_state_write",
