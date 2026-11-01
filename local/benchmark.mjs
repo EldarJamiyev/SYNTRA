@@ -177,7 +177,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       agentResult = await agentRunner({
         root: fixture.workspace, goal: task.goal, requestedPath: task.expectedChangedPaths[0],
         maxIterations: task.maxIterations, maxSlices: task.maxSlices,
-        runChecks: true, modelToolSelection: true, modelRequest,
+        runChecks: true, modelToolSelection: true, modelSelfReview: true, modelRequest,
         onProgress: async update => {
           if (update?.model) progressModel = update.model;
           await onProgress({ taskId: task.id, ...update });
