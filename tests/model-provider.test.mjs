@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   chooseLocalModel,
   detectLocalModel,
+  estimateModelResourceProfile,
   getProviderStatus,
   handleLocalModelRequest
 } from "../local/model-provider.mjs";
@@ -35,6 +36,42 @@ test("model selection leaves memory headroom and applies the same limit to expli
     "an explicit preference must never bypass the memory safety threshold");
   assert.equal(chooseLocalModel([{ name: "exact-limit:latest", size: 17.6 * GB }], "", 32 * GB)?.name, "exact-limit:latest");
   assert.equal(chooseLocalModel([{ name: "just-over-limit:latest", size: 17.61 * GB }], "", 32 * GB), null);
+});
+
+test("resource profile estimates KV-cache demand and reports loaded runtime memory", () => {
+  const profile = estimateModelResourceProfile({
+    modelSizeBytes: 8 * GB,
+    totalMemoryBytes: 32 * GB,
+    availableMemoryBytes: 12 * GB,
+    contextTokens: 8192,
+    modelInfo: {
+      "qwen.block_count": 40,
+      "qwen.embedding_length": 5120,
+      "qwen.attention.head_count": 40,
+      "qwen.attention.head_count_kv": 8
+    },
+    runningModel: { name: "qwen:latest", size: 9 * GB, size_vram: 2 * GB }
+  });
+  assert.equal(profile.modelAlreadyLoaded, true);
+  assert.equal(profile.runtimeVramBytes, 2 * GB);
+  assert.equal(profile.kvCacheBytesPerToken, 40 * 8 * 128 * 4);
+  assert.equal(profile.estimatedKvCacheBytes, profile.kvCacheBytesPerToken * 8192);
+  assert.equal(profile.estimatedHostWorkingSetBytes, 7 * GB + profile.estimatedKvCacheBytes);
+  assert.equal(profile.conservativeBudgetBytes, 32 * GB * 0.55);
+  assert.equal(profile.confidence, "estimated");
+  assert.match(profile.limitation, /GPU offload/);
+});
+
+test("resource profile stays honest when Ollama metadata is incomplete", () => {
+  const profile = estimateModelResourceProfile({
+    modelSizeBytes: 4 * GB,
+    totalMemoryBytes: 16 * GB,
+    availableMemoryBytes: 6 * GB
+  });
+  assert.equal(profile.estimatedKvCacheBytes, null);
+  assert.equal(profile.estimatedHostWorkingSetBytes, null);
+  assert.equal(profile.withinConservativeBudget, null);
+  assert.equal(profile.confidence, "partial");
 });
 
 test("native mode never probes Ollama; auto mode safely falls back if it is offline", async () => {
