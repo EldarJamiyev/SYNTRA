@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   applyFileProposal,
   applyFileProposals,
+  buildVerificationCommand,
   chooseCheck,
   createProjectPlan,
   discoverProjectChecks,
@@ -79,6 +80,30 @@ test("inspect workspace reports project metadata and source files", async () => 
   assert.ok(info.scripts.build);
 });
 
+test("verification defaults to an offline Docker container and filters host environment variables", () => {
+  const root = path.join(os.tmpdir(), "syntra-verification");
+  const selected = { kind: "npm-script", command: "npm run test", script: "test" };
+  const isolated = buildVerificationCommand(root, selected, {
+    platform: "linux",
+    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+  });
+  assert.equal(isolated.mode, "docker");
+  assert.equal(isolated.executable, "docker");
+  for (const flag of ["--network=none", "--read-only", "--cap-drop=ALL",
+    "--pids-limit=128", "--memory=2g", "node:20-bookworm-slim"]) {
+    assert.ok(isolated.args.includes(flag), "expected Docker flag " + flag);
+  }
+  assert.equal(isolated.env.SYNTRA_API_TOKEN, undefined);
+
+  const host = buildVerificationCommand(root, selected, {
+    allowUntrustedHost: true,
+    platform: "linux",
+    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+  });
+  assert.equal(host.mode, "host_opt_in");
+  assert.equal(host.env.SYNTRA_API_TOKEN, undefined);
+});
+
 test("check discovery reports only runners that are actually configured", async () => {
   const root = await createTempProject();
   try {
@@ -88,6 +113,27 @@ test("check discovery reports only runners that are actually configured", async 
     assert.equal(result.checks.find(item => item.task === "test")?.command, "npm run test");
     assert.deepEqual(result.unavailable.map(item => item.task), ["typecheck"]);
     assert.match(result.unavailable[0].reason, /No supported typecheck command/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("mixed Python and Node test ecosystems produce one complete multi-runner plan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-mixed-runners-"));
+  try {
+    await fs.writeFile(path.join(root, "requirements.txt"), "\n");
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "tests", "test_python.py"), "def test_python(): pass\n");
+    await fs.writeFile(path.join(root, "tests", "node.test.mjs"),
+      "import test from 'node:test'; test('node runner', () => {});\n");
+    const selected = await chooseCheck(root, "test", null);
+    assert.equal(selected.kind, "multi-runner");
+    assert.deepEqual(selected.runners.map(item => item.kind), ["python-unittest", "node-test"]);
+    const commands = buildVerificationCommand(root, selected, {
+      platform: "linux", environment: { PATH: "/usr/bin" }
+    });
+    assert.equal(commands.length, 2);
+    assert.deepEqual(commands.map(item => item.image), ["python:3.11-slim", "node:20-bookworm-slim"]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

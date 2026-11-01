@@ -34,12 +34,13 @@ function help() {
     "Reports measurements and scores, not source contents, prompts, or model output."
   ].join("\n"));
 }
-function createModelRequest() {
+function createModelRequest(requestedModel = null) {
   let providerPromise = null;
   const aiBase = process.env.SYNTRA_BENCHMARK_AI_BASE || "http://127.0.0.1:" + Number(process.env.SYNTRA_AI_PORT || 3002);
   return async (method, route, body, timeoutMs, options = {}) => {
-    if (!providerPromise) providerPromise = detectLocalModel();
+    if (!providerPromise) providerPromise = detectLocalModel(requestedModel ? { mode: "ollama", requestedModel } : undefined);
     const provider = await providerPromise;
+    if (requestedModel && !provider) throw new Error("SYNTRA_REVIEW_MODEL must name an installed local Ollama model.");
     if (provider) return handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, signal: options.signal });
     const timeout = timeoutMs || (route === "/model/generate" ? 300000 : 30000);
     const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
@@ -74,7 +75,9 @@ async function main() {
   const outputPath = args.output ? path.resolve(args.output) : path.resolve("benchmark-results", "syntra-" + timestamp + ".json");
   const { report, outputPath: savedPath } = await runBenchmarkSuite({
     suite, suiteDir, taskIds: args.tasks.length ? args.tasks : null,
-    modelRequest: createModelRequest(), outputPath,
+    modelRequest: createModelRequest(),
+    reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim() ? createModelRequest(process.env.SYNTRA_REVIEW_MODEL.trim()) : null,
+    outputPath,
     onProgress: update => {
       if (update.phase === "started" || update.phase === "finished") console.log("[" + update.taskId + "] " + update.message);
       else if (update.phase && update.message) console.log("[" + update.taskId + "] " + update.phase + ": " + update.message);

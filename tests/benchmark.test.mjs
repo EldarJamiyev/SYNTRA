@@ -7,9 +7,11 @@ import { evaluateBenchmarkTask, loadBenchmarkSuite, runBenchmarkSuite, summarize
 
 test("versioned benchmark manifest contains representative coding tasks", async () => {
   const { suite } = await loadBenchmarkSuite();
-  assert.equal(suite.version, "1.0.0");
-  assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp", "string-slugify", "config-deep-merge"]);
-  assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 3);
+  assert.equal(suite.version, "1.1.0");
+  assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp", "string-slugify", "config-deep-merge", "multi-file-request-validation", "python-duration-format"]);
+  assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 5);
+  assert.equal(suite.tasks.find(task => task.id === "multi-file-request-validation").expectedChangedPaths.length, 2);
+  assert.equal(suite.tasks.find(task => task.id === "python-duration-format").baselineCheck, "python-unittest");
 });
 test("suite validation rejects duplicate IDs and fixture path traversal", () => {
   const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-script", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
@@ -70,12 +72,16 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
   try {
     const { report, outputPath: savedPath } = await runBenchmarkSuite({
       suite, suiteDir, outputPath,
+      reviewModelRequest: async () => ({ model_name: "independent-reviewer" }),
       modelRequest: async (method, route) => {
         assert.equal(method, "GET"); assert.equal(route, "/model/status");
         return { checkpoint_exists: true, provider: "ollama", model_name: "test-local-model", context_tokens: 4096 };
       },
       agentRunner: async options => {
         assert.notEqual(options.root, fixtureDir);
+        assert.equal(options.modelSelfReview, true);
+        assert.equal(options.modelToolSelection, true);
+        assert.equal(typeof options.reviewModelRequest, "function");
         assert.equal(await fs.readFile(path.join(options.root, "src", "target.mjs"), "utf8"), original);
         await options.onProgress({ phase: "plan-created", model: { provider: "ollama", name: "test-local-model", contextWindowTokens: 4096 } });
         return {

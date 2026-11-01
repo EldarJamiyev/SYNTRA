@@ -13,11 +13,24 @@ function validLocalOrigin(value) {
   return LOCAL_ORIGIN_HOSTS.has(parsed.hostname.toLowerCase());
 }
 /** Direct loopback service: forwarded host headers are never trusted. */
-export function getHostRejection(request) {
-  const host = firstHeader(request.headers?.host);
-  if (!host || !LOCAL_HOST_HEADER.test(host)) return "The local API only accepts loopback Host headers.";
-  const portPart = host.match(/:([0-9]+)$/)?.[1];
-  if (portPart && (Number(portPart) < 1 || Number(portPart) > 65535)) return "The local API Host port is invalid.";
+export function getHostRejection(request, expectedPort = 3001) {
+  const host = request.headers?.host;
+  if (typeof host !== "string" || !host || host.length > 255 || host.includes(",")) {
+    return "The local API only accepts one valid loopback Host header.";
+  }
+  if (!Number.isInteger(expectedPort) || expectedPort < 1 || expectedPort > 65535) {
+    return "The local API listener port is invalid.";
+  }
+  let parsed;
+  try { parsed = new URL("http://" + host); }
+  catch { return "The local API only accepts loopback Host headers."; }
+  if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash
+    || !["localhost", "127.0.0.1"].includes(parsed.hostname.toLowerCase())) {
+    return "The local API only accepts loopback Host headers.";
+  }
+  if (!parsed.port || Number(parsed.port) !== expectedPort) {
+    return "The Host header must match the local API listener port.";
+  }
   return null;
 }
 /** Never reflect an arbitrary Origin from Host; this prevents DNS-rebinding trust. */

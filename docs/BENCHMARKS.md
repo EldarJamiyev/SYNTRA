@@ -12,15 +12,17 @@ Start a local Ollama model that SYNTRA can select, or start SYNTRA's native AI s
 - Run selected tasks: npm run benchmark -- --task utility-clamp --task string-slugify
 - Choose a report path: npm run benchmark -- --output reports/local-model-run.json
 
-The default suite is benchmarks/suite.v1.json, currently version 1.0.0. It contains three intentionally failing regression fixtures:
+The default suite is benchmarks/suite.v1.json, currently version 1.1.0. It contains five intentionally failing regression fixtures:
 
 | Task | Capability | Acceptance |
 | --- | --- | --- |
 | utility-clamp | Add a bounded numeric helper | Exact expected source-file change and passing Node.js assertions |
 | string-slugify | Correct string normalization | Punctuation/separator behavior and passing Node.js assertions |
 | config-deep-merge | Merge nested configuration | Recursive object merge, array replacement, input immutability |
+| multi-file-request-validation | API request validation | Two-file implementation and invalid/valid payload behavior |
+| python-duration-format | Python utility implementation | Input validation and MM:SS/H:MM:SS formatting through unittest |
 
-Each fixture must fail its baseline Node.js assertion run before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
+Each fixture must fail its language-appropriate baseline assertion run (Node.js or Python unittest) before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
 
 ## Measurements
 
@@ -31,6 +33,10 @@ The aggregate section includes completion, patch-validity and verification-pass 
 ## Measurement boundaries
 
 This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate Ollama daemon, model runtime, GPU memory, or total system memory. Some provider responses may not include prompt-token counts; unavailable values are recorded as zero rather than presented as exact counts.
+
+The benchmark enables the same second-pass patch review as the normal coding workflow. Review is a same-model pass unless `SYNTRA_REVIEW_MODEL` names a different installed local Ollama model; reports should not be described as independent review when both passes use one model.
+
+The benchmark enables the same model-selected read-only retrieval and patch self-review stage as the normal coding workflow. Unless `SYNTRA_REVIEW_MODEL` points to another installed local Ollama model, review is a second pass by the same model, not independent-model verification.
 
 The benchmark does not call a hosted model API. It uses the locally configured Ollama provider when available, otherwise the local SYNTRA AI service. Each fixture is copied to a temporary directory and removed after its run. Agent changes are staged only inside that temporary copy; the active workspace and checked-in fixtures remain unchanged.
 

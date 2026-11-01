@@ -17,6 +17,13 @@ async function createProject() {
     "export interface GatewayOptions { host: string }",
     "export async function resolveGateway(host: string): Promise<string> { return host; }",
     "export const createGateway = (name: string) => ({ name });",
+    "export async function",
+    "  resolveMultilineGateway(",
+    "    host: string",
+    "  ): Promise<string> { return host; }",
+    "export const createMultilineGateway = (",
+    "  name: string",
+    ") => ({ name });",
     "export class GatewayClient {}",
     "export type GatewayState = 'ready' | 'offline';",
     ""
@@ -56,6 +63,11 @@ test("workspace symbol index extracts bounded declarations without persisting so
     assert.equal(refreshed.fileCount, 4);
     assert.ok(refreshed.symbolCount >= 9);
 
+    const multiline = await searchWorkspaceSymbols(root, "resolveMultilineGateway");
+    assert.equal(multiline.results[0].path, "src/service.ts");
+    assert.equal(multiline.results[0].line, 4);
+    const multilineArrow = await searchWorkspaceSymbols(root, "createMultilineGateway");
+    assert.equal(multilineArrow.results[0].path, "src/service.ts");
     const gateway = await searchWorkspaceSymbols(root, "resolveGateway");
     assert.equal(gateway.results.length, 1);
     assert.equal(gateway.results[0].name, "resolveGateway");
@@ -70,7 +82,7 @@ test("workspace symbol index extracts bounded declarations without persisting so
     const rust = await searchWorkspaceSymbols(root, "RouteProvider");
     assert.equal(rust.results[0].path, "src/lib.rs");
 
-    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v3.json"), "utf8");
     assert.equal(stored.includes("SYNTRA_SECRET"), false);
     assert.equal(stored.includes("return host"), false);
     assert.equal(stored.includes("GatewayOptions { host"), false);
@@ -160,6 +172,7 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(refreshed.documentationFileCount, 1);
     assert.equal(refreshed.testFileCount, 1);
     assert.ok(refreshed.importEdgeCount >= 2);
+    assert.ok(refreshed.callEdgeCount >= 2);
     assert.equal(refreshed.documentationReferenceCount, 2);
     assert.equal(refreshed.testOwnershipCount, 1);
 
@@ -171,11 +184,14 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(implementation.imports.length, 0);
     assert.ok(implementation.importedBy.includes("src/consumer.ts"));
     assert.ok(implementation.importedBy.includes("tests/service.test.ts"));
+    assert.ok(implementation.calledBy.includes("src/consumer.ts"));
+    assert.ok(implementation.calledBy.includes("tests/service.test.ts"));
     assert.ok(implementation.referencedByDocs.includes("docs/architecture.md"));
     assert.ok(implementation.ownedTests.includes("tests/service.test.ts"));
 
     const consumer = await searchWorkspaceSymbols(root, "useGateway");
     assert.ok(consumer.results[0].imports.includes("src/service.ts"));
+    assert.ok(consumer.results[0].calls.includes("src/service.ts"));
 
     const testSymbol = await searchWorkspaceSymbols(root, "testResolveGateway");
     assert.equal(testSymbol.results[0].role, "test");
@@ -185,10 +201,11 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(status.documentationFileCount, 1);
     assert.equal(status.testFileCount, 1);
     assert.equal(status.importEdgeCount, refreshed.importEdgeCount);
+    assert.equal(status.callEdgeCount, refreshed.callEdgeCount);
     assert.equal(status.documentationReferenceCount, 2);
     assert.equal(status.testOwnershipCount, 1);
 
-    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v3.json"), "utf8");
     assert.equal(stored.includes("resolveGateway(host: string)"), false);
     assert.equal(stored.includes("used by the"), false);
     assert.equal(stored.includes("The [gateway service]"), false);
@@ -261,9 +278,9 @@ test("workspace index refuses a symbolic-link index file", async t => {
   try {
     await refreshWorkspaceIndex(root);
     await fs.writeFile(outside, JSON.stringify({ schemaVersion: 1 }), "utf8");
-    await fs.unlink(path.join(root, ".syntra", "workspace-index-v2.json"));
+    await fs.unlink(path.join(root, ".syntra", "workspace-index-v3.json"));
     try {
-      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v2.json"), "file");
+      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v3.json"), "file");
     } catch (error) {
       if (["EPERM", "EACCES", "ENOTSUP", "UNKNOWN"].includes(error?.code)) {
         t.skip("The current operating system does not permit creating file symlinks.");

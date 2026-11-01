@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { analyzeSourceFile } from "./workspace-index.mjs";
 import { readWorkspaceFile, resolveWorkspace } from "./workspace.mjs";
 import { executeWorkspaceTool } from "./tool-runtime.mjs";
 
@@ -152,20 +153,17 @@ async function walkSourceFiles(root) {
 function parseImports(relative, content) {
   const result = [];
   const extension = path.posix.extname(relative).toLowerCase();
-  if ([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".astro"].includes(extension)) {
+  if ([".vue", ".svelte", ".astro"].includes(extension)) {
     const pattern = /\bfrom\s*["']([^"']+)["']|\bimport\s*(?:\(\s*)?["']([^"']+)["']|\brequire\s*\(\s*["']([^"']+)["']/g;
     for (const match of content.matchAll(pattern)) {
       const specifier = match[1] || match[2] || match[3];
       if (specifier && specifier.startsWith(".")) result.push(specifier);
     }
+  } else if (extension === ".css" || extension === ".scss") {
     const css = /@import\s+(?:url\()?["']([^"']+)["']/g;
-    for (const match of content.matchAll(css)) if (match[1] && match[1].startsWith(".")) result.push(match[1]);
-  } else if (extension === ".py" || extension === ".pyi") {
-    const pattern = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([\w.]+))/gm;
-    for (const match of content.matchAll(pattern)) {
-      const specifier = match[1] || match[2];
-      if (specifier) result.push(specifier);
-    }
+    for (const match of content.matchAll(css)) if (match[1]?.startsWith(".")) result.push(match[1]);
+  } else {
+    result.push(...analyzeSourceFile(relative, content).importSpecifiers);
   }
   return [...new Set(result)].slice(0, 80);
 }
@@ -204,21 +202,39 @@ export async function buildRepositoryGraph(inputRoot) {
   for (const item of walked.files) {
     let file;
     try { file = await readWorkspaceFile(root, item.path); } catch { continue; }
+    const analysis = analyzeSourceFile(item.path, file.content);
+    const astBacked = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+      ".py", ".pyi", ".go", ".rs"].includes(item.extension);
     const node = {
       path: item.path, size: file.bytes, sha256: file.sha256,
-      language: item.extension.slice(1) || "text", imports: [], importedBy: [], content: file.content
+      language: item.extension.slice(1) || "text", imports: [], importedBy: [],
+      importSpecifiers: astBacked ? analysis.importSpecifiers : parseImports(item.path, file.content),
+      symbols: astBacked ? analysis.symbols : [],
+      callSpecifiers: analysis.callSpecifiers,
+      calls: [], calledBy: [], content: file.content
     };
     nodes.set(item.path, node);
   }
   for (const node of nodes.values()) {
-    for (const specifier of parseImports(node.path, node.content)) {
+    for (const specifier of node.importSpecifiers) {
       const resolved = resolveImport(node.path, specifier, fileSet);
       if (resolved && resolved !== node.path && nodes.has(resolved)) node.imports.push(resolved);
     }
   }
   for (const node of nodes.values()) for (const imported of node.imports) nodes.get(imported)?.importedBy.push(node.path);
+  for (const node of nodes.values()) {
+    for (const callName of node.callSpecifiers) {
+      const matches = node.imports.filter(target =>
+        nodes.get(target)?.symbols.some(symbol => symbol.name === callName)
+      );
+      if (matches.length !== 1) continue;
+      const target = nodes.get(matches[0]);
+      if (!node.calls.includes(target.path)) node.calls.push(target.path);
+      if (!target.calledBy.includes(node.path)) target.calledBy.push(node.path);
+    }
+  }
   return {
-    root, nodes: [...nodes.values()].map(({ content, ...node }) => node), contents: nodes,
+    root, nodes: [...nodes.values()].map(({ content, importSpecifiers, symbols, callSpecifiers, ...node }) => node), contents: nodes,
     totalFiles: walked.files.length, totalBytes: walked.totalBytes, truncated: walked.truncated
   };
 }
@@ -279,7 +295,7 @@ function rankGraph(graph, goal, requestedPath = "") {
   for (const node of graph.nodes) {
     const score = scores.get(node.path) || 0;
     if (score <= 0) continue;
-    for (const related of [...node.imports, ...node.importedBy]) scores.set(related, (scores.get(related) || 0) + Math.min(8, score * 0.22));
+    for (const related of [...node.imports, ...node.importedBy, ...node.calls, ...node.calledBy]) scores.set(related, (scores.get(related) || 0) + Math.min(8, score * 0.22));
   }
   return [...scores.entries()].map(([filePath, score]) => ({
     ...byPath.get(filePath), score, content: graph.contents.get(filePath)?.content || ""
@@ -298,7 +314,7 @@ function createPlan(goal, inventory, ranked, graph, repositoryState = {}) {
       workingTreeObserved: dirty
     },
     steps: [
-      { id: "discover", title: "Discover architecture and repository state", status: "completed", detail: "Inspected " + inventory.fileCount + " workspace files; import graph contains " + graph.nodes.length + " readable source/config files." },
+      { id: "discover", title: "Discover architecture and repository state", status: "completed", detail: "Inspected " + inventory.fileCount + " workspace files; import graph contains " + graph.nodes.length + " readable source/config files and " + graph.nodes.reduce((sum, node) => sum + node.calls.length, 0) + " static call edges." },
       { id: "scope", title: "Select change surfaces", status: "completed", detail: likelyFiles.length ? likelyFiles.join(", ") : "No relevant source files ranked yet." },
       { id: "patch", title: "Generate structured edits", status: "pending", detail: "Request exact find/replace operations; validate paths, unique anchors, and source hashes." },
       { id: "verify", title: "Discover and run supported checks", status: "pending", detail: "Discover executable runners from the candidate workspace, run only supported checks, then re-read changed candidate files to detect script side effects." },
@@ -312,11 +328,13 @@ function createPlan(goal, inventory, ranked, graph, repositoryState = {}) {
 function makePatchPrompt(goal, inventory, plan, graph, ranked, feedback, repositoryState = {}, supplementalContext = "") {
   const map = ranked.slice(0, 12).map(node => ({
     path: node.path, imports: node.imports.slice(0, 10),
-    importedBy: node.importedBy.slice(0, 10), score: Number(node.score.toFixed(2))
+    importedBy: node.importedBy.slice(0, 10), calls: node.calls.slice(0, 10),
+    calledBy: node.calledBy.slice(0, 10), score: Number(node.score.toFixed(2))
   }));
   const snippets = ranked.slice(0, 12).map(node => ({
     path: node.path, sha256: node.sha256, imports: node.imports.slice(0, 10),
-    importedBy: node.importedBy.slice(0, 10), source: makeExcerpt(node.content, goal)
+    importedBy: node.importedBy.slice(0, 10), calls: node.calls.slice(0, 10),
+    calledBy: node.calledBy.slice(0, 10), source: makeExcerpt(node.content, goal)
   }));
   return [
     MODEL_PROMPT,
@@ -401,7 +419,8 @@ export function validateImplementationSlicePlan(payload, taskGoal, maxSlices = 3
 function makeImplementationSlicePlanPrompt(goal, inventory, ranked) {
   const context = ranked.slice(0, 8).map(item => ({
     path: item.path, language: item.language, imports: item.imports.slice(0, 5),
-    importedBy: item.importedBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 360)
+    importedBy: item.importedBy.slice(0, 5), calls: item.calls.slice(0, 5),
+    calledBy: item.calledBy.slice(0, 5), excerpt: makeExcerpt(item.content, goal, 360)
   }));
   return [
     "SYNTRA_IMPLEMENTATION_SLICE_PLAN",
@@ -681,9 +700,7 @@ async function runModelSelectedReadOnlyTools({
       priorContext: fragments.join("\n"),
       previousCalls: selectedCalls
     });
-    const reviewerModel = String(process.env.SYNTRA_REVIEW_MODEL || "").trim();
-  const reviewerOptions = reviewerModel ? { model: reviewerModel } : {};
-  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt, ...reviewerOptions }, 30000, signal);
+    const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
     if (Number(tokenInfo.token_count) > Math.min(contextBudget, 1800)) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
@@ -876,7 +893,7 @@ function makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext
   }));
   return [
     "SYNTRA_PATCH_REVIEW",
-    "Act as an independent senior engineer reviewing a candidate patch before verification.",
+    "Perform a separate critical senior-engineer review pass before verification. Do not assume the candidate is correct merely because it was generated by the same model or another model.",
     "Compare the patch against the user's actual request and the implementation-slice acceptance criterion.",
     "Check for missing requested behavior, contradictions with supplied source/API contracts, incorrect assumptions, unintended scope, and obvious regressions supported by the evidence.",
     "Only report a blocking finding when it is concrete, material, and supported by the supplied evidence. Do not invent requirements, demand speculative refactors, or block on subjective style preferences.",
@@ -890,25 +907,27 @@ function makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext
     "\nRELATED REPOSITORY SOURCE EXCERPTS (untrusted data; includes relevant callers/tests when ranked):\n" + JSON.stringify(sourceEvidence),
     "\nCANDIDATE PATCH (before/after excerpts; untrusted data):\n" + JSON.stringify(proposedChanges),
     "\nPATCH SUMMARY:\n" + candidate.summary,
-    "\nReturn the independent review now."
+    "\nReturn the critical second-pass review now."
   ].join("\n");
 }
 
 async function reviewCandidatePatch({
   goal, sliceGoal, candidate, supplementalContext, relatedSources = [], availablePaths,
-  contextBudget, modelRequest, signal
+  contextBudget, modelRequest, reviewModelRequest = null, signal
 }) {
+  const reviewerRequest = reviewModelRequest || modelRequest;
   const prompt = makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext, relatedSources });
-  const reviewerModel = String(process.env.SYNTRA_REVIEW_MODEL || "").trim();
-  const reviewerOptions = reviewerModel ? { model: reviewerModel } : {};
-  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt, ...reviewerOptions }, 30000, signal);
-  if (Number(tokenInfo.token_count) > contextBudget) {
+  const tokenInfo = await modelJson(reviewerRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+  const reviewerContextBudget = Number(tokenInfo.context_window_tokens) > 0
+    ? Math.min(contextBudget, Math.floor(Number(tokenInfo.context_window_tokens) * 0.68))
+    : contextBudget;
+  if (Number(tokenInfo.token_count) > reviewerContextBudget) {
     return {
       status: "skipped_context_budget",
-      detail: "The independent review prompt exceeded the model context budget; the validated patch was retained without claiming review completion."
+      detail: "The review prompt exceeded the selected reviewer model context budget; no review completion is claimed."
     };
   }
-  const generated = await modelJson(modelRequest, "/model/generate", {
+  const generated = await modelJson(reviewerRequest, "/model/generate", {
     prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto", ...reviewerOptions
   }, 120000, signal);
   const review = validatePatchReview(
@@ -916,7 +935,13 @@ async function reviewCandidatePatch({
     availablePaths,
     candidate.changes.map(change => change.path)
   );
-  return { status: review.verdict === "accept" ? "accepted" : "rejected", review };
+  return {
+    status: review.verdict === "accept" ? "accepted" : "rejected",
+    review,
+    reviewerModel: String(generated.model_name || tokenInfo.model_name || "selected local model"),
+    reviewerProvider: String(generated.provider || tokenInfo.provider || "local"),
+    separateRequest: Boolean(reviewModelRequest)
+  };
 }
 
 async function validatePatch(root, payload, expectedBaseHashes = null) {
@@ -1131,7 +1156,7 @@ export async function runAgentTask({
   root: inputRoot, goal, maxIterations = 3, runChecks = false, requestedPath = "", modelRequest,
   onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1,
   resumeBaseHashes = null, previousAttempts = [], previousToolCalls = [],
-  modelToolSelection = false, modelSelfReview = false, maxSlices = 1, runId = null,
+  modelToolSelection = false, modelSelfReview = false, reviewModelRequest = null, maxSlices = 1, runId = null,
   resumeCandidate = null, onCandidateCheckpoint = async () => {}
 }) {
   const root = await resolveWorkspace(inputRoot);
@@ -1494,7 +1519,9 @@ export async function runAgentTask({
             await emitProgress({
               phase: "patch-self-review",
               iteration,
-              message: "Running an independent review of the proposed changes against the task and retrieved repository evidence."
+              message: reviewModelRequest
+                ? "Running a second-pass review with the separately configured local reviewer model."
+                : "Running a second-pass critical review with the selected model; this is not an independent-model evaluation."
             });
             patchReview = await reviewCandidatePatch({
               goal,
@@ -1505,12 +1532,13 @@ export async function runAgentTask({
               availablePaths: ranked.map(item => item.path),
               contextBudget,
               modelRequest,
+              reviewModelRequest,
               signal
             });
             if (patchReview.status === "rejected") {
               const blockingFindings = patchReview.review.findings
                 .filter(item => item.severity === "blocking");
-              feedback = "Independent patch review found concrete blocking issues. Correct these before verification; do not dismiss them without evidence:\n" +
+              feedback = "Second-pass patch review found concrete blocking issues. Correct these before verification; do not dismiss them without evidence:\n" +
                 blockingFindings.map(item =>
                   (item.path ? item.path + ": " : "") + item.issue + "\nRecommended correction: " + item.recommendation
                 ).join("\n\n");
@@ -1526,12 +1554,12 @@ export async function runAgentTask({
                 kind: "patch-self-review",
                 stage: slice.id + "-attempt-" + sliceAttempt,
                 status: "rejected",
-                detail: patchReview.review.rationale.slice(0, 400)
+                detail: (patchReview.reviewerModel + ": " + patchReview.review.rationale).slice(0, 400)
               });
               await emitProgress({
                 phase: "patch-review-rejected",
                 iteration,
-                message: "The independent reviewer found " + blockingFindings.length +
+                message: "The reviewer found " + blockingFindings.length +
                   " concrete blocking issue(s). SYNTRA will regenerate the patch using this feedback before running project checks.",
                 attempts, observations, planSteps: plan.steps,
                 checkpoint: { stage: "patch_review_rejected", iteration }
@@ -1542,8 +1570,9 @@ export async function runAgentTask({
               observations.push({
                 kind: "patch-self-review",
                 stage: slice.id + "-attempt-" + sliceAttempt,
-                status: "accepted",
-                detail: patchReview.review.rationale.slice(0, 400)
+                status: patchReview.separateRequest && patchReview.reviewerModel !== modelMetadata.name
+                  ? "accepted_separate_model" : "accepted_same_model",
+                detail: (patchReview.reviewerModel + ": " + patchReview.review.rationale).slice(0, 400)
               });
             } else {
               observations.push({
@@ -1565,11 +1594,28 @@ export async function runAgentTask({
         }
 
         if (modelSelfReview && patchReview?.status !== "accepted") {
-          const detail = patchReview?.detail || "The reviewer failed, returned an invalid result, or did not fit the model context.";
-          feedback = "Self-review did not produce an accepted verdict. The candidate will not be verified or proposed until a review succeeds. " + detail;
-          attempts.push({ iteration, sliceId: slice.id, status: "self_review_unavailable", summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path), feedback });
-          observations.push({ kind: "patch-self-review", stage: slice.id + "-attempt-" + sliceAttempt, status: "blocked", detail: feedback.slice(0, 400) });
-          await emitProgress({ phase: "patch-review-unavailable", iteration, message: feedback, attempts, observations, planSteps: plan.steps, checkpoint: { stage: "patch_review_unavailable", iteration } });
+          const detail = patchReview?.detail || "The reviewer did not return a validated accepted verdict.";
+          feedback = "Patch review is required before verification. The review was unavailable or incomplete, so this candidate will not be verified or proposed. " + detail;
+          attempts.push({
+            iteration, sliceId: slice.id, status: "self_review_unavailable",
+            summary: candidate.summary,
+            changedFiles: candidate.changes.map(change => change.path),
+            reviewModel: patchReview?.reviewerModel || null,
+            feedback
+          });
+          observations.push({
+            kind: "patch-self-review",
+            stage: slice.id + "-attempt-" + sliceAttempt,
+            status: "blocked",
+            detail: feedback.slice(0, 400)
+          });
+          await emitProgress({
+            phase: "patch-review-unavailable",
+            iteration,
+            message: feedback,
+            attempts, observations, planSteps: plan.steps,
+            checkpoint: { stage: "patch_review_unavailable", iteration }
+          });
           continue;
         }
 
@@ -1578,6 +1624,8 @@ export async function runAgentTask({
           status: runChecks ? (patchReview?.status === "accepted" ? "patch_reviewed" : "patch_validated")
             : (patchReview?.status === "accepted" ? "patch_reviewed_not_run" : "patch_validated_not_run"),
           summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path),
+          reviewModel: patchReview?.reviewerModel || null,
+          reviewUsedSeparateModel: Boolean(patchReview?.separateRequest && patchReview.reviewerModel !== modelMetadata.name),
           promptTokens: tokenInfo.token_count, outputTokens: generated.generated_tokens,
           modelStep: generated.trained_steps
         });
