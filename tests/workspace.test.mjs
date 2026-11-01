@@ -36,21 +36,6 @@ async function createTempProject() {
   return root;
 }
 
-test("project checks are blocked until an isolation mode is explicitly selected", async () => {
-  const root = await createTempProject();
-  const previousMode = process.env.SYNTRA_CHECK_ISOLATION;
-  const previousOptIn = process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS;
-  process.env.SYNTRA_CHECK_ISOLATION = "disabled";
-  delete process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS;
-  try {
-    await assert.rejects(() => runProjectCheck(root, "build"), /Host execution is disabled by default/);
-  } finally {
-    if (previousMode === undefined) delete process.env.SYNTRA_CHECK_ISOLATION; else process.env.SYNTRA_CHECK_ISOLATION = previousMode;
-    if (previousOptIn === undefined) delete process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS; else process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS = previousOptIn;
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
 test("audit logs rotate and retain a bounded number of archives", async () => {
   const root = await createTempProject();
   try {

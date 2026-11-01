@@ -928,7 +928,7 @@ async function reviewCandidatePatch({
     };
   }
   const generated = await modelJson(reviewerRequest, "/model/generate", {
-    prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto", ...reviewerOptions
+    prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto"
   }, 120000, signal);
   const review = validatePatchReview(
     extractJsonObject(generated.text),

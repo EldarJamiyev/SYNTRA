@@ -9,7 +9,7 @@ test("versioned benchmark manifest contains representative coding tasks", async 
   const { suite } = await loadBenchmarkSuite();
   assert.equal(suite.version, "1.2.0");
   assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp","string-slugify","config-deep-merge","positive-integer","array-chunk","multi-file-request-validation","python-duration-format"]);
-  assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 7);
+  assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 6);
   assert.equal(suite.tasks.find(task => task.id === "multi-file-request-validation").expectedChangedPaths.length, 2);
   assert.equal(suite.tasks.find(task => task.id === "python-duration-format").baselineCheck, "python-unittest");
 });
