@@ -4,6 +4,7 @@ import {
   CHAT_SESSIONS_KEY,
   MAX_CHAT_SESSIONS,
   MAX_SESSION_TEXT_CHARS,
+  MAX_SESSION_AGE_DAYS,
   createChatSession,
   loadSessionState,
   normalizeSessionState,
@@ -104,6 +105,19 @@ test("session collections and total stored text remain bounded", () => {
   assert.ok(boundedChars <= MAX_SESSION_TEXT_CHARS);
 });
 
+test("old conversations are removed after the retention period", () => {
+  const storage = memoryStorage();
+  const oldSession = createChatSession([{ role: "user", content: "Earlier conversation" }], {
+    id: "old-session",
+    now: new Date(Date.now() - (MAX_SESSION_AGE_DAYS + 2) * 86400000).toISOString()
+  });
+  const latest = createChatSession([{ role: "user", content: "Current conversation" }], { id: "latest-session" });
+  saveSessionState({ version: 1, activeSessionId: oldSession.id, sessions: [oldSession, latest] }, storage);
+  const loaded = loadSessionState(storage);
+  assert.deepEqual(loaded.sessions.map(item => item.id), ["latest-session"]);
+  assert.equal(loaded.activeSessionId, "latest-session");
+  assert.doesNotMatch(storage.getItem(CHAT_SESSIONS_KEY), /Earlier conversation/);
+});
 test("automatic titles are based on the first user prompt and remain compact", () => {
   assert.equal(titleFromMessages([{ role: "user", content: "Check DNS records" }]), "Check DNS records");
   assert.equal(titleFromMessages([{ role: "assistant", content: "Hello" }]), "New chat");
