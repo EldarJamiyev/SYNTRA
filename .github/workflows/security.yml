@@ -1,0 +1,38 @@
+name: SYNTRA security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  codeql:
+    name: CodeQL analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript,python
+      - uses: github/codeql-action/analyze@v4
+
+  dependency-audit:
+    name: npm dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Resolve the declared dependency graph for this run
+        run: npm install --package-lock-only --ignore-scripts --no-audit
+      - name: Fail on high or critical npm advisories
+        run: npm audit --audit-level=high
