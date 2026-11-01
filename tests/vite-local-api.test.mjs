@@ -68,7 +68,11 @@ test("Vite starts the local API before serving the frontend and stops the child 
     assert.equal(health.status, 200);
     assert.equal((await health.json()).status, "ok");
 
-    const status = await fetch("http://127.0.0.1:" + port + "/local-api/workspace/status");
+    const base = "http://127.0.0.1:" + port;
+    const sessionResponse = await fetch(base + "/local-api/session", { headers: { Origin: "http://127.0.0.1:3000" } });
+    assert.equal(sessionResponse.status, 200);
+    const token = (await sessionResponse.json()).token;
+    const status = await fetch(base + "/local-api/workspace/status", { headers: { Authorization: "Bearer " + token } });
     assert.equal(status.status, 200);
     assert.equal((await status.json()).root, await fs.realpath(workspace));
     assert.ok(messages.some(message => /Local workspace API is ready/.test(message)));

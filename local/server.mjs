@@ -915,16 +915,18 @@ const routeHandlers = {
     root: body.root || activeWorkspace, name: "workspace.proposals.stage",
     input: { path: body.path, content: body.content, ...(body.expectedSha256 ? { expectedBaseHash: body.expectedSha256 } : {}) }
   }),
-  "POST /local-api/workspace/apply": async body => executeToolOutput({
-    root: body.root || activeWorkspace, name: "workspace.proposals.apply",
-    input: { proposalId: body.proposalId }, approval: body.confirm === true
-  }),
-  "POST /local-api/workspace/check": async body => executeToolOutput({
-    root: body.root || activeWorkspace, auditRoot: body.root || activeWorkspace,
-    name: "workspace.check",
-    input: { task: body.task, ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }) },
-    approval: body.confirm === true
-  })
+  "POST /local-api/workspace/apply": async body => {
+    const root = await resolveWorkspace(body.root || activeWorkspace);
+    const input = { proposalId: body.proposalId };
+    const approval = consumeApprovalCapability(body.approvalToken, root, "workspace.proposals.apply", input);
+    return executeToolOutput({ root, name: "workspace.proposals.apply", input, approval });
+  },
+  "POST /local-api/workspace/check": async body => {
+    const root = await resolveWorkspace(body.root || activeWorkspace);
+    const input = { task: body.task, ...(body.timeoutMs === undefined ? {} : { timeoutMs: body.timeoutMs }) };
+    const approval = consumeApprovalCapability(body.approvalToken, root, "workspace.check", input);
+    return executeToolOutput({ root, auditRoot: root, name: "workspace.check", input, approval });
+  }
 };
 
 const server = http.createServer(async (request, response) => {

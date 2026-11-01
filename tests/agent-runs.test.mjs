@@ -353,7 +353,8 @@ async function startLocalService(root, port) {
       ...process.env,
       SYNTRA_WORKSPACE: root,
       SYNTRA_LOCAL_PORT: String(port),
-      SYNTRA_AI_PORT: String(port + 1)
+      SYNTRA_AI_PORT: String(port + 1),
+      SYNTRA_API_TOKEN: "syntra-agent-runs-test-token"
     },
     stdio: "ignore"
   });
@@ -363,7 +364,12 @@ async function startLocalService(root, port) {
     if (child.exitCode !== null) throw new Error("SYNTRA service exited during startup.");
     try {
       const response = await fetch(baseUrl + "/local-api/health", { signal: AbortSignal.timeout(250) });
-      if (response.ok) return { child, baseUrl };
+      if (response.ok) {
+        const session = await fetch(baseUrl + "/local-api/session", { headers: { Origin: "http://127.0.0.1:3000" } });
+        const token = (await session.json()).token;
+        const apiFetch = (url, options = {}) => fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: "Bearer " + token } });
+        return { child, baseUrl, apiFetch };
+      }
     } catch (error) {
       lastError = error;
     }
@@ -419,14 +425,14 @@ test("run history preserves live tasks and a new service process recovers them",
       }],
       verification: { status: "passed", passed: true, checks: [{ task: "test", passed: true, exitCode: 0 }] }
     });
-    const liveResponse = await fetch(first.baseUrl + "/local-api/agent/runs");
+    const liveResponse = await first.apiFetch(first.baseUrl + "/local-api/agent/runs");
     assert.equal(liveResponse.status, 200);
     const liveRuns = await liveResponse.json();
     assert.equal(liveRuns.runs.find(item => item.id === run.id)?.status, "running");
 
     await stopLocalService(first.child);
     second = await startLocalService(root, port);
-    const recoveredResponse = await fetch(second.baseUrl + "/local-api/agent/runs");
+    const recoveredResponse = await second.apiFetch(second.baseUrl + "/local-api/agent/runs");
     assert.equal(recoveredResponse.status, 200);
     const recoveredRuns = await recoveredResponse.json();
     assert.equal(recoveredRuns.runs.find(item => item.id === run.id)?.status, "interrupted");

@@ -103,8 +103,9 @@ test("local API health, origin protections, and chat validation work over HTTP",
       method: "POST", headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ root: projectRoot, name: "workspace.check", input: { task: "build" } })
     });
-    assert.equal(issuedApproval.status, 200);
-    const capability = await issuedApproval.json();
+    const issuedApprovalBody = await issuedApproval.json();
+    assert.equal(issuedApproval.status, 200, JSON.stringify(issuedApprovalBody));
+    const capability = issuedApprovalBody;
     assert.equal(typeof capability.approvalToken, "string");
     assert.equal(capability.approvalToken.length, 64);
 
@@ -249,7 +250,7 @@ test("local API health, origin protections, and chat validation work over HTTP",
     let naturalHelpStatus = null;
     const naturalHelpDeadline = Date.now() + 5_000;
     while (Date.now() < naturalHelpDeadline) {
-      const response = await apiFetch(base + "/local-api/chat/status", {
+      const response = await service.apiFetch(base + "/local-api/chat/status", {
         method: "POST",
         headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
         body: JSON.stringify({ jobId: naturalHelpJob.jobId })
@@ -305,7 +306,8 @@ async function startLocalServer(workspaceRoot) {
       SYNTRA_LOCAL_PORT: String(port),
       SYNTRA_AI_PORT: String(aiPort),
       SYNTRA_WORKSPACE: workspaceRoot,
-      SYNTRA_MODEL_PROVIDER: "native"
+      SYNTRA_MODEL_PROVIDER: "native",
+      SYNTRA_API_TOKEN: "syntra-test-token"
     },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
@@ -319,16 +321,22 @@ async function startLocalServer(workspaceRoot) {
   child.stderr.on("data", collect);
   try {
     await waitForHealth(port, child, () => logs);
-    return { base: "http://127.0.0.1:" + port, child, getLogs: () => logs };
+    const base = "http://127.0.0.1:" + port;
+    const session = await fetch(base + "/local-api/session", { headers: { Origin: "http://127.0.0.1:3000" } });
+    if (!session.ok) throw new Error("Could not bootstrap test API session: HTTP " + session.status);
+    const token = (await session.json()).token;
+    const apiFetch = (url, options = {}) => fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: "Bearer " + token } });
+    return { base, child, token, apiFetch, getLogs: () => logs };
   } catch (error) {
     await stopChild(child);
     throw new Error((error instanceof Error ? error.message : String(error)) + "\n" + logs);
   }
 }
 
-async function runChatCommand(base, message) {
+async function runChatCommand(service, message) {
+  const base = service.base;
   const headers = { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" };
-  const start = await apiFetch(base + "/local-api/chat", {
+  const start = await service.apiFetch(base + "/local-api/chat", {
     method: "POST",
     headers,
     body: JSON.stringify({ message })
@@ -361,7 +369,7 @@ test("the /secrets chat command scans locally and reports only finding metadata"
     await fs.writeFile(path.join(root, "src", "credentials.ts"), "const token = '" + token + "';\n", "utf8");
     service = await startLocalServer(root);
 
-    const result = await runChatCommand(service.base, "/secrets");
+    const result = await runChatCommand(service, "/secrets");
     assert.equal(result.status, "completed");
     assert.match(result.reply || "", /Workspace secret scan/);
     assert.match(result.reply || "", /Potential findings: 1/);
@@ -386,7 +394,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
   let service = null;
   try {
     service = await startLocalServer(root);
-    const catalogueResponse = await fetch(service.base + "/local-api/tools");
+    const catalogueResponse = await service.apiFetch(service.base + "/local-api/tools");
     assert.equal(catalogueResponse.status, 200);
     const catalogue = await catalogueResponse.json();
     assert.equal(catalogue.tools.length, 22);
@@ -408,7 +416,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.ok(catalogue.tools.some(tool => tool.name === "workspace.check" && tool.approvalRequired));
 
     const headers = { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" };
-    const inspectResponse = await fetch(service.base + "/local-api/tools/execute", {
+    const inspectResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
       method: "POST", headers,
       body: JSON.stringify({ name: "workspace.inspect", root, input: {} })
     });
@@ -424,7 +432,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
       category: "convention",
       tags: ["api"]
     };
-    const deniedMemoryWriteResponse = await fetch(service.base + "/local-api/tools/execute", {
+    const deniedMemoryWriteResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
       method: "POST", headers,
       body: JSON.stringify({ name: "workspace.memory.add", root, input: memoryInput })
     });
@@ -432,7 +440,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.equal(deniedMemoryWrite.ok, false);
     assert.equal(deniedMemoryWrite.status, "approval_required");
 
-    const approvedMemoryWriteResponse = await fetch(service.base + "/local-api/tools/execute", {
+    const approvedMemoryWriteResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
       method: "POST", headers,
       body: JSON.stringify({ name: "workspace.memory.add", root, input: memoryInput, approval: true })
     });
@@ -440,7 +448,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.equal(approvedMemoryWrite.ok, true);
     assert.equal(approvedMemoryWrite.output.note.owner, "user");
 
-    const memoryReadResponse = await fetch(service.base + "/local-api/tools/execute", {
+    const memoryReadResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
       method: "POST", headers,
       body: JSON.stringify({ name: "workspace.memory.search", root, input: { query: "stable error envelope" } })
     });
@@ -449,7 +457,7 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.equal(memoryRead.output.results.length, 1);
     assert.equal(memoryRead.output.results[0].id, approvedMemoryWrite.output.note.id);
 
-    const deniedResponse = await fetch(service.base + "/local-api/tools/execute", {
+    const deniedResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
       method: "POST", headers,
       body: JSON.stringify({ name: "workspace.check", root, input: { task: "test" } })
     });
@@ -457,14 +465,14 @@ test("local tool catalogue and API enforce permissions and record execution", as
     assert.equal(denied.ok, false);
     assert.equal(denied.status, "approval_required");
 
-    const legacyCheckResponse = await fetch(service.base + "/local-api/workspace/check", {
+    const legacyCheckResponse = await service.apiFetch(service.base + "/local-api/workspace/check", {
       method: "POST", headers,
       body: JSON.stringify({ task: "test" })
     });
     assert.equal(legacyCheckResponse.status, 400);
     assert.match((await legacyCheckResponse.json()).error, /explicit user-approved action/);
 
-    const deniedOrigin = await fetch(service.base + "/local-api/tools/execute", {
+    const deniedOrigin = await service.apiFetch(service.base + "/local-api/tools/execute", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "https://attacker.invalid" },
       body: JSON.stringify({ name: "workspace.inspect", root, input: {} })
@@ -498,7 +506,7 @@ test("saved workspace proposals survive a real local service restart", async () 
   let service = null;
   try {
     service = await startLocalServer(root);
-    const staged = await fetch(service.base + "/local-api/workspace/propose", {
+    const staged = await service.apiFetch(service.base + "/local-api/workspace/propose", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
       body: JSON.stringify({ root, path: "src/app.js", content: proposed })
@@ -511,22 +519,22 @@ test("saved workspace proposals survive a real local service restart", async () 
     await stopChild(service.child);
     service = await startLocalServer(root);
 
-    const restoredResponse = await fetch(service.base + "/local-api/workspace/status");
+    const restoredResponse = await service.apiFetch(service.base + "/local-api/workspace/status");
     assert.equal(restoredResponse.status, 200);
     const restored = await restoredResponse.json();
     assert.equal(restored.root, canonicalRoot);
     assert.equal(restored.pendingProposals.length, 1);
     assert.equal(restored.pendingProposals[0].id, proposal.id);
 
-    const review = await runChatCommand(service.base, "/proposals");
+    const review = await runChatCommand(service, "/proposals");
     assert.match(review.reply, /Saved workspace proposals/);
     assert.ok(review.reply.includes("src/app.js"));
 
-    const applied = await runChatCommand(service.base, "/apply");
+    const applied = await runChatCommand(service, "/apply");
     assert.match(applied.reply, /Applied the explicitly requested proposals/);
     assert.equal(await fs.readFile(sourcePath, "utf8"), proposed);
 
-    const afterApply = await fetch(service.base + "/local-api/workspace/status");
+    const afterApply = await service.apiFetch(service.base + "/local-api/workspace/status");
     const finalStatus = await afterApply.json();
     assert.deepEqual(finalStatus.pendingProposals, []);
     assert.deepEqual(finalStatus.staleProposals, []);
