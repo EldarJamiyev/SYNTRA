@@ -511,6 +511,7 @@ test("model-selected context plans allow only bounded read-only retrieval includ
 test("agent executes only model-selected read-only retrieval calls and feeds results into patch context", async () => {
   const root = await createProject();
   const generated = [];
+  const retrievalPrompts = [];
   const modelRequest = async (method, route, body) => {
     if (method === "GET" && route === "/model/status") {
       return {
@@ -522,16 +523,33 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
     if (route === "/model/generate") {
       generated.push(body.prompt);
       if (body.prompt.includes("SYNTRA_READ_ONLY_TOOL_PLAN")) {
-        return {
-          text: JSON.stringify({
-            calls: [
-              { tool: "workspace.search", input: { query: "value", limit: 5 } },
-              { tool: "workspace.symbols.search", input: { query: "value", limit: 4 } },
-              { tool: "workspace.read", input: { path: "src/value.js", startLine: 1, endLine: 1 } }
-            ]
-          }),
-          generated_tokens: 35, trained_steps: null
-        };
+        retrievalPrompts.push(body.prompt);
+        if (body.prompt.includes("round 1 of 3")) {
+          return {
+            text: JSON.stringify({
+              calls: [
+                { tool: "workspace.search", input: { query: "value", limit: 5 } },
+                { tool: "workspace.symbols.search", input: { query: "value", limit: 4 } }
+              ]
+            }),
+            generated_tokens: 35, trained_steps: null
+          };
+        }
+        if (body.prompt.includes("round 2 of 3")) {
+          assert.match(body.prompt, /PREVIOUS RETRIEVAL EVIDENCE/);
+          assert.match(body.prompt, /src\\/value\\.js|src\/value\.js/,
+            "the second planning round must use paths discovered in round one");
+          return {
+            text: JSON.stringify({
+              calls: [
+                { tool: "workspace.read", input: { path: "src/value.js", startLine: 1, endLine: 1 } }
+              ]
+            }),
+            generated_tokens: 24, trained_steps: null
+          };
+        }
+        assert.match(body.prompt, /module\.exports|value/);
+        return { text: JSON.stringify({ calls: [] }), generated_tokens: 8, trained_steps: null };
       }
       assert.match(body.prompt, /MODEL-SELECTED READ-ONLY CONTEXT/);
       assert.ok(body.prompt.includes("module.exports = { value: 1 }"));
@@ -559,7 +577,11 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(generated.length, 2, "one safe tool-plan generation should precede patch generation");
+    assert.equal(generated.length, 4, "three evidence-driven planning rounds should precede patch generation");
+    assert.equal(retrievalPrompts.length, 3);
+    assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL CALLS/);
+    assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL EVIDENCE/);
+    assert.match(retrievalPrompts[1], /src\\/value\\.js|src\/value\.js/);
     assert.equal(result.proposals.length, 1);
     assert.equal(result.proposals[0].path, "src/value.js");
     assert.deepEqual(result.toolCalls.map(call => call.name), [
@@ -568,7 +590,10 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       "workspace.read", "workspace.proposals.stage"
     ]);
     assert.ok(result.toolCalls.every(call => call.auditRecorded));
-    assert.ok(result.observations.some(item => item.kind === "model-readonly-tool-plan" && item.status === "accepted"));
+    assert.ok(result.observations.some(item => item.kind === "model-readonly-tool-plan" && item.stage === "context-retrieval-round-1" && item.status === "accepted"));
+    assert.ok(result.observations.some(item => item.kind === "model-readonly-tool-plan" && item.stage === "context-retrieval-round-2" && item.status === "accepted"));
+    assert.ok(result.observations.some(item => item.kind === "model-readonly-tool-plan" && item.stage === "context-retrieval-round-3" && item.status === "complete"));
+    assert.ok(result.observations.some(item => item.kind === "model-readonly-investigation" && /3 evidence-driven planning round/.test(item.detail)));
     assert.ok(result.observations.some(item => item.kind === "workspace.search" && item.status === "observed"));
     assert.ok(result.observations.some(item => item.kind === "workspace.symbols.search" && item.status === "observed"));
     assert.ok(result.observations.some(item => item.kind === "workspace.read" && item.path === "src/value.js"));

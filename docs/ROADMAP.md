@@ -98,7 +98,9 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Cover supported-runner discovery, evidence persistence, and post-check candidate mutation with regression tests.
 - [x] Let the local model select up to four bounded `workspace.search`/`workspace.read` calls for task-specific context; validate the tool allowlist, query/line limits, and safe file paths before audited execution.
 - [x] Constrain Ollama tool-plan output with JSON schema and fall back to deterministic context ranking when the plan is invalid or exceeds the context budget.
-- [x] Cover allowed retrieval plans, disallowed execution tools, path/range violations, and end-to-end retrieval-to-patch context flow with tests.
+- [x] Add bounded iterative repository investigation: the model reviews prior search/symbol/read results before selecting targeted follow-up reads, with three planning rounds and eight unique read-only calls maximum.
+- [x] Persist each retrieval round as an auditable observation and stop early when the model reports that the evidence is sufficient.
+- [x] Cover allowed retrieval plans, disallowed execution tools, path/range violations, evidence-driven follow-up selection, early stopping, and end-to-end retrieval-to-patch context flow with tests.
 - [x] Let the local model propose up to three ordered implementation slices with explicit acceptance criteria; validate each slice and fall back to one slice if planning fails.
 - [x] Reuse one cumulative temporary candidate across slices, re-inspect and rebuild context after each verified slice, and re-inspect before bounded repair attempts after failed verification.
 - [x] Aggregate multi-slice changes against original workspace contents and source hashes; stage only the final cumulative proposal set.
