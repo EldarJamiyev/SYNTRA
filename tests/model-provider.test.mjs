@@ -140,7 +140,7 @@ test("local model read-only tool plans expose the same safe search tools as the 
   assert.deepEqual(capturedBody.format.required, ["calls"]);
   assert.deepEqual(
     capturedBody.format.properties.calls.items.properties.tool.enum,
-    ["workspace.search", "workspace.read", "workspace.symbols.search", "workspace.memory.search"]
+    ["workspace.search", "workspace.read", "workspace.symbols.search", "workspace.memory.search", "workspace.semantic.search"]
   );
   assert.deepEqual(
     Object.keys(capturedBody.format.properties.calls.items.properties.input.properties).sort(),

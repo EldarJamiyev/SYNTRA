@@ -36,7 +36,7 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 22);
+  assert.equal(tools.length, 25);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
   assert.equal(byName.get("workspace.secrets.scan").permission, "read_only");
   assert.equal(byName.get("workspace.secrets.scan").approvalRequired, false);
@@ -44,6 +44,9 @@ test("tool registry exposes structured schemas and explicit permission metadata"
   assert.equal(byName.get("workspace.index.refresh").permission, "local_state_write");
   assert.equal(byName.get("workspace.index.refresh").approvalRequired, false);
   assert.equal(byName.get("workspace.symbols.search").permission, "read_only");
+  assert.equal(byName.get("workspace.semantic.status").permission, "read_only");
+  assert.equal(byName.get("workspace.semantic.refresh").permission, "local_state_write");
+  assert.equal(byName.get("workspace.semantic.search").permission, "read_only");
   assert.equal(byName.get("workspace.memory.list").permission, "read_only");
   assert.equal(byName.get("workspace.memory.search").permission, "read_only");
   assert.equal(byName.get("workspace.memory.add").permission, "local_state_write");

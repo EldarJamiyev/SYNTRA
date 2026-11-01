@@ -23,6 +23,7 @@ import {
   refreshWorkspaceIndex,
   searchWorkspaceSymbols
 } from "./workspace-index.mjs";
+import { getSemanticIndexStatus, refreshWorkspaceSemanticIndex, searchWorkspaceSemantic } from "./semantic-index.mjs";
 import {
   addWorkspaceMemory,
   deleteWorkspaceMemory,
@@ -72,6 +73,31 @@ const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object", required: ["query"],
       properties: { query: { type: "string", minLength: 2, maxLength: 160 }, limit: { type: "integer", minimum: 1, maximum: 20 } },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "workspace.semantic.status",
+    description: "Read status for the optional local Ollama semantic embedding index.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.semantic.refresh",
+    description: "Build or refresh a local vector index with Ollama embeddings. Stores vectors and source hashes, never source text; requires an installed local embedding model.",
+    permission: "local_state_write",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.semantic.search",
+    description: "Search the workspace's local semantic vector index. Source hashes and workspace exclusions are revalidated before returning excerpts.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: {
+      type: "object", required: ["query"],
+      properties: { query: { type: "string", minLength: 2, maxLength: 300 }, limit: { type: "integer", minimum: 1, maximum: 20 } },
       additionalProperties: false
     }
   },
@@ -444,6 +470,12 @@ async function invokeTool(root, name, input, signal) {
       return refreshWorkspaceIndex(root);
     case "workspace.symbols.search":
       return searchWorkspaceSymbols(root, input.query, input.limit || 10);
+    case "workspace.semantic.status":
+      return getSemanticIndexStatus(root);
+    case "workspace.semantic.refresh":
+      return refreshWorkspaceSemanticIndex(root, { signal });
+    case "workspace.semantic.search":
+      return searchWorkspaceSemantic(root, input.query, input.limit || 8, { signal });
     case "workspace.memory.list":
       return listWorkspaceMemory(root);
     case "workspace.memory.search":
@@ -546,6 +578,13 @@ function summarizeOutput(name, output) {
         available: output.available, resultCount: output.results.length,
         staleFiles: output.staleFiles, topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))]
       };
+    case "workspace.semantic.status":
+      return { available: output.available, embeddingModel: output.embeddingModel, chunkCount: output.chunkCount };
+    case "workspace.semantic.refresh":
+      return { available: output.available, embeddingModel: output.embeddingModel, chunkCount: output.chunkCount, reusedChunks: output.reusedChunks, truncated: output.truncated };
+    case "workspace.semantic.search":
+      return { available: output.available, resultCount: output.results.length, staleResults: output.staleResults,
+        topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))] };
     case "workspace.memory.list":
       return { noteCount: output.total, categories: [...new Set(output.notes.map(note => note.category))] };
     case "workspace.memory.search":
