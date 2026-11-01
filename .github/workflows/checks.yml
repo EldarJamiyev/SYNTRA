@@ -15,6 +15,13 @@ jobs:
         with:
           node-version: "20"
       - run: npm install
+      - name: Export the resolved npm lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: syntra-npm-lockfile
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 2
       - run: npm run build
       - run: npm test
 
