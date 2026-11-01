@@ -173,83 +173,30 @@ export async function listWorkspaceMemory(inputRoot) {
 
 export async function searchWorkspaceMemory(inputRoot, query, limit = 6) {
   const root = await resolveWorkspace(inputRoot);
-  if (typeof query !== "string" || query.trim().length < 2 || query.length > 160) {
-    throw new Error("Project-memory search query must contain 2-160 characters.");
-  }
-  if (!Number.isInteger(limit) || limit < 1 || limit > 12) {
-    throw new Error("Project-memory search limit must be an integer from 1 to 12.");
-  }
+  if (typeof query !== "string" || query.trim().length < 2 || query.length > 160) throw new Error("Project-memory search query must contain 2-160 characters.");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 12) throw new Error("Project-memory search limit must be an integer from 1 to 12.");
   const store = await readMemory(root);
   const normalized = query.trim().toLowerCase();
   const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
   const documents = store.notes.map(note => ({
     note,
-    title: note.title.toLowerCase(),
-    tags: note.tags.join(" ").toLowerCase(),
-    content: note.content.toLowerCase(),
-    tokens: (note.title + " " + note.tags.join(" ") + " " + note.content).toLowerCase().match(/[a-z0-9_.-]{2,}/g) || []
+    titleTokens: note.title.toLowerCase().match(/[a-z0-9_.-]{2,}/g) || [],
+    tagTokens: note.tags.join(" ").toLowerCase().match(/[a-z0-9_.-]{2,}/g) || [],
+    bodyTokens: note.content.toLowerCase().match(/[a-z0-9_.-]{2,}/g) || []
   }));
-  const documentFrequency = new Map();
-  for (const term of terms) {
-    documentFrequency.set(term, documents.filter(doc => doc.tokens.includes(term)).length);
-  }
-  const averageLength = documents.length
-    ? documents.reduce((sum, doc) => sum + doc.tokens.length, 0) / documents.length : 0;
+  const df = new Map(terms.map(term => [term, documents.filter(doc => doc.titleTokens.includes(term) || doc.tagTokens.includes(term) || doc.bodyTokens.includes(term)).length]));
+  const averageLength = documents.length ? documents.reduce((sum, doc) => sum + doc.bodyTokens.length, 0) / documents.length : 0;
+  const count = (tokens, term) => tokens.filter(token => token === term).length;
   const ranked = [];
   for (const doc of documents) {
-    let score = doc.title === normalized ? 8 : doc.title.includes(normalized) ? 4 : 0;
-    const lengthRatio = averageLength > 0 ? doc.tokens.length / averageLength : 1;
+    let score = doc.note.title.toLowerCase() === normalized ? 8 : doc.note.title.toLowerCase().includes(normalized) ? 4 : 0;
+    const lengthRatio = averageLength > 0 ? doc.bodyTokens.length / averageLength : 1;
     for (const term of terms) {
-      const titleTf = doc.title.match(new RegExp("\\b" + term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\  const normalized = query.trim().toLowerCase();
-  const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
-  const ranked = [];
-  for (const note of store.notes) {
-    const title = note.title.toLowerCase();
-    const content = note.content.toLowerCase();
-    const tags = note.tags.join(" ").toLowerCase();
-    let score = title === normalized ? 100 : title.includes(normalized) ? 70 : 0;
-    for (const term of terms) {
-      if (title.includes(term)) score += 12;
-      if (tags.includes(term)) score += 8;
-      if (content.includes(term)) score += 3;
-    }
-    if (score > 0) ranked.push({ note, score });
-  }
-  ranked.sort((a, b) => b.score - a.score || b.note.updatedAt.localeCompare(a.note.updatedAt));") + "\\b", "g"))?.length || 0;
-      const tagTf = doc.tags.match(new RegExp("\\b" + term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\  const normalized = query.trim().toLowerCase();
-  const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
-  const ranked = [];
-  for (const note of store.notes) {
-    const title = note.title.toLowerCase();
-    const content = note.content.toLowerCase();
-    const tags = note.tags.join(" ").toLowerCase();
-    let score = title === normalized ? 100 : title.includes(normalized) ? 70 : 0;
-    for (const term of terms) {
-      if (title.includes(term)) score += 12;
-      if (tags.includes(term)) score += 8;
-      if (content.includes(term)) score += 3;
-    }
-    if (score > 0) ranked.push({ note, score });
-  }
-  ranked.sort((a, b) => b.score - a.score || b.note.updatedAt.localeCompare(a.note.updatedAt));") + "\\b", "g"))?.length || 0;
-      const bodyTf = doc.content.match(new RegExp("\\b" + term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\  const normalized = query.trim().toLowerCase();
-  const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
-  const ranked = [];
-  for (const note of store.notes) {
-    const title = note.title.toLowerCase();
-    const content = note.content.toLowerCase();
-    const tags = note.tags.join(" ").toLowerCase();
-    let score = title === normalized ? 100 : title.includes(normalized) ? 70 : 0;
-    for (const term of terms) {
-      if (title.includes(term)) score += 12;
-      if (tags.includes(term)) score += 8;
-      if (content.includes(term)) score += 3;
-    }
-    if (score > 0) ranked.push({ note, score });
-  }
-  ranked.sort((a, b) => b.score - a.score || b.note.updatedAt.localeCompare(a.note.updatedAt));") + "\\b", "g"))?.length || 0;
-      const df = documentFrequency.get(term) || 0;
-      const inverseFrequency = Math.log(1 + (documents.length - df + 0.5) / (df + 0.5));
+      const titleTf = count(doc.titleTokens, term);
+      const tagTf = count(doc.tagTokens, term);
+      const bodyTf = count(doc.bodyTokens, term);
+      const frequency = df.get(term) || 0;
+      const inverseFrequency = Math.log(1 + (documents.length - frequency + 0.5) / (frequency + 0.5));
       const bodyScore = bodyTf * 2.2 / (bodyTf + 1.2 * (0.25 + 0.75 * lengthRatio));
       score += inverseFrequency * (titleTf * 3 + tagTf * 2 + bodyScore);
     }
@@ -260,12 +207,10 @@ export async function searchWorkspaceMemory(inputRoot, query, limit = 6) {
     root, query, total: store.notes.length,
     results: ranked.slice(0, limit).map(({ note, score }) => ({
       id: note.id, title: note.title, content: note.content.slice(0, 1800),
-      category: note.category, tags: note.tags, updatedAt: note.updatedAt,
-      owner: "user", score
+      category: note.category, tags: note.tags, updatedAt: note.updatedAt, owner: "user", score
     }))
   };
 }
-
 export async function addWorkspaceMemory(inputRoot, input) {
   const root = await resolveWorkspace(inputRoot);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("A project-memory note is required.");
