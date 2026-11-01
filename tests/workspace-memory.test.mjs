@@ -104,7 +104,7 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     ));
     assert.equal(cache.schemaVersion, 1);
     assert.equal(cache.model, "test-embedding-model");
-    assert.equal(cache.root, root);
+    assert.equal(cache.root, await fs.realpath(root));
     assert.equal(cache.entries.length, 2);
     assert.ok(cache.entries.every(entry => !("content" in entry)));
   } finally {
