@@ -604,7 +604,7 @@ export function validateReadOnlyToolPlan(payload, availablePaths = []) {
       validated.push({ tool: call.tool, input: { query, ...(input.limit === undefined ? {} : { limit: input.limit }) } });
       continue;
     }
-    if (call.tool === "workspace.symbols.search") {    if (call.tool === "workspace.symbols.search") {
+    if (call.tool === "workspace.symbols.search") {
       if (Object.keys(input).some(key => !["query", "limit"].includes(key))
         || typeof input.query !== "string" || input.query.trim().length < 2 || input.query.length > 160
         || (input.limit !== undefined && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 8))) {
