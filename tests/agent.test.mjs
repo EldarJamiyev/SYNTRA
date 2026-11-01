@@ -537,7 +537,8 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
         }
         if (body.prompt.includes("round 2 of 3")) {
           assert.match(body.prompt, /PREVIOUS RETRIEVAL EVIDENCE/);
-          assert.match(body.prompt, /src\\/value\\.js|src\/value\.js/,
+          assert.match(body.prompt, /src\/value\.js/,
+            "the second planning round must use paths discovered in round one");
             "the second planning round must use paths discovered in round one");
           return {
             text: JSON.stringify({
@@ -581,7 +582,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
     assert.equal(retrievalPrompts.length, 3);
     assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL CALLS/);
     assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL EVIDENCE/);
-    assert.match(retrievalPrompts[1], /src\\/value\\.js|src\/value\.js/);
+    assert.match(retrievalPrompts[1], /src\/value\.js/);
     assert.equal(result.proposals.length, 1);
     assert.equal(result.proposals[0].path, "src/value.js");
     assert.deepEqual(result.toolCalls.map(call => call.name), [
