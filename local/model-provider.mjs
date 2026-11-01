@@ -527,7 +527,7 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
                   type: "object",
                   properties: {
                     query: { type: "string", minLength: 2, maxLength: 300 },
-                    limit: { type: "integer", minimum: 1, maximum: 10 },
+                    limit: { type: "integer", minimum: 1, maximum: 8 },
                     path: { type: "string" },
                     startLine: { type: "integer", minimum: 1, maximum: 10000000 },
                     endLine: { type: "integer", minimum: 1, maximum: 10000000 }

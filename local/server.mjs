@@ -657,6 +657,7 @@ async function runChatTurn(jobId, message, history, signal) {
         modelSelfReview: true,
         runId: agentRunId,
         resumeCandidate,
+        resumeBudget: resumeRecord?.model?.executionBudget || null,
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),

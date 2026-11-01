@@ -1176,7 +1176,7 @@ export async function runAgentTask({
   onProgress = () => {}, signal, resumePatch = null, resumeIteration = 1,
   resumeBaseHashes = null, previousAttempts = [], previousToolCalls = [],
   modelToolSelection = false, modelSelfReview = false, maxSlices = 1, runId = null,
-  resumeCandidate = null, onCandidateCheckpoint = async () => {}
+  resumeCandidate = null, resumeBudget = null, onCandidateCheckpoint = async () => {}
 }) {
   const root = await resolveWorkspace(inputRoot);
   const emitProgress = async update => {
@@ -1249,7 +1249,17 @@ export async function runAgentTask({
   });
   let graph = await buildRepositoryGraph(root);
   let ranked = rankGraph(graph, goal, requestedPath);
-  const executionBudget = deriveAgentBudget(goal, inventory, { maxIterations, maxSlices });
+  const derivedBudget = deriveAgentBudget(goal, inventory, { maxIterations, maxSlices });
+  const savedBudgetIsValid = resumeBudget && typeof resumeBudget === "object"
+    && Number.isFinite(Number(resumeBudget.maxSlices))
+    && Number.isFinite(Number(resumeBudget.maxIterations))
+    && Number.isFinite(Number(resumeBudget.maxTotalAttempts));
+  const executionBudget = savedBudgetIsValid ? {
+    complexityScore: Math.max(0, Math.min(100, Math.floor(Number(resumeBudget.complexityScore) || 0))),
+    maxSlices: Math.max(1, Math.min(MAX_IMPLEMENTATION_SLICES, Math.floor(Number(resumeBudget.maxSlices)))),
+    maxIterations: Math.max(1, Math.min(MAX_ITERATIONS, Math.floor(Number(resumeBudget.maxIterations)))),
+    maxTotalAttempts: Math.max(1, Math.min(24, Math.floor(Number(resumeBudget.maxTotalAttempts))))
+  } : derivedBudget;
   maxIterations = executionBudget.maxIterations;
   maxSlices = executionBudget.maxSlices;
   let totalPatchAttempts = Math.max(0, Math.floor(Number(resumeIteration) || 1) - 1);

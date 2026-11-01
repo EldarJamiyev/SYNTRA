@@ -178,7 +178,7 @@ test("local model implementation slice plans use a bounded strict JSON schema", 
   assert.equal(capturedBody.format.type, "object");
   assert.deepEqual(capturedBody.format.required, ["slices"]);
   assert.equal(capturedBody.format.properties.slices.minItems, 1);
-  assert.equal(capturedBody.format.properties.slices.maxItems, 3);
+  assert.equal(capturedBody.format.properties.slices.maxItems, 8);
   assert.deepEqual(
     Object.keys(capturedBody.format.properties.slices.items.properties).sort(),
     ["acceptance", "goal"]

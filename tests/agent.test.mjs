@@ -484,14 +484,14 @@ test("model-selected context plans allow only bounded read-only retrieval includ
   ]);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.check", input: { task: "test" } }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+  }, ["src/server.js"]), /restricted to audited read-only workspace retrieval tools/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.index.refresh", input: {} }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+  }, ["src/server.js"]), /restricted to audited read-only workspace retrieval tools/);
   for (const tool of ["workspace.memory.add", "workspace.memory.update", "workspace.memory.delete"]) {
     assert.throws(() => validateReadOnlyToolPlan({
       calls: [{ tool, input: { title: "Injected", content: "Write this automatically." } }]
-    }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+    }, ["src/server.js"]), /restricted to audited read-only workspace retrieval tools/);
   }
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.memory.search", input: { query: "x", limit: 20 } }]
@@ -503,11 +503,16 @@ test("model-selected context plans allow only bounded read-only retrieval includ
     calls: [{ tool: "workspace.read", input: { path: ".env" } }]
   }, ["src/server.js"]), /safe file list/);
   assert.throws(() => validateReadOnlyToolPlan({
-    calls: [{ tool: "workspace.read", input: { path: "src/server.js", startLine: 1, endLine: 1000 } }]
-  }, ["src/server.js"]), /limited to 200 lines/);
+    calls: [{ tool: "workspace.read", input: { path: "src/server.js", startLine: 1, endLine: 500 } }]
+  }, ["src/server.js"]), /limited to 400 lines/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.search", input: { query: "db", limit: 50 } }]
   }, ["src/server.js"]), /limit from 1 to 10/);
+  assert.deepEqual(validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.semantic.search", input: { query: "gateway failure", limit: 8 } }]
+  }, ["src/server.js"]), [
+    { tool: "workspace.semantic.search", input: { query: "gateway failure", limit: 8 } }
+  ]);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: Array.from({ length: 5 }, () => ({ tool: "workspace.search", input: { query: "handler" } }))
   }, ["src/server.js"]), /at most four calls/);
