@@ -182,6 +182,26 @@ export async function searchWorkspaceMemory(inputRoot, query, limit = 6) {
   const store = await readMemory(root);
   const normalized = query.trim().toLowerCase();
   const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
+  const documents = store.notes.map(note => ({
+    note,
+    title: note.title.toLowerCase(),
+    tags: note.tags.join(" ").toLowerCase(),
+    content: note.content.toLowerCase(),
+    tokens: (note.title + " " + note.tags.join(" ") + " " + note.content).toLowerCase().match(/[a-z0-9_.-]{2,}/g) || []
+  }));
+  const documentFrequency = new Map();
+  for (const term of terms) {
+    documentFrequency.set(term, documents.filter(doc => doc.tokens.includes(term)).length);
+  }
+  const averageLength = documents.length
+    ? documents.reduce((sum, doc) => sum + doc.tokens.length, 0) / documents.length : 0;
+  const ranked = [];
+  for (const doc of documents) {
+    let score = doc.title === normalized ? 8 : doc.title.includes(normalized) ? 4 : 0;
+    const lengthRatio = averageLength > 0 ? doc.tokens.length / averageLength : 1;
+    for (const term of terms) {
+      const titleTf = doc.title.match(new RegExp("\\b" + term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\  const normalized = query.trim().toLowerCase();
+  const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
   const ranked = [];
   for (const note of store.notes) {
     const title = note.title.toLowerCase();
@@ -195,7 +215,47 @@ export async function searchWorkspaceMemory(inputRoot, query, limit = 6) {
     }
     if (score > 0) ranked.push({ note, score });
   }
-  ranked.sort((a, b) => b.score - a.score || b.note.updatedAt.localeCompare(a.note.updatedAt));
+  ranked.sort((a, b) => b.score - a.score || b.note.updatedAt.localeCompare(a.note.updatedAt));") + "\\b", "g"))?.length || 0;
+      const tagTf = doc.tags.match(new RegExp("\\b" + term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\  const normalized = query.trim().toLowerCase();
+  const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
+  const ranked = [];
+  for (const note of store.notes) {
+    const title = note.title.toLowerCase();
+    const content = note.content.toLowerCase();
+    const tags = note.tags.join(" ").toLowerCase();
+    let score = title === normalized ? 100 : title.includes(normalized) ? 70 : 0;
+    for (const term of terms) {
+      if (title.includes(term)) score += 12;
+      if (tags.includes(term)) score += 8;
+      if (content.includes(term)) score += 3;
+    }
+    if (score > 0) ranked.push({ note, score });
+  }
+  ranked.sort((a, b) => b.score - a.score || b.note.updatedAt.localeCompare(a.note.updatedAt));") + "\\b", "g"))?.length || 0;
+      const bodyTf = doc.content.match(new RegExp("\\b" + term.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\  const normalized = query.trim().toLowerCase();
+  const terms = [...new Set(normalized.match(/[a-z0-9_.-]{2,}/g) || [])].slice(0, 8);
+  const ranked = [];
+  for (const note of store.notes) {
+    const title = note.title.toLowerCase();
+    const content = note.content.toLowerCase();
+    const tags = note.tags.join(" ").toLowerCase();
+    let score = title === normalized ? 100 : title.includes(normalized) ? 70 : 0;
+    for (const term of terms) {
+      if (title.includes(term)) score += 12;
+      if (tags.includes(term)) score += 8;
+      if (content.includes(term)) score += 3;
+    }
+    if (score > 0) ranked.push({ note, score });
+  }
+  ranked.sort((a, b) => b.score - a.score || b.note.updatedAt.localeCompare(a.note.updatedAt));") + "\\b", "g"))?.length || 0;
+      const df = documentFrequency.get(term) || 0;
+      const inverseFrequency = Math.log(1 + (documents.length - df + 0.5) / (df + 0.5));
+      const bodyScore = bodyTf * 2.2 / (bodyTf + 1.2 * (0.25 + 0.75 * lengthRatio));
+      score += inverseFrequency * (titleTf * 3 + tagTf * 2 + bodyScore);
+    }
+    if (score > 0) ranked.push({ note: doc.note, score });
+  }
+  ranked.sort((left, right) => right.score - left.score || right.note.updatedAt.localeCompare(left.note.updatedAt));
   return {
     root, query, total: store.notes.length,
     results: ranked.slice(0, limit).map(({ note, score }) => ({
