@@ -35,6 +35,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install frontend and runtime dependencies for Windows regression tests
+        run: npm install --ignore-scripts --no-audit
       - name: Parse PowerShell launcher and verify one-click entry point
         shell: pwsh
         run: |
