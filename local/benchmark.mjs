@@ -189,7 +189,7 @@ async function createFixtureWorkspace(suiteDir, task) {
   }
 }
 
-export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, modelRequest, agentRunner = runAgentTask, onProgress = () => {}, outputPath = null }) {
+export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, modelRequest, reviewModelRequest = null, agentRunner = runAgentTask, onProgress = () => {}, outputPath = null }) {
   validateBenchmarkSuite(suite);
   if (typeof modelRequest !== "function") throw new Error("A local model request bridge is required.");
   const requested = taskIds ? new Set(taskIds) : null;
@@ -220,7 +220,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       agentResult = await agentRunner({
         root: fixture.workspace, goal: task.goal, requestedPath: task.expectedChangedPaths[0],
         maxIterations: task.maxIterations, maxSlices: task.maxSlices,
-        runChecks: true, modelToolSelection: true, modelSelfReview: true, modelRequest,
+        runChecks: true, modelToolSelection: true, modelSelfReview: true, modelRequest, reviewModelRequest,
         onProgress: async update => {
           if (update?.model) progressModel = update.model;
           await onProgress({ taskId: task.id, ...update });

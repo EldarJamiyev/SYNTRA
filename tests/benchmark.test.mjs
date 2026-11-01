@@ -72,6 +72,7 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
   try {
     const { report, outputPath: savedPath } = await runBenchmarkSuite({
       suite, suiteDir, outputPath,
+      reviewModelRequest: async () => ({ model_name: "independent-reviewer" }),
       modelRequest: async (method, route) => {
         assert.equal(method, "GET"); assert.equal(route, "/model/status");
         return { checkpoint_exists: true, provider: "ollama", model_name: "test-local-model", context_tokens: 4096 };
@@ -80,6 +81,7 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
         assert.notEqual(options.root, fixtureDir);
         assert.equal(options.modelSelfReview, true);
         assert.equal(options.modelToolSelection, true);
+        assert.equal(typeof options.reviewModelRequest, "function");
         assert.equal(await fs.readFile(path.join(options.root, "src", "target.mjs"), "utf8"), original);
         await options.onProgress({ phase: "plan-created", model: { provider: "ollama", name: "test-local-model", contextWindowTokens: 4096 } });
         return {
