@@ -610,10 +610,6 @@ export async function updateWorkspaceExclusions(inputRoot, options = {}) {
   return { root, patterns, updatedAt: next.updatedAt };
 }
 
-const MAX_AUDIT_LOG_BYTES = 5 * 1024 * 1024;
-const MAX_AUDIT_LOG_ARCHIVES = 3;
-const auditWriteQueues = new Map();
-
 async function rotateAuditLog(auditPath) {
   let info;
   try {
