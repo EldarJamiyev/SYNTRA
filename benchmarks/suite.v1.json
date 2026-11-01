@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "description": "Versioned local coding-agent benchmark. Each fixture includes an intentionally failing Node.js assertion script; SYNTRA must patch only the declared source file and pass its candidate checks.",
+  "version": "1.1.0",
+  "description": "Versioned local coding-agent benchmark covering single-file and multi-file JavaScript, configuration, and Python tasks. Each fixture includes an intentionally failing assertion suite; SYNTRA must make the exact declared changes and pass candidate verification.",
   "tasks": [
     {
       "id": "utility-clamp",
@@ -43,6 +43,35 @@
       "maxIterations": 3,
       "maxSlices": 1,
       "goal": "Fix mergeConfig(base, override) in src/config.mjs. Recursively merge nested plain objects, preserve base keys not present in override, and replace arrays rather than merging their elements. Neither input object may be mutated. Keep the exported function name and do not edit tests or package files."
+    },
+    {
+      "id": "multi-file-request-validation",
+      "category": "api-development",
+      "title": "Implement payload validation across a two-file request flow",
+      "fixture": "fixtures/multi-file-request-validation",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/route.test.mjs",
+      "expectedChangedPaths": [
+        "src/validation.mjs",
+        "src/route.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 2,
+      "goal": "Implement isPlainPayload(payload) in src/validation.mjs so it accepts only non-null plain objects (Object.prototype or null prototype), rejecting arrays, primitives and null. Update src/route.mjs to use this validator: invalid payloads must return {status:400, body:{error:'invalid_payload'}} and valid payload objects must return {status:200, body:{accepted:true}}. Preserve the exported handleRequest function. Do not modify tests or package files."
+    },
+    {
+      "id": "python-duration-format",
+      "category": "python",
+      "title": "Format elapsed durations with validated inputs",
+      "fixture": "fixtures/python-duration-format",
+      "baselineCheck": "python-unittest",
+      "testEntry": "tests/test_duration.py",
+      "expectedChangedPaths": [
+        "src/duration.py"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement format_duration(seconds) in src/duration.py. Accept only non-negative integers but reject booleans; raise TypeError for non-integers and ValueError for negative integers. Format values below one hour as MM:SS with zero-padded minutes and seconds, and values of one hour or more as H:MM:SS where hours are not padded. Do not edit tests or add dependencies."
     }
   ]
 }

@@ -1,0 +1,8 @@
+{
+  "name": "syntra-multi-file-request-validation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test checks/route.test.mjs"
+  }
+}
