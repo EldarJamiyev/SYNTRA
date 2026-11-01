@@ -151,7 +151,7 @@ test("agent implements and verifies multiple slices against one cumulative candi
         if (Object.prototype.hasOwnProperty.call(update, "recoveryPatch")) recoveryCheckpoints.push(update.recoveryPatch);
       }
     });
-    assert.equal(patchCalls, 2);
+    assert.equal(patchCalls, 2, JSON.stringify(result.observations.filter(item => item.kind === "patch-self-review")));
     assert.ok(recoveryCheckpoints.length > 0);
     assert.ok(recoveryCheckpoints.every(value => value === null),
       "multi-slice runs must restart from the overall goal instead of persisting a candidate-relative patch");
@@ -703,7 +703,7 @@ test("patch review validation requires evidence-backed blockers and workspace-lo
       issue: "A required behavior is missing from the patch.",
       recommendation: "Implement the missing requested behavior before verification."
     }]
-  }), /cannot contain blocking findings/);
+  }, ["src/value.js"]), /cannot contain blocking findings/);
   assert.throws(() => validatePatchReview({
     verdict: "revise", rationale: "Invalid path.",
     findings: [{
