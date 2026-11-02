@@ -247,25 +247,17 @@ try {
 
     if (-not $UseOllama) {
     Write-Step "Preparing the isolated native AI environment"
-    $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
-    $pythonReady = $false
-    if (Test-Path $VenvPython) {
-        $dependencyCheck = & $VenvPython -c "import importlib.util; print('READY' if importlib.util.find_spec('torch') and importlib.util.find_spec('numpy') else 'MISSING')" 2>&1
-        $pythonReady = ($LASTEXITCODE -eq 0 -and (($dependencyCheck | Out-String).Trim() -eq "READY"))
+    $VenvPython = Join-Path $Root ".venv\\Scripts\\python.exe"
+    Write-Host "Checking the installed Python environment against requirements.lock.txt..."
+    & python (Join-Path $Root "scripts\\setup_syntra_env.py")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python setup or lock validation failed. Check the installation error above, then double-click Start-SYNTRA.bat again."
     }
 
-    if (-not $pythonReady) {
-        Write-Host "Installing or repairing PyTorch and NumPy. This is needed only when dependencies are missing."
-        & python (Join-Path $Root "scripts\setup_syntra_env.py")
-        if ($LASTEXITCODE -ne 0) {
-            throw "Python setup failed. Check the installation error above, then double-click Start-SYNTRA.bat again."
-        }
-    }
-
-    $runtimeCheck = & $VenvPython -c "import torch, numpy; print('READY PyTorch=' + torch.__version__ + ' NumPy=' + numpy.__version__)" 2>&1
-    if ($LASTEXITCODE -ne 0 -or (($runtimeCheck | Out-String) -notmatch 'READY PyTorch=')) {
+    $runtimeCheck = & $VenvPython -c "import torch, numpy; assert torch.version.cuda is None, 'SYNTRA requires CPU-only PyTorch'; print('READY PyTorch=' + torch.__version__ + ' NumPy=' + numpy.__version__ + ' CUDA=' + str(torch.version.cuda))" 2>&1
+    if ($LASTEXITCODE -ne 0 -or (($runtimeCheck | Out-String) -notmatch 'READY PyTorch=.*CUDA=None')) {
         $runtimeCheck | ForEach-Object { Write-Host $_ }
-        throw "The local Python runtime still cannot import PyTorch and NumPy. Run npm run ai:install and inspect the error."
+        throw "The local Python runtime failed its CPU-only health check. Run npm run ai:install and inspect the error."
     }
     $runtimeCheck | ForEach-Object { Write-Host $_ -ForegroundColor Green }
 
