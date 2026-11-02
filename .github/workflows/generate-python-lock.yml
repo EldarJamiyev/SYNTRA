@@ -1,0 +1,40 @@
+name: Generate Python dependency lock
+
+on:
+  push:
+    branches: [feat/engineering-intelligence-upgrade]
+    paths:
+      - requirements.txt
+      - .github/workflows/generate-python-lock.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned uv lock compiler
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.6"
+      - name: Generate a universal hash-locked requirements file
+        run: uv pip compile --universal --generate-hashes --emit-index-url requirements.txt --output-file requirements.lock.txt
+      - name: Validate hash-locked CPU PyTorch installation
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r requirements.lock.txt
+          .venv/bin/python -m pip check
+          .venv/bin/python -c "import numpy, torch; assert torch.version.cuda is None, 'Expected CPU-only PyTorch'; print('NumPy', numpy.__version__, 'PyTorch', torch.__version__, 'CUDA', torch.version.cuda)"
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: syntra-python-lockfile
+          path: requirements.lock.txt
+          if-no-files-found: error
+          retention-days: 3
