@@ -179,6 +179,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Harden Docker check containers with init, private IPC, bounded swap and an open-file limit; retain no-network, read-only root, dropped capabilities, no-new-privileges and candidate-only write mount.
 - [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
 - [x] Add provider-aware context sizing with provider-specific output caps and safety reserves; use exact Gemini token counts and conservative local estimates.
+- [x] Add model-aware Gemini long decoding for Gemini 4 Argon on the documented v1beta API: bounded 16-hop continuation, exact prompt replay, streaming checkpoint recovery, uncommitted-text discard on disconnect, and separate output ceilings for Gemini 3.8 Flash versus Argon.
 - [ ] Build a cross-language empirical model capability matrix from repeatable runs across the available JavaScript, Python, Go and Rust fixtures.
 - Publish a reproducible release checklist and migration notes.
 
