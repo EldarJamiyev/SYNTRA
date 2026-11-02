@@ -626,12 +626,10 @@ const GEMINI_MAX_CONTINUATION_HOPS = 16;
 const GEMINI_STREAM_TIMEOUT_MS = 20 * 60 * 1000;
 const GEMINI_NON_STREAM_TIMEOUT_MS = 10 * 60 * 1000;
 
-export function geminiRequestTimeoutMs(streaming, requestedTimeoutMs) {
-  const documentedLimit = streaming ? GEMINI_STREAM_TIMEOUT_MS : GEMINI_NON_STREAM_TIMEOUT_MS;
-  const requested = Number(requestedTimeoutMs);
-  if (!Number.isFinite(requested) || requested <= 0) return documentedLimit;
-  // Do not let agent-level 2–5 minute defaults terminate a documented long decode.
-  return Math.min(documentedLimit, Math.max(documentedLimit, Math.floor(requested)));
+export function geminiRequestTimeoutMs(streaming) {
+  // These are Google's documented per-request limits, not model-generation budgets.
+  // Caller-level 2–5 minute defaults must not truncate long-decode streams.
+  return streaming ? GEMINI_STREAM_TIMEOUT_MS : GEMINI_NON_STREAM_TIMEOUT_MS;
 }
 
 function supportsGeminiLongDecode(model) {
