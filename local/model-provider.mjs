@@ -803,6 +803,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
         catch { throw new Error("Gemini returned malformed Server-Sent Events data."); }
         if (chunk.error) throw new Error(String(chunk.error.message || "Gemini streaming failed."));
         const candidate = chunk?.candidates?.[0];
+        let checkpointTokenUpdated = false;
         if (typeof candidate?.finishReason === "string" && candidate.finishReason.trim()) {
           hopFinishReason = candidate.finishReason.trim();
         }
@@ -811,6 +812,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
             throw providerError("Gemini returned an invalid continuation token.", "INVALID_CONTINUATION_TOKEN");
           }
           hopContinuationToken = candidate.continuationToken;
+          checkpointTokenUpdated = true;
         }
         const delta = (candidate?.content?.parts || [])
           .map(part => typeof part?.text === "string" ? part.text : "").join("");
@@ -822,7 +824,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
             onToken(delta, text);
           }
         }
-        if (useLongDecodeApi && hopContinuationToken) commitCheckpointText();
+        if (useLongDecodeApi && checkpointTokenUpdated) commitCheckpointText();
         if (chunk.usageMetadata && typeof chunk.usageMetadata === "object") hopUsage = chunk.usageMetadata;
       };
       const consumeLine = line => {

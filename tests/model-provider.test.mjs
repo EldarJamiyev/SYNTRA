@@ -821,7 +821,10 @@ test("Gemini long streaming retries once from the original request when interrup
               delivered = true;
               controller.enqueue(new TextEncoder().encode(
                 "data: " + JSON.stringify({
-                  candidates: [{ content: { parts: [{ text: calls === 1 ? "uncommitted-first-attempt" : "clean-retry-result" }] } }]
+                  candidates: [{
+                    content: { parts: [{ text: calls === 1 ? "uncommitted-first-attempt" : "clean-retry-result" }] },
+                    ...(calls === 1 ? {} : { finishReason: "STOP" })
+                  }]
                 }) + "\n\n"
               ));
             } else if (calls === 1) {
