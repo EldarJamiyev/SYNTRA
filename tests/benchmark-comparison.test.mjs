@@ -35,6 +35,11 @@ test("report validation rejects malformed schema, duplicate tasks, and invalid m
   assert.throws(() => validateBenchmarkReport({ ...valid, tasks: [{ ...valid.tasks[0], latencyMs: -1 }] }), /latency/i);
   assert.throws(() => validateBenchmarkReport({ ...valid, summary: { ...valid.summary, taskCompletionRate: 1.5 } }), /summary/i);
   assert.throws(() => validateBenchmarkReport({ ...valid, tasks: [{ ...valid.tasks[0], taskComplete: false }] }), /inconsistent completion/i);
+  assert.throws(() => validateBenchmarkReport({
+    ...valid,
+    tasks: [{ ...valid.tasks[0], baselineValidated: false }]
+  }), /inconsistent completion/i,
+  "legacy-shaped reports remain readable, but a reported invalid baseline cannot be marked complete");
 });
 
 test("comparison identifies model improvements and task-level changes", () => {
