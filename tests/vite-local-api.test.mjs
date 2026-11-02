@@ -40,16 +40,13 @@ test("Vite starts the local API before serving the frontend and stops the child 
   const port = await reservePort();
   const aiPort = await reservePort();
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-vite-workspace-"));
-  const previous = {
-    localPort: process.env.SYNTRA_LOCAL_PORT,
-    aiPort: process.env.SYNTRA_AI_PORT,
-    workspace: process.env.SYNTRA_WORKSPACE,
-    autostart: process.env.SYNTRA_AUTOSTART_LOCAL_API
+  const env = {
+    ...process.env,
+    SYNTRA_LOCAL_PORT: String(port),
+    SYNTRA_AI_PORT: String(aiPort),
+    SYNTRA_WORKSPACE: workspace
   };
-  process.env.SYNTRA_LOCAL_PORT = String(port);
-  process.env.SYNTRA_AI_PORT = String(aiPort);
-  process.env.SYNTRA_WORKSPACE = workspace;
-  delete process.env.SYNTRA_AUTOSTART_LOCAL_API;
+  delete env.SYNTRA_AUTOSTART_LOCAL_API;
 
   const httpServer = new EventEmitter();
   const watcher = new EventEmitter();
@@ -61,7 +58,7 @@ test("Vite starts the local API before serving the frontend and stops the child 
   };
 
   try {
-    const plugin = syntraLocalApiPlugin({ root: projectRoot, stdio: "ignore", timeoutMs: 10000 });
+    const plugin = syntraLocalApiPlugin({ root: projectRoot, env, stdio: "ignore", timeoutMs: 10000 });
     await plugin.configureServer(viteServer);
 
     const health = await fetch("http://127.0.0.1:" + port + "/local-api/health");
@@ -82,14 +79,6 @@ test("Vite starts the local API before serving the frontend and stops the child 
   } finally {
     httpServer.emit("close");
     watcher.emit("close");
-    if (previous.localPort === undefined) delete process.env.SYNTRA_LOCAL_PORT;
-    else process.env.SYNTRA_LOCAL_PORT = previous.localPort;
-    if (previous.aiPort === undefined) delete process.env.SYNTRA_AI_PORT;
-    else process.env.SYNTRA_AI_PORT = previous.aiPort;
-    if (previous.workspace === undefined) delete process.env.SYNTRA_WORKSPACE;
-    else process.env.SYNTRA_WORKSPACE = previous.workspace;
-    if (previous.autostart === undefined) delete process.env.SYNTRA_AUTOSTART_LOCAL_API;
-    else process.env.SYNTRA_AUTOSTART_LOCAL_API = previous.autostart;
     await fs.rm(workspace, { recursive: true, force: true });
   }
 });
