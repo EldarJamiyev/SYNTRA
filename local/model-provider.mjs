@@ -618,16 +618,23 @@ export async function handleLocalModelRequest(provider, method, route, body = {}
 }
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
-const GEMINI_LONG_DECODE_API_BASE = "https://generativelanguage.googleapis.com/v1beta1";
 const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
 const GEMINI_CONTEXT_TOKENS = 1_048_576;
 const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = 131_072;
+const GEMINI_FLASH_MAX_OUTPUT_TOKENS = 65_536;
 const GEMINI_MAX_CONTINUATION_HOPS = 16;
 
-function geminiMaxOutputTokens() {
+function supportsGeminiLongDecode(model) {
+  return String(model || "").toLowerCase() === "gemini-4-argon";
+}
+
+function geminiMaxOutputTokens(model = DEFAULT_GEMINI_MODEL) {
+  const longDecodeSupported = supportsGeminiLongDecode(model);
+  const hardLimit = longDecodeSupported ? GEMINI_CONTEXT_TOKENS : GEMINI_FLASH_MAX_OUTPUT_TOKENS;
+  const defaultLimit = longDecodeSupported ? DEFAULT_GEMINI_MAX_OUTPUT_TOKENS : GEMINI_FLASH_MAX_OUTPUT_TOKENS;
   const configured = Number(process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS);
-  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_GEMINI_MAX_OUTPUT_TOKENS;
-  return Math.max(16, Math.min(GEMINI_CONTEXT_TOKENS, Math.floor(configured)));
+  if (!Number.isFinite(configured) || configured <= 0) return defaultLimit;
+  return Math.max(16, Math.min(hardLimit, Math.floor(configured)));
 }
 
 function validGeminiContinuationToken(token) {
@@ -648,7 +655,17 @@ export function getGeminiProviderStatus(model = process.env.SYNTRA_GEMINI_MODEL 
     config: { seq_len: GEMINI_CONTEXT_TOKENS }, pretrained_weights: true,
     external_ai_api: true, local_only: false,
     data_policy: "Unpaid Gemini API content may be used to improve Google products and may be reviewed by humans; do not submit confidential or personal data.",
-    capabilities: { hostedInference: true, contextWindowTokens: GEMINI_CONTEXT_TOKENS, maxOutputTokens: geminiMaxOutputTokens(), maxContinuationHops: GEMINI_MAX_CONTINUATION_HOPS, tokenCountIsEstimate: false, incrementalTokenStreaming: true, continuationTokens: true, benchmarkStatus: "not_measured" },
+    capabilities: {
+      hostedInference: true,
+      contextWindowTokens: GEMINI_CONTEXT_TOKENS,
+      maxOutputTokens: geminiMaxOutputTokens(model),
+      maxContinuationHops: supportsGeminiLongDecode(model) ? GEMINI_MAX_CONTINUATION_HOPS : 1,
+      tokenCountIsEstimate: false,
+      incrementalTokenStreaming: true,
+      continuationTokens: supportsGeminiLongDecode(model),
+      longDecode: supportsGeminiLongDecode(model),
+      benchmarkStatus: "not_measured"
+    },
     note: "Hosted inference is explicit. Repository prompts additionally require SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1."
   };
 }
@@ -717,7 +734,12 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
     throw new Error("Cloud repository inference is disabled. Set SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1 only after reviewing Google's Gemini API data-use terms and your workspace confidentiality requirements.");
   }
   if (signal?.aborted) throw cancellationError();
-  const maxTokens = Math.max(16, Math.min(geminiMaxOutputTokens(), Math.floor(Number(body.max_new_tokens) || 1024)));
+  const streaming = typeof onToken === "function";
+  const perRequestLimit = streaming ? 65_536 : 32_768;
+  const longDecodeSupported = supportsGeminiLongDecode(model);
+  const modelOutputLimit = geminiMaxOutputTokens(model);
+  const requestOutputLimit = longDecodeSupported ? modelOutputLimit : Math.min(modelOutputLimit, perRequestLimit);
+  const maxTokens = Math.max(16, Math.min(requestOutputLimit, Math.floor(Number(body.max_new_tokens) || 1024)));
   const temperature = Math.max(0, Math.min(2, Number.isFinite(Number(body.temperature)) ? Number(body.temperature) : 0.2));
   const contents = [{ role: "user", parts: [{ text: prompt }] }];
   const generationConfig = {
@@ -725,10 +747,8 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
     temperature,
     ...(isRepositoryPrompt(prompt) ? { responseMimeType: "application/json" } : {})
   };
-  const streaming = typeof onToken === "function";
-  const perRequestLimit = streaming ? 65_536 : 32_768;
-  const useLongDecodeApi = maxTokens > perRequestLimit;
-  const apiBase = useLongDecodeApi ? GEMINI_LONG_DECODE_API_BASE : GEMINI_API_BASE;
+  const useLongDecodeApi = longDecodeSupported && maxTokens > perRequestLimit;
+  const apiBase = GEMINI_API_BASE;
   let continuationToken = null;
   let text = "";
   let finishReason = null;
@@ -904,6 +924,13 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
       totalCandidateTokens += Number(hopUsage.candidatesTokenCount) || 0;
     }
     finishReason = validateGeminiFinishReason(hopFinishReason);
+    if (finishReason === "CONTINUATION" && !longDecodeSupported) {
+      throw providerError(
+        "The selected Gemini model does not support long decode. Select gemini-4-argon to resume CONTINUATION responses.",
+        "UNSUPPORTED_CONTINUATION",
+        false
+      );
+    }
     if (finishReason !== "CONTINUATION") break;
     if (!validGeminiContinuationToken(hopContinuationToken)) {
       throw providerError(

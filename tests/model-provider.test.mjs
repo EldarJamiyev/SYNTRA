@@ -445,6 +445,8 @@ test("Gemini provider requires repository-content consent and uses server-side A
     assert.equal(status.context_tokens, 1_048_576);
     assert.equal(status.capabilities.tokenCountIsEstimate, false);
     assert.equal(status.capabilities.incrementalTokenStreaming, true);
+    assert.equal(status.capabilities.maxOutputTokens, 65536);
+    assert.equal(status.capabilities.continuationTokens, false);
     await assert.rejects(
       () => handleGeminiModelRequest("POST", "/model/generate", {
         prompt: "You are SYNTRA's repository-aware software engineering agent. Return one JSON patch."
@@ -524,7 +526,7 @@ test("Gemini provider requires repository-content consent and uses server-side A
         },
         onToken: () => {}, timeoutMs: 1000
       }),
-      error => error.code === "MISSING_CONTINUATION_TOKEN" && /without returning a usable continuationToken/.test(error.message)
+      error => error.code === "UNSUPPORTED_CONTINUATION" && /does not support long decode/.test(error.message)
     );
     const tokenCount = await handleGeminiModelRequest("POST", "/model/tokenize", { text: "count this prompt" }, {
       fetchImpl: async (url, options) => {
@@ -576,7 +578,7 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
     maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
   };
   process.env.SYNTRA_GEMINI_API_KEY = "test-key";
-  process.env.SYNTRA_GEMINI_MODEL = "gemini-3.8-flash";
+  process.env.SYNTRA_GEMINI_MODEL = "gemini-4-argon";
   process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
   process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
   const makeSse = events => {
@@ -620,7 +622,7 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
       timeoutMs: 1000
     });
     assert.equal(calls.length, 2);
-    assert.ok(calls.every(call => call.url.includes("/v1beta1/models/gemini-3.8-flash:streamGenerateContent")));
+    assert.ok(calls.every(call => call.url.includes("/v1beta/models/gemini-4-argon:streamGenerateContent")));
     assert.equal(calls[0].request.generationConfig.maxOutputTokens, 70000);
     assert.equal(calls[1].request.generationConfig.maxOutputTokens, 70000);
     assert.equal(calls[1].request.continuationToken, "opaque-token-first-hop");
@@ -659,7 +661,7 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
       timeoutMs: 1000
     });
     assert.equal(calls.length, 2);
-    assert.ok(calls.every(call => call.url.includes("/v1beta1/models/gemini-3.8-flash:generateContent")));
+    assert.ok(calls.every(call => call.url.includes("/v1beta/models/gemini-4-argon:generateContent")));
     assert.equal(calls[1].request.continuationToken, "opaque-token-nonstream");
     assert.deepEqual(calls[1].request.contents, calls[0].request.contents);
     assert.equal(nonStreaming.text, "yaml-prefix-yaml-suffix");
@@ -680,10 +682,12 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
 test("Gemini continuation rejects missing tokens, repeated tokens, and excessive hop chains", async () => {
   const previous = {
     key: process.env.SYNTRA_GEMINI_API_KEY,
+    model: process.env.SYNTRA_GEMINI_MODEL,
     allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
     maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
   };
   process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_MODEL = "gemini-4-argon";
   process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
   process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
   const response = (candidate) => new Response(JSON.stringify({
@@ -718,6 +722,7 @@ test("Gemini continuation rejects missing tokens, repeated tokens, and excessive
   } finally {
     for (const [key, value] of Object.entries({
       SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_MODEL: previous.model,
       SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
       SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
     })) {
@@ -729,10 +734,12 @@ test("Gemini continuation rejects missing tokens, repeated tokens, and excessive
 test("Gemini long streaming resumes from the latest checkpoint and drops speculative text after disconnect", async () => {
   const previous = {
     key: process.env.SYNTRA_GEMINI_API_KEY,
+    model: process.env.SYNTRA_GEMINI_MODEL,
     allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
     maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
   };
   process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_MODEL = "gemini-4-argon";
   process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
   process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
   const streamResponse = (events, interrupt = false) => {
@@ -787,6 +794,7 @@ test("Gemini long streaming resumes from the latest checkpoint and drops specula
   } finally {
     for (const [key, value] of Object.entries({
       SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_MODEL: previous.model,
       SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
       SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
     })) {
@@ -798,10 +806,12 @@ test("Gemini long streaming resumes from the latest checkpoint and drops specula
 test("Gemini long streaming retries once from the original request when interrupted before its first checkpoint", async () => {
   const previous = {
     key: process.env.SYNTRA_GEMINI_API_KEY,
+    model: process.env.SYNTRA_GEMINI_MODEL,
     allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
     maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
   };
   process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_MODEL = "gemini-4-argon";
   process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
   process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
   try {
@@ -844,6 +854,7 @@ test("Gemini long streaming retries once from the original request when interrup
   } finally {
     for (const [key, value] of Object.entries({
       SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_MODEL: previous.model,
       SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
       SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
     })) {
