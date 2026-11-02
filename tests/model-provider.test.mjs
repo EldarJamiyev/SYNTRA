@@ -8,10 +8,16 @@ import {
   describeLocalModelCapabilities,
   handleLocalModelRequest,
   getGeminiProviderStatus,
-  handleGeminiModelRequest
+  handleGeminiModelRequest,
+  geminiRequestTimeoutMs
 } from "../local/model-provider.mjs";
 
 const GB = 1024 ** 3;
+
+test("Gemini HTTP request deadlines honor documented long-decode limits", () => {
+  assert.equal(geminiRequestTimeoutMs(true), 20 * 60 * 1000);
+  assert.equal(geminiRequestTimeoutMs(false), 10 * 60 * 1000);
+});
 
 test("model selection prefers local coding models and excludes cloud-only or oversized models", () => {
   const models = [
