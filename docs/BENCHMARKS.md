@@ -12,15 +12,20 @@ Start a local Ollama model that SYNTRA can select, or start SYNTRA's native AI s
 - Run selected tasks: npm run benchmark -- --task utility-clamp --task string-slugify
 - Choose a report path: npm run benchmark -- --output reports/local-model-run.json
 
-The default suite is benchmarks/suite.v1.json, currently version 1.0.0. It contains three intentionally failing regression fixtures:
+The default suite is benchmarks/suite.v1.json, currently version 1.4.0. It contains eight intentionally failing regression fixtures:
 
 | Task | Capability | Acceptance |
 | --- | --- | --- |
 | utility-clamp | Add a bounded numeric helper | Exact expected source-file change and passing Node.js assertions |
+| positive-integer | Validate positive integer input | Numeric, boundary, and invalid-type behavior |
+| array-chunk | Split arrays into fixed-size groups | Correct chunk boundaries, empty arrays, and invalid sizes |
 | string-slugify | Correct string normalization | Punctuation/separator behavior and passing Node.js assertions |
 | config-deep-merge | Merge nested configuration | Recursive object merge, array replacement, input immutability |
+| multi-file-request-validation | API request validation | Two-file implementation and invalid/valid payload behavior |
+| python-duration-format | Python utility implementation | Input validation and MM:SS/H:MM:SS formatting through unittest |
+| typescript-contract-consistency | TypeScript API contracts | Aliased imports, interface conformance, and a real tsc noEmit baseline |
 
-Each fixture must fail its baseline Node.js assertion run before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
+Each fixture must fail its language-appropriate baseline check (Node.js assertions/import contract, Python unittest, or the installed TypeScript compiler in noEmit mode) before SYNTRA is invoked. Every task declares an `expectedBaselineFailure` diagnostic substring; a nonzero exit code is insufficient. The runner requires that diagnostic in the captured baseline output before invoking the agent, so missing dependencies, malformed test files, runner startup errors, and unrelated failures cannot masquerade as a valid failing fixture. The task report records `baselineValidated`. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
 
 ## Measurements
 
@@ -31,6 +36,8 @@ The aggregate section includes completion, patch-validity and verification-pass 
 ## Measurement boundaries
 
 This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate Ollama daemon, model runtime, GPU memory, or total system memory. Some provider responses may not include prompt-token counts; unavailable values are recorded as zero rather than presented as exact counts.
+
+The benchmark enables the same model-selected read-only retrieval and second-pass patch review as the normal coding workflow. Review uses a separately selected local Ollama model only when `SYNTRA_REVIEW_MODEL` names an installed model distinct from the generator; otherwise it is a same-model second pass, not independent-model verification.
 
 The benchmark does not call a hosted model API. It uses the locally configured Ollama provider when available, otherwise the local SYNTRA AI service. Each fixture is copied to a temporary directory and removed after its run. Agent changes are staged only inside that temporary copy; the active workspace and checked-in fixtures remain unchanged.
 

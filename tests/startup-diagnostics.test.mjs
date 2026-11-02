@@ -22,6 +22,14 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
+test("Windows startup defaults to pretrained Ollama and only selects the native research model explicitly", async () => {
+  const launcher = await fs.readFile(launcherPath, "utf8");
+  assert.match(launcher, /else\s*\{\s*"ollama"\s*\}/);
+  assert.match(launcher, /@\("native", "ollama"\) -notcontains \$providerMode/);
+  assert.match(launcher, /SYNTRA_MODEL_PROVIDER=native/);
+  assert.doesNotMatch(launcher, /else\s*\{\s*"auto"\s*\}/);
+});
+
 test("Vite startup keeps console output visible in its own service window", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
   assert.match(launcher, /npm run dev -- --clearScreen false/);

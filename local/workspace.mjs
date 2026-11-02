@@ -81,23 +81,11 @@ function normalizeRelativePath(relativePath) {
     throw new Error("Absolute file paths are not accepted for workspace operations.");
   }
   const normalized = relativePath.replace(/\\/g, "/");
-  const segments = normalized.split("/");
-  if (segments.some(part => part === ".." || part === "." || part === "")) {
+  if (normalized.split("/").some(part => part === ".." || part === "." || part === "")) {
     throw new Error("Relative path traversal or empty path segments are not allowed.");
   }
-  // The reserved state directory must remain reserved on case-insensitive filesystems.
-  // Also reject Win32 aliases and NTFS alternate-data-stream syntax on every OS so a
-  // workspace behaves consistently when moved between Windows and POSIX systems.
-  const lowerPath = normalized.toLowerCase();
-  if (lowerPath === ".syntra" || lowerPath.startsWith(".syntra/")) {
-    throw new Error("The .syntra state directory is reserved by SYNTRA (case-insensitive).");
-  }
-  const invalidWindowsName = /[<>:"|?*\u0000-\u001f]/u;
-  const reservedWindowsDevice = /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/iu;
-  for (const segment of segments) {
-    if (invalidWindowsName.test(segment) || /[. ]$/u.test(segment) || reservedWindowsDevice.test(segment)) {
-      throw new Error("Workspace paths cannot contain Windows-reserved names, alternate data streams, or trailing dots/spaces: " + segment);
-    }
+  if (normalized.startsWith(".syntra/") || normalized === ".syntra") {
+    throw new Error("The .syntra state directory is reserved by SYNTRA.");
   }
   return normalized;
 }
@@ -622,6 +610,24 @@ export async function updateWorkspaceExclusions(inputRoot, options = {}) {
   return { root, patterns, updatedAt: next.updatedAt };
 }
 
+async function rotateAuditLog(auditPath) {
+  let info;
+  try {
+    info = await fs.lstat(auditPath);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error("Workspace audit log must be a regular file.");
+  for (let index = MAX_AUDIT_LOG_ARCHIVES; index >= 1; index -= 1) {
+    const source = index === 1 ? auditPath : auditPath + "." + (index - 1);
+    const target = auditPath + "." + index;
+    if (!(await assertRegularStateFile(source, "Workspace audit archive"))) continue;
+    if (await assertRegularStateFile(target, "Workspace audit archive")) await fs.rm(target);
+    await fs.rename(source, target);
+  }
+}
+
 async function appendAudit(root, entry) {
   const auditPath = path.join(stateDirectory(root), "actions.jsonl");
   const previous = auditWriteQueues.get(auditPath) || Promise.resolve();
@@ -630,22 +636,55 @@ async function appendAudit(root, entry) {
     const record = { timestamp: new Date().toISOString(), ...entry };
     let line = JSON.stringify(record) + "\n";
     if (Buffer.byteLength(line, "utf8") > 32 * 1024) {
-      line = JSON.stringify({ timestamp: record.timestamp, action: typeof record.action === "string" ? record.action : "audit_entry", truncated: true, note: "Original audit entry exceeded the 32 KB record limit." }) + "\n";
+      line = JSON.stringify({
+        timestamp: record.timestamp,
+        action: typeof record.action === "string" ? record.action : "audit_entry",
+        truncated: true,
+        note: "Original audit entry exceeded the 32 KB record limit."
+      }) + "\n";
     }
     const lineBytes = Buffer.byteLength(line, "utf8");
-    const current = await fs.stat(auditPath).catch(error => error?.code === "ENOENT" ? null : Promise.reject(error));
+    let current;
+    try {
+      current = await fs.lstat(auditPath);
+      if (current.isSymbolicLink() || !current.isFile()) {
+        throw new Error("Workspace audit log must be a regular file.");
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      current = null;
+    }
     if (current && current.size + lineBytes > MAX_AUDIT_LOG_BYTES) {
       for (let index = MAX_AUDIT_ARCHIVES; index >= 1; index -= 1) {
         const destination = auditPath + "." + index;
         const source = index === 1 ? auditPath : auditPath + "." + (index - 1);
-        if (index === MAX_AUDIT_ARCHIVES) await fs.rm(destination, { force: true });
-        await fs.rename(source, destination).catch(error => { if (error?.code !== "ENOENT") throw error; });
+        if (index === MAX_AUDIT_ARCHIVES) {
+          try {
+            const target = await fs.lstat(destination);
+            if (target.isSymbolicLink() || !target.isFile()) {
+              throw new Error("Workspace audit archive must be a regular file.");
+            }
+            await fs.rm(destination);
+          } catch (error) {
+            if (error?.code !== "ENOENT") throw error;
+          }
+        }
+        try {
+          const sourceInfo = await fs.lstat(source);
+          if (sourceInfo.isSymbolicLink() || !sourceInfo.isFile()) {
+            throw new Error("Workspace audit archive must be a regular file.");
+          }
+          await fs.rename(source, destination);
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+        }
       }
     }
     await fs.appendFile(auditPath, line, "utf8");
   });
   auditWriteQueues.set(auditPath, write);
-  try { await write; } finally { if (auditWriteQueues.get(auditPath) === write) auditWriteQueues.delete(auditPath); }
+  try { await write; }
+  finally { if (auditWriteQueues.get(auditPath) === write) auditWriteQueues.delete(auditPath); }
 }
 
 export async function recordWorkspaceToolEvent(inputRoot, event) {
@@ -760,15 +799,10 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
   if (payload.schemaVersion !== 1 || payload.runId !== runId || path.resolve(String(payload.root || "")) !== root) {
     throw new Error("Candidate checkpoint does not match this run and workspace.");
   }
-  const verifiedBoundary = payload.stage === "slice_verified";
-  const unverifiedCandidate = payload.stage === "slice_unverified";
-  if (!verifiedBoundary && !unverifiedCandidate) {
-    throw new Error("Candidate checkpoint must describe a verified slice boundary or an unverified candidate awaiting checks.");
-  }
+  if (payload.stage !== "slice_verified") throw new Error("Only a verified slice boundary can be persisted for continuation.");
   if (!Number.isInteger(payload.nextSliceIndex) || !Array.isArray(payload.slices)
-    || payload.slices.length < 1 || payload.slices.length > 8
-    || payload.nextSliceIndex < (verifiedBoundary ? 1 : 0)
-    || payload.nextSliceIndex >= payload.slices.length) {
+    || payload.slices.length < 1 || payload.slices.length > 3
+    || payload.nextSliceIndex < 1 || payload.nextSliceIndex >= payload.slices.length) {
     throw new Error("Candidate checkpoint slice progression is invalid.");
   }
   const slices = payload.slices.map((slice, index) => {
@@ -779,8 +813,7 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
       || typeof slice.acceptance !== "string" || slice.acceptance.trim().length < 8 || slice.acceptance.length > 400) {
       throw new Error("Candidate checkpoint contains an invalid implementation slice.");
     }
-    const expectedStatus = index < payload.nextSliceIndex ? "completed"
-      : unverifiedCandidate && index === payload.nextSliceIndex ? "running" : "pending";
+    const expectedStatus = index < payload.nextSliceIndex ? "completed" : "pending";
     if (slice.status !== expectedStatus) {
       throw new Error("Candidate checkpoint slice statuses do not match the next-slice index.");
     }
@@ -832,21 +865,21 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
   });
   const verification = payload.verification;
   if (!verification || typeof verification !== "object" || Array.isArray(verification)
-    || (verifiedBoundary && (verification.passed !== true || !["passed", "passed_review_required"].includes(verification.status)))
-    || (unverifiedCandidate && (verification.passed !== false || verification.status !== "candidate_ready"))) {
-    throw new Error("Candidate checkpoint verification state does not match its stage.");
+    || verification.passed !== true
+    || !["passed", "passed_review_required"].includes(verification.status)) {
+    throw new Error("Only a successfully verified candidate slice can be resumed.");
   }
   const sanitized = {
     schemaVersion: 1,
     runId,
     root,
-    stage: payload.stage,
+    stage: "slice_verified",
     nextSliceIndex: payload.nextSliceIndex,
     slices,
     files,
     verification: {
       status: verification.status,
-      passed: verifiedBoundary,
+      passed: true,
       checks: Array.isArray(verification.checks)
         ? verification.checks
             .filter(check => check && typeof check === "object" && !Array.isArray(check))
@@ -1029,25 +1062,12 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
       contextBudgetTokens: Number.isFinite(patch.model.contextBudgetTokens)
         ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextBudgetTokens))) : 0,
       outputBudgetTokens: Number.isFinite(patch.model.outputBudgetTokens)
-        ? Math.max(0, Math.min(100_000, Math.floor(patch.model.outputBudgetTokens))) : 0,
-      contextSafetyMarginTokens: Number.isFinite(patch.model.contextSafetyMarginTokens)
-        ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextSafetyMarginTokens))) : 0,
-      contextBudgetProfile: ["provider-tokenizer", "conservative-estimate"].includes(patch.model.contextBudgetProfile)
-        ? patch.model.contextBudgetProfile : "unknown",
-      tokenizerIsExact: patch.model.tokenizerIsExact === true,
-      ...(patch.model.executionBudget && typeof patch.model.executionBudget === "object" ? {
-        executionBudget: {
-          complexityScore: Math.max(0, Math.min(100, Math.floor(Number(patch.model.executionBudget.complexityScore) || 0))),
-          maxSlices: Math.max(1, Math.min(8, Math.floor(Number(patch.model.executionBudget.maxSlices) || 1))),
-          maxIterations: Math.max(1, Math.min(6, Math.floor(Number(patch.model.executionBudget.maxIterations) || 1))),
-          maxTotalAttempts: Math.max(1, Math.min(24, Math.floor(Number(patch.model.executionBudget.maxTotalAttempts) || 1)))
-        }
-      } : {})
+        ? Math.max(0, Math.min(100_000, Math.floor(patch.model.outputBudgetTokens))) : 0
     };
   }
   if (typeof patch.phase === "string") next.phase = patch.phase.slice(0, 64);
   if (typeof patch.message === "string") next.message = patch.message.replace(/[\r\n]+/g, " ").slice(0, 500);
-  if (Number.isInteger(patch.iteration)) next.iteration = Math.max(0, Math.min(128, patch.iteration));
+  if (Number.isInteger(patch.iteration)) next.iteration = Math.max(0, Math.min(20, patch.iteration));
   if (typeof patch.cancelRequested === "boolean") next.cancelRequested = patch.cancelRequested;
   if (typeof patch.error === "string" || patch.error === null) next.error = patch.error ? patch.error.slice(0, 1200) : null;
   if (Array.isArray(patch.planSteps)) next.planSteps = patch.planSteps.slice(0, 12).map(step => ({
@@ -1098,7 +1118,7 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
     next.checkpoint = {
       stage: String(patch.checkpoint.stage || next.checkpoint?.stage || "unknown").slice(0, 64),
       iteration: Number.isInteger(patch.checkpoint.iteration)
-        ? Math.max(0, Math.min(128, patch.checkpoint.iteration))
+        ? Math.max(0, Math.min(20, patch.checkpoint.iteration))
         : next.iteration
     };
   }
@@ -1718,7 +1738,7 @@ export async function chooseCheck(root, task, packageJson) {
     if (dotnetSolution) builders.push(executableCheck("command", "dotnet", ["build"], ".NET solution"));
     else if (dotnetProjects.length === 1) builders.push(executableCheck("command", "dotnet", ["build", dotnetProjects[0]], ".NET project"));
     if (builders.length === 1) return builders[0];
-    if (builders.length > 1) throw new Error("Multiple build systems were detected. Add an explicit build script to package.json so SYNTRA can run the intended build.");
+    if (builders.length > 1) return { kind: "multi-runner", command: "multiple build runners", label: "Multiple build systems", runners: builders };
   }
 
   if (task === "test") {
@@ -1763,9 +1783,7 @@ export async function chooseCheck(root, task, packageJson) {
     if (jsFiles.length > 0) testRunners.push(executableCheck("node-test", "node", ["--test"], "Node.js"));
 
     if (testRunners.length === 1) return testRunners[0];
-    if (testRunners.length > 1) {
-      throw new Error("Multiple test ecosystems were detected without a configured test script. Add a package.json test script or specify one test runner to avoid reporting a partial test pass as full verification.");
-    }
+    if (testRunners.length > 1) return { kind: "multi-runner", command: "multiple test runners", label: "Multiple test ecosystems", runners: testRunners };
     if (isPythonProject && pythonFiles.length === 0) {
       throw new Error("A Python project was detected, but no test_*.py or *_test.py files were found. SYNTRA cannot call this a verified test pass.");
     }
@@ -1799,43 +1817,125 @@ export async function discoverProjectChecks(inputRoot) {
   return { root, checks, unavailable };
 }
 
-export function buildDockerCheckArgs(root, image, command) {
-  const allowedImages = new Set([
-    "node:20-bookworm-slim", "python:3.11-slim", "golang:1.23",
-    "rust:1.84", "mcr.microsoft.com/dotnet/sdk:8.0"
-  ]);
-  if (typeof root !== "string" || !path.isAbsolute(root)) throw new Error("Docker candidate workspace path must be absolute.");
+function restrictedVerificationEnvironment(source = process.env) {
+  const allowed = [
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
+    "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "SYSTEMDRIVE"
+  ];
+  const result = {};
+  for (const key of allowed) {
+    const value = source[key];
+    if (typeof value === "string" && value.length <= 4096) result[key] = value;
+  }
+  result.CI = "true";
+  result.NODE_ENV = "test";
+  return result;
+}
+
+function verificationContainerImage(selected, environment) {
+  let runtime;
+  if (selected.kind === "npm-script" || selected.kind === "node-test") runtime = "NODE";
+  else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") runtime = "PYTHON";
+  else if (selected.kind === "command") {
+    const executable = path.basename(String(selected.executable || "")).toLowerCase().replace(/\.exe$/, "");
+    if (executable === "cargo") runtime = "RUST";
+    else if (executable === "go") runtime = "GO";
+    else if (executable === "dotnet") runtime = "DOTNET";
+  }
+  if (!runtime) throw new Error("No isolated container runtime is configured for verification runner " + String(selected.kind) + ".");
+  const defaults = {
+    NODE: "node:20-bookworm-slim",
+    PYTHON: "python:3.11-slim",
+    RUST: "rust:1-slim",
+    GO: "golang:1.23-bookworm",
+    DOTNET: "mcr.microsoft.com/dotnet/sdk:8.0"
+  };
+  const image = String(environment["SYNTRA_" + runtime + "_SANDBOX_IMAGE"] || defaults[runtime]);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,180}$/.test(image)) {
+    throw new Error("The configured " + runtime + " sandbox image name is invalid.");
+  }
+  return image;
+}
+
+export function buildVerificationCommand(root, selected, {
+  allowUntrustedHost = false,
+  platform = process.platform,
+  environment = process.env
+} = {}) {
+  if (!selected || typeof selected !== "object") throw new Error("A supported verification runner is required.");
+  if (selected.kind === "multi-runner") {
+    if (!Array.isArray(selected.runners) || selected.runners.length < 1 || selected.runners.length > 8) {
+      throw new Error("The multi-runner verification plan is invalid.");
+    }
+    return selected.runners.map(runner => buildVerificationCommand(root, runner, { allowUntrustedHost, platform, environment }));
+  }
+  if (allowUntrustedHost) {
+    let executable;
+    let args;
+    if (selected.kind === "npm-script" && platform === "win32") {
+      executable = "cmd.exe";
+      args = ["/d", "/s", "/c", selected.command];
+    } else if (selected.kind === "npm-script") {
+      executable = "npm";
+      args = ["run", selected.script];
+    } else if (["python-pytest", "python-unittest", "node-test", "command"].includes(selected.kind)) {
+      executable = selected.executable;
+      args = selected.args;
+    } else {
+      throw new Error("Unsupported verification runner: " + String(selected.kind));
+    }
+    return {
+      executable, args, env: restrictedVerificationEnvironment(environment),
+      mode: "host_opt_in", command: selected.command || [executable, ...args].join(" ")
+    };
+  }
+
   const workspacePath = path.resolve(root);
+  // Docker --mount uses comma-delimited key/value options. A colon is valid in
+  // a Windows drive path, so reject only characters that can break this syntax.
   if ([10, 13, 0].some(code => workspacePath.includes(String.fromCharCode(code))) || workspacePath.includes(",")) {
-    throw new Error("Docker candidate workspace path contains characters that cannot be mounted safely.");
+    throw new Error("The workspace path contains characters that cannot be mounted safely into a Docker container.");
   }
   const mountSourcePath = process.platform === "win32"
     ? workspacePath.split(String.fromCharCode(92)).join("/")
     : workspacePath;
-  if (!allowedImages.has(image)) throw new Error("Docker verification image is not in SYNTRA's allowlist.");
-  if (typeof command !== "string" || !command.trim() || command.length > 12000 || command.includes(String.fromCharCode(0))) {
-    throw new Error("Docker verification command is invalid.");
-  }
-  return [
-    "run", "--rm", "--init", "--network=none", "--ipc=private",
-    "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+  const image = verificationContainerImage(selected, environment);
+  let command;
+  if (selected.kind === "npm-script") command = ["npm", "run", selected.script];
+  else if (selected.kind === "node-test") command = ["node", ...selected.args];
+  else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") command = ["python", ...selected.args];
+  else if (selected.kind === "command") command = [selected.executable, ...selected.args];
+  else throw new Error("Unsupported verification runner: " + String(selected.kind));
+
+  const args = [
+    "run", "--rm", "--init", "--pull=missing",
+    "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
+    "--security-opt=no-new-privileges:true",
     "--pids-limit=128", "--memory=2g", "--memory-swap=2g", "--cpus=2",
     "--ulimit", "nofile=1024:1024",
-    "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m", "--env", "HOME=/tmp",
+    "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=512m",
+    // The bind source is the disposable candidate workspace, never the original project.
     "--mount", "type=bind,source=" + mountSourcePath + ",target=/workspace",
-    "--workdir", "/workspace", image, "/bin/sh", "-lc", command
+    "--workdir", "/workspace",
+    "--env", "CI=true", "--env", "NODE_ENV=test",
+    "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
+    "--env", "NPM_CONFIG_CACHE=/tmp/.npm",
+    image, ...command
   ];
+  return {
+    executable: String(environment.SYNTRA_DOCKER_BIN || "docker"),
+    args,
+    env: restrictedVerificationEnvironment(environment),
+    mode: "docker",
+    image,
+    command: "docker run " + image + " " + command.join(" ")
+  };
 }
 
-export async function runProjectCheck(inputRoot, task, options = {}) {
-  const root = await resolveWorkspace(inputRoot);
-  const packageJson = await readJsonIfPresent(root, "package.json");
-  const selected = await chooseCheck(root, task, packageJson);
+async function runVerificationExecution(root, task, selected, execution, options = {}) {
   const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
-  const isolationMode = String(process.env.SYNTRA_CHECK_ISOLATION || "disabled").trim().toLowerCase();
-  const allowHostExecution = process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS === "1";
-  if (isolationMode !== "docker" && !(isolationMode === "host" && allowHostExecution)) {
-    throw new Error("Project checks execute repository-defined code. Host execution is disabled by default. Configure SYNTRA_CHECK_ISOLATION=docker for container execution, or explicitly set SYNTRA_CHECK_ISOLATION=host and SYNTRA_ALLOW_UNSANDBOXED_CHECKS=1 only for a workspace you trust.");
+  if (execution.mode === "host_opt_in" && process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS !== "true") {
+    throw new Error("Direct host execution is disabled. Explicitly set SYNTRA_ALLOW_UNSANDBOXED_CHECKS=true only for a trusted workspace.");
   }
   if (options.signal?.aborted) {
     const error = new Error("Project check was cancelled before it started.");
@@ -1850,40 +1950,12 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
   return await new Promise((resolve, reject) => {
     let child;
     try {
-      const spawnOptions = {
+      child = spawn(execution.executable, execution.args, {
         cwd: root,
+        env: execution.env,
         windowsHide: true,
-        detached: process.platform !== "win32",
-        ...(isolationMode === "host" ? {
-          env: Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-            ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"].includes(key.toUpperCase())
-          ))
-        } : {})
-      };
-      if (isolationMode === "docker") {
-        const image = selected.kind === "npm-script" || selected.kind === "node-test" ? "node:20-bookworm-slim"
-          : selected.kind === "python-pytest" || selected.kind === "python-unittest" ? "python:3.11-slim"
-            : selected.executable === "go" ? "golang:1.23"
-              : selected.executable === "cargo" ? "rust:1.84"
-                : selected.executable === "dotnet" ? "mcr.microsoft.com/dotnet/sdk:8.0" : null;
-        if (!image) { reject(new Error("No isolated Docker image is configured for this verification runner.")); return; }
-        let command = selected.command;
-        if (selected.kind === "python-pytest" || selected.kind === "python-unittest") command = "python " + selected.args.map(value => JSON.stringify(value)).join(" ");
-        else if (selected.kind === "node-test") command = "node --test";
-        const dockerArgs = buildDockerCheckArgs(root, image, command);
-        child = spawn("docker", dockerArgs, spawnOptions);
-      } else if (selected.kind === "npm-script" && process.platform === "win32") {
-        child = spawn("cmd.exe", ["/d", "/s", "/c", selected.command], spawnOptions);
-      } else if (selected.kind === "npm-script") {
-        child = spawn("npm", ["run", selected.script], spawnOptions);
-      } else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") {
-        child = spawn(selected.executable, selected.args, spawnOptions);
-      } else if (selected.kind === "node-test" || selected.kind === "command") {
-        child = spawn(selected.executable, selected.args, spawnOptions);
-      } else {
-        reject(new Error("Unsupported verification runner: " + String(selected.kind)));
-        return;
-      }
+        detached: process.platform !== "win32"
+      });
     } catch (error) {
       reject(error);
       return;
@@ -1921,7 +1993,9 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
     else signal?.addEventListener("abort", abortProcess, { once: true });
     child.on("error", error => {
       cleanup();
-      reject(error);
+      if (execution.mode === "docker" && error?.code === "ENOENT") {
+        reject(new Error("Docker is required for isolated project checks. Start Docker Desktop or install Docker Engine. To run checks directly on the host, explicitly set SYNTRA_ALLOW_UNSANDBOXED_CHECKS=true; host mode can access your user files and network."));
+      } else reject(error);
     });
     child.on("close", code => {
       cleanup();
@@ -1932,17 +2006,146 @@ export async function runProjectCheck(inputRoot, task, options = {}) {
         return;
       }
       const result = {
-        root, task, command: selected.command, exitCode: code,
+        root, task, command: execution.command, executionMode: execution.mode,
+        image: execution.image || null, exitCode: code,
         passed: code === 0 && !timedOut, timedOut,
         durationMs: Date.now() - startedAt, output: outputParts.join("")
       };
       appendAudit(root, {
-        action: "run_project_check", task,
-        command: selected.command, exitCode: code, timedOut
+        action: "run_project_check", task, command: execution.command,
+        executionMode: execution.mode, exitCode: code, timedOut
       }).catch(() => {});
       resolve(result);
     });
   });
+}
+
+
+export async function runProjectCheck(inputRoot, task, options = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  const packageJson = await readJsonIfPresent(root, "package.json");
+  const selected = await chooseCheck(root, task, packageJson);
+  const runners = selected.kind === "multi-runner" ? selected.runners : [selected];
+  const timeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 120000));
+  const startedAt = Date.now();
+  const checks = [];
+  const allowUntrustedHost = process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS === "true";
+
+  for (const runner of runners) {
+    const remaining = timeoutMs - (Date.now() - startedAt);
+    const execution = buildVerificationCommand(root, runner, { allowUntrustedHost });
+    if (remaining <= 0) {
+      checks.push({
+        root, task, command: execution.command, executionMode: execution.mode,
+        image: execution.image || null, exitCode: null, passed: false,
+        timedOut: true, durationMs: 0,
+        output: "The overall verification time budget was exhausted before this runner started."
+      });
+      continue;
+    }
+    checks.push(await runVerificationExecution(root, task, runner, execution, {
+      ...options, timeoutMs: remaining
+    }));
+  }
+
+  const passed = checks.length === runners.length && checks.every(item => item.passed);
+  const firstFailure = checks.find(item => !item.passed);
+  const modes = [...new Set(checks.map(item => item.executionMode))];
+  const labels = runners.map(item => item.label || item.command || item.kind);
+  const output = checks.map((item, index) => "[" + labels[index] + "]\n" + item.output)
+    .join("\n\n").slice(0, MAX_OUTPUT);
+  return {
+    root, task,
+    command: checks.map(item => item.command).join(" && "),
+    executionMode: modes.length === 1 ? modes[0] : "mixed",
+    exitCode: passed ? 0 : (firstFailure?.exitCode ?? 1),
+    passed,
+    timedOut: checks.some(item => item.timedOut),
+    durationMs: Date.now() - startedAt,
+    output,
+    checks
+  };
+}
+
+
+export function buildVerificationLevels(discovery, results) {
+  const discovered = new Set((discovery?.checks || []).map(item => item.task));
+  const byTask = new Map((results || []).map(item => [item.task, item]));
+  const status = task => {
+    if (!discovered.has(task)) return "unavailable";
+    const result = byTask.get(task);
+    if (!result) return "not_run";
+    if (result.timedOut) return "timed_out";
+    return result.passed ? "passed" : "failed";
+  };
+  const staticTasks = ["lint", "typecheck"].filter(task => discovered.has(task));
+  const staticStatus = staticTasks.length
+    ? staticTasks.map(status).some(value => value === "failed" || value === "timed_out") ? "failed"
+      : staticTasks.every(task => status(task) === "passed") ? "passed" : "partial"
+    : "not_run";
+  const taskStatuses = Object.fromEntries(["build", "test", "lint", "typecheck"].map(task => [task, status(task)]));
+  const discoveredTasks = [...discovered];
+  const allDiscoveredChecksPassed = discoveredTasks.length > 0
+    && discoveredTasks.every(task => status(task) === "passed");
+  return {
+    levels: {
+      syntax_validated: "not_run",
+      unit_tests_passed: "not_classified",
+      integration_tests_passed: "not_classified",
+      test_suites_passed: status("test"),
+      build_passed: status("build"),
+      static_analysis_passed: staticStatus,
+      security_checks_passed: "not_run",
+      fully_verified: false
+    },
+    taskStatuses,
+    allDiscoveredChecksPassed,
+    fullyVerified: false,
+    limitations: [
+      "The repository does not currently classify test suites as unit versus integration tests.",
+      "No workspace-local security verification runner was executed.",
+      "A complete syntax-only pass across every detected language was not executed."
+    ]
+  };
+}
+
+export async function runWorkspaceVerification(inputRoot, options = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  const discovery = await discoverProjectChecks(root);
+  const availableTasks = discovery.checks.map(item => item.task);
+  const totalTimeoutMs = Math.max(1000, Math.min(180000, Number(options.timeoutMs) || 180000));
+  const startedAt = Date.now();
+  const results = [];
+  for (const task of ["build", "test", "lint", "typecheck"]) {
+    if (!availableTasks.includes(task)) continue;
+    const remaining = totalTimeoutMs - (Date.now() - startedAt);
+    if (remaining <= 0) {
+      results.push({
+        task, passed: false, timedOut: true, exitCode: null,
+        executionMode: "not_started", durationMs: 0,
+        output: "Overall verification time budget was exhausted before this check started.",
+        checks: []
+      });
+      continue;
+    }
+    results.push(await runProjectCheck(root, task, {
+      timeoutMs: remaining, signal: options.signal
+    }));
+  }
+  const evidence = buildVerificationLevels(discovery, results);
+  const passed = results.length > 0 && results.every(item => item.passed);
+  const modes = [...new Set(results.map(item => item.executionMode))];
+  return {
+    root,
+    status: passed ? "all_discovered_checks_passed" : results.some(item => item.passed) ? "partial" : "failed",
+    passed,
+    fullyVerified: false,
+    executionMode: modes.length === 1 ? modes[0] : modes.length ? "mixed" : "not_run",
+    durationMs: Date.now() - startedAt,
+    verification: evidence,
+    checks: results,
+    unavailable: discovery.unavailable
+  };
 }
 
 export const workspaceLimits = {

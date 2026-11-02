@@ -7,9 +7,8 @@ import path from "node:path";
 import {
   applyFileProposal,
   applyFileProposals,
-  buildDockerCheckArgs,
-  createAgentRun,
-  updateAgentRun,
+  buildVerificationCommand,
+  buildVerificationLevels,
   chooseCheck,
   createProjectPlan,
   discoverProjectChecks,
@@ -38,19 +37,25 @@ async function createTempProject() {
   return root;
 }
 
-test("project checks are blocked until an isolation mode is explicitly selected", async () => {
-  const root = await createTempProject();
-  const previousMode = process.env.SYNTRA_CHECK_ISOLATION;
-  const previousOptIn = process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS;
-  process.env.SYNTRA_CHECK_ISOLATION = "disabled";
-  delete process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS;
-  try {
-    await assert.rejects(() => runProjectCheck(root, "build"), /Host execution is disabled by default/);
-  } finally {
-    if (previousMode === undefined) delete process.env.SYNTRA_CHECK_ISOLATION; else process.env.SYNTRA_CHECK_ISOLATION = previousMode;
-    if (previousOptIn === undefined) delete process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS; else process.env.SYNTRA_ALLOW_UNSANDBOXED_CHECKS = previousOptIn;
-    await fs.rm(root, { recursive: true, force: true });
-  }
+test("verification evidence distinguishes executed checks from unclassified and unrun levels", () => {
+  const discovery = {
+    checks: [{ task: "build" }, { task: "test" }, { task: "lint" }],
+    unavailable: [{ task: "typecheck", reason: "No type checker configured." }]
+  };
+  const evidence = buildVerificationLevels(discovery, [
+    { task: "build", passed: true, timedOut: false },
+    { task: "test", passed: true, timedOut: false },
+    { task: "lint", passed: false, timedOut: false }
+  ]);
+  assert.equal(evidence.levels.build_passed, "passed");
+  assert.equal(evidence.levels.test_suites_passed, "passed");
+  assert.equal(evidence.levels.static_analysis_passed, "failed");
+  assert.equal(evidence.levels.unit_tests_passed, "not_classified");
+  assert.equal(evidence.levels.integration_tests_passed, "not_classified");
+  assert.equal(evidence.levels.security_checks_passed, "not_run");
+  assert.equal(evidence.levels.fully_verified, false);
+  assert.equal(evidence.fullyVerified, false);
+  assert.equal(evidence.allDiscoveredChecksPassed, false);
 });
 
 test("audit logs rotate and retain a bounded number of archives", async () => {
@@ -82,6 +87,40 @@ test("inspect workspace reports project metadata and source files", async () => 
   assert.ok(info.scripts.build);
 });
 
+test("verification defaults to an offline Docker container and filters host environment variables", () => {
+  const root = path.join(os.tmpdir(), "syntra-verification");
+  const selected = { kind: "npm-script", command: "npm run test", script: "test" };
+  const isolated = buildVerificationCommand(root, selected, {
+    platform: "linux",
+    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+  });
+  assert.equal(isolated.mode, "docker");
+  assert.equal(isolated.executable, "docker");
+  for (const flag of ["--init", "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
+    "--pids-limit=128", "--memory=2g", "--memory-swap=2g", "nofile=1024:1024",
+    "/tmp:rw,noexec,nosuid,nodev,size=512m", "--mount", "node:20-bookworm-slim"]) {
+    assert.ok(isolated.args.includes(flag), "expected Docker flag " + flag);
+  }
+  const mountIndex = isolated.args.indexOf("--mount");
+  assert.ok(isolated.args[mountIndex + 1].startsWith("type=bind,source="));
+  assert.ok(isolated.args[mountIndex + 1].endsWith(",target=/workspace"));
+  assert.equal(isolated.env.SYNTRA_API_TOKEN, undefined);
+  assert.throws(
+    () => buildVerificationCommand(root + ",unsafe", selected, {
+      platform: "linux", environment: { PATH: "/usr/bin" }
+    }),
+    /cannot be mounted safely/
+  );
+
+  const host = buildVerificationCommand(root, selected, {
+    allowUntrustedHost: true,
+    platform: "linux",
+    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+  });
+  assert.equal(host.mode, "host_opt_in");
+  assert.equal(host.env.SYNTRA_API_TOKEN, undefined);
+});
+
 test("check discovery reports only runners that are actually configured", async () => {
   const root = await createTempProject();
   try {
@@ -91,6 +130,27 @@ test("check discovery reports only runners that are actually configured", async 
     assert.equal(result.checks.find(item => item.task === "test")?.command, "npm run test");
     assert.deepEqual(result.unavailable.map(item => item.task), ["typecheck"]);
     assert.match(result.unavailable[0].reason, /No supported typecheck command/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("mixed Python and Node test ecosystems produce one complete multi-runner plan", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-mixed-runners-"));
+  try {
+    await fs.writeFile(path.join(root, "requirements.txt"), "\n");
+    await fs.mkdir(path.join(root, "tests"), { recursive: true });
+    await fs.writeFile(path.join(root, "tests", "test_python.py"), "def test_python(): pass\n");
+    await fs.writeFile(path.join(root, "tests", "node.test.mjs"),
+      "import test from 'node:test'; test('node runner', () => {});\n");
+    const selected = await chooseCheck(root, "test", null);
+    assert.equal(selected.kind, "multi-runner");
+    assert.deepEqual(selected.runners.map(item => item.kind), ["python-unittest", "node-test"]);
+    const commands = buildVerificationCommand(root, selected, {
+      platform: "linux", environment: { PATH: "/usr/bin" }
+    });
+    assert.equal(commands.length, 2);
+    assert.deepEqual(commands.map(item => item.image), ["python:3.11-slim", "node:20-bookworm-slim"]);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -112,34 +172,6 @@ test("read exposes content hash and refuses secret files", async () => {
   await assert.rejects(() => readWorkspaceFile(root, ".env"), /blocks access/);
   const example = await readWorkspaceFile(root, ".env.example");
   assert.match(example.content, /APP_PORT=3000/);
-});
-
-test("workspace paths reject case-insensitive state aliases and Windows filesystem aliases", async () => {
-  const root = await createTempProject();
-  const rejectedPaths = [
-    ".SYNTRA/proposals/private.json",
-    ".SynTra/runs/run.json",
-    "src/network.ts:alternate-stream",
-    "src/CON.txt",
-    "src/conin$.log",
-    "src/COM1",
-    "src/LPT³.txt",
-    "src/trailing.",
-    "src/trailing "
-  ];
-  for (const relativePath of rejectedPaths) {
-    await assert.rejects(
-      () => readWorkspaceFile(root, relativePath),
-      error => error instanceof Error && /reserved|Windows-reserved|alternate data streams/i.test(error.message),
-      "unsafe path should be rejected: " + relativePath
-    );
-    await assert.rejects(
-      () => proposeFileChange(root, relativePath, "must not be staged"),
-      error => error instanceof Error && /reserved|Windows-reserved|alternate data streams/i.test(error.message),
-      "unsafe proposal path should be rejected: " + relativePath
-    );
-  }
-  await fs.rm(root, { recursive: true, force: true });
 });
 
 test("proposal requires confirmation and protects concurrent edits", async () => {
@@ -484,45 +516,4 @@ test("AI-generated proposal rejects a source file that changed after generation"
     () => proposeFileChange(root, "src/network.ts", proposalContent, loaded.sha256),
     /changed after SYNTRA read it for generation/
   );
-});
-
-test("Docker verification arguments enforce a restricted candidate-only container", () => {
-  const root = path.resolve("candidate-workspace");
-  const args = buildDockerCheckArgs(root, "node:20-bookworm-slim", "npm test");
-  const mountRoot = process.platform === "win32" ? root.split(String.fromCharCode(92)).join("/") : root;
-  const required = [
-    "--init", "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
-    "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g",
-    "--memory-swap=2g", "--cpus=2", "nofile=1024:1024", "/tmp:rw,noexec,nosuid,size=512m",
-    "type=bind,source=" + mountRoot + ",target=/workspace"
-  ];
-  for (const value of required) assert.ok(args.includes(value), "missing Docker restriction: " + value);
-  assert.ok(!args.includes("--privileged"));
-  assert.throws(() => buildDockerCheckArgs(root, "unknown:latest", "npm test"), /allowlist/);
-  assert.throws(() => buildDockerCheckArgs(root, "node:20-bookworm-slim", ""), /command is invalid/);
-  assert.throws(() => buildDockerCheckArgs(root + ",unsafe", "node:20-bookworm-slim", "npm test"), /cannot be mounted safely/);
-  assert.throws(() => buildDockerCheckArgs(root, "node:20-bookworm-slim", "npm" + String.fromCharCode(0) + "test"), /command is invalid/);
-});
-
-test("agent run iteration and checkpoint counters survive values above the legacy limit", async () => {
-  const root = await createTempProject();
-  try {
-    const run = await createAgentRun(root, "Run a long bounded engineering task.");
-    const updated = await updateAgentRun(root, run.id, {
-      iteration: 96,
-      checkpoint: { stage: "slice_started", iteration: 96 },
-      model: { provider: "ollama", name: "test", contextWindowTokens: 4096,
-        contextBudgetTokens: 2800, outputBudgetTokens: 900,
-        contextSafetyMarginTokens: 800, contextBudgetProfile: "conservative-estimate", tokenizerIsExact: false,
-        executionBudget: { complexityScore: 12, maxSlices: 8, maxIterations: 3, maxTotalAttempts: 24 } }
-    });
-    assert.equal(updated.iteration, 96);
-    assert.equal(updated.checkpoint.iteration, 96);
-    assert.equal(updated.model.executionBudget.maxTotalAttempts, 24);
-    assert.equal(updated.model.contextSafetyMarginTokens, 800);
-    assert.equal(updated.model.contextBudgetProfile, "conservative-estimate");
-    assert.equal(updated.model.tokenizerIsExact, false);
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
 });

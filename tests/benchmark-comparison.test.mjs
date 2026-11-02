@@ -35,6 +35,30 @@ test("report validation rejects malformed schema, duplicate tasks, and invalid m
   assert.throws(() => validateBenchmarkReport({ ...valid, tasks: [{ ...valid.tasks[0], latencyMs: -1 }] }), /latency/i);
   assert.throws(() => validateBenchmarkReport({ ...valid, summary: { ...valid.summary, taskCompletionRate: 1.5 } }), /summary/i);
   assert.throws(() => validateBenchmarkReport({ ...valid, tasks: [{ ...valid.tasks[0], taskComplete: false }] }), /inconsistent completion/i);
+  assert.throws(() => validateBenchmarkReport({
+    ...valid,
+    tasks: [{ ...valid.tasks[0], baselineValidated: false }]
+  }), /inconsistent completion/i,
+  "legacy-shaped reports remain readable, but a reported invalid baseline cannot be marked complete");
+});
+
+test("1.4 benchmark reports require explicit baseline validation evidence", () => {
+  const legacy = report({
+    runId: "legacy-1", model: "model-a", completion: 1, patch: true,
+    verification: true, latency: 100, tokens: 50, rss: 1000, taskComplete: true
+  });
+  const current = { ...legacy, suiteVersion: "1.4.0" };
+  assert.throws(() => validateBenchmarkReport(current), /missing required baseline validation evidence/i);
+  const unvalidated = {
+    ...current,
+    tasks: [{ ...current.tasks[0], baselineValidated: false }]
+  };
+  assert.throws(() => validateBenchmarkReport(unvalidated), /inconsistent completion/i);
+  const validated = {
+    ...current,
+    tasks: [{ ...current.tasks[0], baselineValidated: true }]
+  };
+  assert.equal(validateBenchmarkReport(validated), validated);
 });
 
 test("comparison identifies model improvements and task-level changes", () => {

@@ -69,14 +69,14 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
   const signal = options?.signal;
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
-  if (modelRoute && String(process.env.SYNTRA_MODEL_PROVIDER || "auto").toLowerCase() === "gemini") {
+  if (modelRoute && String(process.env.SYNTRA_MODEL_PROVIDER || "ollama").trim().toLowerCase() === "gemini") {
     return handleGeminiModelRequest(method, route, body || {}, { timeoutMs, onToken, signal });
   }
   if (modelRoute) {
     let provider = await detectLocalModel();
     let modelBody = body || {};
     if (typeof modelBody.model === "string" && modelBody.model.trim()) {
-      const requested = await detectLocalModel({ requestedModel: modelBody.model.trim() });
+      const requested = await detectLocalModel({ mode: "ollama", requestedModel: modelBody.model.trim() });
       if (!requested) throw new Error("The configured SYNTRA_REVIEW_MODEL is not installed locally or exceeds the safe memory-selection limit.");
       provider = requested;
       modelBody = { ...modelBody };
@@ -621,9 +621,7 @@ async function runChatTurn(jobId, message, history, signal) {
           cancelRequested: false,
           proposalIds: [],
           event: { phase: "resuming", message: resumeCandidate
-            ? resumeCandidate.stage === "slice_unverified"
-              ? "Restoring an in-flight candidate and re-running checks before continuing."
-              : "Restoring the last verified candidate snapshot and continuing at the next implementation slice."
+            ? "Restoring the last verified candidate snapshot and continuing at the next implementation slice."
             : resumeRecord.recoveryPatch
               ? "Restoring and revalidating the saved patch checkpoint."
               : "Restarting task discovery because no verified candidate or patch checkpoint was saved." }
@@ -642,14 +640,12 @@ async function runChatTurn(jobId, message, history, signal) {
       const result = await runAgentTask({
         root: activeWorkspace,
         goal: taskGoal,
-        maxIterations: Number(process.env.SYNTRA_AGENT_MAX_ATTEMPTS_PER_SLICE || 5),
-        maxSlices: Number(process.env.SYNTRA_AGENT_MAX_SLICES || 8),
+        maxIterations: 3,
+        maxSlices: 3,
         runChecks: true,
         signal,
         resumePatch: resumeRecord?.recoveryPatch || null,
-        resumeIteration: resumeRecord
-          ? Math.max(1, Number(resumeRecord.iteration || resumeRecord.checkpoint?.iteration || 0) + 1)
-          : 1,
+        resumeIteration: resumeRecord?.checkpoint?.iteration || 1,
         resumeBaseHashes: resumeRecord?.recoveryPatch
           ? Object.fromEntries((resumeRecord.changedFiles || []).map(change => [change.path, change.baseHash ?? null]))
           : null,
@@ -659,10 +655,13 @@ async function runChatTurn(jobId, message, history, signal) {
         modelSelfReview: true,
         runId: agentRunId,
         resumeCandidate,
-        resumeBudget: resumeRecord?.model?.executionBudget || null,
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
+        reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim()
+          ? (method, route, body, timeoutMs, options = {}) =>
+              aiRequest(method, route, { ...(body || {}), model: process.env.SYNTRA_REVIEW_MODEL.trim() }, timeoutMs, { ...options, signal })
+          : null,
         onProgress: async update => {
           const phase = update.phase || "working";
           const messageText = update.message || "Working on the requested change";
@@ -949,7 +948,7 @@ const routeHandlers = {
 const server = http.createServer(async (request, response) => {
   const parsed = new URL(request.url || "/", "http://" + HOST + ":" + PORT);
   const key = (request.method || "GET") + " " + parsed.pathname;
-  const hostRejection = getHostRejection(request);
+  const hostRejection = getHostRejection(request, request.socket?.localPort || PORT);
   if (hostRejection) { sendJson(response, 403, { error: hostRejection }); return; }
   const originRejection = getOriginRejection(request);
   if (originRejection) { sendJson(response, 403, { error: originRejection }); return; }

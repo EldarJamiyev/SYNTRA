@@ -135,13 +135,14 @@ try {
 
     $UseOllama = $false
     $UsableOllamaModels = @()
-    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "auto" }
+    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "ollama" }
     $requestedLocalModel = if ($env:SYNTRA_LOCAL_MODEL) { $env:SYNTRA_LOCAL_MODEL.Trim() } else { "" }
-    if (@("auto", "native", "ollama") -notcontains $providerMode) {
+    if ($providerMode -eq "gemini" -and -not $env:SYNTRA_GEMINI_API_KEY) { throw "SYNTRA_MODEL_PROVIDER=gemini requires SYNTRA_GEMINI_API_KEY." }
+    if (@("auto", "native", "ollama", "gemini") -notcontains $providerMode) {
         throw "SYNTRA_MODEL_PROVIDER must be auto, native, or ollama."
     }
 
-    if ($providerMode -ne "native") {
+    if ($providerMode -ne "native" -and $providerMode -ne "gemini") {
         $ollamaExe = Get-Command ollama -ErrorAction SilentlyContinue
         $ollamaTagsUrl = "http://127.0.0.1:11434/api/tags"
         $ollamaReady = Test-Endpoint $ollamaTagsUrl
