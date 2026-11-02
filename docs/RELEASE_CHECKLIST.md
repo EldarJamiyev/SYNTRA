@@ -7,20 +7,20 @@ This checklist is the release gate for the current local-first SYNTRA applicatio
 - Confirm the intended branch and commit. Do not publish a draft feature branch as a stable release.
 - Keep a recoverable copy of active project workspaces before upgrading. Do not delete the project's `.syntra` directory: it contains local proposals, run/checkpoint history, memory, indexes and audit state.
 - Confirm the release notes identify the release commit, supported operating systems, Node.js requirement, optional Python requirement, and known limitations.
-- Check dependency resolution before release. **The current repository does not commit `package-lock.json`**, so `npm ci` is not yet available and npm transitive dependency resolution can change between installs. Use `npm install` for the current branch, but treat a committed npm lockfile as an outstanding release-readiness requirement.
+- Confirm `package-lock.json` is committed and synchronized with `package.json`. Use `npm ci` for a clean, lockfile-pinned JavaScript dependency install; do not regenerate the lockfile during release validation.
 
 ## 2. Automated quality gates
 
 Run these from the SYNTRA repository root:
 
 ```powershell
-npm install
+npm ci
 npm run lint
 npm test
 npm run build
 ```
 
-All commands must exit successfully. The repository currently has no committed npm lockfile: `npm install` validates a fresh dependency resolution but is not a reproducible, lockfile-pinned install. Before a stable release, commit a reviewed `package-lock.json`, switch this gate to `npm ci`, and keep the lockfile synchronized with `package.json`. Python requirements also use bounded version ranges rather than a fully hashed lock. The test suite includes local API/origin-policy, workspace, agent checkpoint/recovery, security boundary, model-provider, semantic-index and Windows launcher regression coverage. `npm test` runs the cross-platform Node.js regression suite; it does not install or prove that the user's preferred Ollama model, Docker runtime, or Gemini API credentials work.
+All commands must exit successfully. The committed npm lockfile pins the resolved JavaScript dependency graph, and `npm ci` fails when the manifest and lockfile disagree. The Windows launcher uses the same lockfile-based install when dependencies are missing or stale. Python requirements still use bounded version ranges rather than a fully hashed, cross-platform lock; the native Python environment therefore remains less reproducible than the frontend. The test suite includes local API/origin-policy, workspace, agent checkpoint/recovery, security boundary, model-provider, semantic-index and Windows launcher regression coverage. `npm test` runs the cross-platform Node.js regression suite; it does not install or prove that the user's preferred Ollama model, Docker runtime, or Gemini API credentials work.
 
 On GitHub, require both the `SYNTRA checks` workflow and CodeQL to pass on the exact release-candidate commit. Review failed or skipped jobs rather than relying only on a green top-level badge.
 
@@ -94,6 +94,8 @@ Retain both reports. Interpret latency/RSS changes only when the recorded enviro
 Release only when all applicable gates are recorded:
 
 - [ ] The intended commit is identified and backed up.
+- [ ] `package-lock.json` is committed, `npm ci` succeeds, and Dependabot dependency updates are reviewed.
+- [ ] Python dependencies are pinned with a reproducible cross-platform lock while preserving the CPU-only PyTorch wheel policy.
 - [ ] A reviewed `package-lock.json` is committed, `npm ci` succeeds from a clean checkout, and Python dependency resolution/lock policy is documented.
 - [ ] GitHub `SYNTRA checks` and CodeQL pass on that exact commit.
 - [ ] Local lint, regression tests and production build pass.

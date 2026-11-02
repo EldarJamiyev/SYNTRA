@@ -215,11 +215,34 @@ try {
     }
 
     Write-Step "Preparing the web application"
-    if (-not (Test-Path (Join-Path $Root "node_modules\vite\bin\vite.js")) -or -not (Test-Path (Join-Path $Root "node_modules\react\package.json")) -or -not (Test-Path (Join-Path $Root "node_modules\react-markdown\package.json")) -or -not (Test-Path (Join-Path $Root "node_modules\remark-gfm\package.json"))) {
-        npm install
-        if ($LASTEXITCODE -ne 0) { throw "npm install failed. Fix the npm error shown above and run Start-SYNTRA.bat again." }
+    $ProjectLock = Join-Path $Root "package-lock.json"
+    $InstalledLock = Join-Path $Root "node_modules\\.package-lock.json"
+    if (-not (Test-Path -LiteralPath $ProjectLock -PathType Leaf)) {
+        throw "package-lock.json is missing. Run git pull in the SYNTRA repository folder before starting the application."
+    }
+
+    $requiredDependenciesMissing = (
+        -not (Test-Path (Join-Path $Root "node_modules\\vite\\bin\\vite.js")) -or
+        -not (Test-Path (Join-Path $Root "node_modules\\react\\package.json")) -or
+        -not (Test-Path (Join-Path $Root "node_modules\\react-markdown\\package.json")) -or
+        -not (Test-Path (Join-Path $Root "node_modules\\remark-gfm\\package.json"))
+    )
+    $dependencyInputs = @(
+        Get-Item -LiteralPath (Join-Path $Root "package.json")
+        Get-Item -LiteralPath $ProjectLock
+    )
+    $latestDependencyInput = ($dependencyInputs | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+    $lockNeedsRefresh = -not (Test-Path -LiteralPath $InstalledLock -PathType Leaf)
+    if (-not $lockNeedsRefresh) {
+        $lockNeedsRefresh = $latestDependencyInput -gt (Get-Item -LiteralPath $InstalledLock).LastWriteTimeUtc
+    }
+
+    if ($requiredDependenciesMissing -or $lockNeedsRefresh) {
+        Write-Host "Installing the exact dependency tree from package-lock.json with npm ci..."
+        npm ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed. Fix the npm error shown above and run Start-SYNTRA.bat again." }
     } else {
-        Write-Host "JavaScript dependencies are already installed." -ForegroundColor Green
+        Write-Host "JavaScript dependencies match the committed npm lockfile." -ForegroundColor Green
     }
 
     if (-not $UseOllama) {

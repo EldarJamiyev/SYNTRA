@@ -16,7 +16,7 @@ git pull
 
 Then double-click **Start-SYNTRA.bat**. Open http://127.0.0.1:3000 and keep the service windows open. On future runs, double-click the same file again.
 
-The launcher checks the page signature, detects stale app processes on the chat port, and installs newly required frontend dependencies instead of blindly accepting an unrelated page.
+The launcher checks the page signature, detects stale app processes on the chat port, and uses `npm ci` when frontend dependencies are missing or the committed `package-lock.json` is newer than the installed dependency tree. This keeps local installation aligned with the lockfile instead of resolving new package versions on every setup.
 
 ## Chat and coding behavior
 
