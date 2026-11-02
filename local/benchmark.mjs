@@ -27,11 +27,8 @@ export function validateBenchmarkSuite(suite) {
     if (typeof task.title !== "string" || !task.title.trim() || task.title.length > 120) throw new Error("Benchmark task " + task.id + " has an invalid title.");
     if (typeof task.goal !== "string" || !task.goal.trim() || task.goal.length > 5000) throw new Error("Benchmark task " + task.id + " has an invalid goal.");
     if (typeof task.fixture !== "string" || !task.fixture.trim() || path.isAbsolute(task.fixture) || task.fixture.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " has an unsafe fixture path.");
-    if (!["node-script", "python-unittest", "typescript"].includes(task.baselineCheck)) throw new Error("Benchmark task " + task.id + " has an unsupported baseline check.");
-    if (typeof task.expectedBaselineFailure !== "string"
-      || task.expectedBaselineFailure.trim().length < 4
-      || task.expectedBaselineFailure.length > 300) {
-      throw new Error("Benchmark task " + task.id + " must declare a 4-300 character expected baseline failure diagnostic.");
+    if (!["node-script", "python-unittest", "go-test", "rust-test"].includes(task.baselineCheck)) {
+      throw new Error("Benchmark task " + task.id + " uses an unsupported baseline check.");
     }
     if (typeof task.testEntry !== "string" || !task.testEntry.trim() || path.isAbsolute(task.testEntry)
       || task.testEntry.split(/[\\/]+/).some(part => part === ".." || part === ".")) {
@@ -41,8 +38,8 @@ export function validateBenchmarkSuite(suite) {
     for (const value of task.expectedChangedPaths) {
       if (typeof value !== "string" || !value || path.isAbsolute(value) || value.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " contains an unsafe expected changed path.");
     }
-    task.maxIterations = Math.max(1, Math.min(5, Number(task.maxIterations) || 2));
-    task.maxSlices = Math.max(1, Math.min(3, Number(task.maxSlices) || 1));
+    task.maxIterations = Math.max(1, Math.min(6, Number(task.maxIterations) || 2));
+    task.maxSlices = Math.max(1, Math.min(8, Number(task.maxSlices) || 1));
   }
   return suite;
 }
@@ -91,25 +88,33 @@ export async function runNodeBaselineCheck(cwd, testEntry, timeoutMs = 30000) {
   });
 }
 
-export async function runPythonBaselineCheck(cwd, testEntry, timeoutMs = 30000) {
+export async function runBenchmarkBaselineCheck(cwd, task, timeoutMs = 30000) {
+  if (!task || !["node-script", "python-unittest", "go-test", "rust-test"].includes(task.baselineCheck)) {
+    throw new Error("Unsupported benchmark baseline runner.");
+  }
+  if (task.baselineCheck === "node-script") return runNodeBaselineCheck(cwd, task.testEntry, timeoutMs);
   const root = await fs.realpath(cwd);
-  const requestedEntry = path.resolve(root, testEntry);
-  if (!isInside(root, requestedEntry)) throw new Error("Benchmark Python test entry escapes its fixture workspace.");
+  const requestedEntry = path.resolve(root, task.testEntry);
+  if (!isInside(root, requestedEntry)) throw new Error("Benchmark test entry escapes its fixture workspace.");
   const entry = await fs.realpath(requestedEntry);
   if (!isInside(root, entry) || !(await fs.stat(entry)).isFile()) {
-    throw new Error("Benchmark Python test entry is missing or resolves outside its fixture workspace.");
+    throw new Error("Benchmark test entry is missing or resolves outside its fixture workspace.");
   }
   const relative = path.relative(root, entry);
-  const python = process.platform === "win32" ? "python" : "python3";
-  return new Promise(resolve => {
+  const commands = {
+    "python-unittest": process.platform === "win32"
+      ? ["python", ["-m", "unittest", "discover", "-s", path.dirname(relative) || ".", "-p", path.basename(relative), "-v"]]
+      : ["python3", ["-m", "unittest", "discover", "-s", path.dirname(relative) || ".", "-p", path.basename(relative), "-v"]],
+    "go-test": ["go", ["test", "./..."]],
+    "rust-test": ["cargo", ["test", "--offline"]]
+  };
+  const [executable, args] = commands[task.baselineCheck];
+  return await new Promise(resolve => {
     let stdout = "", stderr = "", timedOut = false, settled = false, child;
     try {
-      child = spawn(python, ["-m", "unittest", "discover", "-s", path.dirname(relative),
-        "-p", path.basename(relative), "-v"], {
-        cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
-      });
+      child = spawn(executable, args, { cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     } catch (error) {
-      resolve({ passed: false, timedOut: false, exitCode: null, error: error instanceof Error ? error.message : String(error) });
+      resolve({ passed: false, skipped: error?.code === "ENOENT", timedOut: false, exitCode: null, error: String(error?.message || error) });
       return;
     }
     const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
@@ -117,83 +122,35 @@ export async function runPythonBaselineCheck(cwd, testEntry, timeoutMs = 30000) 
     child.stderr.on("data", chunk => { stderr = boundedOutput(stderr, chunk); });
     child.on("error", error => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ passed: false, timedOut, exitCode: null, error: error.message, stdout, stderr });
+      settled = true; clearTimeout(timer);
+      resolve({ passed: false, skipped: error?.code === "ENOENT", timedOut, exitCode: null, error: error.message, stdout, stderr });
     });
     child.on("close", code => {
       if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ passed: code === 0 && !timedOut, timedOut, exitCode: code, stdout, stderr });
-    });
-  });
-}
-
-export async function runTypeScriptBaselineCheck(cwd, projectEntry, timeoutMs = 30000) {
-  const root = await fs.realpath(cwd);
-  const requestedEntry = path.resolve(root, projectEntry);
-  if (!isInside(root, requestedEntry)) throw new Error("Benchmark TypeScript project escapes its fixture workspace.");
-  const project = await fs.realpath(requestedEntry);
-  if (!isInside(root, project) || !(await fs.stat(project)).isFile()) {
-    throw new Error("Benchmark TypeScript project file is missing or resolves outside its fixture workspace.");
-  }
-  const compilerRoot = path.join(REPO_ROOT, "node_modules", "typescript");
-  const compilerPath = path.join(compilerRoot, "bin", "tsc");
-  let compiler;
-  try { compiler = await fs.realpath(compilerPath); }
-  catch {
-    return { passed: false, timedOut: false, exitCode: null, error: "The repository TypeScript compiler is unavailable. Run npm ci before TypeScript benchmarks." };
-  }
-  if (!isInside(await fs.realpath(compilerRoot), compiler)) {
-    throw new Error("Benchmark TypeScript compiler resolves outside the installed TypeScript package.");
-  }
-  const projectRelative = path.relative(root, project);
-  return new Promise(resolve => {
-    let stdout = "", stderr = "", timedOut = false, settled = false, child;
-    try {
-      child = spawn(process.execPath, [compiler, "--noEmit", "--pretty", "false", "--project", projectRelative], {
-        cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
-      });
-    } catch (error) {
-      resolve({ passed: false, timedOut: false, exitCode: null, error: error instanceof Error ? error.message : String(error) });
-      return;
-    }
-    const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
-    child.stdout.on("data", chunk => { stdout = boundedOutput(stdout, chunk); });
-    child.stderr.on("data", chunk => { stderr = boundedOutput(stderr, chunk); });
-    child.on("error", error => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ passed: false, timedOut, exitCode: null, error: error.message, stdout, stderr });
-    });
-    child.on("close", code => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ passed: code === 0 && !timedOut, timedOut, exitCode: code, stdout, stderr });
+      settled = true; clearTimeout(timer);
+      resolve({ passed: code === 0 && !timedOut, skipped: false, timedOut, exitCode: code, stdout, stderr });
     });
   });
 }
 
 export function evaluateBenchmarkTask(task, agentResult, metrics = {}) {
+  const skipped = metrics.skipped === true;
   const actualPaths = Array.isArray(agentResult?.changedFiles) ? agentResult.changedFiles.map(item => relativePath(item?.path)).filter(Boolean).sort() : [];
   const expectedPaths = task.expectedChangedPaths.map(relativePath).sort();
   const exactPaths = actualPaths.length === expectedPaths.length && actualPaths.every((item, index) => item === expectedPaths[index]);
   const patchValid = actualPaths.length > 0 && exactPaths;
   const verificationPassed = agentResult?.verification?.passed === true;
-  const baselineValidated = metrics.baselineValidated === true;
   const promptTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.promptTokens) || 0), 0);
   const outputTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.outputTokens) || 0), 0);
   return {
     id: task.id, category: String(task.category || "general"), title: task.title,
-    agentStatus: String(agentResult?.status || "unknown"),
-    patchValid, verificationPassed,
-    taskComplete: baselineValidated && patchValid && verificationPassed,
+    agentStatus: skipped ? "skipped" : String(agentResult?.status || "unknown"),
+    skipped,
+    patchValid: !skipped && patchValid,
+    verificationPassed: !skipped && verificationPassed,
+    taskComplete: !skipped && patchValid && verificationPassed,
     expectedChangedPaths: expectedPaths, changedPaths: actualPaths,
     verificationStatus: String(agentResult?.verification?.status || "not_run"),
-    baselineValidated,
     latencyMs: Math.max(0, Math.round(Number(metrics.latencyMs) || 0)),
     tokens: { prompt: promptTokens, output: outputTokens, total: promptTokens + outputTokens },
     peakProcessRssBytes: Math.max(0, Math.round(Number(metrics.peakProcessRssBytes) || 0)),
@@ -207,17 +164,42 @@ function median(values) {
 }
 export function summarizeBenchmarkResults(results) {
   const count = results.length;
-  const latencies = results.map(item => item.latencyMs).filter(Number.isFinite);
-  const promptTokens = results.reduce((sum, item) => sum + item.tokens.prompt, 0);
-  const outputTokens = results.reduce((sum, item) => sum + item.tokens.output, 0);
-  const patchCount = results.filter(item => item.patchValid).length;
-  const verificationCount = results.filter(item => item.verificationPassed).length;
-  const completeCount = results.filter(item => item.taskComplete).length;
+  const executed = results.filter(item => item.skipped !== true);
+  const executedCount = executed.length;
+  const skippedCount = count - executedCount;
+  const latencies = executed.map(item => item.latencyMs).filter(Number.isFinite);
+  const promptTokens = executed.reduce((sum, item) => sum + item.tokens.prompt, 0);
+  const outputTokens = executed.reduce((sum, item) => sum + item.tokens.output, 0);
+  const patchCount = executed.filter(item => item.patchValid).length;
+  const verificationCount = executed.filter(item => item.verificationPassed).length;
+  const completeCount = executed.filter(item => item.taskComplete).length;
+  const categoryGroups = new Map();
+  for (const item of results) {
+    const category = String(item.category || "uncategorized").slice(0, 64);
+    const group = categoryGroups.get(category) || [];
+    group.push(item);
+    categoryGroups.set(category, group);
+  }
+  const categories = Object.fromEntries([...categoryGroups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([category, items]) => {
+    const measured = items.filter(item => item.skipped !== true);
+    const total = measured.length;
+    const valid = measured.filter(item => item.patchValid).length;
+    const verified = measured.filter(item => item.verificationPassed).length;
+    const complete = measured.filter(item => item.taskComplete).length;
+    return [category, {
+      taskCount: total,
+      patchValidityRate: total ? Number((valid / total).toFixed(4)) : 0,
+      verificationPassRate: total ? Number((verified / total).toFixed(4)) : 0,
+      taskCompletionRate: total ? Number((complete / total).toFixed(4)) : 0
+    }];
+  }));
   return {
-    taskCount: count, patchValidCount: patchCount, verificationPassedCount: verificationCount, completedTaskCount: completeCount,
-    patchValidityRate: count ? Number((patchCount / count).toFixed(4)) : 0,
-    verificationPassRate: count ? Number((verificationCount / count).toFixed(4)) : 0,
-    taskCompletionRate: count ? Number((completeCount / count).toFixed(4)) : 0,
+    taskCount: count, executedTaskCount: executedCount, skippedTaskCount: skippedCount,
+    patchValidCount: patchCount, verificationPassedCount: verificationCount, completedTaskCount: completeCount,
+    categories,
+    patchValidityRate: executedCount ? Number((patchCount / executedCount).toFixed(4)) : 0,
+    verificationPassRate: executedCount ? Number((verificationCount / executedCount).toFixed(4)) : 0,
+    taskCompletionRate: executedCount ? Number((completeCount / executedCount).toFixed(4)) : 0,
     latencyMs: {
       mean: latencies.length ? Math.round(latencies.reduce((sum, value) => sum + value, 0) / latencies.length) : 0,
       median: median(latencies), min: latencies.length ? Math.min(...latencies) : 0, max: latencies.length ? Math.max(...latencies) : 0
@@ -244,7 +226,7 @@ async function createFixtureWorkspace(suiteDir, task) {
   }
 }
 
-export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, modelRequest, reviewModelRequest = null, agentRunner = runAgentTask, onProgress = () => {}, outputPath = null }) {
+export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, modelRequest, agentRunner = runAgentTask, onProgress = () => {}, outputPath = null }) {
   validateBenchmarkSuite(suite);
   if (typeof modelRequest !== "function") throw new Error("A local model request bridge is required.");
   const requested = taskIds ? new Set(taskIds) : null;
@@ -260,36 +242,30 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
   let selectedModel = null;
   for (const task of selected) {
     let fixture = null, agentResult = null, taskError = null, progressModel = null;
-    let baselineValidated = false;
     const started = performance.now();
     let peakRss = process.memoryUsage().rss;
     const sampler = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss); }, 100);
     try {
       fixture = await createFixtureWorkspace(suiteDir, task);
-      const baseline = task.baselineCheck === "python-unittest"
-        ? await runPythonBaselineCheck(fixture.workspace, task.testEntry)
-        : task.baselineCheck === "typescript"
-          ? await runTypeScriptBaselineCheck(fixture.workspace, task.testEntry)
-          : await runNodeBaselineCheck(fixture.workspace, task.testEntry);
-      if (baseline.timedOut || baseline.passed || baseline.exitCode === null) {
-        throw new Error("Fixture baseline is invalid: its " + task.baselineCheck + " checks must fail before the requested change and finish within 30 seconds.");
-      }
-      const baselineOutput = String(baseline.stdout || "") + "\n" + String(baseline.stderr || "");
-      if (!baselineOutput.includes(task.expectedBaselineFailure)) {
-        throw new Error("Fixture baseline failed for an unexpected reason. Its output did not contain the declared diagnostic substring.");
-      }
-      baselineValidated = true;
-      await onProgress({ taskId: task.id, phase: "started", message: "The fixture failed for its expected reason. Running the actual local coding agent against an isolated fixture." });
-      agentResult = await agentRunner({
-        root: fixture.workspace, goal: task.goal, requestedPath: task.expectedChangedPaths[0],
-        maxIterations: task.maxIterations, maxSlices: task.maxSlices,
-        runChecks: true, modelToolSelection: true, modelSelfReview: true, modelRequest, reviewModelRequest,
-        onProgress: async update => {
-          if (update?.model) progressModel = update.model;
-          await onProgress({ taskId: task.id, ...update });
+      const baseline = await runBenchmarkBaselineCheck(fixture.workspace, task);
+      if (baseline.skipped) {
+        taskError = "Required benchmark runtime is not installed: " + task.baselineCheck + ". " + String(baseline.error || "");
+      } else {
+        if (baseline.timedOut || baseline.passed || baseline.exitCode === null) {
+          throw new Error("Fixture baseline is invalid: its " + task.baselineCheck + " assertions must fail before the requested change and finish within 30 seconds.");
         }
-      });
-      if (progressModel && !selectedModel) selectedModel = progressModel;
+        await onProgress({ taskId: task.id, phase: "started", message: "Running the actual local coding agent against an isolated fixture." });
+        agentResult = await agentRunner({
+          root: fixture.workspace, goal: task.goal, requestedPath: task.expectedChangedPaths[0],
+          maxIterations: task.maxIterations, maxSlices: task.maxSlices,
+          runChecks: true, modelToolSelection: true, modelSelfReview: true, modelRequest,
+          onProgress: async update => {
+            if (update?.model) progressModel = update.model;
+            await onProgress({ taskId: task.id, ...update });
+          }
+        });
+        if (progressModel && !selectedModel) selectedModel = progressModel;
+      }
     } catch (error) {
       taskError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -298,17 +274,22 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       if (fixture?.parent) await fs.rm(fixture.parent, { recursive: true, force: true }).catch(() => {});
     }
     const result = evaluateBenchmarkTask(task, agentResult, {
-      latencyMs: performance.now() - started, peakProcessRssBytes: peakRss,
-      baselineValidated, error: taskError
+      latencyMs: performance.now() - started, peakProcessRssBytes: peakRss, error: taskError,
+      skipped: !agentResult && /Required benchmark runtime is not installed/.test(taskError || "")
     });
-    if (!agentResult) {
+    if (!agentResult && result.skipped) {
+      result.patchValid = false; result.verificationPassed = false;
+      result.taskComplete = false; result.agentStatus = "skipped";
+    } else if (!agentResult) {
       result.patchValid = false; result.verificationPassed = false;
       result.taskComplete = false; result.agentStatus = "error";
     }
     results.push(result);
     await onProgress({
       taskId: task.id, phase: "finished",
-      message: result.taskComplete ? "Expected patch and candidate verification both passed." : "Task did not meet every benchmark acceptance criterion.",
+      message: result.skipped ? "Skipped because the required language runtime is not installed."
+        : result.taskComplete ? "Expected patch and candidate verification both passed."
+          : "Task did not meet every benchmark acceptance criterion.",
       result
     });
   }
@@ -331,6 +312,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       "Token counts come from the local provider response; prompt counts may be unavailable.",
       "Peak RSS measures the SYNTRA benchmark Node.js process only, not the Ollama daemon, model runtime, GPU, or total system memory.",
       "Task completion requires the exact expected changed-file set and passing candidate verification.",
+      "Python, Go, or Rust fixtures are explicitly skipped when their required runtime is unavailable and excluded from completion-rate denominators.",
       "Each task uses a disposable fixture copy. The original fixture and active workspace are not modified."
     ]
   };

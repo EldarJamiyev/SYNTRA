@@ -15,16 +15,15 @@ import {
   resolveWorkspace,
   isWorkspacePathExcluded,
   runProjectCheck,
-  runWorkspaceVerification,
   searchWorkspace
 } from "./workspace.mjs";
 import { scanWorkspaceSecrets } from "./secret-scanner.mjs";
 import {
   getWorkspaceIndexStatus,
   refreshWorkspaceIndex,
-  searchWorkspaceSymbols,
-  searchWorkspaceSemantic
+  searchWorkspaceSymbols
 } from "./workspace-index.mjs";
+import { getSemanticIndexStatus, refreshWorkspaceSemanticIndex, searchWorkspaceSemantic } from "./semantic-index.mjs";
 import {
   addWorkspaceMemory,
   deleteWorkspaceMemory,
@@ -78,6 +77,31 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: "workspace.semantic.status",
+    description: "Read status for the optional local Ollama semantic embedding index.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.semantic.refresh",
+    description: "Build or refresh a local vector index with Ollama embeddings. Stores vectors and source hashes, never source text; requires an installed local embedding model.",
+    permission: "local_state_write",
+    approvalRequired: false,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.semantic.search",
+    description: "Search the workspace's local semantic vector index. Source hashes and workspace exclusions are revalidated before returning excerpts.",
+    permission: "read_only",
+    approvalRequired: false,
+    inputSchema: {
+      type: "object", required: ["query"],
+      properties: { query: { type: "string", minLength: 2, maxLength: 300 }, limit: { type: "integer", minimum: 1, maximum: 20 } },
+      additionalProperties: false
+    }
+  },
+  {
     name: "workspace.memory.list",
     description: "List user-authored notes saved explicitly for the active workspace. No chat or source files are ingested automatically.",
     permission: "read_only",
@@ -92,17 +116,6 @@ const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object", required: ["query"],
       properties: { query: { type: "string", minLength: 2, maxLength: 160 }, limit: { type: "integer", minimum: 1, maximum: 12 } },
-      additionalProperties: false
-    }
-  },
-  {
-    name: "workspace.semantic.search",
-    description: "Search source and test code using bounded, overlapping content chunks and local Ollama embeddings. Returns the best matching hash-validated excerpt with exact line ranges, balances chunk coverage across files, caches vectors locally without storing source text, and falls back to lexical search when embeddings are unavailable.",
-    permission: "read_only",
-    approvalRequired: false,
-    inputSchema: {
-      type: "object", required: ["query"],
-      properties: { query: { type: "string", minLength: 2, maxLength: 300 }, limit: { type: "integer", minimum: 1, maximum: 20 } },
       additionalProperties: false
     }
   },
@@ -264,19 +277,8 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
-    name: "workspace.verify",
-    description: "Run every discovered build, test, lint, and type-check runner in sequence using restricted offline Docker containers by default. Returns explicit per-level evidence and never claims fully_verified when integration or security coverage is not established. Requires one explicit approval for the complete verification plan.",
-    permission: "execute",
-    approvalRequired: true,
-    inputSchema: {
-      type: "object",
-      properties: { timeoutMs: { type: "integer", minimum: 1000, maximum: 180000 } },
-      additionalProperties: false
-    }
-  },
-  {
     name: "workspace.check",
-    description: "Run one discovered project check with a hard timeout. Project code runs in a restricted offline Docker container by default; direct host execution requires the explicit SYNTRA_ALLOW_UNSANDBOXED_CHECKS=true setting. Always requires explicit approval.",
+    description: "Run one discovered project check with a hard timeout. This may execute repository-defined code and always requires explicit approval.",
     permission: "execute",
     approvalRequired: true,
     inputSchema: {
@@ -360,7 +362,6 @@ function validateInput(definition, input) {
 function summarizeInput(name, input) {
   switch (name) {
     case "workspace.symbols.search": return { queryLength: input.query.length, limit: input.limit || 10 };
-    case "workspace.semantic.search": return { queryLength: input.query.length, limit: input.limit || 8 };
     case "workspace.memory.search": return { queryLength: input.query.length, limit: input.limit || 6 };
     case "workspace.memory.add": return { category: input.category, titleLength: input.title.length, contentCharacters: input.content.length, tagCount: input.tags?.length || 0 };
     case "workspace.memory.update": return { noteId: input.id, fieldsUpdated: ["title", "content", "category", "tags"].filter(key => input[key] !== undefined) };
@@ -375,7 +376,6 @@ function summarizeInput(name, input) {
     case "workspace.proposals.apply": return { proposalId: input.proposalId };
     case "workspace.proposals.discard": return { proposalCount: input.proposalIds.length };
     case "workspace.check": return { task: input.task, timeoutMs: input.timeoutMs || 120000 };
-    case "workspace.verify": return { timeoutMs: input.timeoutMs || 180000, scope: "all_discovered_checks" };
     default: return {};
   }
 }
@@ -470,8 +470,12 @@ async function invokeTool(root, name, input, signal) {
       return refreshWorkspaceIndex(root);
     case "workspace.symbols.search":
       return searchWorkspaceSymbols(root, input.query, input.limit || 10);
+    case "workspace.semantic.status":
+      return getSemanticIndexStatus(root);
+    case "workspace.semantic.refresh":
+      return refreshWorkspaceSemanticIndex(root, { signal });
     case "workspace.semantic.search":
-      return searchWorkspaceSemantic(root, input.query, input.limit || 8);
+      return searchWorkspaceSemantic(root, input.query, input.limit || 8, { signal });
     case "workspace.memory.list":
       return listWorkspaceMemory(root);
     case "workspace.memory.search":
@@ -519,8 +523,6 @@ async function invokeTool(root, name, input, signal) {
       return discardFileProposals(root, input.proposalIds, true);
     case "workspace.check":
       return runProjectCheck(root, input.task, { timeoutMs: input.timeoutMs || 120000, signal });
-    case "workspace.verify":
-      return runWorkspaceVerification(root, { timeoutMs: input.timeoutMs || 180000, signal });
     case "git.status":
       return { root, status: await readFilteredGitStatus(root) };
     case "git.diff-summary": {
@@ -556,7 +558,7 @@ function summarizeOutput(name, output) {
         available: output.available, fileCount: output.fileCount,
         symbolCount: output.symbolCount,
         documentationFileCount: output.documentationFileCount,
-        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount, callEdgeCount: output.callEdgeCount,
+        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount,
         documentationReferenceCount: output.documentationReferenceCount,
         testOwnershipCount: output.testOwnershipCount, truncated: output.truncated
       };
@@ -564,7 +566,7 @@ function summarizeOutput(name, output) {
       return {
         fileCount: output.fileCount, symbolCount: output.symbolCount,
         documentationFileCount: output.documentationFileCount,
-        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount, callEdgeCount: output.callEdgeCount,
+        testFileCount: output.testFileCount, importEdgeCount: output.importEdgeCount,
         documentationReferenceCount: output.documentationReferenceCount,
         testOwnershipCount: output.testOwnershipCount,
         parsedFiles: output.parsedFiles, reusedFiles: output.reusedFiles,
@@ -576,15 +578,13 @@ function summarizeOutput(name, output) {
         available: output.available, resultCount: output.results.length,
         staleFiles: output.staleFiles, topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))]
       };
+    case "workspace.semantic.status":
+      return { available: output.available, embeddingModel: output.embeddingModel, chunkCount: output.chunkCount };
+    case "workspace.semantic.refresh":
+      return { available: output.available, embeddingModel: output.embeddingModel, chunkCount: output.chunkCount, reusedChunks: output.reusedChunks, truncated: output.truncated };
     case "workspace.semantic.search":
-      return {
-        retrievalMode: output.retrievalMode, embeddingModel: output.embeddingModel || null,
-        resultCount: output.results.length, semanticCoverage: output.semanticCoverage || 0,
-        semanticChunkCoverage: output.semanticChunkCoverage || 0,
-        indexedFiles: output.indexedFiles || 0, indexedChunks: output.indexedChunks || 0,
-        staleFiles: output.staleFiles || 0,
-        topPaths: output.results.slice(0, 8).map(item => item.path)
-      };
+      return { available: output.available, resultCount: output.results.length, staleResults: output.staleResults,
+        topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))] };
     case "workspace.memory.list":
       return { noteCount: output.total, categories: [...new Set(output.notes.map(note => note.category))] };
     case "workspace.memory.search":
@@ -598,9 +598,7 @@ function summarizeOutput(name, output) {
       return {
         supportedTasks: output.checks.map(check => check.task),
         runnerKinds: output.checks.map(check => check.kind),
-        runnerLabels: output.checks.map(check => check.label),
-        unavailableTasks: output.unavailable.map(item => item.task),
-        executionMode: output.executionMode
+        unavailableTasks: output.unavailable.map(item => item.task)
       };
     case "workspace.search":
       return { searchedFiles: output.searchedFiles, resultCount: output.results.length, topPaths: output.results.slice(0, 8).map(item => item.path) };
@@ -619,15 +617,7 @@ function summarizeOutput(name, output) {
     case "workspace.proposals.discard":
       return { discardedCount: output.discarded.length };
     case "workspace.check":
-      return { task: output.task, passed: output.passed, exitCode: output.exitCode, timedOut: output.timedOut, executionMode: output.executionMode };
-    case "workspace.verify":
-      return {
-        status: output.status, passed: output.passed, fullyVerified: output.fullyVerified,
-        executionMode: output.executionMode, completedChecks: output.checks.length,
-        taskStatuses: output.verification.taskStatuses,
-        levels: output.verification.levels,
-        unavailableTasks: output.unavailable.map(item => item.task)
-      };
+      return { task: output.task, passed: output.passed, exitCode: output.exitCode, timedOut: output.timedOut };
     case "git.status":
       return { statusCharacters: output.status.length };
     case "git.diff-summary":

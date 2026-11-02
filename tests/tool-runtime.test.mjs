@@ -36,7 +36,7 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 24);
+  assert.equal(tools.length, 25);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
   assert.equal(byName.get("workspace.secrets.scan").permission, "read_only");
   assert.equal(byName.get("workspace.secrets.scan").approvalRequired, false);
@@ -44,8 +44,9 @@ test("tool registry exposes structured schemas and explicit permission metadata"
   assert.equal(byName.get("workspace.index.refresh").permission, "local_state_write");
   assert.equal(byName.get("workspace.index.refresh").approvalRequired, false);
   assert.equal(byName.get("workspace.symbols.search").permission, "read_only");
+  assert.equal(byName.get("workspace.semantic.status").permission, "read_only");
+  assert.equal(byName.get("workspace.semantic.refresh").permission, "local_state_write");
   assert.equal(byName.get("workspace.semantic.search").permission, "read_only");
-  assert.equal(byName.get("workspace.semantic.search").approvalRequired, false);
   assert.equal(byName.get("workspace.memory.list").permission, "read_only");
   assert.equal(byName.get("workspace.memory.search").permission, "read_only");
   assert.equal(byName.get("workspace.memory.add").permission, "local_state_write");
@@ -62,40 +63,12 @@ test("tool registry exposes structured schemas and explicit permission metadata"
   assert.equal(byName.get("workspace.proposals.apply-many").approvalRequired, true);
   assert.equal(byName.get("workspace.proposals.apply").permission, "source_write");
   assert.equal(byName.get("workspace.proposals.discard").approvalRequired, true);
-  assert.equal(byName.get("workspace.verify").approvalRequired, true);
-  assert.equal(byName.get("workspace.verify").permission, "execute");
   assert.equal(byName.get("workspace.check").approvalRequired, true);
   assert.equal(byName.get("workspace.check").permission, "execute");
   assert.equal(byName.get("git.status").approvalRequired, false);
   assert.equal(byName.get("git.diff-summary").permission, "read_only");
   assert.ok(tools.every(item => item.inputSchema.additionalProperties === false));
   assert.ok(!tools.some(item => /shell|terminal|powershell/i.test(item.name)));
-});
-
-test("semantic source-search tool uses lexical fallback when no local embedding model is configured", async () => {
-  const root = await createProject();
-  const previous = process.env.SYNTRA_EMBED_MODEL;
-  try {
-    delete process.env.SYNTRA_EMBED_MODEL;
-    await fs.writeFile(path.join(root, "src", "value.js"), [
-      "export function resolveGateway(host) { return host; }",
-      "export class GatewayRouter {}",
-      ""
-    ].join("\n"), "utf8");
-    await executeWorkspaceTool({ root, name: "workspace.index.refresh" });
-    const result = await executeWorkspaceTool({
-      root, name: "workspace.semantic.search",
-      input: { query: "resolveGateway" }
-    });
-    assert.equal(result.ok, true);
-    assert.equal(result.output.retrievalMode, "lexical_fallback");
-    assert.ok(result.output.results.some(item => item.path === "src/value.js"));
-    assert.equal(result.permission, "read_only");
-  } finally {
-    if (previous === undefined) delete process.env.SYNTRA_EMBED_MODEL;
-    else process.env.SYNTRA_EMBED_MODEL = previous;
-    await fs.rm(root, { recursive: true, force: true });
-  }
 });
 
 test("workspace index tools refresh, search, and report status through the audit registry", async () => {

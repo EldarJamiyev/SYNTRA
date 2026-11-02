@@ -799,10 +799,15 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
   if (payload.schemaVersion !== 1 || payload.runId !== runId || path.resolve(String(payload.root || "")) !== root) {
     throw new Error("Candidate checkpoint does not match this run and workspace.");
   }
-  if (payload.stage !== "slice_verified") throw new Error("Only a verified slice boundary can be persisted for continuation.");
+  const verifiedBoundary = payload.stage === "slice_verified";
+  const unverifiedCandidate = payload.stage === "slice_unverified";
+  if (!verifiedBoundary && !unverifiedCandidate) {
+    throw new Error("Candidate checkpoint stage is invalid.");
+  }
   if (!Number.isInteger(payload.nextSliceIndex) || !Array.isArray(payload.slices)
-    || payload.slices.length < 1 || payload.slices.length > 3
-    || payload.nextSliceIndex < 1 || payload.nextSliceIndex >= payload.slices.length) {
+    || payload.slices.length < 1 || payload.slices.length > 8
+    || payload.nextSliceIndex < (verifiedBoundary ? 1 : 0)
+    || payload.nextSliceIndex >= payload.slices.length) {
     throw new Error("Candidate checkpoint slice progression is invalid.");
   }
   const slices = payload.slices.map((slice, index) => {
@@ -813,7 +818,8 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
       || typeof slice.acceptance !== "string" || slice.acceptance.trim().length < 8 || slice.acceptance.length > 400) {
       throw new Error("Candidate checkpoint contains an invalid implementation slice.");
     }
-    const expectedStatus = index < payload.nextSliceIndex ? "completed" : "pending";
+    const expectedStatus = index < payload.nextSliceIndex ? "completed"
+      : unverifiedCandidate && index === payload.nextSliceIndex ? "running" : "pending";
     if (slice.status !== expectedStatus) {
       throw new Error("Candidate checkpoint slice statuses do not match the next-slice index.");
     }
@@ -864,22 +870,24 @@ function validateAgentCandidateCheckpoint(root, runId, payload) {
     };
   });
   const verification = payload.verification;
-  if (!verification || typeof verification !== "object" || Array.isArray(verification)
-    || verification.passed !== true
-    || !["passed", "passed_review_required"].includes(verification.status)) {
-    throw new Error("Only a successfully verified candidate slice can be resumed.");
+  const validVerification = verification && typeof verification === "object" && !Array.isArray(verification)
+    && (verifiedBoundary
+      ? verification.passed === true && ["passed", "passed_review_required"].includes(verification.status)
+      : verification.passed === false && verification.status === "candidate_ready");
+  if (!validVerification) {
+    throw new Error("Candidate checkpoint verification state does not match its stage.");
   }
   const sanitized = {
     schemaVersion: 1,
     runId,
     root,
-    stage: "slice_verified",
+    stage: payload.stage,
     nextSliceIndex: payload.nextSliceIndex,
     slices,
     files,
     verification: {
       status: verification.status,
-      passed: true,
+      passed: verification.passed === true,
       checks: Array.isArray(verification.checks)
         ? verification.checks
             .filter(check => check && typeof check === "object" && !Array.isArray(check))

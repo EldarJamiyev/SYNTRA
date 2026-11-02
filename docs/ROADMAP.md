@@ -6,7 +6,7 @@ This roadmap separates shipped behavior from planned capabilities. A checked ite
 
 ## Product principles
 
-- **Local-first by default.** Project source and prompts stay on the local machine. Model inference uses a locally installed Ollama model or SYNTRA's native runtime.
+- **Local-first by default.** Project source and prompts stay on the local machine unless the owner explicitly selects a hosted provider; unpaid cloud tiers carry separate data-use risks. Local inference uses Ollama or SYNTRA's native runtime.
 - **Real tools, not simulated tools.** A capability is only advertised after it has a working implementation, bounded permissions, observable results, and tests.
 - **Reviewable changes.** File modifications are staged, verified where possible, previewed, and protected by source hashes and backups.
 - **Explicit execution boundaries.** Reading a file, modifying a file, and executing a command are different permission levels. A coding prompt must not silently become arbitrary shell execution.
@@ -19,8 +19,8 @@ The repository already contains:
 
 - A minimal React chat interface with bounded, local multi-conversation history, automatic titles, search, rename/delete/resume, and migration from the original single-thread store.
 - A loopback-only Node service that routes chat, network diagnostics, workspace operations, and coding requests.
-- Local model routing to installed Ollama models, with a native PyTorch research runtime as fallback.
-- Workspace inspection, text search, file reading, a local import graph, and relevance-ranked source context.
+- Local model routing to installed Ollama models, with a native PyTorch research runtime as fallback and an explicitly opt-in Gemini API provider.
+- Workspace inspection, text search, file reading, a local import graph, relevance-ranked source context, and an optional local Ollama embedding index for semantic retrieval.
 - Structured exact-anchor patches with path and secret-file validation.
 - Candidate verification in a temporary project copy, bounded repair attempts, and hash-checked proposal application with backups and an audit log.
 - Local ping, DNS, and single-port TCP diagnostics.
@@ -98,7 +98,7 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Cover supported-runner discovery, evidence persistence, and post-check candidate mutation with regression tests.
 - [x] Let the local model select up to four bounded `workspace.search`/`workspace.read` calls for task-specific context; validate the tool allowlist, query/line limits, and safe file paths before audited execution.
 - [x] Constrain Ollama tool-plan output with JSON schema and fall back to deterministic context ranking when the plan is invalid or exceeds the context budget.
-- [x] Add bounded iterative repository investigation: the model reviews prior search/symbol/read results before selecting targeted follow-up reads, with three planning rounds and eight unique read-only calls maximum.
+- [x] Add bounded iterative repository investigation: the model reviews prior search/symbol/read results before selecting targeted follow-up reads, with five planning rounds and twelve unique read-only calls maximum. File reads are capped at 400 lines.
 - [x] Persist each retrieval round as an auditable observation and stop early when the model reports that the evidence is sufficient.
 - [x] Add an independent pre-verification patch reviewer that compares candidate changes with the user request, slice scope, and retrieved repository evidence.
 - [x] Feed concrete blocking review findings into a bounded patch-correction attempt; record advisory findings without blocking.
@@ -106,7 +106,7 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Keep the reviewer read-only: it cannot call tools, execute commands, or modify candidate/workspace files.
 - [x] Cover reject-correct-accept behavior, malformed review decisions, workspace-path validation, and reviewer schema output with tests.
 - [x] Cover allowed retrieval plans, disallowed execution tools, path/range violations, evidence-driven follow-up selection, early stopping, and end-to-end retrieval-to-patch context flow with tests.
-- [x] Let the local model propose up to three ordered implementation slices with explicit acceptance criteria; validate each slice and fall back to one slice if planning fails.
+- [x] Let the selected model propose up to eight ordered implementation slices with explicit acceptance criteria; derive a smaller maximum from task and workspace complexity, validate every slice and fall back to one slice if planning fails.
 - [x] Reuse one cumulative temporary candidate across slices, re-inspect and rebuild context after each verified slice, and re-inspect before bounded repair attempts after failed verification.
 - [x] Aggregate multi-slice changes against original workspace contents and source hashes; stage only the final cumulative proposal set.
 - [x] Mark a task unverified when any planned slice is incomplete. Do not apply a partial multi-slice result automatically.
@@ -117,7 +117,7 @@ Every accepted tool invocation records bounded input/output summaries, result, d
 - [x] Cover two-slice verification, candidate-context refresh, cumulative proposal hashes, and incomplete-slice failure handling with tests.
 - [x] Cover durable storage, lifecycle transitions, changed-source rejection, and actual service restart recovery with tests.
 
-Still outstanding in this phase: model-selected execution/source-modification tool choice, resumable checkpoints between individual operations within an unverified slice, and optional parallel execution of independent read-only tasks. The current workflow remains bounded and deterministic; these items are not claimed as delivered.
+Still outstanding in this phase: model-selected execution/source-modification tool choice, serialization of arbitrary intermediate model/tool operations within a slice, and optional parallel execution of independent read-only tasks. A bounded candidate snapshot is now persisted before project checks; after restart SYNTRA validates original hashes and re-runs checks before resuming from that candidate. The current workflow remains bounded and permissioned; model-selected source writes and arbitrary shell execution are not claimed as delivered.
 
 **Acceptance:** A complex task can complete multiple verified slices, resume after interruption, and explain which evidence supports its final status. Retries are bounded and cannot bypass safety checks.
 
@@ -152,12 +152,11 @@ Still outstanding in this phase: model-selected execution/source-modification to
 
 **Delivered evaluation slice (initial):**
 
-- [x] Add a versioned local coding benchmark suite with three intentionally failing Node.js regression fixtures.
+- [x] Add a versioned local coding benchmark suite with eleven deterministic fixtures spanning JavaScript utilities, async/API behavior, multi-file changes, Python unittest, Go test and Rust Cargo test; non-JavaScript tasks are skipped when their required runtime is unavailable.
 - [x] Run the real coding agent against disposable fixture copies using the selected local model; do not apply proposals to the active workspace.
 - [x] Require the exact expected changed-file set and passing candidate verification for task completion; extra test/configuration edits invalidate the patch score.
 - [x] Record provider/model identity, task latency, prompt/output tokens, patch validity, verification outcomes, task completion, and benchmark-process peak RSS in JSON reports.
 - [x] Add regression coverage for suite validation, scoring, aggregation, fixture isolation, baseline checks, and report output.
-- [x] Require each benchmark fixture to declare its expected failing diagnostic and reject unrelated setup/import/runner failures before the agent is invoked; record baseline validation per task.
 
 **Delivered reporting slice:**
 
@@ -167,14 +166,26 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Capture CPU, memory, runtime, and architecture metadata and mark latency/RSS comparisons incomparable when environments differ.
 - [x] Test report validation, improvement/regression detection, task-set matching, and environment comparability.
 
-Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Prompt token counts may be unavailable from the provider. Hardware metadata cannot prove identical background load or power/thermal conditions. A broader language/framework fixture set remains future work.
+Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Gemini prompt counts use the provider `:countTokens` endpoint; Ollama counts remain estimates. Hardware metadata cannot prove identical background load or power/thermal conditions. The eleven-task deterministic suite now includes Python, Go and Rust tasks, but the non-JavaScript fixtures are small language-smoke tasks, not broad framework coverage. The suite is not evidence of parity with frontier engineering agents until real model runs and a larger, versioned benchmark corpus have been measured.
 
 - [x] Create a versioned coding benchmark from representative local tasks and regression fixtures.
 - [x] Record patch validity, candidate-test verification, task completion, end-to-end latency, prompt/output tokens, and benchmark-process RSS with each model run.
-- Add provider selection and clear model capability metadata.
+- [x] Add provider selection and capability metadata that distinguishes locally measured/heuristic attributes from unmeasured engineering task performance. Local model selection scores remain heuristics; no model is labeled frontier-equivalent.
 - [x] Add bounded Ollama retries for transient transport/server failures; classify context-window and model-memory exhaustion; reject incomplete streams and never replay partial streamed output.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
-- Publish a reproducible release checklist and migration notes.
+- [x] Commit `package-lock.json`, enforce clean `npm ci` installs in CI and the Windows launcher, and configure weekly Dependabot npm/pip update pull requests.
+- [x] Add a universal SHA-256 hash-locked Python requirements file with CPU-only PyTorch markers; enforce lock freshness and hash installs in Linux/Windows CI and the native-runtime installer.
+- [x] Reject case-variant access to the reserved `.syntra` state directory and cross-platform Windows path aliases, including NTFS alternate data streams, reserved device names, and trailing-dot/space names.
+- [x] Make an explicit Windows `SYNTRA_LOCAL_MODEL` selection fail clearly when Ollama is unavailable, the model is not installed locally, or the launcher RAM filter excludes it; cover catalog selection with PowerShell tests on the Windows CI runner.
+- [x] Add an explicitly opt-in Gemini API provider with server-side API-key handling, request cancellation, provider metadata, and a separate consent gate before repository context is sent to the cloud.
+- [x] Add optional local semantic retrieval using Ollama embeddings; persist only vectors, path/line metadata and source hashes; revalidate hashes before returning excerpts.
+- [x] Expand orchestration to a complexity-derived maximum of eight slices, six attempts per slice and a 24-attempt total ceiling. Persist the global attempt counter and execution budget across local-service restarts.
+- [x] Harden Docker check containers with init, private IPC, bounded swap and an open-file limit; retain no-network, read-only root, dropped capabilities, no-new-privileges and candidate-only write mount.
+- [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
+- [x] Add provider-aware context sizing with provider-specific output caps and safety reserves; use exact Gemini token counts and conservative local estimates.
+- [x] Add model-aware Gemini long decoding for Gemini 4 Argon on the documented v1beta API: bounded 16-hop continuation, exact prompt replay, streaming checkpoint recovery, uncommitted-text discard on disconnect, and separate output ceilings for Gemini 3.8 Flash versus Argon.
+- [ ] Build a cross-language empirical model capability matrix from repeatable runs across the available JavaScript, Python, Go and Rust fixtures.
+- [x] Publish a reproducible release checklist and upgrade notes covering CI/CodeQL, local runtime, isolation, semantic retrieval, optional Gemini, benchmark history and release gates.
 
 **Acceptance:** Release claims are backed by repeatable measurements. The installation path, test results, supported hardware, and model limitations are documented.
 
