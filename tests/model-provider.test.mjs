@@ -498,7 +498,7 @@ test("Gemini provider requires repository-content consent and uses server-side A
           const partial = new ReadableStream({
             start(controller) {
               controller.enqueue(new TextEncoder().encode(
-                'data: {"candidates":[{"content":{"parts":[{"text":"partial output"}]}}]}\\n\\n'
+                'data: {"candidates":[{"content":{"parts":[{"text":"partial output"}]}}]}\n\n'
               ));
               controller.close();
             }
@@ -515,7 +515,7 @@ test("Gemini provider requires repository-content consent and uses server-side A
           const continued = new ReadableStream({
             start(controller) {
               controller.enqueue(new TextEncoder().encode(
-                'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":"CONTINUATION"}]}\\n\\n'
+                'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":"CONTINUATION"}]}\n\n'
               ));
               controller.close();
             }
