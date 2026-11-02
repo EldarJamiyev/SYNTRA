@@ -50,8 +50,8 @@ jobs:
           if (-not (Test-Path "Start-SYNTRA.bat")) { throw "Start-SYNTRA.bat is missing." }
           if (-not (Test-Path "package-lock.json")) { throw "Committed npm package-lock.json is missing." }
           $launcherText = Get-Content "scripts/start-syntra.ps1" -Raw
-          if ($launcherText -notmatch '(?m)^\\s*npm ci\\s*
-          if (-not (Test-Path "tests/windows-launcher.test.ps1")) { throw "Windows launcher behavior tests are missing." }
+          if (-not $launcherText.Contains("npm ci")) { throw "Windows launcher must install frontend dependencies with npm ci." }
+          if ($launcherText.Contains("npm install")) { throw "Windows launcher must not resolve unpinned npm dependencies with npm install." }
           & ./tests/windows-launcher.test.ps1
           if (-not (Test-Path "tests/frontend.test.mjs")) { throw "Minimal chat frontend regression test is missing." }
           node scripts/run-node-tests.mjs

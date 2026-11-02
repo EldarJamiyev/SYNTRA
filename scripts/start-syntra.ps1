@@ -216,16 +216,16 @@ try {
 
     Write-Step "Preparing the web application"
     $ProjectLock = Join-Path $Root "package-lock.json"
-    $InstalledLock = Join-Path $Root "node_modules\\.package-lock.json"
+    $InstalledLock = Join-Path $Root "node_modules\.package-lock.json"
     if (-not (Test-Path -LiteralPath $ProjectLock -PathType Leaf)) {
         throw "package-lock.json is missing. Run git pull in the SYNTRA repository folder before starting the application."
     }
 
     $requiredDependenciesMissing = (
-        -not (Test-Path (Join-Path $Root "node_modules\\vite\\bin\\vite.js")) -or
-        -not (Test-Path (Join-Path $Root "node_modules\\react\\package.json")) -or
-        -not (Test-Path (Join-Path $Root "node_modules\\react-markdown\\package.json")) -or
-        -not (Test-Path (Join-Path $Root "node_modules\\remark-gfm\\package.json"))
+        -not (Test-Path (Join-Path $Root "node_modules\vite\bin\vite.js")) -or
+        -not (Test-Path (Join-Path $Root "node_modules\react\package.json")) -or
+        -not (Test-Path (Join-Path $Root "node_modules\react-markdown\package.json")) -or
+        -not (Test-Path (Join-Path $Root "node_modules\remark-gfm\package.json"))
     )
     $dependencyInputs = @(
         Get-Item -LiteralPath (Join-Path $Root "package.json")
