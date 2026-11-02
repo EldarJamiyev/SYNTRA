@@ -621,7 +621,9 @@ async function runChatTurn(jobId, message, history, signal) {
           cancelRequested: false,
           proposalIds: [],
           event: { phase: "resuming", message: resumeCandidate
-            ? "Restoring the last verified candidate snapshot and continuing at the next implementation slice."
+            ? resumeCandidate.stage === "slice_unverified"
+              ? "Restoring an in-flight candidate and re-running checks before continuing."
+              : "Restoring the last verified candidate snapshot and continuing at the next implementation slice."
             : resumeRecord.recoveryPatch
               ? "Restoring and revalidating the saved patch checkpoint."
               : "Restarting task discovery because no verified candidate or patch checkpoint was saved." }

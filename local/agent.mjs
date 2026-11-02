@@ -701,9 +701,7 @@ async function runModelSelectedReadOnlyTools({
       priorContext: fragments.join("\n"),
       previousCalls: selectedCalls
     });
-    const reviewerModel = String(process.env.SYNTRA_REVIEW_MODEL || "").trim();
-  const reviewerOptions = reviewerModel ? { model: reviewerModel } : {};
-  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt, ...reviewerOptions }, 30000, signal);
+    const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
     if (Number(tokenInfo.token_count) > Math.min(contextBudget, 1800)) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
@@ -938,7 +936,14 @@ async function reviewCandidatePatch({
   const reviewerModel = String(process.env.SYNTRA_REVIEW_MODEL || "").trim();
   const reviewerOptions = reviewerModel ? { model: reviewerModel } : {};
   const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt, ...reviewerOptions }, 30000, signal);
-  if (Number(tokenInfo.token_count) > contextBudget) {
+  const reviewerBudget = tokenInfo.context_window_tokens
+    ? deriveModelContextBudget({
+      context_tokens: tokenInfo.context_window_tokens,
+      is_estimate: tokenInfo.is_estimate,
+      capabilities: { maxOutputTokens: 420, tokenCountIsEstimate: tokenInfo.is_estimate === false }
+    }).contextBudgetTokens
+    : contextBudget;
+  if (Number(tokenInfo.token_count) > reviewerBudget) {
     return {
       status: "skipped_context_budget",
       detail: "The independent review prompt exceeded the model context budget; the validated patch was retained without claiming review completion."
@@ -1163,6 +1168,35 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
   };
 }
 
+export function deriveModelContextBudget(modelStatus = {}) {
+  const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
+  const contextWindowTokens = Number.isFinite(rawContext)
+    ? Math.max(1024, Math.min(1_048_576, Math.floor(rawContext)))
+    : 4096;
+  const capabilities = modelStatus.capabilities && typeof modelStatus.capabilities === "object"
+    ? modelStatus.capabilities : {};
+  const exactTokenCount = capabilities.tokenCountIsEstimate === false || modelStatus.is_estimate === false;
+  const outputCap = Number(capabilities.maxOutputTokens || modelStatus.max_output_tokens || 1024);
+  const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(128, Math.min(8192, Math.floor(outputCap))) : 1024;
+  const promptFraction = exactTokenCount ? 0.76 : 0.64;
+  const outputFraction = exactTokenCount ? 0.18 : 0.20;
+  const reserveFraction = exactTokenCount ? 0.06 : 0.16;
+  const outputBudgetTokens = Math.max(128, Math.min(maxOutputTokens, Math.floor(contextWindowTokens * outputFraction)));
+  const safetyMarginTokens = Math.max(128, Math.floor(contextWindowTokens * reserveFraction));
+  const promptCapacity = Math.max(128, contextWindowTokens - outputBudgetTokens - safetyMarginTokens);
+  const contextBudgetTokens = Math.max(128, Math.min(
+    Math.floor(contextWindowTokens * promptFraction), promptCapacity
+  ));
+  return {
+    contextWindowTokens,
+    contextBudgetTokens,
+    outputBudgetTokens,
+    safetyMarginTokens,
+    exactTokenCount,
+    budgetProfile: exactTokenCount ? "provider-tokenizer" : "conservative-estimate"
+  };
+}
+
 export function deriveAgentBudget(goal, inventory = {}, requested = {}) {
   const text = String(goal || "").toLowerCase();
   const signals = [
@@ -1212,15 +1246,19 @@ export async function runAgentTask({
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
   if (!modelStatus.checkpoint_exists) throw new Error("No usable local model is available. Start a local Ollama model or train SYNTRA's native model before requesting an agent patch.");
-  const contextWindow = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 4096);
-  const contextBudget = Math.max(128, Math.floor(contextWindow * 0.68));
-  const outputBudget = Math.max(128, Math.min(1024, Math.floor(contextWindow * 0.22)));
+  const contextPlan = deriveModelContextBudget(modelStatus);
+  const contextWindow = contextPlan.contextWindowTokens;
+  const contextBudget = contextPlan.contextBudgetTokens;
+  const outputBudget = contextPlan.outputBudgetTokens;
   const modelMetadata = {
     provider: String(modelStatus.provider || "native-local").slice(0, 80),
     name: String(modelStatus.model_name || modelStatus.model || "unknown").slice(0, 120),
     contextWindowTokens: contextWindow,
     contextBudgetTokens: contextBudget,
-    outputBudgetTokens: outputBudget
+    outputBudgetTokens: outputBudget,
+    contextSafetyMarginTokens: contextPlan.safetyMarginTokens,
+    contextBudgetProfile: contextPlan.budgetProfile,
+    tokenizerIsExact: contextPlan.exactTokenCount
   };
   await emitProgress({ phase: "tool-execution", iteration: 0, message: "Tool: workspace.inspect — collecting project metadata and file inventory." });
   const inspectionRun = await executeWorkspaceTool({
