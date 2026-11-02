@@ -489,16 +489,19 @@ test("AI-generated proposal rejects a source file that changed after generation"
 test("Docker verification arguments enforce a restricted candidate-only container", () => {
   const root = path.resolve("candidate-workspace");
   const args = buildDockerCheckArgs(root, "node:20-bookworm-slim", "npm test");
+  const mountRoot = process.platform === "win32" ? root.split(String.fromCharCode(92)).join("/") : root;
   const required = [
     "--init", "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
     "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g",
     "--memory-swap=2g", "--cpus=2", "nofile=1024:1024", "/tmp:rw,noexec,nosuid,size=512m",
-    "type=bind,source=" + root + ",target=/workspace"
+    "type=bind,source=" + mountRoot + ",target=/workspace"
   ];
   for (const value of required) assert.ok(args.includes(value), "missing Docker restriction: " + value);
   assert.ok(!args.includes("--privileged"));
   assert.throws(() => buildDockerCheckArgs(root, "unknown:latest", "npm test"), /allowlist/);
   assert.throws(() => buildDockerCheckArgs(root, "node:20-bookworm-slim", ""), /command is invalid/);
+  assert.throws(() => buildDockerCheckArgs(root + ",unsafe", "node:20-bookworm-slim", "npm test"), /cannot be mounted safely/);
+  assert.throws(() => buildDockerCheckArgs(root, "node:20-bookworm-slim", "npm" + String.fromCharCode(0) + "test"), /command is invalid/);
 });
 
 test("agent run iteration and checkpoint counters survive values above the legacy limit", async () => {
