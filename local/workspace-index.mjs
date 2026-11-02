@@ -1,21 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-let typescriptParser = null;
-try { typescriptParser = require("typescript"); } catch {}
+import ts from "typescript";
 import {
   ensureWorkspaceStateDirectory,
   getWorkspaceStateDirectory,
   listWorkspaceIndexCandidates,
   isWorkspacePathExcluded,
   readWorkspaceFile,
-  resolveWorkspace
+  resolveWorkspace,
+  searchWorkspace
 } from "./workspace.mjs";
 
-const INDEX_FILENAME = "workspace-index-v2.json";
-const INDEX_SCHEMA_VERSION = 2;
+const INDEX_FILENAME = "workspace-index-v3.json";
+const INDEX_SCHEMA_VERSION = 3;
+const SEMANTIC_CACHE_FILENAME = "workspace-semantic-v2.json";
+const MAX_SEMANTIC_CACHE_BYTES = 20 * 1024 * 1024;
+const MAX_SEMANTIC_FILES = 64;
+const MAX_SEMANTIC_CHUNKS = 256;
+const MAX_SEMANTIC_CHUNKS_PER_FILE = 16;
+const MAX_SEMANTIC_CHUNK_CHARS = 2400;
+const MAX_SEMANTIC_CHUNK_LINES = 48;
+const SEMANTIC_CHUNK_OVERLAP_LINES = 4;
+const MAX_EMBEDDING_BATCH = 32;
 const MAX_INDEX_CANDIDATES = 2000;
 const MAX_INDEX_SCAN_BYTES = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES = 4 * 1024 * 1024;
@@ -77,13 +84,19 @@ function isLocalSpecifier(value) {
     && !value.startsWith("//") && !value.startsWith("/");
 }
 
+function createTypeScriptSourceFile(relativePath, content) {
+  const extension = path.posix.extname(relativePath).toLowerCase();
+  const scriptKind = extension === ".tsx" ? ts.ScriptKind.TSX
+    : extension === ".jsx" ? ts.ScriptKind.JSX
+      : [".js", ".mjs", ".cjs"].includes(extension) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+  return ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true, scriptKind);
+}
+
 function parseDeclarations(relativePath, content) {
   const extension = path.posix.extname(relativePath).toLowerCase();
   if (!SOURCE_EXTENSIONS.has(extension)) return [];
   const symbols = [];
   const seen = new Set();
-  const lines = content.split(/\r?\n/);
-
   function add(kind, name, line) {
     if (!SYMBOL_KINDS.has(kind) || !IDENTIFIER_PATTERN.test(name) || symbols.length >= MAX_SYMBOLS_PER_FILE) return;
     const key = kind + ":" + name + ":" + line;
@@ -92,49 +105,45 @@ function parseDeclarations(relativePath, content) {
     symbols.push({ name, kind, line, signature: kind + " " + name });
   }
 
-  if (JS_EXTENSIONS.has(extension) && typescriptParser) {
-    const source = typescriptParser.createSourceFile(relativePath, content, typescriptParser.ScriptTarget.Latest, true);
-    const visit = node => {
-      const name = node.name && typescriptParser.isIdentifier(node.name) ? node.name.text : null;
-      const kind = typescriptParser.isFunctionDeclaration(node) ? "function"
-        : typescriptParser.isClassDeclaration(node) ? "class"
-          : typescriptParser.isInterfaceDeclaration(node) ? "interface"
-            : typescriptParser.isTypeAliasDeclaration(node) ? "type"
-              : typescriptParser.isEnumDeclaration(node) ? "enum" : null;
-      if (kind && name) add(kind, name, source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1);
-      if (typescriptParser.isVariableStatement(node)) {
-        for (const declaration of node.declarationList.declarations) {
-          const init = declaration.initializer;
-          if (typescriptParser.isIdentifier(declaration.name) && init && (typescriptParser.isArrowFunction(init) || typescriptParser.isFunctionExpression(init))) {
-            add("function", declaration.name.text, source.getLineAndCharacterOfPosition(declaration.getStart(source)).line + 1);
-          }
-        }
+  if (JS_EXTENSIONS.has(extension)) {
+    const sourceFile = createTypeScriptSourceFile(relativePath, content);
+    function addNamedNode(node, kind) {
+      if (node.name && ts.isIdentifier(node.name)) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        add(kind, node.name.text, line);
       }
-      typescriptParser.forEachChild(node, visit);
-    };
-    visit(source);
+    }
+    function visit(node) {
+      if (ts.isFunctionDeclaration(node)) addNamedNode(node, "function");
+      else if (ts.isClassDeclaration(node)) addNamedNode(node, "class");
+      else if (ts.isInterfaceDeclaration(node)) addNamedNode(node, "interface");
+      else if (ts.isTypeAliasDeclaration(node)) addNamedNode(node, "type");
+      else if (ts.isEnumDeclaration(node)) addNamedNode(node, "enum");
+      else if (ts.isModuleDeclaration(node)) addNamedNode(node, "module");
+      else if (ts.isMethodDeclaration(node) || ts.isMethodSignature(node)
+        || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
+        addNamedNode(node, "function");
+      } else if (ts.isVariableDeclaration(node) && node.initializer) {
+        const initializer = node.initializer;
+        if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) addNamedNode(node, "function");
+        else if (ts.isClassExpression(initializer)) addNamedNode(node, "class");
+      } else if (ts.isPropertyDeclaration(node) && node.initializer
+        && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+        addNamedNode(node, "function");
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(sourceFile);
     return symbols;
   }
+
+  const lines = content.split(/\r?\n/);
   for (let index = 0; index < lines.length && symbols.length < MAX_SYMBOLS_PER_FILE; index += 1) {
     const line = lines[index];
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*")) continue;
     let match;
-
-    if (JS_EXTENSIONS.has(extension)) {
-      match = /^\s*(?:(?:export|declare|default|abstract)\s+)*(?:async\s+)?function\s*\*?\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("function", match[1], index + 1);
-      match = /^\s*(?:(?:export|default|abstract|declare)\s+)*class\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("class", match[1], index + 1);
-      match = /^\s*(?:(?:export|declare)\s+)*interface\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("interface", match[1], index + 1);
-      match = /^\s*(?:(?:export|declare)\s+)*type\s+([A-Za-z_$][\w$]*)\s*=/.exec(line);
-      if (match) add("type", match[1], index + 1);
-      match = /^\s*(?:(?:export|declare)\s+)*enum\s+([A-Za-z_$][\w$]*)\b/.exec(line);
-      if (match) add("enum", match[1], index + 1);
-      match = /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/.exec(line);
-      if (match) add("function", match[1], index + 1);
-    } else if (extension === ".py" || extension === ".pyi") {
+    if (extension === ".py" || extension === ".pyi") {
       match = /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/.exec(line);
       if (match) add("function", match[1], index + 1);
       match = /^\s*class\s+([A-Za-z_]\w*)\b/.exec(line);
@@ -149,8 +158,7 @@ function parseDeclarations(relativePath, content) {
     } else if (extension === ".rs") {
       match = /^\s*(?:(?:pub(?:\([^)]*\))?|async|unsafe|extern(?:\s+"[^"]+")?)\s+)*(fn|struct|enum|trait|type|mod)\s+([A-Za-z_]\w*)\b/.exec(line);
       if (match) {
-        const kind = match[1] === "fn" ? "function"
-          : match[1] === "mod" ? "module" : match[1];
+        const kind = match[1] === "fn" ? "function" : match[1] === "mod" ? "module" : match[1];
         add(kind, match[2], index + 1);
       }
     }
@@ -178,21 +186,27 @@ function extractImportSpecifiers(relativePath, content) {
   };
 
   if (JS_EXTENSIONS.has(extension)) {
-    const pattern = /\bfrom\s*["']([^"']+)["']|\bimport\s*(?:\(\s*)?["']([^"']+)["']|\brequire\s*\(\s*["']([^"']+)["']/g;
-    for (const match of content.matchAll(pattern)) {
-      const specifier = match[1] || match[2] || match[3];
-      if (specifier?.startsWith(".")) add(specifier);
+    const sourceFile = createTypeScriptSourceFile(relativePath, content);
+    function visit(node) {
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+        && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+        add(node.moduleSpecifier.text);
+      } else if (ts.isCallExpression(node)) {
+        const expression = node.expression;
+        const isRequire = ts.isIdentifier(expression) && expression.text === "require";
+        const isDynamicImport = expression.kind === ts.SyntaxKind.ImportKeyword;
+        const argument = node.arguments[0];
+        if ((isRequire || isDynamicImport) && argument && ts.isStringLiteralLike(argument)) add(argument.text);
+      }
+      ts.forEachChild(node, visit);
     }
-    const css = /@import\s+(?:url\()?["']([^"']+)["']/g;
-    for (const match of content.matchAll(css)) if (match[1]?.startsWith(".")) add(match[1]);
+    visit(sourceFile);
   } else if (extension === ".py" || extension === ".pyi") {
     const pattern = /^\s*(?:from\s+([.\w]+)\s+import\b|import\s+([\w.]+))/gm;
     for (const match of content.matchAll(pattern)) add(match[1] || match[2]);
   } else if (extension === ".go") {
     const blocks = content.match(/\bimport\s*\([\s\S]*?\)/g) || [];
-    for (const block of blocks) {
-      for (const match of block.matchAll(/["']([^"']+)["']/g)) add(match[1]);
-    }
+    for (const block of blocks) for (const match of block.matchAll(/["']([^"']+)["']/g)) add(match[1]);
     const single = /^\s*import\s+(?:[A-Za-z_]\w*\s+)?["']([^"']+)["']/gm;
     for (const match of content.matchAll(single)) add(match[1]);
   } else if (extension === ".rs") {
@@ -205,6 +219,91 @@ function extractImportSpecifiers(relativePath, content) {
     }
   }
   return result;
+}
+
+function extractCallSpecifiers(relativePath, content) {
+  if (!JS_EXTENSIONS.has(path.posix.extname(relativePath).toLowerCase())) return [];
+  const sourceFile = createTypeScriptSourceFile(relativePath, content);
+  const result = [];
+  const seen = new Set();
+  function visit(node) {
+    if (ts.isCallExpression(node)) {
+      const expression = node.expression;
+      const name = ts.isIdentifier(expression) ? expression.text
+        : ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.name) ? expression.name.text : "";
+      if (IDENTIFIER_PATTERN.test(name) && !seen.has(name) && result.length < MAX_SPECIFIERS_PER_FILE) {
+        seen.add(name);
+        result.push(name);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return result;
+}
+
+function extractTypeSpecifiers(relativePath, content) {
+  if (!JS_EXTENSIONS.has(path.posix.extname(relativePath).toLowerCase())) return [];
+  const sourceFile = createTypeScriptSourceFile(relativePath, content);
+  const result = [];
+  const seen = new Set();
+  const add = name => {
+    if (IDENTIFIER_PATTERN.test(name || "") && !seen.has(name)
+      && result.length < MAX_SPECIFIERS_PER_FILE) {
+      seen.add(name);
+      result.push(name);
+    }
+  };
+  function rightmostName(node) {
+    if (ts.isIdentifier(node)) return node.text;
+    if (ts.isQualifiedName(node)) return node.right.text;
+    if (ts.isPropertyAccessExpression(node)) return node.name.text;
+    return "";
+  }
+  function visit(node) {
+    if (ts.isTypeReferenceNode(node)) add(rightmostName(node.typeName));
+    else if (ts.isExpressionWithTypeArguments(node)) add(rightmostName(node.expression));
+    else if (ts.isTypeQueryNode(node)) add(rightmostName(node.exprName));
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return result;
+}
+
+function extractImportedTypeBindings(relativePath, content) {
+  if (!JS_EXTENSIONS.has(path.posix.extname(relativePath).toLowerCase())) return [];
+  const sourceFile = createTypeScriptSourceFile(relativePath, content);
+  const bindings = [];
+  const seen = new Set();
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !statement.moduleSpecifier
+      || !ts.isStringLiteralLike(statement.moduleSpecifier)) continue;
+    const named = statement.importClause?.namedBindings;
+    if (!named || !ts.isNamedImports(named)) continue;
+    for (const element of named.elements) {
+      const localName = element.name.text;
+      const importedName = element.propertyName?.text || localName;
+      const key = [statement.moduleSpecifier.text, localName, importedName].join(":");
+      if (seen.has(key) || bindings.length >= MAX_SPECIFIERS_PER_FILE) continue;
+      seen.add(key);
+      bindings.push({
+        moduleSpecifier: statement.moduleSpecifier.text,
+        localName,
+        importedName
+      });
+    }
+  }
+  return bindings;
+}
+
+export function analyzeSourceFile(relativePath, content) {
+  return {
+    symbols: parseDeclarations(relativePath, content),
+    importSpecifiers: extractImportSpecifiers(relativePath, content),
+    callSpecifiers: extractCallSpecifiers(relativePath, content),
+    typeSpecifiers: extractTypeSpecifiers(relativePath, content),
+    importedTypeBindings: extractImportedTypeBindings(relativePath, content)
+  };
 }
 
 function extractDocumentationTargets(content) {
@@ -356,20 +455,23 @@ function validIndexedFile(item) {
   }
 
   const importSpecifiers = uniqueStrings(item.importSpecifiers, MAX_SPECIFIERS_PER_FILE, 300);
+  const callSpecifiers = uniqueStrings(item.callSpecifiers, MAX_SPECIFIERS_PER_FILE, 120);
   const imports = uniqueStrings(item.imports, MAX_RELATIONS_PER_FILE);
   const importedBy = uniqueStrings(item.importedBy, MAX_RELATIONS_PER_FILE);
+  const calls = uniqueStrings(item.calls, MAX_RELATIONS_PER_FILE);
+  const calledBy = uniqueStrings(item.calledBy, MAX_RELATIONS_PER_FILE);
   const docLinkTargets = uniqueStrings(item.docLinkTargets, MAX_RELATIONS_PER_FILE, 300);
   const documentationReferences = uniqueStrings(item.documentationReferences, MAX_RELATIONS_PER_FILE);
   const referencedByDocs = uniqueStrings(item.referencedByDocs, MAX_RELATIONS_PER_FILE);
   const testOwners = uniqueStrings(item.testOwners, 8);
   const ownedTests = uniqueStrings(item.ownedTests, MAX_RELATIONS_PER_FILE);
-  if (!importSpecifiers || !imports || !importedBy || !docLinkTargets
+  if (!importSpecifiers || !callSpecifiers || !imports || !importedBy || !calls || !calledBy || !docLinkTargets
     || !documentationReferences || !referencedByDocs || !testOwners || !ownedTests
     || importSpecifiers.some(value => !isLocalSpecifier(value))
     || docLinkTargets.some(value => !isLocalSpecifier(value))) return null;
   return {
     path: item.path, size: item.size, sha256: item.sha256, role: item.role, symbols,
-    importSpecifiers, imports, importedBy, docLinkTargets, documentationReferences,
+    importSpecifiers, callSpecifiers, imports, importedBy, calls, calledBy, docLinkTargets, documentationReferences,
     referencedByDocs, testOwners, ownedTests
   };
 }
@@ -397,6 +499,8 @@ function validateLoadedIndex(root, value) {
     const relations = [
       ...file.imports.map(target => [target, ["source", "test"]]),
       ...file.importedBy.map(target => [target, ["source", "test"]]),
+      ...file.calls.map(target => [target, ["source"]]),
+      ...file.calledBy.map(target => [target, ["source", "test"]]),
       ...file.documentationReferences.map(target => [target, null]),
       ...file.referencedByDocs.map(target => [target, ["documentation"]]),
       ...file.testOwners.map(target => [target, ["source"]]),
@@ -488,7 +592,7 @@ export async function getWorkspaceIndexStatus(inputRoot) {
     return {
       available: false, root, indexedAt: null, fileCount: 0, symbolCount: 0,
       documentationFileCount: 0, testFileCount: 0, importEdgeCount: 0,
-      documentationReferenceCount: 0, testOwnershipCount: 0,
+      documentationReferenceCount: 0, testOwnershipCount: 0, callEdgeCount: 0,
       indexedBytes: 0, truncated: false, reason: "not_built_or_invalid"
     };
   }
@@ -500,6 +604,7 @@ export async function getWorkspaceIndexStatus(inputRoot) {
     importEdgeCount: countRelations(index.files, "imports"),
     documentationReferenceCount: countRelations(index.files, "documentationReferences"),
     testOwnershipCount: countRelations(index.files, "testOwners"),
+    callEdgeCount: countRelations(index.files, "calls"),
     indexedBytes: index.files.reduce((sum, file) => sum + file.size, 0),
     truncated: index.truncated
   };
@@ -553,15 +658,18 @@ export async function refreshWorkspaceIndex(inputRoot) {
     const cached = previousByPath.get(candidate.path);
     let symbols = [];
     let importSpecifiers = [];
+    let callSpecifiers = [];
     let docLinkTargets = [];
     if (cached && cached.sha256 === source.sha256 && cached.size === source.bytes && cached.role === role) {
       symbols = cached.symbols;
       importSpecifiers = cached.importSpecifiers;
+      callSpecifiers = cached.callSpecifiers || [];
       docLinkTargets = cached.docLinkTargets;
       reusedFiles += 1;
     } else {
       symbols = role === "documentation" ? [] : parseDeclarations(candidate.path, source.content);
       importSpecifiers = role === "documentation" ? [] : extractImportSpecifiers(candidate.path, source.content);
+      callSpecifiers = role === "documentation" ? [] : extractCallSpecifiers(candidate.path, source.content);
       docLinkTargets = role === "documentation" ? extractDocumentationTargets(source.content) : [];
       parsedFiles += 1;
     }
@@ -572,7 +680,7 @@ export async function refreshWorkspaceIndex(inputRoot) {
     totalSymbols += symbols.length;
     nextFiles.push({
       path: candidate.path, size: source.bytes, sha256: source.sha256, role, symbols,
-      importSpecifiers, imports: [], importedBy: [],
+      importSpecifiers, callSpecifiers, imports: [], importedBy: [], calls: [], calledBy: [],
       docLinkTargets, documentationReferences: [], referencedByDocs: [],
       testOwners: [], ownedTests: []
     });
@@ -613,6 +721,19 @@ export async function refreshWorkspaceIndex(inputRoot) {
         linked.importedBy.push(file.path);
       }
     }
+    for (const callName of file.callSpecifiers) {
+      const matchingImports = file.imports.filter(target =>
+        fileByPath.get(target)?.symbols.some(symbol => symbol.name === callName)
+      );
+      if (matchingImports.length === 1) {
+        const target = matchingImports[0];
+        if (!file.calls.includes(target) && file.calls.length < MAX_RELATIONS_PER_FILE) file.calls.push(target);
+        const linked = fileByPath.get(target);
+        if (linked && !linked.calledBy.includes(file.path) && linked.calledBy.length < MAX_RELATIONS_PER_FILE) {
+          linked.calledBy.push(file.path);
+        }
+      }
+    }
     for (const target of file.documentationReferences) {
       const linked = fileByPath.get(target);
       if (linked && !linked.referencedByDocs.includes(file.path) && linked.referencedByDocs.length < MAX_RELATIONS_PER_FILE) {
@@ -638,6 +759,8 @@ export async function refreshWorkspaceIndex(inputRoot) {
 
   for (const file of nextFiles) {
     file.importedBy.sort();
+    file.calls.sort();
+    file.calledBy.sort();
     file.documentationReferences.sort();
     file.referencedByDocs.sort();
     file.testOwners.sort();
@@ -661,6 +784,7 @@ export async function refreshWorkspaceIndex(inputRoot) {
     importEdgeCount: countRelations(nextFiles, "imports"),
     documentationReferenceCount: countRelations(nextFiles, "documentationReferences"),
     testOwnershipCount: countRelations(nextFiles, "testOwners"),
+    callEdgeCount: countRelations(nextFiles, "calls"),
     parsedFiles, reusedFiles, removedFiles, skippedFiles, indexedBytes,
     truncated, rebuilt: !previous
   };
@@ -755,6 +879,8 @@ export async function searchWorkspaceSymbols(inputRoot, query, limit = 10) {
     const relations = {
       imports: await currentRelations(file.imports, 6),
       importedBy: await currentRelations(file.importedBy, 6),
+      calls: await currentRelations(file.calls, 6),
+      calledBy: await currentRelations(file.calledBy, 6),
       documentationReferences: await currentRelations(file.documentationReferences, 6),
       referencedByDocs: await currentRelations(file.referencedByDocs, 6),
       testOwners: await currentRelations(file.testOwners, 4),
@@ -768,4 +894,430 @@ export async function searchWorkspaceSymbols(inputRoot, query, limit = 10) {
     truncated: index.truncated || validationLimitReached || ranked.length > selected.length && validationLimitReached,
     indexedAt: index.indexedAt
   };
+}
+
+
+function buildSemanticContentChunks(content) {
+  const lines = String(content).split(/\r?\n/);
+  const chunks = [];
+  let start = 0;
+
+  while (start < lines.length) {
+    let cursor = start;
+    let characterCount = 0;
+    const selectedLines = [];
+    while (cursor < lines.length && cursor - start < MAX_SEMANTIC_CHUNK_LINES) {
+      const line = lines[cursor];
+      const separatorLength = selectedLines.length ? 1 : 0;
+      const remaining = MAX_SEMANTIC_CHUNK_CHARS - characterCount - separatorLength;
+      if (remaining <= 0) break;
+      if (line.length > remaining) {
+        if (!selectedLines.length) {
+          selectedLines.push(line.slice(0, MAX_SEMANTIC_CHUNK_CHARS));
+          cursor += 1;
+        }
+        break;
+      }
+      selectedLines.push(line);
+      characterCount += line.length + separatorLength;
+      cursor += 1;
+    }
+
+    if (!selectedLines.length) {
+      selectedLines.push(lines[start].slice(0, MAX_SEMANTIC_CHUNK_CHARS));
+      cursor = start + 1;
+    }
+    chunks.push({
+      lineStart: start + 1,
+      lineEnd: Math.max(start + 1, cursor),
+      source: selectedLines.join("\n").slice(0, MAX_SEMANTIC_CHUNK_CHARS)
+    });
+    if (cursor >= lines.length) break;
+    start = Math.max(start + 1, cursor - SEMANTIC_CHUNK_OVERLAP_LINES);
+  }
+
+  if (chunks.length <= MAX_SEMANTIC_CHUNKS_PER_FILE) {
+    return { chunks, totalChunks: chunks.length, sampled: false };
+  }
+  const sampled = Array.from({ length: MAX_SEMANTIC_CHUNKS_PER_FILE }, (_, index) => {
+    const selectedIndex = Math.round(index * (chunks.length - 1) / (MAX_SEMANTIC_CHUNKS_PER_FILE - 1));
+    return chunks[selectedIndex];
+  });
+  return { chunks: sampled, totalChunks: chunks.length, sampled: true };
+}
+
+function semanticEmbeddingText(file, chunk) {
+  const nearbySymbols = file.symbols
+    .filter(symbol => symbol.line >= chunk.lineStart && symbol.line <= chunk.lineEnd)
+    .slice(0, 24)
+    .map(symbol => symbol.kind + " " + symbol.name + " (line " + symbol.line + ")")
+    .join("\n");
+  const symbols = nearbySymbols || file.symbols.slice(0, 12)
+    .map(symbol => symbol.kind + " " + symbol.name)
+    .join("\n");
+  const relations = [
+    "Imports: " + file.imports.slice(0, 12).join(", "),
+    "Callers: " + file.calledBy.slice(0, 12).join(", "),
+    "Tests: " + file.ownedTests.slice(0, 8).join(", ")
+  ].join("\n");
+  return [
+    "Path: " + file.path,
+    "Role: " + file.role,
+    "Language: " + path.posix.extname(file.path).slice(1),
+    "Chunk lines: " + chunk.lineStart + "-" + chunk.lineEnd,
+    "Symbols: " + symbols,
+    relations,
+    "Source:\n" + chunk.source
+  ].join("\n");
+}
+
+function validSemanticVector(value, dimension = null) {
+  return Array.isArray(value)
+    && value.length >= 8 && value.length <= 4096
+    && (dimension === null || value.length === dimension)
+    && value.every(item => typeof item === "number" && Number.isFinite(item));
+}
+
+function semanticTextHash(value) {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+async function semanticCachePath(root, create = false) {
+  const directory = create
+    ? await ensureWorkspaceStateDirectory(root)
+    : await getWorkspaceStateDirectory(root);
+  return path.join(directory, SEMANTIC_CACHE_FILENAME);
+}
+
+async function readSemanticCache(root, model) {
+  const target = await semanticCachePath(root, false);
+  let info;
+  try { info = await fs.lstat(target); }
+  catch (error) {
+    if (error?.code === "ENOENT") return { dimension: null, entries: [] };
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error("The semantic source cache must be a regular file, not a symbolic link.");
+  }
+  if (info.size > MAX_SEMANTIC_CACHE_BYTES) {
+    throw new Error("The semantic source cache exceeds its 20 MB storage limit.");
+  }
+  let value;
+  try { value = JSON.parse(await fs.readFile(target, "utf8")); }
+  catch {
+    throw new Error("The semantic source cache contains invalid JSON and was not overwritten.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || value.schemaVersion !== 2 || value.root !== root
+    || typeof value.model !== "string" || !Array.isArray(value.entries)
+    || value.entries.length > MAX_SEMANTIC_CHUNKS) {
+    throw new Error("The semantic source cache is invalid or belongs to another workspace.");
+  }
+  if (value.model !== model) return { dimension: null, entries: [] };
+  const dimension = Number.isInteger(value.dimension) && value.dimension >= 8 && value.dimension <= 4096
+    ? value.dimension : null;
+  const seen = new Set();
+  const entries = [];
+  for (const entry of value.entries) {
+    const key = entry && typeof entry.path === "string" && Number.isInteger(entry.chunkIndex)
+      ? entry.path + "\\0" + entry.chunkIndex : "";
+    if (!entry || typeof entry !== "object" || !safeIndexedPath(entry.path)
+      || !Number.isInteger(entry.chunkIndex) || entry.chunkIndex < 0
+      || entry.chunkIndex >= MAX_SEMANTIC_CHUNKS_PER_FILE
+      || seen.has(key) || !HASH_PATTERN.test(entry.textHash || "")
+      || !validSemanticVector(entry.embedding, dimension)) {
+      throw new Error("The semantic source cache contains an invalid chunk vector entry.");
+    }
+    seen.add(key);
+    entries.push({
+      path: entry.path, chunkIndex: entry.chunkIndex,
+      textHash: entry.textHash, embedding: entry.embedding
+    });
+  }
+  return { dimension, entries };
+}
+async function writeSemanticCache(root, model, dimension, entries) {
+  if (!Array.isArray(entries) || entries.length > MAX_SEMANTIC_CHUNKS) {
+    throw new Error("The semantic source cache can contain at most 256 chunk vectors.");
+  }
+  const target = await semanticCachePath(root, true);
+  let existing;
+  try {
+    existing = await fs.lstat(target);
+    if (existing.isSymbolicLink() || !existing.isFile()) {
+      throw new Error("The semantic source cache must be a regular file, not a symbolic link.");
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  const serialized = JSON.stringify({
+    schemaVersion: 2, root, model, dimension,
+    updatedAt: new Date().toISOString(), entries
+  });
+  if (Buffer.byteLength(serialized, "utf8") > MAX_SEMANTIC_CACHE_BYTES) {
+    throw new Error("The semantic source cache exceeded its 20 MB storage limit.");
+  }
+  const temporary = target + "." + process.pid + "." + crypto.randomBytes(4).toString("hex") + ".tmp";
+  await fs.writeFile(temporary, serialized + "\n", { encoding: "utf8", flag: "wx" });
+  try { await fs.rename(temporary, target); }
+  catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+async function requestSourceEmbeddings(fetchImpl, model, inputs) {
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > MAX_EMBEDDING_BATCH) {
+    throw new Error("Local semantic embedding batches must contain 1-32 texts.");
+  }
+  const response = await fetchImpl("http://127.0.0.1:11434/api/embed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, input: inputs, truncate: false }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) throw new Error("Local Ollama semantic embedding request failed with HTTP " + response.status + ".");
+  const payload = await response.json();
+  if (!payload || !Array.isArray(payload.embeddings) || payload.embeddings.length !== inputs.length) {
+    throw new Error("Local Ollama returned an invalid semantic embedding response.");
+  }
+  const dimension = payload.embeddings[0]?.length;
+  if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
+    || !payload.embeddings.every(vector => validSemanticVector(vector, dimension))) {
+    throw new Error("Local Ollama returned invalid or inconsistent semantic vectors.");
+  }
+  return { dimension, embeddings: payload.embeddings };
+}
+
+function semanticCosineSimilarity(left, right) {
+  if (!validSemanticVector(left) || !validSemanticVector(right) || left.length !== right.length) return null;
+  let dot = 0, leftNorm = 0, rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftNorm += left[index] * left[index];
+    rightNorm += right[index] * right[index];
+  }
+  if (!leftNorm || !rightNorm) return null;
+  return dot / Math.sqrt(leftNorm * rightNorm);
+}
+
+function lexicalSourceScore(file, query) {
+  const words = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_$-]{2,}/gu) || [])].slice(0, 16);
+  if (!words.length) return 0;
+  const haystack = [
+    file.path, ...file.symbols.map(symbol => symbol.name + " " + symbol.signature),
+    ...file.imports, ...file.importedBy, ...file.calls, ...file.calledBy
+  ].join(" ").toLowerCase();
+  return words.reduce((score, word) => score + Math.min(5, haystack.split(word).length - 1), 0);
+}
+
+function semanticMetadata(file) {
+  return {
+    path: file.path,
+    role: file.role,
+    language: path.posix.extname(file.path).slice(1) || "text",
+    symbols: file.symbols.slice(0, 12).map(symbol => ({
+      name: symbol.name, kind: symbol.kind, line: symbol.line
+    })),
+    imports: file.imports.slice(0, 8),
+    importedBy: file.importedBy.slice(0, 8),
+    calls: file.calls.slice(0, 8),
+    calledBy: file.calledBy.slice(0, 8),
+    ownedTests: file.ownedTests.slice(0, 6),
+    testOwners: file.testOwners.slice(0, 4)
+  };
+}
+
+export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, options = {}) {
+  const root = await resolveWorkspace(inputRoot);
+  if (typeof query !== "string" || query.trim().length < 2 || query.length > 300) {
+    throw new Error("Semantic source search query must contain 2-300 characters.");
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+    throw new Error("Semantic source search limit must be an integer from 1 to 20.");
+  }
+  const normalized = query.trim();
+  const model = String(options.embedModel ?? process.env.SYNTRA_EMBED_MODEL ?? "").trim();
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (!model) {
+    const lexical = await searchWorkspace(root, normalized, limit);
+    return {
+      available: true, root, query: normalized, retrievalMode: "lexical_fallback",
+      embeddingModel: null, semanticCoverage: 0, semanticChunkCoverage: 0,
+      results: lexical.results.map(item => ({
+        ...item, role: path.posix.extname(item.path).toLowerCase() === ".test" ? "test" : "source"
+      }))
+    };
+  }
+  const index = await readIndex(root);
+  if (!index) {
+    const lexical = await searchWorkspace(root, normalized, limit);
+    return {
+      available: false, root, query: normalized, retrievalMode: "lexical_fallback",
+      embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+      reason: "workspace_index_unavailable", results: lexical.results
+    };
+  }
+
+  const sourceFiles = index.files.filter(file => file.role === "source" || file.role === "test");
+  const candidates = [...sourceFiles].sort((left, right) => {
+    const leftStructure = left.symbols.length + left.imports.length * 2
+      + left.calledBy.length * 2 + left.ownedTests.length;
+    const rightStructure = right.symbols.length + right.imports.length * 2
+      + right.calledBy.length * 2 + right.ownedTests.length;
+    const leftScore = lexicalSourceScore(left, normalized) * 6 + Math.min(40, leftStructure);
+    const rightScore = lexicalSourceScore(right, normalized) * 6 + Math.min(40, rightStructure);
+    return rightScore - leftScore || left.path.localeCompare(right.path);
+  }).slice(0, MAX_SEMANTIC_FILES);
+  if (!candidates.length) {
+    return {
+      available: true, root, query: normalized, retrievalMode: "semantic",
+      embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+      results: [], truncated: false
+    };
+  }
+
+  try {
+    const currentFiles = [];
+    let staleFiles = 0;
+    for (const indexed of candidates) {
+      if (!(await safeIndexedPath(indexed.path)) || await isWorkspacePathExcluded(root, indexed.path)) {
+        staleFiles += 1;
+        continue;
+      }
+      try {
+        const current = await readWorkspaceFile(root, indexed.path);
+        if (current.sha256 !== indexed.sha256 || current.bytes !== indexed.size) {
+          staleFiles += 1;
+          continue;
+        }
+        const built = buildSemanticContentChunks(current.content);
+        const chunks = built.chunks.map((chunk, chunkIndex) => {
+          const embeddingText = semanticEmbeddingText(indexed, chunk);
+          return {
+            path: indexed.path, indexed, sha256: current.sha256, content: current.content,
+            chunkIndex, lineStart: chunk.lineStart, lineEnd: chunk.lineEnd,
+            source: chunk.source, textHash: semanticTextHash(embeddingText), embeddingText
+          };
+        });
+        currentFiles.push({
+          indexed, sha256: current.sha256, chunks,
+          sampledChunks: built.sampled, totalChunks: built.totalChunks
+        });
+      } catch {
+        staleFiles += 1;
+      }
+    }
+
+    // Round-robin chunks across files so a few very large modules cannot consume
+    // the entire embedding budget before smaller, relevant files are considered.
+    const selectedChunks = [];
+    const maximumRounds = Math.max(0, ...currentFiles.map(file => file.chunks.length));
+    for (let round = 0; round < maximumRounds && selectedChunks.length < MAX_SEMANTIC_CHUNKS; round += 1) {
+      for (const file of currentFiles) {
+        const chunk = file.chunks[round];
+        if (chunk) selectedChunks.push(chunk);
+        if (selectedChunks.length >= MAX_SEMANTIC_CHUNKS) break;
+      }
+    }
+    if (!selectedChunks.length) {
+      return {
+        available: true, root, query: normalized, retrievalMode: "semantic",
+        embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+        results: [], staleFiles, truncated: sourceFiles.length > candidates.length
+      };
+    }
+
+    const cache = await readSemanticCache(root, model);
+    const cacheByKey = new Map(cache.entries.map(entry => [
+      entry.path + "\\0" + entry.chunkIndex, entry
+    ]));
+    const vectorsByKey = new Map();
+    const missing = [];
+    for (const item of selectedChunks) {
+      const key = item.path + "\\0" + item.chunkIndex;
+      const cached = cacheByKey.get(key);
+      if (cached && cached.textHash === item.textHash && cache.dimension
+        && validSemanticVector(cached.embedding, cache.dimension)) {
+        vectorsByKey.set(key, cached.embedding);
+      } else {
+        missing.push(item);
+      }
+    }
+
+    const inputs = [...missing.map(item => item.embeddingText), normalized];
+    const generated = [];
+    let dimension = cache.dimension;
+    for (let offset = 0; offset < inputs.length; offset += MAX_EMBEDDING_BATCH) {
+      const batch = await requestSourceEmbeddings(
+        fetchImpl, model, inputs.slice(offset, offset + MAX_EMBEDDING_BATCH)
+      );
+      if (dimension !== null && dimension !== batch.dimension) {
+        throw new Error("The local semantic model returned a different vector dimension than the cached workspace index.");
+      }
+      dimension = batch.dimension;
+      generated.push(...batch.embeddings);
+    }
+    if (generated.length !== inputs.length) {
+      throw new Error("Local semantic embedding generation returned an incomplete vector set.");
+    }
+
+    missing.forEach((item, index) => {
+      vectorsByKey.set(item.path + "\\0" + item.chunkIndex, generated[index]);
+    });
+    const queryEmbedding = generated[generated.length - 1];
+    const serializedEntries = selectedChunks.filter(item =>
+      vectorsByKey.has(item.path + "\\0" + item.chunkIndex)
+    ).map(item => ({
+      path: item.path, chunkIndex: item.chunkIndex,
+      textHash: item.textHash, embedding: vectorsByKey.get(item.path + "\\0" + item.chunkIndex)
+    }));
+    await writeSemanticCache(root, model, dimension, serializedEntries);
+
+    const bestByPath = new Map();
+    for (const item of selectedChunks) {
+      const key = item.path + "\\0" + item.chunkIndex;
+      const cosine = semanticCosineSimilarity(queryEmbedding, vectorsByKey.get(key));
+      const score = cosine === null ? 0 : Number(cosine.toFixed(6));
+      if (score <= 0) continue;
+      const previous = bestByPath.get(item.path);
+      if (previous && previous.score >= score) continue;
+      bestByPath.set(item.path, {
+        ...semanticMetadata(item.indexed),
+        sha256: item.sha256,
+        score,
+        lineStart: item.lineStart,
+        lineEnd: item.lineEnd,
+        excerpt: item.source.slice(0, 1600)
+      });
+    }
+    const results = [...bestByPath.values()]
+      .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+      .slice(0, limit);
+    const semanticFileCoverage = new Set(serializedEntries.map(item => item.path)).size;
+    const totalAvailableChunks = currentFiles.reduce((sum, file) => sum + file.totalChunks, 0);
+    return {
+      available: true, root, query: normalized, retrievalMode: "semantic",
+      embeddingModel: model,
+      semanticCoverage: semanticFileCoverage,
+      semanticChunkCoverage: serializedEntries.length,
+      indexedCandidates: sourceFiles.length,
+      indexedFiles: currentFiles.length,
+      indexedChunks: selectedChunks.length,
+      staleFiles,
+      truncated: sourceFiles.length > candidates.length
+        || currentFiles.some(file => file.sampledChunks)
+        || totalAvailableChunks > selectedChunks.length,
+      results
+    };
+  } catch (error) {
+    const lexical = await searchWorkspace(root, normalized, limit);
+    return {
+      available: true, root, query: normalized, retrievalMode: "lexical_fallback",
+      embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+      semanticError: (error instanceof Error ? error.message : String(error)).slice(0, 240),
+      results: lexical.results
+    };
+  }
 }

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   chooseLocalModel,
   detectLocalModel,
+  estimateModelResourceProfile,
   getProviderStatus,
   handleLocalModelRequest
 } from "../local/model-provider.mjs";
@@ -37,23 +38,70 @@ test("model selection leaves memory headroom and applies the same limit to expli
   assert.equal(chooseLocalModel([{ name: "just-over-limit:latest", size: 17.61 * GB }], "", 32 * GB), null);
 });
 
-test("native mode never probes Ollama; auto mode safely falls back if it is offline", async () => {
+test("resource profile estimates KV-cache demand and reports loaded runtime memory", () => {
+  const profile = estimateModelResourceProfile({
+    modelSizeBytes: 8 * GB,
+    totalMemoryBytes: 32 * GB,
+    availableMemoryBytes: 12 * GB,
+    contextTokens: 8192,
+    modelInfo: {
+      "qwen.block_count": 40,
+      "qwen.embedding_length": 5120,
+      "qwen.attention.head_count": 40,
+      "qwen.attention.head_count_kv": 8
+    },
+    runningModel: { name: "qwen:latest", size: 9 * GB, size_vram: 2 * GB }
+  });
+  assert.equal(profile.modelAlreadyLoaded, true);
+  assert.equal(profile.runtimeVramBytes, 2 * GB);
+  assert.equal(profile.kvCacheBytesPerToken, 40 * 8 * 128 * 4);
+  assert.equal(profile.estimatedKvCacheBytes, profile.kvCacheBytesPerToken * 8192);
+  assert.equal(profile.estimatedHostWorkingSetBytes, 7 * GB + profile.estimatedKvCacheBytes);
+  assert.equal(profile.conservativeBudgetBytes, Math.floor(32 * GB * 0.55));
+  assert.equal(profile.confidence, "estimated");
+  assert.match(profile.limitation, /GPU offload/);
+});
+
+test("resource profile stays honest when Ollama metadata is incomplete", () => {
+  const profile = estimateModelResourceProfile({
+    modelSizeBytes: 4 * GB,
+    totalMemoryBytes: 16 * GB,
+    availableMemoryBytes: 6 * GB
+  });
+  assert.equal(profile.estimatedKvCacheBytes, null);
+  assert.equal(profile.estimatedHostWorkingSetBytes, null);
+  assert.equal(profile.withinConservativeBudget, null);
+  assert.equal(profile.confidence, "partial");
+});
+
+test("native mode is explicit; the default Ollama mode fails closed instead of falling back", async () => {
+  const originalMode = process.env.SYNTRA_MODEL_PROVIDER;
   let calls = 0;
   const failingFetch = async () => {
     calls += 1;
     throw new Error("connection refused");
   };
-  assert.equal(await detectLocalModel({ mode: "native", fetchImpl: failingFetch }), null);
-  assert.equal(calls, 0);
-  assert.equal(await detectLocalModel({ mode: "auto", fetchImpl: failingFetch }), null);
-  assert.equal(calls, 1);
-  await assert.rejects(
-    () => detectLocalModel({ mode: "ollama", fetchImpl: failingFetch }),
-    /Ollama is not responding at http:\/\/127\.0\.0\.1:11434/
-  );
+  try {
+    delete process.env.SYNTRA_MODEL_PROVIDER;
+    assert.equal(await detectLocalModel({ mode: "native", fetchImpl: failingFetch }), null);
+    assert.equal(calls, 0);
+    await assert.rejects(
+      () => detectLocalModel({ fetchImpl: failingFetch }),
+      /pretrained Ollama backend.*Ollama is not responding/
+    );
+    assert.equal(calls, 1);
+    await assert.rejects(
+      () => detectLocalModel({ mode: "auto", fetchImpl: failingFetch }),
+      /SYNTRA_MODEL_PROVIDER must be native or ollama/
+    );
+    assert.equal(calls, 1, "an unsupported auto mode must not probe or fall back");
+  } finally {
+    if (originalMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
+    else process.env.SYNTRA_MODEL_PROVIDER = originalMode;
+  }
 });
 
-test("auto mode selects an installed local model and reports local-only status", async () => {
+test("Ollama mode selects an installed local model and reports local-only status", async () => {
   const fetchImpl = async url => {
     assert.equal(url, "http://127.0.0.1:11434/api/tags");
     return new Response(JSON.stringify({
@@ -63,7 +111,7 @@ test("auto mode selects an installed local model and reports local-only status",
       ]
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   };
-  const provider = await detectLocalModel({ mode: "auto", fetchImpl, totalMemoryBytes: 32 * GB });
+  const provider = await detectLocalModel({ mode: "ollama", fetchImpl, totalMemoryBytes: 32 * GB });
   assert.equal(provider.provider, "ollama-local");
   assert.equal(provider.model, "qwen2.5-coder:14b");
   const status = getProviderStatus(provider);
@@ -71,6 +119,8 @@ test("auto mode selects an installed local model and reports local-only status",
   assert.equal(status.external_ai_api, false);
   assert.equal(status.local_only, true);
   assert.equal(status.context_tokens, 8192);
+  assert.equal(status.tokenizer, "utf8-byte-ratio-estimate");
+  assert.equal(status.tokenizer_is_estimate, true);
 });
 
 test("local generation uses only loopback Ollama and JSON mode for structured patches", async () => {
@@ -247,23 +297,37 @@ test("local token estimate is bounded and clearly marked as an estimate", async 
 });
 
 
-test("default model discovery caches short-lived misses to avoid repeated Ollama probes", async () => {
+test("default model discovery caches successful Ollama selection", async () => {
   const originalFetch = globalThis.fetch;
   const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
-  let calls = 0;
+  let tagCalls = 0;
   globalThis.fetch = async url => {
-    calls += 1;
-    assert.equal(url, "http://127.0.0.1:11434/api/tags");
-    return new Response(JSON.stringify({ models: [] }), {
-      status: 200, headers: { "Content-Type": "application/json" }
-    });
+    if (url === "http://127.0.0.1:11434/api/tags") {
+      tagCalls += 1;
+      return new Response(JSON.stringify({ models: [{ name: "syntra-cache-regression-test", size: 1024 }] }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url === "http://127.0.0.1:11434/api/show") {
+      return new Response(JSON.stringify({ model_info: {} }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url === "http://127.0.0.1:11434/api/ps") {
+      return new Response(JSON.stringify({ models: [] }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    }
+    throw new Error("Unexpected Ollama URL: " + url);
   };
   try {
     delete process.env.SYNTRA_MODEL_PROVIDER;
     const options = { requestedModel: "syntra-cache-regression-test" };
-    assert.equal(await detectLocalModel(options), null);
-    assert.equal(await detectLocalModel(options), null);
-    assert.equal(calls, 1, "a repeated miss inside the short cache window should not probe Ollama twice");
+    const first = await detectLocalModel(options);
+    const second = await detectLocalModel(options);
+    assert.equal(first?.model, "syntra-cache-regression-test");
+    assert.equal(second?.model, first.model);
+    assert.equal(tagCalls, 1, "a repeated successful selection inside the short cache window should reuse the cached provider");
   } finally {
     globalThis.fetch = originalFetch;
     if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
@@ -422,6 +486,7 @@ test("Ollama patch-review mode uses a strict reviewer-only JSON schema", async (
     Object.keys(capturedBody.format.properties.findings.items.properties).sort(),
     ["issue", "path", "recommendation", "severity"]
   );
-  assert.match(capturedBody.messages[0].content, /independent patch reviewer/);
+  assert.match(capturedBody.messages[0].content, /critical second-pass patch reviewer/);
+  assert.match(capturedBody.messages[0].content, /same model that generated the candidate/);
   assert.equal(JSON.parse(result.text).verdict, "accept");
 });

@@ -157,6 +157,7 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Require the exact expected changed-file set and passing candidate verification for task completion; extra test/configuration edits invalidate the patch score.
 - [x] Record provider/model identity, task latency, prompt/output tokens, patch validity, verification outcomes, task completion, and benchmark-process peak RSS in JSON reports.
 - [x] Add regression coverage for suite validation, scoring, aggregation, fixture isolation, baseline checks, and report output.
+- [x] Require each benchmark fixture to declare its expected failing diagnostic and reject unrelated setup/import/runner failures before the agent is invoked; record baseline validation per task.
 
 **Delivered reporting slice:**
 

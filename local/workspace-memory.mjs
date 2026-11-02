@@ -8,6 +8,10 @@ import {
 } from "./workspace.mjs";
 
 const MEMORY_FILENAME = "project-memory-v1.json";
+const MEMORY_EMBEDDINGS_FILENAME = "project-memory-embeddings-v1.json";
+const MAX_EMBEDDING_CACHE_BYTES = 8 * 1024 * 1024;
+const MAX_SEMANTIC_INDEX_NOTES = 64;
+const EMBEDDING_BATCH_SIZE = 32;
 const MEMORY_SCHEMA_VERSION = 1;
 const MAX_NOTES = 200;
 const MAX_MEMORY_BYTES = 1024 * 1024;
@@ -171,7 +175,202 @@ export async function listWorkspaceMemory(inputRoot) {
   };
 }
 
-export async function searchWorkspaceMemory(inputRoot, query, limit = 6) {
+function memoryEmbeddingText(note) {
+  return [
+    note.title,
+    "Category: " + note.category,
+    "Tags: " + note.tags.join(", "),
+    note.content
+  ].join("\n");
+}
+
+function memoryTextHash(text) {
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function validEmbeddingVector(value, dimension = null) {
+  return Array.isArray(value)
+    && value.length >= 8 && value.length <= 4096
+    && (dimension === null || value.length === dimension)
+    && value.every(item => Number.isFinite(item));
+}
+
+async function readMemoryEmbeddingCache(root, model) {
+  const directory = path.dirname(await memoryPathFor(root, false));
+  const target = path.join(directory, MEMORY_EMBEDDINGS_FILENAME);
+  let stat;
+  try { stat = await fs.lstat(target); }
+  catch (error) {
+    if (error?.code === "ENOENT") return { dimension: null, entries: [] };
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("The project-memory embedding cache must be a regular file, not a symbolic link.");
+  }
+  if (stat.size > MAX_EMBEDDING_CACHE_BYTES) {
+    throw new Error("The project-memory embedding cache exceeds its 8 MB limit.");
+  }
+  let value;
+  try { value = JSON.parse(await fs.readFile(target, "utf8")); }
+  catch (error) {
+    throw new Error("The local project-memory embedding cache contains invalid JSON and was not overwritten.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || value.schemaVersion !== 1 || value.root !== root
+    || typeof value.model !== "string" || !Array.isArray(value.entries)
+    || value.entries.length > MAX_NOTES) {
+    throw new Error("The local project-memory embedding cache is invalid or belongs to another workspace.");
+  }
+  if (value.model !== model) return { dimension: null, entries: [] };
+  const dimension = Number.isInteger(value.dimension) && value.dimension >= 8 && value.dimension <= 4096
+    ? value.dimension : null;
+  const ids = new Set();
+  const entries = [];
+  for (const item of value.entries) {
+    if (!item || typeof item !== "object" || !NOTE_ID_PATTERN.test(item.noteId || "")
+      || ids.has(item.noteId) || !/^[a-f0-9]{64}$/.test(item.textHash || "")
+      || !validEmbeddingVector(item.embedding, dimension)) {
+      throw new Error("The local project-memory embedding cache contains an invalid vector entry.");
+    }
+    ids.add(item.noteId);
+    entries.push({ noteId: item.noteId, textHash: item.textHash, embedding: item.embedding });
+  }
+  return { dimension, entries };
+}
+
+async function writeMemoryEmbeddingCache(root, model, dimension, entries) {
+  const memoryPath = await memoryPathFor(root, true);
+  const target = path.join(path.dirname(memoryPath), MEMORY_EMBEDDINGS_FILENAME);
+  const current = await fs.lstat(target).catch(error => error?.code === "ENOENT" ? null : Promise.reject(error));
+  if (current && (current.isSymbolicLink() || !current.isFile())) {
+    throw new Error("The project-memory embedding cache must be a regular file, not a symbolic link.");
+  }
+  const serialized = JSON.stringify({
+    schemaVersion: 1, root, model, dimension,
+    updatedAt: new Date().toISOString(), entries
+  });
+  if (Buffer.byteLength(serialized, "utf8") > MAX_EMBEDDING_CACHE_BYTES) {
+    throw new Error("The local project-memory embedding cache exceeded its 8 MB limit.");
+  }
+  const temporary = target + "." + process.pid + "." + crypto.randomBytes(4).toString("hex") + ".tmp";
+  await fs.writeFile(temporary, serialized + "\n", { encoding: "utf8", flag: "wx" });
+  try { await fs.rename(temporary, target); }
+  catch (error) {
+    await fs.rm(temporary, { force: true });
+    throw error;
+  }
+}
+
+async function requestLocalEmbeddings(fetchImpl, model, input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > EMBEDDING_BATCH_SIZE) {
+    throw new Error("Local embedding batches must contain 1-32 texts.");
+  }
+  const response = await fetchImpl("http://127.0.0.1:11434/api/embed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, input, truncate: false }),
+    signal: AbortSignal.timeout(25000)
+  });
+  if (!response.ok) throw new Error("Local Ollama embedding request failed with HTTP " + response.status + ".");
+  const payload = await response.json();
+  if (!payload || !Array.isArray(payload.embeddings) || payload.embeddings.length !== input.length) {
+    throw new Error("Local Ollama returned an invalid embedding response.");
+  }
+  const dimension = payload.embeddings[0]?.length;
+  if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
+    || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))) {
+    throw new Error("Local Ollama returned an invalid or inconsistent embedding dimension.");
+  }
+  return { dimension, embeddings: payload.embeddings };
+}
+
+function cosineSimilarity(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length || !left.length) return null;
+  let dot = 0, leftNorm = 0, rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftNorm += left[index] * left[index];
+    rightNorm += right[index] * right[index];
+  }
+  if (leftNorm <= 0 || rightNorm <= 0) return null;
+  return dot / Math.sqrt(leftNorm * rightNorm);
+}
+
+async function searchMemorySemantically(root, store, query, ranked, options = {}) {
+  const model = String(options.embedModel ?? process.env.SYNTRA_EMBED_MODEL ?? "").trim();
+  if (!model) return null;
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  if (typeof fetchImpl !== "function") throw new Error("Local Ollama embeddings are unavailable in this runtime.");
+  const cache = await readMemoryEmbeddingCache(root, model);
+  const noteById = new Map(store.notes.map(note => [note.id, note]));
+  const validEntries = cache.entries.filter(entry => {
+    const note = noteById.get(entry.noteId);
+    return note && entry.textHash === memoryTextHash(memoryEmbeddingText(note));
+  });
+  const vectorById = new Map(validEntries.map(entry => [entry.noteId, entry.embedding]));
+  const recent = store.notes.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, MAX_SEMANTIC_INDEX_NOTES);
+  const lexicalCandidates = ranked.slice(0, 16).map(item => item.note);
+  const selected = [...new Map([...lexicalCandidates, ...recent].map(note => [note.id, note])).values()]
+    .slice(0, MAX_SEMANTIC_INDEX_NOTES);
+  const missing = selected.filter(note => !vectorById.has(note.id));
+  let dimension = cache.dimension;
+  const inputs = [...missing.map(note => memoryEmbeddingText(note)), query];
+  const vectors = [];
+  for (let offset = 0; offset < inputs.length; offset += EMBEDDING_BATCH_SIZE) {
+    const batch = await requestLocalEmbeddings(
+      fetchImpl, model, inputs.slice(offset, offset + EMBEDDING_BATCH_SIZE)
+    );
+    if (dimension !== null && dimension !== batch.dimension) {
+      throw new Error("The local embedding model returned a different vector size than the cached memory index.");
+    }
+    dimension = batch.dimension;
+    vectors.push(...batch.embeddings);
+  }
+  if (vectors.length !== inputs.length) throw new Error("Local embedding generation returned an incomplete vector set.");
+  const newEntries = missing.map((note, index) => ({
+    noteId: note.id,
+    textHash: memoryTextHash(memoryEmbeddingText(note)),
+    embedding: vectors[index]
+  }));
+  for (const entry of newEntries) vectorById.set(entry.noteId, entry.embedding);
+  const currentEntries = store.notes
+    .filter(note => vectorById.has(note.id))
+    .map(note => ({
+      noteId: note.id,
+      textHash: memoryTextHash(memoryEmbeddingText(note)),
+      embedding: vectorById.get(note.id)
+    }));
+  await writeMemoryEmbeddingCache(root, model, dimension, currentEntries);
+  const queryEmbedding = vectors[vectors.length - 1];
+  const lexicalById = new Map(ranked.map(item => [item.note.id, item.score]));
+  const maxLexical = Math.max(1, ...ranked.map(item => item.score));
+  const semanticRanked = [];
+  for (const note of store.notes) {
+    const lexicalScore = lexicalById.get(note.id) || 0;
+    const lexicalNormalized = lexicalScore / maxLexical;
+    const vector = vectorById.get(note.id);
+    const cosine = vector ? cosineSimilarity(queryEmbedding, vector) : null;
+    const semanticScore = cosine === null ? 0 : Math.max(0, cosine);
+    const score = vector
+      ? (semanticScore * 0.65) + (lexicalNormalized * 0.35)
+      : lexicalNormalized * 0.35;
+    if (score > 0) semanticRanked.push({
+      note, score, semanticScore, lexicalScore
+    });
+  }
+  semanticRanked.sort((left, right) =>
+    right.score - left.score || right.note.updatedAt.localeCompare(left.note.updatedAt)
+  );
+  return {
+    retrievalMode: "hybrid_semantic",
+    embeddingModel: model,
+    semanticCoverage: currentEntries.length,
+    results: semanticRanked
+  };
+}
+
+export async function searchWorkspaceMemory(inputRoot, query, limit = 6, options = {}) {
   const root = await resolveWorkspace(inputRoot);
   if (typeof query !== "string" || query.trim().length < 2 || query.length > 160) throw new Error("Project-memory search query must contain 2-160 characters.");
   if (!Number.isInteger(limit) || limit < 1 || limit > 12) throw new Error("Project-memory search limit must be an integer from 1 to 12.");
@@ -203,13 +402,40 @@ export async function searchWorkspaceMemory(inputRoot, query, limit = 6) {
     if (score > 0) ranked.push({ note: doc.note, score });
   }
   ranked.sort((left, right) => right.score - left.score || right.note.updatedAt.localeCompare(left.note.updatedAt));
-  return {
-    root, query, total: store.notes.length,
-    results: ranked.slice(0, limit).map(({ note, score }) => ({
-      id: note.id, title: note.title, content: note.content.slice(0, 1800),
-      category: note.category, tags: note.tags, updatedAt: note.updatedAt, owner: "user", score
-    }))
-  };
+  const keywordResults = ranked.slice(0, limit).map(({ note, score }) => ({
+    id: note.id, title: note.title, content: note.content.slice(0, 1800),
+    category: note.category, tags: note.tags, updatedAt: note.updatedAt, owner: "user", score
+  }));
+  const embeddingModel = String(options.embedModel ?? process.env.SYNTRA_EMBED_MODEL ?? "").trim();
+  if (!embeddingModel) {
+    return {
+      root, query, total: store.notes.length, retrievalMode: "bm25",
+      results: keywordResults
+    };
+  }
+  try {
+    const semantic = await searchMemorySemantically(root, store, normalized, ranked, options);
+    return {
+      root, query, total: store.notes.length,
+      retrievalMode: semantic.retrievalMode,
+      embeddingModel: semantic.embeddingModel,
+      semanticCoverage: semantic.semanticCoverage,
+      results: semantic.results.slice(0, limit).map(({ note, score, semanticScore, lexicalScore }) => ({
+        id: note.id, title: note.title, content: note.content.slice(0, 1800),
+        category: note.category, tags: note.tags, updatedAt: note.updatedAt, owner: "user",
+        score: Number(score.toFixed(6)),
+        semanticScore: Number(semanticScore.toFixed(6)),
+        keywordScore: Number(lexicalScore.toFixed(4))
+      }))
+    };
+  } catch (error) {
+    return {
+      root, query, total: store.notes.length,
+      retrievalMode: "bm25_fallback",
+      semanticError: (error instanceof Error ? error.message : String(error)).slice(0, 240),
+      results: keywordResults
+    };
+  }
 }
 export async function addWorkspaceMemory(inputRoot, input) {
   const root = await resolveWorkspace(inputRoot);

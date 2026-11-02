@@ -2,7 +2,9 @@
 from pathlib import Path
 from time import monotonic
 from typing import Callable
+import hashlib
 import json
+import unicodedata
 
 import torch
 
@@ -21,6 +23,12 @@ MAX_INSTRUCTION_TOKENS = 3_000_000
 MAX_INSTRUCTION_FILE_BYTES = 100 * 1024 * 1024
 MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
 MAX_INSTRUCTION_FIELD_BYTES = 512 * 1024
+INSTRUCTION_VALIDATION_FRACTION = 0.1
+INSTRUCTION_SPLIT_SEED = "syntra-instruction-split-v1"
+
+
+def _normalized_instruction_text(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
 def load_instruction_examples(
@@ -62,6 +70,12 @@ def load_instruction_examples(
             if (len(prompt_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES
                 or len(completion_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES):
                 raise ValueError(f"Prompt/completion on line {line_number} exceeds the 512 KiB field limit.")
+            normalized_prompt = _normalized_instruction_text(prompt_text)
+            normalized_completion = _normalized_instruction_text(completion_text)
+            prompt_group_id = hashlib.sha256(normalized_prompt.encode("utf-8")).hexdigest()
+            example_id = hashlib.sha256(
+                (normalized_prompt + "\\0" + normalized_completion).encode("utf-8")
+            ).hexdigest()
             prompt = tokenizer.encode(prompt_text)
             completion = tokenizer.encode(completion_text)
             completion = completion[:max(8, seq_len // 2)]
@@ -84,15 +98,161 @@ def load_instruction_examples(
                 "labels": labels,
                 "prompt_tokens": len(prompt),
                 "completion_tokens": len(completion),
+                "prompt_group_id": prompt_group_id,
+                "example_id": example_id,
                 "line": line_number,
             })
             total_tokens += example_tokens
             if len(examples) >= max_examples:
                 break
-    if len(examples) < 2:
-        raise ValueError("At least two non-empty prompt/completion examples are required for train/validation splits.")
+    if len(examples) < 1:
+        raise ValueError("Instruction dataset contains no non-empty prompt/completion examples.")
     return examples
 
+
+def split_instruction_examples(
+    examples: list[dict],
+    validation_fraction: float = INSTRUCTION_VALIDATION_FRACTION,
+    seed: str = INSTRUCTION_SPLIT_SEED,
+) -> tuple[list[dict], list[dict], dict]:
+    """Split by normalized prompt groups so repeated prompts cannot leak across validation."""
+    if not isinstance(examples, list) or len(examples) < 2:
+        raise ValueError("At least two instruction examples are required for a train/validation split.")
+    if not isinstance(validation_fraction, (int, float)) or not 0 < validation_fraction < 0.5:
+        raise ValueError("validation_fraction must be greater than 0 and less than 0.5.")
+    if not isinstance(seed, str) or not seed.strip() or len(seed) > 128:
+        raise ValueError("Instruction split seed must be a non-empty string of at most 128 characters.")
+
+    groups: dict[str, list[dict]] = {}
+    example_ids = []
+    for example in examples:
+        if not isinstance(example, dict):
+            raise ValueError("Instruction examples must be dictionaries returned by load_instruction_examples.")
+        prompt_group_id = example.get("prompt_group_id")
+        example_id = example.get("example_id")
+        if not isinstance(prompt_group_id, str) or len(prompt_group_id) != 64:
+            raise ValueError("Instruction example is missing its normalized prompt-group hash.")
+        if not isinstance(example_id, str) or len(example_id) != 64:
+            raise ValueError("Instruction example is missing its exact example hash.")
+        groups.setdefault(prompt_group_id, []).append(example)
+        example_ids.append(example_id)
+
+    if len(groups) < 2:
+        raise ValueError(
+            "At least two distinct normalized prompts are required; repeated copies of one prompt "
+            "cannot form an independent validation set."
+        )
+
+    validation_group_count = max(1, int(len(groups) * validation_fraction))
+    validation_group_count = min(validation_group_count, len(groups) - 1)
+    ranked_groups = sorted(
+        groups,
+        key=lambda group_id: hashlib.sha256((seed + ":" + group_id).encode("utf-8")).hexdigest()
+    )
+    validation_group_ids = set(ranked_groups[:validation_group_count])
+    training_examples = [example for example in examples if example["prompt_group_id"] not in validation_group_ids]
+    validation_examples = [example for example in examples if example["prompt_group_id"] in validation_group_ids]
+    if not training_examples or not validation_examples:
+        raise ValueError("Instruction split did not produce non-empty train and validation sets.")
+
+    unique_examples = len(set(example_ids))
+    unique_prompts = len(groups)
+    duplicate_prompts = len(examples) - unique_prompts
+    exact_duplicates = len(examples) - unique_examples
+    validation_fraction_actual = len(validation_examples) / len(examples)
+    warnings = []
+    if len(examples) < 100:
+        warnings.append("Small dataset: fewer than 100 examples; validation loss is weak evidence of generalization.")
+    if unique_prompts < 20:
+        warnings.append("Low prompt diversity: fewer than 20 distinct normalized prompts.")
+    if duplicate_prompts:
+        warnings.append(
+            f"{duplicate_prompts} example(s) reuse an existing normalized prompt; all copies are kept in one split."
+        )
+    if exact_duplicates:
+        warnings.append(
+            f"{exact_duplicates} exact prompt/completion duplicate(s) may overweight repeated examples during training."
+        )
+    if validation_fraction_actual < 0.05 or validation_fraction_actual > 0.3:
+        warnings.append(
+            "The prompt-group constraint makes the actual validation fraction differ substantially from the requested fraction."
+        )
+
+    quality = {
+        "example_count": len(examples),
+        "unique_prompt_count": unique_prompts,
+        "repeated_prompt_example_count": duplicate_prompts,
+        "exact_duplicate_example_count": exact_duplicates,
+        "training_examples": len(training_examples),
+        "validation_examples": len(validation_examples),
+        "training_prompt_groups": len({item["prompt_group_id"] for item in training_examples}),
+        "validation_prompt_groups": len(validation_group_ids),
+        "validation_fraction": round(validation_fraction_actual, 4),
+        "requested_validation_fraction": float(validation_fraction),
+        "split_strategy": "deterministic-sha256-prompt-groups",
+        "split_seed": seed,
+        "prompt_leakage_groups": 0,
+        "warnings": warnings,
+    }
+    return training_examples, validation_examples, quality
+
+
+def audit_instruction_dataset(
+    dataset_path: str | Path,
+    seq_len: int = 4096,
+    tokenizer: ByteBPETokenizer | None = None,
+    max_examples: int = MAX_INSTRUCTION_EXAMPLES,
+    max_tokens: int = MAX_INSTRUCTION_TOKENS,
+) -> dict:
+    """Return a read-only structural audit of a local prompt/completion JSONL file."""
+    tokenizer_basis = "checkpoint-tokenizer" if tokenizer is not None else "byte-fallback"
+    try:
+        examples = load_instruction_examples(
+            dataset_path, seq_len, tokenizer=tokenizer,
+            max_examples=max_examples, max_tokens=max_tokens
+        )
+    except (OSError, ValueError) as error:
+        return {
+            "valid": False, "split_available": False, "example_count": 0,
+            "tokenizer_basis": tokenizer_basis, "error": str(error), "warnings": [],
+        }
+
+    unique_prompt_count = len({item["prompt_group_id"] for item in examples})
+    unique_example_count = len({item["example_id"] for item in examples})
+    repeated_prompt_count = len(examples) - unique_prompt_count
+    exact_duplicate_count = len(examples) - unique_example_count
+    warnings = []
+    if len(examples) < 100:
+        warnings.append("Small dataset: fewer than 100 examples; validation loss is weak evidence of generalization.")
+    if unique_prompt_count < 20:
+        warnings.append("Low prompt diversity: fewer than 20 distinct normalized prompts.")
+    if repeated_prompt_count:
+        warnings.append(f"{repeated_prompt_count} example(s) reuse an existing normalized prompt; all copies stay in one split.")
+    if exact_duplicate_count:
+        warnings.append(f"{exact_duplicate_count} exact prompt/completion duplicate(s) may overweight repeated examples during training.")
+
+    try:
+        _, _, split_quality = split_instruction_examples(examples)
+    except ValueError as error:
+        warnings.append(str(error))
+        return {
+            "valid": True, "split_available": False, "example_count": len(examples),
+            "unique_prompt_count": unique_prompt_count,
+            "repeated_prompt_example_count": repeated_prompt_count,
+            "exact_duplicate_example_count": exact_duplicate_count,
+            "training_examples": 0, "validation_examples": 0, "validation_fraction": 0.0,
+            "split_strategy": "deterministic-sha256-prompt-groups",
+            "split_seed": INSTRUCTION_SPLIT_SEED,
+            "prompt_leakage_groups": 0 if unique_prompt_count < 2 else None,
+            "tokenizer_basis": tokenizer_basis,
+            "tokenization_note": "Byte-level fallback used for audit unless a checkpoint tokenizer is supplied; fine-tuning uses the checkpoint tokenizer.",
+            "error": str(error), "warnings": warnings,
+        }
+    return {
+        "valid": True, "split_available": True, **split_quality,
+        "tokenizer_basis": tokenizer_basis,
+        "tokenization_note": "Byte-level fallback used for audit unless a checkpoint tokenizer is supplied; fine-tuning uses the checkpoint tokenizer.",
+    }
 
 def _instruction_batch(examples: list[dict], batch_size: int, device: torch.device):
     indices = torch.randint(0, len(examples), (batch_size,)).tolist()
@@ -157,10 +317,7 @@ def finetune(
     model.load_state_dict(saved["model_state"])
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     examples = load_instruction_examples(dataset_path, config.seq_len, tokenizer)
-    split = max(1, int(len(examples) * 0.9))
-    if split >= len(examples):
-        split = len(examples) - 1
-    training_examples, validation_examples = examples[:split], examples[split:]
+    training_examples, validation_examples, dataset_quality = split_instruction_examples(examples)
     base_step = int(saved.get("step", 0))
     started = monotonic()
     last_train_loss = None
@@ -179,6 +336,7 @@ def finetune(
             "checkpoint": str(checkpoint_path_value),
             "training_mode": "supervised-instruction-finetuning",
             "instruction_examples": len(examples),
+            "instruction_dataset_quality": dataset_quality,
             "tokenizer_vocab_size": tokenizer.vocab_size,
             "context_tokens": config.seq_len,
         }
@@ -187,7 +345,12 @@ def finetune(
         return value
 
     model.train()
-    report("running", base_step, f"Supervised fine-tuning started with {len(examples)} local prompt/completion examples.")
+    report(
+        "running", base_step,
+        f"Supervised fine-tuning started with {len(training_examples)} training and "
+        f"{len(validation_examples)} validation examples. "
+        + ("Dataset warnings: " + " ".join(dataset_quality["warnings"]) if dataset_quality["warnings"] else "No basic dataset-quality warnings.")
+    )
     for step in range(base_step + 1, base_step + steps + 1):
         x, y = _instruction_batch(training_examples, batch_size, device)
         optimizer.zero_grad(set_to_none=True)
@@ -210,6 +373,7 @@ def finetune(
                 "step": step,
                 "training_mode": "supervised-instruction-finetuning",
                 "instruction_examples": len(examples),
+                "instruction_dataset_quality": dataset_quality,
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
             }
@@ -223,6 +387,7 @@ def finetune(
                 "tokenizer": "byte-BPE", "tokenizer_vocab_size": tokenizer.vocab_size,
                 "context_tokens": config.seq_len,
                 "training_mode": "supervised-instruction-finetuning", "instruction_examples": len(examples),
+                "instruction_dataset_quality": dataset_quality,
                 "pretrained_weights": False,
             }
             metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")

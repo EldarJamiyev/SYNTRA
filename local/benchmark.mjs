@@ -27,7 +27,12 @@ export function validateBenchmarkSuite(suite) {
     if (typeof task.title !== "string" || !task.title.trim() || task.title.length > 120) throw new Error("Benchmark task " + task.id + " has an invalid title.");
     if (typeof task.goal !== "string" || !task.goal.trim() || task.goal.length > 5000) throw new Error("Benchmark task " + task.id + " has an invalid goal.");
     if (typeof task.fixture !== "string" || !task.fixture.trim() || path.isAbsolute(task.fixture) || task.fixture.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " has an unsafe fixture path.");
-    if (task.baselineCheck !== "node-script") throw new Error("Benchmark task " + task.id + " must use the supported node-script baseline check.");
+    if (!["node-script", "python-unittest", "typescript"].includes(task.baselineCheck)) throw new Error("Benchmark task " + task.id + " has an unsupported baseline check.");
+    if (typeof task.expectedBaselineFailure !== "string"
+      || task.expectedBaselineFailure.trim().length < 4
+      || task.expectedBaselineFailure.length > 300) {
+      throw new Error("Benchmark task " + task.id + " must declare a 4-300 character expected baseline failure diagnostic.");
+    }
     if (typeof task.testEntry !== "string" || !task.testEntry.trim() || path.isAbsolute(task.testEntry)
       || task.testEntry.split(/[\\/]+/).some(part => part === ".." || part === ".")) {
       throw new Error("Benchmark task " + task.id + " has an unsafe test-entry path.");
@@ -86,20 +91,109 @@ export async function runNodeBaselineCheck(cwd, testEntry, timeoutMs = 30000) {
   });
 }
 
+export async function runPythonBaselineCheck(cwd, testEntry, timeoutMs = 30000) {
+  const root = await fs.realpath(cwd);
+  const requestedEntry = path.resolve(root, testEntry);
+  if (!isInside(root, requestedEntry)) throw new Error("Benchmark Python test entry escapes its fixture workspace.");
+  const entry = await fs.realpath(requestedEntry);
+  if (!isInside(root, entry) || !(await fs.stat(entry)).isFile()) {
+    throw new Error("Benchmark Python test entry is missing or resolves outside its fixture workspace.");
+  }
+  const relative = path.relative(root, entry);
+  const python = process.platform === "win32" ? "python" : "python3";
+  return new Promise(resolve => {
+    let stdout = "", stderr = "", timedOut = false, settled = false, child;
+    try {
+      child = spawn(python, ["-m", "unittest", "discover", "-s", path.dirname(relative),
+        "-p", path.basename(relative), "-v"], {
+        cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
+      });
+    } catch (error) {
+      resolve({ passed: false, timedOut: false, exitCode: null, error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
+    child.stdout.on("data", chunk => { stdout = boundedOutput(stdout, chunk); });
+    child.stderr.on("data", chunk => { stderr = boundedOutput(stderr, chunk); });
+    child.on("error", error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ passed: false, timedOut, exitCode: null, error: error.message, stdout, stderr });
+    });
+    child.on("close", code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ passed: code === 0 && !timedOut, timedOut, exitCode: code, stdout, stderr });
+    });
+  });
+}
+
+export async function runTypeScriptBaselineCheck(cwd, projectEntry, timeoutMs = 30000) {
+  const root = await fs.realpath(cwd);
+  const requestedEntry = path.resolve(root, projectEntry);
+  if (!isInside(root, requestedEntry)) throw new Error("Benchmark TypeScript project escapes its fixture workspace.");
+  const project = await fs.realpath(requestedEntry);
+  if (!isInside(root, project) || !(await fs.stat(project)).isFile()) {
+    throw new Error("Benchmark TypeScript project file is missing or resolves outside its fixture workspace.");
+  }
+  const compilerRoot = path.join(REPO_ROOT, "node_modules", "typescript");
+  const compilerPath = path.join(compilerRoot, "bin", "tsc");
+  let compiler;
+  try { compiler = await fs.realpath(compilerPath); }
+  catch {
+    return { passed: false, timedOut: false, exitCode: null, error: "The repository TypeScript compiler is unavailable. Run npm ci before TypeScript benchmarks." };
+  }
+  if (!isInside(await fs.realpath(compilerRoot), compiler)) {
+    throw new Error("Benchmark TypeScript compiler resolves outside the installed TypeScript package.");
+  }
+  const projectRelative = path.relative(root, project);
+  return new Promise(resolve => {
+    let stdout = "", stderr = "", timedOut = false, settled = false, child;
+    try {
+      child = spawn(process.execPath, [compiler, "--noEmit", "--pretty", "false", "--project", projectRelative], {
+        cwd: root, shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"]
+      });
+    } catch (error) {
+      resolve({ passed: false, timedOut: false, exitCode: null, error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeoutMs);
+    child.stdout.on("data", chunk => { stdout = boundedOutput(stdout, chunk); });
+    child.stderr.on("data", chunk => { stderr = boundedOutput(stderr, chunk); });
+    child.on("error", error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ passed: false, timedOut, exitCode: null, error: error.message, stdout, stderr });
+    });
+    child.on("close", code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ passed: code === 0 && !timedOut, timedOut, exitCode: code, stdout, stderr });
+    });
+  });
+}
+
 export function evaluateBenchmarkTask(task, agentResult, metrics = {}) {
   const actualPaths = Array.isArray(agentResult?.changedFiles) ? agentResult.changedFiles.map(item => relativePath(item?.path)).filter(Boolean).sort() : [];
   const expectedPaths = task.expectedChangedPaths.map(relativePath).sort();
   const exactPaths = actualPaths.length === expectedPaths.length && actualPaths.every((item, index) => item === expectedPaths[index]);
   const patchValid = actualPaths.length > 0 && exactPaths;
   const verificationPassed = agentResult?.verification?.passed === true;
+  const baselineValidated = metrics.baselineValidated === true;
   const promptTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.promptTokens) || 0), 0);
   const outputTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.outputTokens) || 0), 0);
   return {
     id: task.id, category: String(task.category || "general"), title: task.title,
     agentStatus: String(agentResult?.status || "unknown"),
-    patchValid, verificationPassed, taskComplete: patchValid && verificationPassed,
+    patchValid, verificationPassed,
+    taskComplete: baselineValidated && patchValid && verificationPassed,
     expectedChangedPaths: expectedPaths, changedPaths: actualPaths,
     verificationStatus: String(agentResult?.verification?.status || "not_run"),
+    baselineValidated,
     latencyMs: Math.max(0, Math.round(Number(metrics.latencyMs) || 0)),
     tokens: { prompt: promptTokens, output: outputTokens, total: promptTokens + outputTokens },
     peakProcessRssBytes: Math.max(0, Math.round(Number(metrics.peakProcessRssBytes) || 0)),
@@ -150,7 +244,7 @@ async function createFixtureWorkspace(suiteDir, task) {
   }
 }
 
-export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, modelRequest, agentRunner = runAgentTask, onProgress = () => {}, outputPath = null }) {
+export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, modelRequest, reviewModelRequest = null, agentRunner = runAgentTask, onProgress = () => {}, outputPath = null }) {
   validateBenchmarkSuite(suite);
   if (typeof modelRequest !== "function") throw new Error("A local model request bridge is required.");
   const requested = taskIds ? new Set(taskIds) : null;
@@ -166,18 +260,30 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
   let selectedModel = null;
   for (const task of selected) {
     let fixture = null, agentResult = null, taskError = null, progressModel = null;
+    let baselineValidated = false;
     const started = performance.now();
     let peakRss = process.memoryUsage().rss;
     const sampler = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss); }, 100);
     try {
       fixture = await createFixtureWorkspace(suiteDir, task);
-      const baseline = await runNodeBaselineCheck(fixture.workspace, task.testEntry);
-      if (baseline.timedOut || baseline.passed || baseline.exitCode === null) throw new Error("Fixture baseline is invalid: its Node.js assertion script must fail before the requested change and finish within 30 seconds.");
-      await onProgress({ taskId: task.id, phase: "started", message: "Running the actual local coding agent against an isolated fixture." });
+      const baseline = task.baselineCheck === "python-unittest"
+        ? await runPythonBaselineCheck(fixture.workspace, task.testEntry)
+        : task.baselineCheck === "typescript"
+          ? await runTypeScriptBaselineCheck(fixture.workspace, task.testEntry)
+          : await runNodeBaselineCheck(fixture.workspace, task.testEntry);
+      if (baseline.timedOut || baseline.passed || baseline.exitCode === null) {
+        throw new Error("Fixture baseline is invalid: its " + task.baselineCheck + " checks must fail before the requested change and finish within 30 seconds.");
+      }
+      const baselineOutput = String(baseline.stdout || "") + "\n" + String(baseline.stderr || "");
+      if (!baselineOutput.includes(task.expectedBaselineFailure)) {
+        throw new Error("Fixture baseline failed for an unexpected reason. Its output did not contain the declared diagnostic substring.");
+      }
+      baselineValidated = true;
+      await onProgress({ taskId: task.id, phase: "started", message: "The fixture failed for its expected reason. Running the actual local coding agent against an isolated fixture." });
       agentResult = await agentRunner({
         root: fixture.workspace, goal: task.goal, requestedPath: task.expectedChangedPaths[0],
         maxIterations: task.maxIterations, maxSlices: task.maxSlices,
-        runChecks: true, modelToolSelection: true, modelSelfReview: true, modelRequest,
+        runChecks: true, modelToolSelection: true, modelSelfReview: true, modelRequest, reviewModelRequest,
         onProgress: async update => {
           if (update?.model) progressModel = update.model;
           await onProgress({ taskId: task.id, ...update });
@@ -192,7 +298,8 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       if (fixture?.parent) await fs.rm(fixture.parent, { recursive: true, force: true }).catch(() => {});
     }
     const result = evaluateBenchmarkTask(task, agentResult, {
-      latencyMs: performance.now() - started, peakProcessRssBytes: peakRss, error: taskError
+      latencyMs: performance.now() - started, peakProcessRssBytes: peakRss,
+      baselineValidated, error: taskError
     });
     if (!agentResult) {
       result.patchValid = false; result.verificationPassed = false;

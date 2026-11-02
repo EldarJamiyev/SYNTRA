@@ -2,11 +2,11 @@ name: SYNTRA CodeQL
 
 on:
   push:
-    branches: [main]
+    branches: [main, "hardening/**"]
   pull_request:
     branches: [main]
   schedule:
-    - cron: '31 4 * * 1'
+    - cron: "31 4 * * 1"
 
 permissions:
   actions: read
@@ -22,13 +22,9 @@ jobs:
       matrix:
         language: [javascript-typescript, python]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-      - name: Build
-        uses: github/codeql-action/autobuild@v3
-      - name: Analyze
-        uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/autobuild@v4
+      - uses: github/codeql-action/analyze@v4

@@ -5,8 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 const DEFAULT_ROOT = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 
-function apiPort() {
-  const value = Number(process.env.SYNTRA_LOCAL_PORT || 3001);
+function apiPort(env = process.env) {
+  const value = Number(env.SYNTRA_LOCAL_PORT || 3001);
   if (!Number.isInteger(value) || value < 1 || value > 65535) {
     throw new Error("SYNTRA_LOCAL_PORT must be a valid TCP port.");
   }
@@ -33,13 +33,13 @@ function stopChild(child) {
   }
 }
 
-async function startOrReuseApi({ root, port, stdio, timeoutMs }) {
+async function startOrReuseApi({ root, port, stdio, timeoutMs, env }) {
   const healthUrl = "http://127.0.0.1:" + port + "/local-api/health";
   if (await isHealthy(healthUrl)) return { child: null, reused: true };
 
   const child = spawn(process.execPath, [path.join(root, "local", "server.mjs")], {
     cwd: root,
-    env: process.env,
+    env,
     stdio,
     windowsHide: true
   });
@@ -85,20 +85,23 @@ export function syntraLocalApiPlugin(options = {}) {
   const root = path.resolve(options.root || DEFAULT_ROOT);
   const stdio = options.stdio || "inherit";
   const timeoutMs = options.timeoutMs || 20000;
+  // Tests and embedders can supply an isolated environment without mutating
+  // the host process environment shared by concurrent Node test workers.
+  const env = options.env || process.env;
 
   return {
     name: "syntra-local-api",
     apply: "serve",
     async configureServer(server) {
-      if (process.env.SYNTRA_AUTOSTART_LOCAL_API === "0") {
+      if (env.SYNTRA_AUTOSTART_LOCAL_API === "0") {
         server.config.logger.warn(
           "[SYNTRA] Automatic local API startup is disabled (SYNTRA_AUTOSTART_LOCAL_API=0)."
         );
         return;
       }
 
-      const port = apiPort();
-      const result = await startOrReuseApi({ root, port, stdio, timeoutMs });
+      const port = apiPort(env);
+      const result = await startOrReuseApi({ root, port, stdio, timeoutMs, env });
       server.config.logger.info(
         result.reused
           ? "[SYNTRA] Reusing the healthy local API on port " + port + "."

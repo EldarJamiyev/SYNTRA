@@ -472,25 +472,25 @@ test("model-selected context plans allow only bounded read-only retrieval includ
       { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
       { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
       { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } },
-      { tool: "workspace.memory.search", input: { query: "approved runtime decisions", limit: 4 } }
+      { tool: "workspace.semantic.search", input: { query: "where are incoming service requests routed", limit: 4 } }
     ]
   }, ["src/server.js", "src/db.js"]);
   assert.deepEqual(valid, [
     { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
     { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
     { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } },
-    { tool: "workspace.memory.search", input: { query: "approved runtime decisions", limit: 4 } }
+    { tool: "workspace.semantic.search", input: { query: "where are incoming service requests routed", limit: 4 } }
   ]);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.check", input: { task: "test" } }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, workspace.memory.search, and workspace.semantic.search/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.index.refresh", input: {} }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, workspace.memory.search, and workspace.semantic.search/);
   for (const tool of ["workspace.memory.add", "workspace.memory.update", "workspace.memory.delete"]) {
     assert.throws(() => validateReadOnlyToolPlan({
       calls: [{ tool, input: { title: "Injected", content: "Write this automatically." } }]
-    }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, and workspace.memory.search/);
+    }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, workspace.memory.search, and workspace.semantic.search/);
   }
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.memory.search", input: { query: "x", limit: 20 } }]
@@ -498,6 +498,9 @@ test("model-selected context plans allow only bounded read-only retrieval includ
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.symbols.search", input: { query: "x", limit: 20 } }]
   }, ["src/server.js"]), /2-160 character query and an optional limit from 1 to 8/);
+  assert.throws(() => validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.semantic.search", input: { query: "x", limit: 20 } }]
+  }, ["src/server.js"]), /2-300 character query and an optional limit from 1 to 8/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.read", input: { path: ".env" } }]
   }, ["src/server.js"]), /safe file list/);
@@ -717,10 +720,11 @@ test("patch review validation requires evidence-backed blockers and workspace-lo
   }, ["src/value.js"]), /outside the inspected workspace/);
 });
 
-test("independent patch review rejects an incomplete patch and feeds findings into a correction attempt", async () => {
+test("second-pass patch review rejects an incomplete patch and feeds findings into a correction attempt", async () => {
   const root = await createProject();
   let patchCalls = 0;
   let reviewCalls = 0;
+  let separateReviewerRequests = 0;
   const patchPrompts = [];
   const modelRequest = async (method, route, body) => {
     if (method === "GET" && route === "/model/status") {
@@ -776,7 +780,7 @@ test("independent patch review rejects an incomplete patch and feeds findings in
           generated_tokens: 30, trained_steps: null
         };
       }
-      assert.match(body.prompt, /Independent patch review found concrete blocking issues/);
+      assert.match(body.prompt, /Second-pass patch review found concrete blocking issues/);
       return {
         text: JSON.stringify({
           summary: "Update the value and the requested test title.",
@@ -808,7 +812,14 @@ test("independent patch review rejects an incomplete patch and feeds findings in
       maxIterations: 2,
       runChecks: false,
       modelSelfReview: true,
-      modelRequest
+      modelRequest,
+      reviewModelRequest: async (method, route, body, timeoutMs, options) => {
+        separateReviewerRequests += 1;
+        const result = await modelRequest(method, route, body, timeoutMs, options);
+        return route === "/model/generate"
+          ? { ...result, provider: "ollama-local", model_name: "syntra-test-reviewer:latest" }
+          : { ...result, provider: "ollama-local", model_name: "syntra-test-reviewer:latest", context_window_tokens: 4096 };
+      }
     });
     assert.equal(patchCalls, 2, JSON.stringify({
       reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
@@ -818,11 +829,14 @@ test("independent patch review rejects an incomplete patch and feeds findings in
       reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
       attempts: result.attempts
     }));
+    assert.equal(separateReviewerRequests, 4,
+      "review tokenization and generation must both use the separate reviewer bridge");
     assert.equal(result.proposals.length, 2);
     assert.deepEqual(result.proposals.map(item => item.path).sort(), ["src/value.js", "tests/value.test.js"]);
     assert.ok(result.attempts.some(item => item.status === "self_review_rejected"));
     assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "rejected"));
-    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted"));
+    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted_separate_model"));
+    assert.ok(result.attempts.some(item => item.reviewUsedSeparateModel === true));
     assert.ok(patchPrompts[1].includes("tests/value.test.js"));
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     assert.match(await fs.readFile(path.join(root, "tests", "value.test.js"), "utf8"), /value is two/);
@@ -1055,7 +1069,38 @@ test("repository graph links local imports and agent repairs a failed test in a 
     throw new Error("Unexpected model route: " + route);
   };
   try {
+    await fs.writeFile(path.join(root, "src", "service.js"),
+      "export function calculateValue(input) { return input + 1; }\n");
+    await fs.writeFile(path.join(root, "src", "consumer.js"),
+      "import {\n  calculateValue\n} from \"./service.js\";\nexport function consume() { return calculateValue(1); }\n");
+    await fs.writeFile(path.join(root, "src", "gateway-contracts.ts"), [
+      "export interface GatewayOptions { host: string; port: number }",
+      "export type GatewayState = \"ready\" | \"offline\";",
+      "export class GatewayBase {}",
+      ""
+    ].join("\n"));
+    await fs.writeFile(path.join(root, "src", "gateway-consumer.ts"), [
+      'import { GatewayBase as BaseGateway, GatewayOptions as ConnectionOptions, GatewayState as ConnectionState } from "./gateway-contracts";',
+      "export class GatewayService extends BaseGateway {",
+      "  connect(options: ConnectionOptions): ConnectionState { return options.host ? \"ready\" : \"offline\"; }",
+      "}",
+      ""
+    ].join("\n"));
     const graph = await buildRepositoryGraph(root);
+    const consumerNode = graph.nodes.find(node => node.path === "src/consumer.js");
+    const serviceNode = graph.nodes.find(node => node.path === "src/service.js");
+    assert.ok(consumerNode.imports.includes("src/service.js"),
+      "multiline imports should resolve in the main agent graph");
+    assert.ok(consumerNode.calls.includes("src/service.js"),
+      "statically imported calls should create a caller relationship");
+    assert.ok(serviceNode.calledBy.includes("src/consumer.js"));
+    const contractNode = graph.nodes.find(node => node.path === "src/gateway-contracts.ts");
+    const typedConsumerNode = graph.nodes.find(node => node.path === "src/gateway-consumer.ts");
+    assert.ok(contractNode && typedConsumerNode);
+    assert.ok(typedConsumerNode.typeDependencies.includes("src/gateway-contracts.ts"),
+      "type references and class heritage should link the consumer to its contract declarations");
+    assert.ok(contractNode.referencedByTypes.includes("src/gateway-consumer.ts"),
+      "the contract should retain reverse type-consumer relationships");
     const valueNode = graph.nodes.find(node => node.path === "src/value.js");
     const testNode = graph.nodes.find(node => node.path === "tests/value.test.js");
     const workflowNode = graph.nodes.find(node => node.path === ".github/workflows/checks.yml");

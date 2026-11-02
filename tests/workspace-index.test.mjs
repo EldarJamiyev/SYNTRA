@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   getWorkspaceIndexStatus,
   refreshWorkspaceIndex,
+  searchWorkspaceSemantic,
   searchWorkspaceSymbols
 } from "../local/workspace-index.mjs";
 
@@ -17,6 +18,13 @@ async function createProject() {
     "export interface GatewayOptions { host: string }",
     "export async function resolveGateway(host: string): Promise<string> { return host; }",
     "export const createGateway = (name: string) => ({ name });",
+    "export async function",
+    "  resolveMultilineGateway(",
+    "    host: string",
+    "  ): Promise<string> { return host; }",
+    "export const createMultilineGateway = (",
+    "  name: string",
+    ") => ({ name });",
     "export class GatewayClient {}",
     "export type GatewayState = 'ready' | 'offline';",
     ""
@@ -56,6 +64,11 @@ test("workspace symbol index extracts bounded declarations without persisting so
     assert.equal(refreshed.fileCount, 4);
     assert.ok(refreshed.symbolCount >= 9);
 
+    const multiline = await searchWorkspaceSymbols(root, "resolveMultilineGateway");
+    assert.equal(multiline.results[0].path, "src/service.ts");
+    assert.equal(multiline.results[0].line, 4);
+    const multilineArrow = await searchWorkspaceSymbols(root, "createMultilineGateway");
+    assert.equal(multilineArrow.results[0].path, "src/service.ts");
     const gateway = await searchWorkspaceSymbols(root, "resolveGateway");
     assert.equal(gateway.results.length, 1);
     assert.equal(gateway.results[0].name, "resolveGateway");
@@ -70,7 +83,7 @@ test("workspace symbol index extracts bounded declarations without persisting so
     const rust = await searchWorkspaceSymbols(root, "RouteProvider");
     assert.equal(rust.results[0].path, "src/lib.rs");
 
-    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v3.json"), "utf8");
     assert.equal(stored.includes("SYNTRA_SECRET"), false);
     assert.equal(stored.includes("return host"), false);
     assert.equal(stored.includes("GatewayOptions { host"), false);
@@ -160,6 +173,7 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(refreshed.documentationFileCount, 1);
     assert.equal(refreshed.testFileCount, 1);
     assert.ok(refreshed.importEdgeCount >= 2);
+    assert.ok(refreshed.callEdgeCount >= 2);
     assert.equal(refreshed.documentationReferenceCount, 2);
     assert.equal(refreshed.testOwnershipCount, 1);
 
@@ -171,11 +185,14 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(implementation.imports.length, 0);
     assert.ok(implementation.importedBy.includes("src/consumer.ts"));
     assert.ok(implementation.importedBy.includes("tests/service.test.ts"));
+    assert.ok(implementation.calledBy.includes("src/consumer.ts"));
+    assert.ok(implementation.calledBy.includes("tests/service.test.ts"));
     assert.ok(implementation.referencedByDocs.includes("docs/architecture.md"));
     assert.ok(implementation.ownedTests.includes("tests/service.test.ts"));
 
     const consumer = await searchWorkspaceSymbols(root, "useGateway");
     assert.ok(consumer.results[0].imports.includes("src/service.ts"));
+    assert.ok(consumer.results[0].calls.includes("src/service.ts"));
 
     const testSymbol = await searchWorkspaceSymbols(root, "testResolveGateway");
     assert.equal(testSymbol.results[0].role, "test");
@@ -185,10 +202,11 @@ test("workspace graph indexes local imports, documentation links, and test owner
     assert.equal(status.documentationFileCount, 1);
     assert.equal(status.testFileCount, 1);
     assert.equal(status.importEdgeCount, refreshed.importEdgeCount);
+    assert.equal(status.callEdgeCount, refreshed.callEdgeCount);
     assert.equal(status.documentationReferenceCount, 2);
     assert.equal(status.testOwnershipCount, 1);
 
-    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v2.json"), "utf8");
+    const stored = await fs.readFile(path.join(root, ".syntra", "workspace-index-v3.json"), "utf8");
     assert.equal(stored.includes("resolveGateway(host: string)"), false);
     assert.equal(stored.includes("used by the"), false);
     assert.equal(stored.includes("The [gateway service]"), false);
@@ -261,9 +279,9 @@ test("workspace index refuses a symbolic-link index file", async t => {
   try {
     await refreshWorkspaceIndex(root);
     await fs.writeFile(outside, JSON.stringify({ schemaVersion: 1 }), "utf8");
-    await fs.unlink(path.join(root, ".syntra", "workspace-index-v2.json"));
+    await fs.unlink(path.join(root, ".syntra", "workspace-index-v3.json"));
     try {
-      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v2.json"), "file");
+      await fs.symlink(outside, path.join(root, ".syntra", "workspace-index-v3.json"), "file");
     } catch (error) {
       if (["EPERM", "EACCES", "ENOTSUP", "UNKNOWN"].includes(error?.code)) {
         t.skip("The current operating system does not permit creating file symlinks.");
@@ -276,5 +294,110 @@ test("workspace index refuses a symbolic-link index file", async t => {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { force: true });
+  }
+});
+
+
+test("semantic source search retrieves deep code chunks, reuses local vectors, and stores no source text", async () => {
+  const root = await createProject();
+  try {
+    const lines = Array.from({ length: 150 }, (_, index) =>
+      "// unrelated bootstrap configuration note " + index + " for the application runtime"
+    );
+    lines.push(
+      "export function normalizeWebhookEvent(payload: unknown) {",
+      "  // Convert incoming webhook payloads into the canonical event envelope before dispatch.",
+      "  return { type: 'canonical', payload };",
+      "}"
+    );
+    await fs.writeFile(path.join(root, "src", "router.ts"), lines.join("\n") + "\n", "utf8");
+    await refreshWorkspaceIndex(root);
+
+    let requests = 0;
+    const fetchImpl = async (url, options) => {
+      requests += 1;
+      assert.equal(url, "http://127.0.0.1:11434/api/embed");
+      const body = JSON.parse(options.body);
+      assert.equal(body.model, "fixture-embedding-model");
+      assert.equal(body.truncate, false);
+      const embeddings = body.input.map(input =>
+        /canonical event envelope/i.test(input)
+          ? [1, 0, 0, 0, 0, 0, 0, 0]
+          : [0, 1, 0, 0, 0, 0, 0, 0]
+      );
+      return new Response(JSON.stringify({ embeddings }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    };
+
+    const first = await searchWorkspaceSemantic(
+      root,
+      "Where are incoming webhook payloads normalized into a canonical event envelope before dispatch?",
+      8,
+      { embedModel: "fixture-embedding-model", fetchImpl }
+    );
+    assert.equal(first.retrievalMode, "semantic");
+    assert.ok(first.semanticChunkCoverage > first.semanticCoverage,
+      "the index should store multiple chunk vectors for multi-chunk source files");
+    const router = first.results.find(item => item.path === "src/router.ts");
+    assert.ok(router, JSON.stringify(first.results));
+    assert.ok(router.lineStart > 1, "the matching result must point beyond the file prefix");
+    assert.ok(router.lineEnd >= router.lineStart);
+    assert.match(router.excerpt, /canonical event envelope/);
+
+    const cachePath = path.join(root, ".syntra", "workspace-semantic-v2.json");
+    const stored = await fs.readFile(cachePath, "utf8");
+    const cache = JSON.parse(stored);
+    assert.equal(cache.schemaVersion, 2);
+    assert.equal(cache.model, "fixture-embedding-model");
+    assert.ok(cache.entries.length > first.semanticCoverage);
+    assert.ok(cache.entries.every(entry =>
+      typeof entry.path === "string"
+      && Number.isInteger(entry.chunkIndex)
+      && /^[a-f0-9]{64}$/.test(entry.textHash)
+      && Array.isArray(entry.embedding)
+    ));
+    assert.equal(stored.includes("canonical event envelope"), false);
+    assert.equal(stored.includes("embeddingText"), false);
+
+    const callsBeforeCachedSearch = requests;
+    const second = await searchWorkspaceSemantic(
+      root,
+      "Find the code that prepares webhook events for dispatch.",
+      8,
+      { embedModel: "fixture-embedding-model", fetchImpl }
+    );
+    assert.equal(second.retrievalMode, "semantic");
+    assert.equal(requests, callsBeforeCachedSearch + 1,
+      "unchanged source chunks should be reused; only the new query needs embedding");
+
+    await fs.appendFile(path.join(root, "src", "router.ts"), "\n// changed after indexing\n", "utf8");
+    const stale = await searchWorkspaceSemantic(
+      root,
+      "Where is the canonical webhook event normalized?",
+      8,
+      { embedModel: "fixture-embedding-model", fetchImpl }
+    );
+    assert.ok(stale.staleFiles >= 1);
+    assert.equal(stale.results.some(item => item.path === "src/router.ts"), false,
+      "source excerpts must not be returned when the indexed file hash is stale");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic source search falls back cleanly when local Ollama embeddings are unavailable", async () => {
+  const root = await createProject();
+  try {
+    await refreshWorkspaceIndex(root);
+    const result = await searchWorkspaceSemantic(root, "Gateway client routing", 6, {
+      embedModel: "missing-local-embedding-model",
+      fetchImpl: async () => { throw new Error("connection refused"); }
+    });
+    assert.equal(result.retrievalMode, "lexical_fallback");
+    assert.match(result.semanticError, /connection refused/);
+    assert.ok(result.results.length > 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });

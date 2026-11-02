@@ -73,7 +73,7 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
     let provider = await detectLocalModel();
     let modelBody = body || {};
     if (typeof modelBody.model === "string" && modelBody.model.trim()) {
-      const requested = await detectLocalModel({ requestedModel: modelBody.model.trim() });
+      const requested = await detectLocalModel({ mode: "ollama", requestedModel: modelBody.model.trim() });
       if (!requested) throw new Error("The configured SYNTRA_REVIEW_MODEL is not installed locally or exceeds the safe memory-selection limit.");
       provider = requested;
       modelBody = { ...modelBody };
@@ -655,6 +655,10 @@ async function runChatTurn(jobId, message, history, signal) {
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
+        reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim()
+          ? (method, route, body, timeoutMs, options = {}) =>
+              aiRequest(method, route, { ...(body || {}), model: process.env.SYNTRA_REVIEW_MODEL.trim() }, timeoutMs, { ...options, signal })
+          : null,
         onProgress: async update => {
           const phase = update.phase || "working";
           const messageText = update.message || "Working on the requested change";
@@ -941,7 +945,7 @@ const routeHandlers = {
 const server = http.createServer(async (request, response) => {
   const parsed = new URL(request.url || "/", "http://" + HOST + ":" + PORT);
   const key = (request.method || "GET") + " " + parsed.pathname;
-  const hostRejection = getHostRejection(request);
+  const hostRejection = getHostRejection(request, request.socket?.localPort || PORT);
   if (hostRejection) { sendJson(response, 403, { error: hostRejection }); return; }
   const originRejection = getOriginRejection(request);
   if (originRejection) { sendJson(response, 403, { error: originRejection }); return; }

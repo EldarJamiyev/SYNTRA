@@ -1,5 +1,14 @@
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
+function compareSemver(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
 function finiteNonNegative(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -35,7 +44,16 @@ export function validateBenchmarkReport(report) {
       || !finiteNonNegative(task.tokens.total)) {
       throw new Error("Benchmark task " + task.id + " has invalid token measurements.");
     }
-    if (task.taskComplete !== (task.patchValid && task.verificationPassed)) {
+    const baselineValidationRequired = compareSemver(report.suiteVersion, "1.4.0") >= 0;
+    if (baselineValidationRequired && typeof task.baselineValidated !== "boolean") {
+      throw new Error("Benchmark task " + task.id + " is missing required baseline validation evidence.");
+    }
+    if (task.baselineValidated !== undefined && typeof task.baselineValidated !== "boolean") {
+      throw new Error("Benchmark task " + task.id + " has an invalid baselineValidated value.");
+    }
+    const expectedComplete = task.patchValid && task.verificationPassed
+      && task.baselineValidated !== false;
+    if (task.taskComplete !== expectedComplete) {
       throw new Error("Benchmark task " + task.id + " has an inconsistent completion status.");
     }
     if (task.tokens.total !== task.tokens.prompt + task.tokens.output) {
@@ -72,11 +90,15 @@ function taskMap(report) {
 }
 
 export function compareBenchmarkReports(baselineInput, candidateInput) {
+  const baselineVersion = baselineInput?.suiteVersion;
+  const candidateVersion = candidateInput?.suiteVersion;
+  if (typeof baselineVersion === "string" && SEMVER.test(baselineVersion)
+    && typeof candidateVersion === "string" && SEMVER.test(candidateVersion)
+    && baselineVersion !== candidateVersion) {
+    throw new Error("Cannot compare suite versions " + baselineVersion + " and " + candidateVersion + ". Run the same benchmark suite version.");
+  }
   const baseline = validateBenchmarkReport(baselineInput);
   const candidate = validateBenchmarkReport(candidateInput);
-  if (baseline.suiteVersion !== candidate.suiteVersion) {
-    throw new Error("Cannot compare suite versions " + baseline.suiteVersion + " and " + candidate.suiteVersion + ". Run the same benchmark suite version.");
-  }
   const baselineTasks = taskMap(baseline);
   const candidateTasks = taskMap(candidate);
   const baselineIds = [...baselineTasks.keys()].sort();

@@ -223,7 +223,7 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "what is add?", "completion": "def add(a, b): return a+b"},
                 {"prompt": "what is max?", "completion": "def max2(a, b): return max(a, b)"},
             ]
-            dataset.write_text("\\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "max_examples must be between"):
                 load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_examples=MAX_INSTRUCTION_EXAMPLES + 1)
             with self.assertRaisesRegex(ValueError, "max_tokens must be between"):
@@ -244,6 +244,127 @@ class TransformerTests(unittest.TestCase):
             }), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "512 KiB field limit"):
                 load_instruction_examples(huge_field, seq_len=32, tokenizer=tokenizer)
+
+    def test_instruction_split_is_deterministic_and_keeps_repeated_prompts_together(self):
+        from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
+
+        rows = [
+            {"prompt": "Describe addition", "completion": "Add two numeric values."},
+            {"prompt": "Explain maximum", "completion": "Return the larger value."},
+            {"prompt": "  describe   ADDITION  ", "completion": "Add two numeric values."},
+            {"prompt": "Explain minimum", "completion": "Return the smaller value."},
+        ]
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-split-") as temp:
+            dataset = Path(temp) / "instructions.jsonl"
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
+            training, validation, quality = split_instruction_examples(examples)
+            training_groups = {item["prompt_group_id"] for item in training}
+            validation_groups = {item["prompt_group_id"] for item in validation}
+
+            self.assertTrue(training)
+            self.assertTrue(validation)
+            self.assertFalse(training_groups & validation_groups, "normalized prompts must not cross train/validation")
+            self.assertEqual(quality["unique_prompt_count"], 3)
+            self.assertEqual(quality["repeated_prompt_example_count"], 1)
+            self.assertEqual(quality["exact_duplicate_example_count"], 1)
+            self.assertEqual(quality["prompt_leakage_groups"], 0)
+            self.assertTrue(any("Low prompt diversity" in warning for warning in quality["warnings"]))
+            self.assertTrue(any("exact prompt/completion duplicate" in warning for warning in quality["warnings"]))
+
+            _, repeated_validation, repeated_quality = split_instruction_examples(examples)
+            self.assertEqual(
+                {item["prompt_group_id"] for item in repeated_validation},
+                validation_groups,
+                "the same dataset and seed must produce the same held-out prompt groups",
+            )
+            self.assertEqual(repeated_quality, quality)
+
+    def test_instruction_split_rejects_datasets_with_only_one_unique_prompt(self):
+        from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
+
+        rows = [
+            {"prompt": "Explain addition", "completion": "Add values."},
+            {"prompt": "  EXPLAIN   ADDITION ", "completion": "Sum values."},
+        ]
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-one-prompt-") as temp:
+            dataset = Path(temp) / "instructions.jsonl"
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
+            with self.assertRaisesRegex(ValueError, "two distinct normalized prompts"):
+                split_instruction_examples(examples)
+
+    def test_instruction_dataset_audit_reports_quality_and_invalid_validation_splits(self):
+        from syntra_ai.instruction import audit_instruction_dataset
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-audit-") as temp:
+            root = Path(temp)
+            valid_dataset = root / "valid.jsonl"
+            rows = [
+                {"prompt": "Describe addition", "completion": "Add two numeric values."},
+                {"prompt": "Explain maximum", "completion": "Return the larger value."},
+                {"prompt": "  describe   ADDITION  ", "completion": "Add two numeric values."},
+                {"prompt": "Explain minimum", "completion": "Return the smaller value."},
+            ]
+            valid_dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            report = audit_instruction_dataset(valid_dataset, seq_len=64)
+            self.assertTrue(report["valid"])
+            self.assertTrue(report["split_available"])
+            self.assertEqual(report["example_count"], 4)
+            self.assertEqual(report["unique_prompt_count"], 3)
+            self.assertEqual(report["exact_duplicate_example_count"], 1)
+            self.assertEqual(report["tokenizer_basis"], "byte-fallback")
+            self.assertTrue(report["warnings"])
+
+            one_prompt_dataset = root / "one-prompt.jsonl"
+            one_prompt_rows = [
+                {"prompt": "Explain addition", "completion": "Add values."},
+                {"prompt": "  EXPLAIN   ADDITION ", "completion": "Sum values."},
+            ]
+            one_prompt_dataset.write_text("\n".join(json.dumps(row) for row in one_prompt_rows), encoding="utf-8")
+            one_prompt_report = audit_instruction_dataset(one_prompt_dataset, seq_len=64)
+            self.assertTrue(one_prompt_report["valid"])
+            self.assertFalse(one_prompt_report["split_available"])
+            self.assertEqual(one_prompt_report["unique_prompt_count"], 1)
+            self.assertIn("two distinct normalized prompts", one_prompt_report["error"])
+
+            invalid_dataset = root / "invalid.jsonl"
+            invalid_dataset.write_text("{not json}\n", encoding="utf-8")
+            invalid_report = audit_instruction_dataset(invalid_dataset, seq_len=64)
+            self.assertFalse(invalid_report["valid"])
+            self.assertIn("Invalid JSON", invalid_report["error"])
+
+    def test_instruction_audit_cli_returns_json_and_nonzero_for_unsafe_split(self):
+        import contextlib
+        import io
+        from syntra_ai.cli import main
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-cli-") as temp:
+            dataset = Path(temp) / "instructions.jsonl"
+            rows = [
+                {"prompt": "Explain addition", "completion": "Add values."},
+                {"prompt": "Explain maximum", "completion": "Return larger value."},
+            ]
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                exit_code = main(["audit-instructions", "--dataset", str(dataset), "--seq-len", "64"])
+            report = json.loads(output.getvalue())
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(report["split_available"])
+
+            one_prompt = Path(temp) / "one-prompt.jsonl"
+            one_prompt.write_text(
+                json.dumps({"prompt": "same prompt", "completion": "first"}) + "\n" +
+                json.dumps({"prompt": " SAME   PROMPT ", "completion": "second"}),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                exit_code = main(["audit-instructions", "--dataset", str(one_prompt), "--seq-len", "64"])
+            report = json.loads(output.getvalue())
+            self.assertEqual(exit_code, 2)
+            self.assertFalse(report["split_available"])
 
     def test_checkpoint_file_budget_rejects_oversized_loads(self):
         from syntra_ai.resources import validate_checkpoint_load_budget
