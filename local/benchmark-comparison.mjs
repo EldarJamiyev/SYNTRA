@@ -35,7 +35,12 @@ export function validateBenchmarkReport(report) {
       || !finiteNonNegative(task.tokens.total)) {
       throw new Error("Benchmark task " + task.id + " has invalid token measurements.");
     }
-    if (task.taskComplete !== (task.patchValid && task.verificationPassed)) {
+    if (task.baselineValidated !== undefined && typeof task.baselineValidated !== "boolean") {
+      throw new Error("Benchmark task " + task.id + " has an invalid baselineValidated value.");
+    }
+    const expectedComplete = task.patchValid && task.verificationPassed
+      && task.baselineValidated !== false;
+    if (task.taskComplete !== expectedComplete) {
       throw new Error("Benchmark task " + task.id + " has an inconsistent completion status.");
     }
     if (task.tokens.total !== task.tokens.prompt + task.tokens.output) {
