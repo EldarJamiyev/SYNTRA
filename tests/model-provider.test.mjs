@@ -524,7 +524,7 @@ test("Gemini provider requires repository-content consent and uses server-side A
         },
         onToken: () => {}, timeoutMs: 1000
       }),
-      error => error.code === "STREAM_CONTINUATION_REQUIRED" && /does not yet resume/.test(error.message)
+      error => error.code === "MISSING_CONTINUATION_TOKEN" && /without returning a usable continuationToken/.test(error.message)
     );
     const tokenCount = await handleGeminiModelRequest("POST", "/model/tokenize", { text: "count this prompt" }, {
       fetchImpl: async (url, options) => {
@@ -661,7 +661,7 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
     assert.equal(calls.length, 2);
     assert.ok(calls.every(call => call.url.includes("/v1beta1/models/gemini-3.8-flash:generateContent")));
     assert.equal(calls[1].request.continuationToken, "opaque-token-nonstream");
-    assert.equal(calls[1].request.contents, calls[0].request.contents);
+    assert.deepEqual(calls[1].request.contents, calls[0].request.contents);
     assert.equal(nonStreaming.text, "yaml-prefix-yaml-suffix");
     assert.equal(nonStreaming.finish_reason, "STOP");
     assert.equal(nonStreaming.continuation_hops, 1);
@@ -736,13 +736,17 @@ test("Gemini long streaming resumes from the latest checkpoint and drops specula
   process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
   process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
   const streamResponse = (events, interrupt = false) => {
+    let index = 0;
     const stream = new ReadableStream({
-      start(controller) {
-        for (const event of events) {
+      pull(controller) {
+        if (index < events.length) {
+          const event = events[index++];
           controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(event) + "\n\n"));
+        } else if (interrupt) {
+          controller.error(new Error("simulated socket interruption"));
+        } else {
+          controller.close();
         }
-        if (interrupt) controller.error(new Error("simulated socket interruption"));
-        else controller.close();
       }
     });
     return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
@@ -771,7 +775,7 @@ test("Gemini long streaming resumes from the latest checkpoint and drops specula
     });
     assert.equal(calls.length, 2);
     assert.equal(calls[1].request.continuationToken, "checkpoint-token-1");
-    assert.equal(calls[1].request.contents, calls[0].request.contents);
+    assert.deepEqual(calls[1].request.contents, calls[0].request.contents);
     assert.equal(result.text, "committed-prefix-resumed-suffix");
     assert.doesNotMatch(result.text, /must-be-discarded/);
     assert.deepEqual(received, [
@@ -810,15 +814,21 @@ test("Gemini long streaming retries once from the original request when interrup
         const request = JSON.parse(options.body);
         assert.equal(request.continuationToken, undefined,
           "a stream with no checkpoint must be retried from its original prompt");
+        let delivered = false;
         const stream = new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode(
-              "data: " + JSON.stringify({
-                candidates: [{ content: { parts: [{ text: calls === 1 ? "uncommitted-first-attempt" : "clean-retry-result" }] } }]
-              }) + "\n\n"
-            ));
-            if (calls === 1) controller.error(new Error("disconnect before checkpoint"));
-            else controller.close();
+          pull(controller) {
+            if (!delivered) {
+              delivered = true;
+              controller.enqueue(new TextEncoder().encode(
+                "data: " + JSON.stringify({
+                  candidates: [{ content: { parts: [{ text: calls === 1 ? "uncommitted-first-attempt" : "clean-retry-result" }] } }]
+                }) + "\n\n"
+              ));
+            } else if (calls === 1) {
+              controller.error(new Error("disconnect before checkpoint"));
+            } else {
+              controller.close();
+            }
           }
         });
         return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
