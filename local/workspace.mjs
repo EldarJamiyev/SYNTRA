@@ -1893,11 +1893,11 @@ export function buildVerificationCommand(root, selected, {
   const workspacePath = path.resolve(root);
   // Docker --mount uses comma-delimited key/value options. A colon is valid in
   // a Windows drive path, so reject only characters that can break this syntax.
-  if (/[\\r\\n\\0,]/.test(workspacePath)) {
+  if ([10, 13, 0].some(code => workspacePath.includes(String.fromCharCode(code))) || workspacePath.includes(",")) {
     throw new Error("The workspace path contains characters that cannot be mounted safely into a Docker container.");
   }
   const mountSourcePath = process.platform === "win32"
-    ? workspacePath.replace(/\\\\/g, "/")
+    ? workspacePath.split(String.fromCharCode(92)).join("/")
     : workspacePath;
   const image = verificationContainerImage(selected, environment);
   let command;
