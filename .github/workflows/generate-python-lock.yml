@@ -24,7 +24,7 @@ jobs:
         with:
           version: "0.13.6"
       - name: Generate a universal hash-locked requirements file
-        run: uv pip compile --universal --generate-hashes --emit-index-url requirements.txt --output-file requirements.lock.txt
+        run: uv pip compile --universal --generate-hashes --emit-index-url --torch-backend=cpu requirements.txt --output-file requirements.lock.txt
       - name: Validate hash-locked CPU PyTorch installation
         run: |
           python -m venv .venv
