@@ -1,5 +1,14 @@
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
+function compareSemver(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
 function finiteNonNegative(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
@@ -34,6 +43,10 @@ export function validateBenchmarkReport(report) {
     if (!task.tokens || !finiteNonNegative(task.tokens.prompt) || !finiteNonNegative(task.tokens.output)
       || !finiteNonNegative(task.tokens.total)) {
       throw new Error("Benchmark task " + task.id + " has invalid token measurements.");
+    }
+    const baselineValidationRequired = compareSemver(report.suiteVersion, "1.4.0") >= 0;
+    if (baselineValidationRequired && typeof task.baselineValidated !== "boolean") {
+      throw new Error("Benchmark task " + task.id + " is missing required baseline validation evidence.");
     }
     if (task.baselineValidated !== undefined && typeof task.baselineValidated !== "boolean") {
       throw new Error("Benchmark task " + task.id + " has an invalid baselineValidated value.");
