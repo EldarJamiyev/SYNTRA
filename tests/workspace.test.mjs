@@ -102,7 +102,8 @@ test("verification defaults to an offline Docker container and filters host envi
     assert.ok(isolated.args.includes(flag), "expected Docker flag " + flag);
   }
   const mountIndex = isolated.args.indexOf("--mount");
-  assert.match(isolated.args[mountIndex + 1], /^type=bind,source=.+,target=\\/workspace$/);
+  assert.ok(isolated.args[mountIndex + 1].startsWith("type=bind,source="));
+  assert.ok(isolated.args[mountIndex + 1].endsWith(",target=/workspace"));
   assert.equal(isolated.env.SYNTRA_API_TOKEN, undefined);
   assert.throws(
     () => buildVerificationCommand(root + ",unsafe", selected, {
