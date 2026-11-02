@@ -27,7 +27,8 @@ test("Windows startup defaults to pretrained Ollama and only selects the native 
   assert.match(launcher, /else\s*\{\s*"ollama"\s*\}/);
   assert.match(launcher, /@\("auto", "native", "ollama", "gemini"\) -notcontains \$providerMode/);
   assert.match(launcher, /SYNTRA_GEMINI_API_KEY/);
-  assert.match(launcher, /SYNTRA_MODEL_PROVIDER=native/);
+  assert.match(launcher, /SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini/);
+  assert.match(launcher, /\$providerMode -ne "native" -and \$providerMode -ne "gemini"/);
   assert.doesNotMatch(launcher, /else\s*\{\s*"auto"\s*\}/);
 });
 
