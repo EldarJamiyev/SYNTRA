@@ -1038,6 +1038,9 @@ async function readSemanticCache(root, model) {
   return { dimension, entries };
 }
 async function writeSemanticCache(root, model, dimension, entries) {
+  if (!Array.isArray(entries) || entries.length > MAX_SEMANTIC_CHUNKS) {
+    throw new Error("The semantic source cache can contain at most 256 chunk vectors.");
+  }
   const target = await semanticCachePath(root, true);
   let existing;
   try {
@@ -1049,7 +1052,7 @@ async function writeSemanticCache(root, model, dimension, entries) {
     if (error?.code !== "ENOENT") throw error;
   }
   const serialized = JSON.stringify({
-    schemaVersion: 1, root, model, dimension,
+    schemaVersion: 2, root, model, dimension,
     updatedAt: new Date().toISOString(), entries
   });
   if (Buffer.byteLength(serialized, "utf8") > MAX_SEMANTIC_CACHE_BYTES) {
