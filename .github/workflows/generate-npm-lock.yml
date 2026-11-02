@@ -1,0 +1,29 @@
+name: Generate npm lockfile
+
+on:
+  push:
+    branches: [feat/engineering-intelligence-upgrade]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Resolve the manifest and verify lockfile installation
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
+      - name: Upload the generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: syntra-npm-lockfile
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 3
