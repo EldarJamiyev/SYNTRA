@@ -567,3 +567,161 @@ test("local model capability metadata distinguishes heuristic classification fro
   });
   assert.equal(glmFlash.codingSpecialized, true);
 });
+
+test("Gemini long decode resumes streaming and non-streaming responses with the latest continuation token", async () => {
+  const previous = {
+    key: process.env.SYNTRA_GEMINI_API_KEY,
+    model: process.env.SYNTRA_GEMINI_MODEL,
+    allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
+    maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
+  };
+  process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_MODEL = "gemini-3.8-flash";
+  process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
+  process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
+  const makeSse = events => {
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const event of events) {
+          controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(event) + "\n\n"));
+        }
+        controller.close();
+      }
+    });
+    return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
+  try {
+    assert.equal(getGeminiProviderStatus().capabilities.maxOutputTokens, 131072);
+    let calls = [];
+    const deltas = [];
+    const streaming = await handleGeminiModelRequest("POST", "/model/generate", {
+      prompt: "Produce a very long source file.", max_new_tokens: 70000
+    }, {
+      fetchImpl: async (url, options) => {
+        const request = JSON.parse(options.body);
+        calls.push({ url, request });
+        if (calls.length === 1) return makeSse([{
+          candidates: [{
+            content: { parts: [{ text: "first-segment-" }] },
+            finishReason: "CONTINUATION",
+            continuationToken: "opaque-token-first-hop"
+          }],
+          usageMetadata: { promptTokenCount: 40, candidatesTokenCount: 65_536 }
+        }]);
+        return makeSse([{
+          candidates: [{
+            content: { parts: [{ text: "second-segment" }] },
+            finishReason: "STOP"
+          }],
+          usageMetadata: { promptTokenCount: 40, candidatesTokenCount: 100 }
+        }]);
+      },
+      onToken: (delta, fullText) => deltas.push({ delta, fullText }),
+      timeoutMs: 1000
+    });
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(call => call.url.includes("/v1beta1/models/gemini-3.8-flash:streamGenerateContent")));
+    assert.equal(calls[0].request.generationConfig.maxOutputTokens, 70000);
+    assert.equal(calls[1].request.generationConfig.maxOutputTokens, 70000);
+    assert.equal(calls[1].request.continuationToken, "opaque-token-first-hop");
+    assert.deepEqual(calls[1].request.contents, calls[0].request.contents,
+      "continuation must resend the original prompt unchanged, not append partial output");
+    assert.equal(streaming.text, "first-segment-second-segment");
+    assert.equal(streaming.finish_reason, "STOP");
+    assert.equal(streaming.continuation_hops, 1);
+    assert.equal(streaming.prompt_tokens, 80);
+    assert.equal(streaming.generated_tokens, 65636);
+    assert.deepEqual(deltas, [
+      { delta: "first-segment-", fullText: "first-segment-" },
+      { delta: "second-segment", fullText: "first-segment-second-segment" }
+    ]);
+
+    calls = [];
+    const nonStreaming = await handleGeminiModelRequest("POST", "/model/generate", {
+      prompt: "Generate a long configuration file.", max_new_tokens: 40000
+    }, {
+      fetchImpl: async (url, options) => {
+        const request = JSON.parse(options.body);
+        calls.push({ url, request });
+        const candidate = calls.length === 1 ? {
+          content: { parts: [{ text: "yaml-prefix-" }] },
+          finishReason: "CONTINUATION",
+          continuationToken: "opaque-token-nonstream"
+        } : {
+          content: { parts: [{ text: "yaml-suffix" }] },
+          finishReason: "STOP"
+        };
+        return new Response(JSON.stringify({
+          candidates: [candidate],
+          usageMetadata: { promptTokenCount: 25, candidatesTokenCount: calls.length === 1 ? 32768 : 25 }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      },
+      timeoutMs: 1000
+    });
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(call => call.url.includes("/v1beta1/models/gemini-3.8-flash:generateContent")));
+    assert.equal(calls[1].request.continuationToken, "opaque-token-nonstream");
+    assert.equal(calls[1].request.contents, calls[0].request.contents);
+    assert.equal(nonStreaming.text, "yaml-prefix-yaml-suffix");
+    assert.equal(nonStreaming.finish_reason, "STOP");
+    assert.equal(nonStreaming.continuation_hops, 1);
+  } finally {
+    for (const [key, value] of Object.entries({
+      SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_MODEL: previous.model,
+      SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
+      SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test("Gemini continuation rejects missing tokens, repeated tokens, and excessive hop chains", async () => {
+  const previous = {
+    key: process.env.SYNTRA_GEMINI_API_KEY,
+    allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
+    maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
+  };
+  process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
+  process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
+  const response = (candidate) => new Response(JSON.stringify({
+    candidates: [candidate], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 }
+  }), { status: 200 });
+  try {
+    await assert.rejects(
+      () => handleGeminiModelRequest("POST", "/model/generate", {
+        prompt: "Very long output", max_new_tokens: 70000
+      }, { fetchImpl: async () => response({ content: { parts: [{ text: "partial" }] }, finishReason: "CONTINUATION" }) }),
+      error => error.code === "MISSING_CONTINUATION_TOKEN"
+    );
+    let calls = 0;
+    await assert.rejects(
+      () => handleGeminiModelRequest("POST", "/model/generate", {
+        prompt: "Very long output", max_new_tokens: 70000
+      }, {
+        fetchImpl: async (_url, options) => {
+          calls += 1;
+          const request = JSON.parse(options.body);
+          const token = request.continuationToken || "same-token-repeat";
+          return response({
+            content: { parts: [{ text: "segment" }] },
+            finishReason: "CONTINUATION",
+            continuationToken: token
+          });
+        }
+      }),
+      error => error.code === "REPEATED_CONTINUATION_TOKEN"
+    );
+    assert.equal(calls, 2);
+  } finally {
+    for (const [key, value] of Object.entries({
+      SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
+      SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
