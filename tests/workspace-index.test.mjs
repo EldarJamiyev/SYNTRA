@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   getWorkspaceIndexStatus,
   refreshWorkspaceIndex,
+  searchWorkspaceSemantic,
   searchWorkspaceSymbols
 } from "../local/workspace-index.mjs";
 
@@ -293,5 +294,110 @@ test("workspace index refuses a symbolic-link index file", async t => {
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     await fs.rm(outside, { force: true });
+  }
+});
+
+
+test("semantic source search retrieves deep code chunks, reuses local vectors, and stores no source text", async () => {
+  const root = await createProject();
+  try {
+    const lines = Array.from({ length: 150 }, (_, index) =>
+      "// unrelated bootstrap configuration note " + index + " for the application runtime"
+    );
+    lines.push(
+      "export function normalizeWebhookEvent(payload: unknown) {",
+      "  // Convert incoming webhook payloads into the canonical event envelope before dispatch.",
+      "  return { type: 'canonical', payload };",
+      "}"
+    );
+    await fs.writeFile(path.join(root, "src", "router.ts"), lines.join("\n") + "\n", "utf8");
+    await refreshWorkspaceIndex(root);
+
+    let requests = 0;
+    const fetchImpl = async (url, options) => {
+      requests += 1;
+      assert.equal(url, "http://127.0.0.1:11434/api/embed");
+      const body = JSON.parse(options.body);
+      assert.equal(body.model, "fixture-embedding-model");
+      assert.equal(body.truncate, false);
+      const embeddings = body.input.map(input =>
+        /canonical event envelope|normalizeWebhookEvent/i.test(input)
+          ? [1, 0, 0, 0, 0, 0, 0, 0]
+          : [0, 1, 0, 0, 0, 0, 0, 0]
+      );
+      return new Response(JSON.stringify({ embeddings }), {
+        status: 200, headers: { "Content-Type": "application/json" }
+      });
+    };
+
+    const first = await searchWorkspaceSemantic(
+      root,
+      "Where are incoming webhook payloads normalized into a canonical event envelope before dispatch?",
+      8,
+      { embedModel: "fixture-embedding-model", fetchImpl }
+    );
+    assert.equal(first.retrievalMode, "semantic");
+    assert.ok(first.semanticChunkCoverage > first.semanticCoverage,
+      "the index should store multiple chunk vectors for multi-chunk source files");
+    const router = first.results.find(item => item.path === "src/router.ts");
+    assert.ok(router, JSON.stringify(first.results));
+    assert.ok(router.lineStart > 1, "the matching result must point beyond the file prefix");
+    assert.ok(router.lineEnd >= router.lineStart);
+    assert.match(router.excerpt, /canonical event envelope/);
+
+    const cachePath = path.join(root, ".syntra", "workspace-semantic-v2.json");
+    const stored = await fs.readFile(cachePath, "utf8");
+    const cache = JSON.parse(stored);
+    assert.equal(cache.schemaVersion, 2);
+    assert.equal(cache.model, "fixture-embedding-model");
+    assert.ok(cache.entries.length > first.semanticCoverage);
+    assert.ok(cache.entries.every(entry =>
+      typeof entry.path === "string"
+      && Number.isInteger(entry.chunkIndex)
+      && /^[a-f0-9]{64}$/.test(entry.textHash)
+      && Array.isArray(entry.embedding)
+    ));
+    assert.equal(stored.includes("canonical event envelope"), false);
+    assert.equal(stored.includes("embeddingText"), false);
+
+    const callsBeforeCachedSearch = requests;
+    const second = await searchWorkspaceSemantic(
+      root,
+      "Find the code that prepares webhook events for dispatch.",
+      8,
+      { embedModel: "fixture-embedding-model", fetchImpl }
+    );
+    assert.equal(second.retrievalMode, "semantic");
+    assert.equal(requests, callsBeforeCachedSearch + 1,
+      "unchanged source chunks should be reused; only the new query needs embedding");
+
+    await fs.appendFile(path.join(root, "src", "router.ts"), "\n// changed after indexing\n", "utf8");
+    const stale = await searchWorkspaceSemantic(
+      root,
+      "Where is the canonical webhook event normalized?",
+      8,
+      { embedModel: "fixture-embedding-model", fetchImpl }
+    );
+    assert.ok(stale.staleFiles >= 1);
+    assert.equal(stale.results.some(item => item.path === "src/router.ts"), false,
+      "source excerpts must not be returned when the indexed file hash is stale");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic source search falls back cleanly when local Ollama embeddings are unavailable", async () => {
+  const root = await createProject();
+  try {
+    await refreshWorkspaceIndex(root);
+    const result = await searchWorkspaceSemantic(root, "Gateway client routing", 6, {
+      embedModel: "missing-local-embedding-model",
+      fetchImpl: async () => { throw new Error("connection refused"); }
+    });
+    assert.equal(result.retrievalMode, "lexical_fallback");
+    assert.match(result.semanticError, /connection refused/);
+    assert.ok(result.results.length > 0);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
   }
 });
