@@ -2,7 +2,7 @@
 
 SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It keeps the conversation and message composer in focus instead of filling the screen with model controls. Multiple named conversations are saved locally on the current device; you can start, search, resume, rename, or delete a conversation from the history drawer. Session storage is bounded, invalid data is discarded safely, and the previous single-thread history is migrated automatically. Each conversation keeps its latest 60 messages, and prompts are saved immediately so a refresh during generation does not erase what you asked. Type /clear to clear the active conversation without deleting the other sessions.
 
-See [the staged product roadmap](docs/ROADMAP.md) for the planned path from the current local coding agent to a more complete, permissioned engineering assistant.
+See [the staged product roadmap](docs/ROADMAP.md) for the planned path from the current local coding agent to a more complete, permissioned engineering assistant. See the [release checklist and upgrade notes](docs/RELEASE_CHECKLIST.md) for repeatable validation and deployment gates.
 
 ## Windows launch
 

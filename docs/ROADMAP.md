@@ -181,7 +181,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Add provider-aware context sizing with provider-specific output caps and safety reserves; use exact Gemini token counts and conservative local estimates.
 - [x] Add model-aware Gemini long decoding for Gemini 4 Argon on the documented v1beta API: bounded 16-hop continuation, exact prompt replay, streaming checkpoint recovery, uncommitted-text discard on disconnect, and separate output ceilings for Gemini 3.8 Flash versus Argon.
 - [ ] Build a cross-language empirical model capability matrix from repeatable runs across the available JavaScript, Python, Go and Rust fixtures.
-- Publish a reproducible release checklist and migration notes.
+- [x] Publish a reproducible release checklist and upgrade notes covering CI/CodeQL, local runtime, isolation, semantic retrieval, optional Gemini, benchmark history and release gates.
 
 **Acceptance:** Release claims are backed by repeatable measurements. The installation path, test results, supported hardware, and model limitations are documented.
 
