@@ -834,6 +834,8 @@ async function runModelSelectedReadOnlyTools({
           role: item.role,
           language: item.language,
           score: item.score,
+          lineStart: item.lineStart,
+          lineEnd: item.lineEnd,
           symbols: (item.symbols || []).slice(0, 10),
           imports: (item.imports || []).slice(0, 6),
           importedBy: (item.importedBy || []).slice(0, 6),
