@@ -52,32 +52,6 @@ jobs:
           $launcherText = Get-Content "scripts/start-syntra.ps1" -Raw
           if (-not $launcherText.Contains("npm ci")) { throw "Windows launcher must install frontend dependencies with npm ci." }
           if ($launcherText.Contains("npm install")) { throw "Windows launcher must not resolve unpinned npm dependencies with npm install." }
-          & ./tests/windows-launcher.test.ps1
-          if (-not (Test-Path "tests/frontend.test.mjs")) { throw "Minimal chat frontend regression test is missing." }
-          node scripts/run-node-tests.mjs
-          if ($LASTEXITCODE -ne 0) { throw "Node.js regression suite failed on Windows." }
-          if (-not (Test-Path "local/model-provider.mjs")) { throw "Local model routing module is missing." }
-          $package = Get-Content "package.json" -Raw | ConvertFrom-Json
-          if ($package.scripts.'ai:cli' -ne "python scripts/run_syntra_module.py cli") { throw "The AI CLI launcher mapping is incorrect." }
-          if ($package.scripts.'ai:server' -ne "python scripts/run_syntra_module.py server") { throw "The AI server launcher mapping is incorrect." }
-          if (-not $package.dependencies.react -or -not $package.dependencies.'react-dom' -or -not $package.dependencies.'react-markdown' -or -not $package.dependencies.'remark-gfm' -or -not $package.devDependencies.typescript -or -not $package.devDependencies.vite) { throw "Required frontend dependencies are missing from package.json." }
-          if ((Get-Content "requirements.txt" -Raw) -notmatch "numpy") { throw "NumPy is not listed in requirements.txt." }
-          Write-Host "PowerShell launcher syntax and one-click entry point are valid."
-) { throw "Windows launcher must install frontend dependencies with npm ci." }
-          if ($launcherText -match '(?m)^\\s*npm install\\s*
-          if (-not (Test-Path "tests/windows-launcher.test.ps1")) { throw "Windows launcher behavior tests are missing." }
-          & ./tests/windows-launcher.test.ps1
-          if (-not (Test-Path "tests/frontend.test.mjs")) { throw "Minimal chat frontend regression test is missing." }
-          node scripts/run-node-tests.mjs
-          if ($LASTEXITCODE -ne 0) { throw "Node.js regression suite failed on Windows." }
-          if (-not (Test-Path "local/model-provider.mjs")) { throw "Local model routing module is missing." }
-          $package = Get-Content "package.json" -Raw | ConvertFrom-Json
-          if ($package.scripts.'ai:cli' -ne "python scripts/run_syntra_module.py cli") { throw "The AI CLI launcher mapping is incorrect." }
-          if ($package.scripts.'ai:server' -ne "python scripts/run_syntra_module.py server") { throw "The AI server launcher mapping is incorrect." }
-          if (-not $package.dependencies.react -or -not $package.dependencies.'react-dom' -or -not $package.dependencies.'react-markdown' -or -not $package.dependencies.'remark-gfm' -or -not $package.devDependencies.typescript -or -not $package.devDependencies.vite) { throw "Required frontend dependencies are missing from package.json." }
-          if ((Get-Content "requirements.txt" -Raw) -notmatch "numpy") { throw "NumPy is not listed in requirements.txt." }
-          Write-Host "PowerShell launcher syntax and one-click entry point are valid."
-) { throw "Windows launcher must not resolve unpinned npm dependencies with npm install." }
           if (-not (Test-Path "scripts/launcher-helpers.ps1")) { throw "Windows launcher helper module is missing." }
           if (-not (Test-Path "tests/windows-launcher.test.ps1")) { throw "Windows launcher behavior tests are missing." }
           & ./tests/windows-launcher.test.ps1
