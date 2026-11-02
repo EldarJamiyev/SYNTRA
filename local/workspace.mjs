@@ -1891,9 +1891,14 @@ export function buildVerificationCommand(root, selected, {
   }
 
   const workspacePath = path.resolve(root);
-  if (/[\\r\\n\\0:]/.test(workspacePath)) {
+  // Docker --mount uses comma-delimited key/value options. A colon is valid in
+  // a Windows drive path, so reject only characters that can break this syntax.
+  if (/[\\r\\n\\0,]/.test(workspacePath)) {
     throw new Error("The workspace path contains characters that cannot be mounted safely into a Docker container.");
   }
+  const mountSourcePath = process.platform === "win32"
+    ? workspacePath.replace(/\\\\/g, "/")
+    : workspacePath;
   const image = verificationContainerImage(selected, environment);
   let command;
   if (selected.kind === "npm-script") command = ["npm", "run", selected.script];
@@ -1903,12 +1908,14 @@ export function buildVerificationCommand(root, selected, {
   else throw new Error("Unsupported verification runner: " + String(selected.kind));
 
   const args = [
-    "run", "--rm", "--pull=missing",
-    "--network=none", "--read-only", "--cap-drop=ALL",
+    "run", "--rm", "--init", "--pull=missing",
+    "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
     "--security-opt=no-new-privileges:true",
-    "--pids-limit=128", "--memory=2g", "--cpus=2",
-    "--tmpfs", "/tmp:rw,nosuid,nodev,size=512m",
-    "--volume", workspacePath + ":/workspace:ro",
+    "--pids-limit=128", "--memory=2g", "--memory-swap=2g", "--cpus=2",
+    "--ulimit", "nofile=1024:1024",
+    "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=512m",
+    // The bind source is the disposable candidate workspace, never the original project.
+    "--mount", "type=bind,source=" + mountSourcePath + ",target=/workspace",
     "--workdir", "/workspace",
     "--env", "CI=true", "--env", "NODE_ENV=test",
     "--env", "HOME=/tmp", "--env", "TMPDIR=/tmp",
