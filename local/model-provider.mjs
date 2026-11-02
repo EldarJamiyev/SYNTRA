@@ -623,6 +623,16 @@ const GEMINI_CONTEXT_TOKENS = 1_048_576;
 const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS = 131_072;
 const GEMINI_FLASH_MAX_OUTPUT_TOKENS = 65_536;
 const GEMINI_MAX_CONTINUATION_HOPS = 16;
+const GEMINI_STREAM_TIMEOUT_MS = 20 * 60 * 1000;
+const GEMINI_NON_STREAM_TIMEOUT_MS = 10 * 60 * 1000;
+
+export function geminiRequestTimeoutMs(streaming, requestedTimeoutMs) {
+  const documentedLimit = streaming ? GEMINI_STREAM_TIMEOUT_MS : GEMINI_NON_STREAM_TIMEOUT_MS;
+  const requested = Number(requestedTimeoutMs);
+  if (!Number.isFinite(requested) || requested <= 0) return documentedLimit;
+  // Do not let agent-level 2–5 minute defaults terminate a documented long decode.
+  return Math.min(documentedLimit, Math.max(documentedLimit, Math.floor(requested)));
+}
 
 function supportsGeminiLongDecode(model) {
   return String(model || "").toLowerCase() === "gemini-4-argon";
@@ -691,7 +701,7 @@ function validateGeminiFinishReason(reason) {
 }
 
 export async function handleGeminiModelRequest(method, route, body = {}, {
-  fetchImpl = globalThis.fetch, timeoutMs = 300000, onToken, signal
+  fetchImpl = globalThis.fetch, timeoutMs, onToken, signal
 } = {}) {
   const apiKey = String(process.env.SYNTRA_GEMINI_API_KEY || "").trim();
   const model = String(body?.model || process.env.SYNTRA_GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim();
@@ -769,7 +779,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
       + (streaming ? ":streamGenerateContent?alt=sse" : ":generateContent");
     let response;
     try {
-      const timeoutSignal = AbortSignal.timeout(timeoutMs || 300000);
+      const timeoutSignal = AbortSignal.timeout(geminiRequestTimeoutMs(streaming, timeoutMs));
       response = await fetchImpl(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
@@ -966,4 +976,4 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
   };
 }
 
-export const localModelInternals = { isCloudModel, modelNameOf, scoreModel, estimateTokens, contextLimit, MAX_MODEL_RAM_FRACTION, isRepositoryPrompt };
+export const localModelInternals = { isCloudModel, modelNameOf, scoreModel, estimateTokens, contextLimit, MAX_MODEL_RAM_FRACTION, isRepositoryPrompt, geminiRequestTimeoutMs };
