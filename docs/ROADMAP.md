@@ -174,7 +174,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Add bounded Ollama retries for transient transport/server failures; classify context-window and model-memory exhaustion; reject incomplete streams and never replay partial streamed output.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
 - [x] Commit `package-lock.json`, enforce clean `npm ci` installs in CI and the Windows launcher, and configure weekly Dependabot npm/pip update pull requests.
-- [ ] Add a reproducible cross-platform Python dependency lock/constraints policy that preserves the CPU-only PyTorch wheel source, then enforce it in CI and the native-runtime installer.
+- [x] Add a universal SHA-256 hash-locked Python requirements file with CPU-only PyTorch markers; enforce lock freshness and hash installs in Linux/Windows CI and the native-runtime installer.
 - [x] Reject case-variant access to the reserved `.syntra` state directory and cross-platform Windows path aliases, including NTFS alternate data streams, reserved device names, and trailing-dot/space names.
 - [x] Make an explicit Windows `SYNTRA_LOCAL_MODEL` selection fail clearly when Ollama is unavailable, the model is not installed locally, or the launcher RAM filter excludes it; cover catalog selection with PowerShell tests on the Windows CI runner.
 - [x] Add an explicitly opt-in Gemini API provider with server-side API-key handling, request cancellation, provider metadata, and a separate consent gate before repository context is sent to the cloud.
