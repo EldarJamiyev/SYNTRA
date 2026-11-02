@@ -11,7 +11,21 @@ const MAX_INDEX_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 500, MAX_CHUNKS = 600, MAX_CHUNK_CHARS = 2400;
 const CHUNK_LINES = 36, CHUNK_OVERLAP = 6;
 const DEFAULT_EMBEDDING_MODEL = "embeddinggemma";
-const OLLAMA_BASE = process.env.SYNTRA_OLLAMA_BASE_URL || "http://127.0.0.1:11434";
+const DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434";
+
+export function resolveLocalOllamaBaseUrl(value = process.env.SYNTRA_OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE) {
+  let parsed;
+  try { parsed = new URL(value); }
+  catch { throw new Error("SYNTRA_OLLAMA_BASE_URL must be a valid loopback HTTP URL."); }
+  const host = parsed.hostname.toLowerCase();
+  if (parsed.protocol !== "http:"
+    || !["127.0.0.1", "localhost", "[::1]"].includes(host)
+    || parsed.username || parsed.password
+    || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("Semantic embeddings are local-only: SYNTRA_OLLAMA_BASE_URL must target localhost, 127.0.0.1, or ::1 over HTTP without credentials or a URL path.");
+  }
+  return parsed.origin;
+}
 
 function cosineSimilarity(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return -1;
@@ -65,7 +79,7 @@ async function writeIndex(root, index) {
 async function embed(texts, model, fetchImpl, signal) {
   if (!texts.length) return [];
   const timeout = AbortSignal.timeout(120000);
-  const response = await fetchImpl(OLLAMA_BASE + "/api/embed", {
+  const response = await fetchImpl(resolveLocalOllamaBaseUrl() + "/api/embed", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, input: texts, truncate: true }),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout

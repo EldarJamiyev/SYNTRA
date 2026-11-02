@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { refreshWorkspaceSemanticIndex, searchWorkspaceSemantic, getSemanticIndexStatus } from "../local/semantic-index.mjs";
+import { refreshWorkspaceSemanticIndex, searchWorkspaceSemantic, getSemanticIndexStatus, resolveLocalOllamaBaseUrl } from "../local/semantic-index.mjs";
 
 async function makeWorkspace() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-semantic-test-"));
@@ -17,6 +17,20 @@ async function makeWorkspace() {
   ].join("\n"), "utf8");
   return root;
 }
+test("semantic embedding endpoint accepts loopback only and rejects remote data destinations", () => {
+  assert.equal(resolveLocalOllamaBaseUrl(), "http://127.0.0.1:11434");
+  assert.equal(resolveLocalOllamaBaseUrl("http://localhost:11434/"), "http://localhost:11434");
+  assert.equal(resolveLocalOllamaBaseUrl("http://[::1]:11435"), "http://[::1]:11435");
+  for (const value of [
+    "https://127.0.0.1:11434",
+    "http://192.168.1.20:11434",
+    "http://example.com:11434",
+    "http://user:pass@127.0.0.1:11434",
+    "http://127.0.0.1:11434/proxy",
+    "http://127.0.0.1:11434/?forward=1"
+  ]) assert.throws(() => resolveLocalOllamaBaseUrl(value), /local-only/);
+});
+
 function fakeEmbeddings(url, options) {
   assert.equal(url, "http://127.0.0.1:11434/api/embed");
   const input = JSON.parse(options.body).input;
