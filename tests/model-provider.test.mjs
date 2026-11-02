@@ -725,3 +725,116 @@ test("Gemini continuation rejects missing tokens, repeated tokens, and excessive
     }
   }
 });
+
+test("Gemini long streaming resumes from the latest checkpoint and drops speculative text after disconnect", async () => {
+  const previous = {
+    key: process.env.SYNTRA_GEMINI_API_KEY,
+    allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
+    maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
+  };
+  process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
+  process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
+  const streamResponse = (events, interrupt = false) => {
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const event of events) {
+          controller.enqueue(new TextEncoder().encode("data: " + JSON.stringify(event) + "\n\n"));
+        }
+        if (interrupt) controller.error(new Error("simulated socket interruption"));
+        else controller.close();
+      }
+    });
+    return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  };
+  try {
+    const calls = [];
+    const received = [];
+    const result = await handleGeminiModelRequest("POST", "/model/generate", {
+      prompt: "Generate a very large source artifact.", max_new_tokens: 70000
+    }, {
+      fetchImpl: async (url, options) => {
+        const request = JSON.parse(options.body);
+        calls.push({ url, request });
+        if (calls.length === 1) {
+          return streamResponse([
+            { candidates: [{ content: { parts: [{ text: "committed-prefix-" }] }, continuationToken: "checkpoint-token-1" }] },
+            { candidates: [{ content: { parts: [{ text: "must-be-discarded" }] } }] }
+          ], true);
+        }
+        return streamResponse([
+          { candidates: [{ content: { parts: [{ text: "resumed-suffix" }] }, finishReason: "STOP" }] }
+        ]);
+      },
+      onToken: (delta, fullText) => received.push({ delta, fullText }),
+      timeoutMs: 1000
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].request.continuationToken, "checkpoint-token-1");
+    assert.equal(calls[1].request.contents, calls[0].request.contents);
+    assert.equal(result.text, "committed-prefix-resumed-suffix");
+    assert.doesNotMatch(result.text, /must-be-discarded/);
+    assert.deepEqual(received, [
+      { delta: "committed-prefix-", fullText: "committed-prefix-" },
+      { delta: "resumed-suffix", fullText: "committed-prefix-resumed-suffix" }
+    ]);
+    assert.equal(result.finish_reason, "STOP");
+    assert.equal(result.continuation_hops, 1);
+  } finally {
+    for (const [key, value] of Object.entries({
+      SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
+      SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test("Gemini long streaming retries once from the original request when interrupted before its first checkpoint", async () => {
+  const previous = {
+    key: process.env.SYNTRA_GEMINI_API_KEY,
+    allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
+    maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
+  };
+  process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
+  process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
+  try {
+    let calls = 0;
+    const output = await handleGeminiModelRequest("POST", "/model/generate", {
+      prompt: "Generate a large artifact.", max_new_tokens: 70000
+    }, {
+      fetchImpl: async (_url, options) => {
+        calls += 1;
+        const request = JSON.parse(options.body);
+        assert.equal(request.continuationToken, undefined,
+          "a stream with no checkpoint must be retried from its original prompt");
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(
+              "data: " + JSON.stringify({
+                candidates: [{ content: { parts: [{ text: calls === 1 ? "uncommitted-first-attempt" : "clean-retry-result" }] } }]
+              }) + "\n\n"
+            ));
+            if (calls === 1) controller.error(new Error("disconnect before checkpoint"));
+            else controller.close();
+          }
+        });
+        return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      },
+      onToken: () => {},
+      timeoutMs: 1000
+    });
+    assert.equal(calls, 2);
+    assert.equal(output.text, "clean-retry-result");
+  } finally {
+    for (const [key, value] of Object.entries({
+      SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
+      SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});

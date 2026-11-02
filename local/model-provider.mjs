@@ -728,7 +728,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
   const streaming = typeof onToken === "function";
   const perRequestLimit = streaming ? 65_536 : 32_768;
   const useLongDecodeApi = maxTokens > perRequestLimit;
-  const apiBase = useLongDecodeApi || false ? GEMINI_LONG_DECODE_API_BASE : GEMINI_API_BASE;
+  const apiBase = useLongDecodeApi ? GEMINI_LONG_DECODE_API_BASE : GEMINI_API_BASE;
   let continuationToken = null;
   let text = "";
   let finishReason = null;
@@ -878,8 +878,8 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
       if (!hopFinishReason && validGeminiContinuationToken(hopContinuationToken)) {
         hopFinishReason = "CONTINUATION";
       }
-      if (useLongDecodeApi && pendingCheckpointText) {
-        if (hopFinishReason) commitCheckpointText();
+      if (useLongDecodeApi && pendingCheckpointText && hopFinishReason && !streamReadFailure) {
+        commitCheckpointText();
       }
     } else {
       const payload = await response.json().catch(() => ({}));
