@@ -6,7 +6,7 @@ See [the staged product roadmap](docs/ROADMAP.md) for the planned path from the 
 
 ## Windows launch
 
-Requirements: Node.js 20+ and Git. The test suite includes an HTTP smoke test for the local API's origin guards and request validation. Python 3.11+ is required only for the native model fallback. A compatible local model in Ollama is preferred automatically.
+Requirements: Node.js 20+ and Git. The test suite includes an HTTP smoke test for the local API's origin guards and request validation. Python 3.11+ is required only for the native model fallback. A compatible local model in Ollama is preferred automatically. On Windows, set `SYNTRA_LOCAL_MODEL` to require an exact installed local Ollama model name; the launcher stops with a specific error if that model is missing or exceeds its conservative 70% physical-RAM selection threshold instead of silently switching to the native from-scratch runtime. The size threshold is a selection heuristic, not a guarantee that inference will fit in memory.
 
 In your existing SYNTRA repository folder, run:
 

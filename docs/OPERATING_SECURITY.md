@@ -36,3 +36,8 @@ The local session is a bearer secret available to JavaScript running in the same
 ## Cross-platform workspace path policy
 
 Workspace-relative paths are validated against Windows filesystem aliases on every platform. The root `.syntra` state directory is reserved case-insensitively, and paths containing NTFS alternate-data-stream separators, Win32-invalid characters, reserved device names (including numbered COM/LPT aliases), or trailing dots/spaces are rejected before a workspace read or proposal is staged. This avoids hidden-stream access and path aliasing when a project is moved between case-sensitive and case-insensitive filesystems. It is a portability and boundary safeguard, not an operating-system isolation boundary.
+
+
+## Windows launcher model selection
+
+The Windows launcher excludes cloud-only catalog entries from local Ollama selection. When `SYNTRA_LOCAL_MODEL` is set, the value must match an installed local model name. If Ollama is unreachable, the model is missing, or its reported weight size exceeds the launcher's conservative 70% physical-RAM threshold, startup stops with a diagnostic rather than silently falling back to the native from-scratch model. If no explicit model is required, automatic selection may use another suitable local model or proceed to the configured native fallback. Model file size is only a first-pass RAM filter; it does not account for every runtime allocation, KV cache, context length, or GPU/driver constraint.

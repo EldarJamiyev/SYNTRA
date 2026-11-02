@@ -175,6 +175,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
 - [ ] Commit and enforce a reviewed npm dependency lockfile (`package-lock.json`), add a reproducible Python dependency lock/constraints policy, and define a routine dependency-update and vulnerability-review gate.
 - [x] Reject case-variant access to the reserved `.syntra` state directory and cross-platform Windows path aliases, including NTFS alternate data streams, reserved device names, and trailing-dot/space names.
+- [x] Make an explicit Windows `SYNTRA_LOCAL_MODEL` selection fail clearly when Ollama is unavailable, the model is not installed locally, or the launcher RAM filter excludes it; cover catalog selection with PowerShell tests on the Windows CI runner.
 - [x] Add an explicitly opt-in Gemini API provider with server-side API-key handling, request cancellation, provider metadata, and a separate consent gate before repository context is sent to the cloud.
 - [x] Add optional local semantic retrieval using Ollama embeddings; persist only vectors, path/line metadata and source hashes; revalidate hashes before returning excerpts.
 - [x] Expand orchestration to a complexity-derived maximum of eight slices, six attempts per slice and a 24-attempt total ceiling. Persist the global attempt counter and execution budget across local-service restarts.
