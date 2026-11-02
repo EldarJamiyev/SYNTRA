@@ -482,11 +482,15 @@ test("agent run iteration and checkpoint counters survive values above the legac
       checkpoint: { stage: "slice_started", iteration: 96 },
       model: { provider: "ollama", name: "test", contextWindowTokens: 4096,
         contextBudgetTokens: 2800, outputBudgetTokens: 900,
+        contextSafetyMarginTokens: 800, contextBudgetProfile: "conservative-estimate", tokenizerIsExact: false,
         executionBudget: { complexityScore: 12, maxSlices: 8, maxIterations: 3, maxTotalAttempts: 24 } }
     });
     assert.equal(updated.iteration, 96);
     assert.equal(updated.checkpoint.iteration, 96);
     assert.equal(updated.model.executionBudget.maxTotalAttempts, 24);
+    assert.equal(updated.model.contextSafetyMarginTokens, 800);
+    assert.equal(updated.model.contextBudgetProfile, "conservative-estimate");
+    assert.equal(updated.model.tokenizerIsExact, false);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

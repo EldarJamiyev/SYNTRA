@@ -1018,6 +1018,11 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
         ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextBudgetTokens))) : 0,
       outputBudgetTokens: Number.isFinite(patch.model.outputBudgetTokens)
         ? Math.max(0, Math.min(100_000, Math.floor(patch.model.outputBudgetTokens))) : 0,
+      contextSafetyMarginTokens: Number.isFinite(patch.model.contextSafetyMarginTokens)
+        ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextSafetyMarginTokens))) : 0,
+      contextBudgetProfile: ["provider-tokenizer", "conservative-estimate"].includes(patch.model.contextBudgetProfile)
+        ? patch.model.contextBudgetProfile : "unknown",
+      tokenizerIsExact: patch.model.tokenizerIsExact === true,
       ...(patch.model.executionBudget && typeof patch.model.executionBudget === "object" ? {
         executionBudget: {
           complexityScore: Math.max(0, Math.min(100, Math.floor(Number(patch.model.executionBudget.complexityScore) || 0))),
