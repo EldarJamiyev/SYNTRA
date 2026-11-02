@@ -166,7 +166,7 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Capture CPU, memory, runtime, and architecture metadata and mark latency/RSS comparisons incomparable when environments differ.
 - [x] Test report validation, improvement/regression detection, task-set matching, and environment comparability.
 
-Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Some provider token counts may be unavailable or estimated. Hardware metadata cannot prove identical background load or power/thermal conditions. The eleven-task deterministic suite now includes Python, Go and Rust tasks, but the non-JavaScript fixtures are small language-smoke tasks, not broad framework coverage. The suite is not evidence of parity with frontier engineering agents until real model runs and a larger, versioned benchmark corpus have been measured.
+Remaining measurement limitations: peak RSS covers only the benchmark Node.js process, not Ollama or GPU memory. Gemini prompt counts use the provider `:countTokens` endpoint; Ollama counts remain estimates. Hardware metadata cannot prove identical background load or power/thermal conditions. The eleven-task deterministic suite now includes Python, Go and Rust tasks, but the non-JavaScript fixtures are small language-smoke tasks, not broad framework coverage. The suite is not evidence of parity with frontier engineering agents until real model runs and a larger, versioned benchmark corpus have been measured.
 
 - [x] Create a versioned coding benchmark from representative local tasks and regression fixtures.
 - [x] Record patch validity, candidate-test verification, task completion, end-to-end latency, prompt/output tokens, and benchmark-process RSS with each model run.
@@ -178,7 +178,8 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Expand orchestration to a complexity-derived maximum of eight slices, six attempts per slice and a 24-attempt total ceiling. Persist the global attempt counter and execution budget across local-service restarts.
 - [x] Harden Docker check containers with init, private IPC, bounded swap and an open-file limit; retain no-network, read-only root, dropped capabilities, no-new-privileges and candidate-only write mount.
 - [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
-- [ ] Add provider-calibrated context sizing and a cross-language empirical model capability matrix. Hosted-provider token counts remain estimates.
+- [x] Add provider-aware context sizing with provider-specific output caps and safety reserves; use exact Gemini token counts and conservative local estimates.
+- [ ] Build a cross-language empirical model capability matrix from repeatable runs across the available JavaScript, Python, Go and Rust fixtures.
 - Publish a reproducible release checklist and migration notes.
 
 **Acceptance:** Release claims are backed by repeatable measurements. The installation path, test results, supported hardware, and model limitations are documented.

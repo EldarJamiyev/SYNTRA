@@ -527,4 +527,8 @@ test("local model capability metadata distinguishes heuristic classification fro
   });
   assert.equal(explicit.selectionMethod, "user_selected");
   assert.equal(explicit.codingSpecialized, false);
+  const glmFlash = describeLocalModelCapabilities({
+    model: "glm-4.7-flash", contextTokens: 8192, selection: "automatic", selectionScore: 132
+  });
+  assert.equal(glmFlash.codingSpecialized, true);
 });

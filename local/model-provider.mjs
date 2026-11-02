@@ -272,7 +272,7 @@ export function describeLocalModelCapabilities(provider) {
   const model = String(provider?.model || "").toLowerCase();
   return {
     modelFamily: model.split(/[/:_-]/)[0] || "unknown",
-    codingSpecialized: /qwen.*coder|devstral|deepseek.*coder|codestral|starcoder|granite.*code|glm.*code/.test(model),
+    codingSpecialized: /qwen.*coder|devstral|deepseek.*coder|codestral|starcoder|granite.*code|glm(?:-4\.7-flash|.*code)/.test(model),
     contextWindowTokens: Math.max(0, Number(provider?.contextTokens) || 0),
     maxOutputTokens: 8192,
     tokenCountIsEstimate: true,
