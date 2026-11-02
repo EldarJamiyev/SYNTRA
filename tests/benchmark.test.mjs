@@ -60,18 +60,27 @@ test("task evaluator requires exact changed paths and successful verification", 
     status: "verified_proposals_ready", changedFiles: [{ path: "src/math.mjs" }],
     verification: { passed: true, status: "passed" },
     attempts: [{ promptTokens: 120, outputTokens: 45 }, { promptTokens: 80, outputTokens: 30 }]
-  }, { latencyMs: 1500, peakProcessRssBytes: 123456 });
+  }, { latencyMs: 1500, peakProcessRssBytes: 123456, baselineValidated: true });
   assert.equal(good.patchValid, true);
   assert.equal(good.verificationPassed, true);
   assert.equal(good.taskComplete, true);
   assert.deepEqual(good.tokens, { prompt: 200, output: 75, total: 275 });
   assert.equal(good.latencyMs, 1500);
-  const extra = evaluateBenchmarkTask(task, { changedFiles: [{ path: "src/math.mjs" }, { path: "test/math.test.mjs" }], verification: { passed: true, status: "passed" } });
+  const extra = evaluateBenchmarkTask(task, { changedFiles: [{ path: "src/math.mjs" }, { path: "test/math.test.mjs" }], verification: { passed: true, status: "passed" } }, { baselineValidated: true });
   assert.equal(extra.patchValid, false);
   assert.equal(extra.taskComplete, false);
-  const unverified = evaluateBenchmarkTask(task, { changedFiles: [{ path: "src/math.mjs" }], verification: { passed: false, status: "failed" } });
+  const unverified = evaluateBenchmarkTask(task, { changedFiles: [{ path: "src/math.mjs" }], verification: { passed: false, status: "failed" } }, { baselineValidated: true });
   assert.equal(unverified.patchValid, true);
   assert.equal(unverified.taskComplete, false);
+  const unbaselined = evaluateBenchmarkTask(task, {
+    changedFiles: [{ path: "src/math.mjs" }],
+    verification: { passed: true, status: "passed" }
+  }, { baselineValidated: false });
+  assert.equal(unbaselined.patchValid, true);
+  assert.equal(unbaselined.verificationPassed, true);
+  assert.equal(unbaselined.baselineValidated, false);
+  assert.equal(unbaselined.taskComplete, false,
+    "a passing patch cannot be scored complete without its expected failing baseline");
 });
 test("benchmark summary calculates rates, latency and token totals", () => {
   const summary = summarizeBenchmarkResults([
