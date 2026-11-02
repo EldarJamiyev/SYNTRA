@@ -321,7 +321,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
       assert.equal(body.model, "fixture-embedding-model");
       assert.equal(body.truncate, false);
       const embeddings = body.input.map(input =>
-        /canonical event envelope|normalizeWebhookEvent/i.test(input)
+        /canonical event envelope/i.test(input)
           ? [1, 0, 0, 0, 0, 0, 0, 0]
           : [0, 1, 0, 0, 0, 0, 0, 0]
       );
