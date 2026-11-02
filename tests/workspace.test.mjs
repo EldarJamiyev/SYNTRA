@@ -96,11 +96,20 @@ test("verification defaults to an offline Docker container and filters host envi
   });
   assert.equal(isolated.mode, "docker");
   assert.equal(isolated.executable, "docker");
-  for (const flag of ["--network=none", "--read-only", "--cap-drop=ALL",
-    "--pids-limit=128", "--memory=2g", "node:20-bookworm-slim"]) {
+  for (const flag of ["--init", "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
+    "--pids-limit=128", "--memory=2g", "--memory-swap=2g", "nofile=1024:1024",
+    "/tmp:rw,noexec,nosuid,nodev,size=512m", "--mount", "node:20-bookworm-slim"]) {
     assert.ok(isolated.args.includes(flag), "expected Docker flag " + flag);
   }
+  const mountIndex = isolated.args.indexOf("--mount");
+  assert.match(isolated.args[mountIndex + 1], /^type=bind,source=.+,target=\\/workspace$/);
   assert.equal(isolated.env.SYNTRA_API_TOKEN, undefined);
+  assert.throws(
+    () => buildVerificationCommand(root + ",unsafe", selected, {
+      platform: "linux", environment: { PATH: "/usr/bin" }
+    }),
+    /cannot be mounted safely/
+  );
 
   const host = buildVerificationCommand(root, selected, {
     allowUntrustedHost: true,
