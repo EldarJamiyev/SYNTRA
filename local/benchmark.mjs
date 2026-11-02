@@ -183,15 +183,17 @@ export function evaluateBenchmarkTask(task, agentResult, metrics = {}) {
   const exactPaths = actualPaths.length === expectedPaths.length && actualPaths.every((item, index) => item === expectedPaths[index]);
   const patchValid = actualPaths.length > 0 && exactPaths;
   const verificationPassed = agentResult?.verification?.passed === true;
+  const baselineValidated = metrics.baselineValidated === true;
   const promptTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.promptTokens) || 0), 0);
   const outputTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.outputTokens) || 0), 0);
   return {
     id: task.id, category: String(task.category || "general"), title: task.title,
     agentStatus: String(agentResult?.status || "unknown"),
-    patchValid, verificationPassed, taskComplete: patchValid && verificationPassed,
+    patchValid, verificationPassed,
+    taskComplete: baselineValidated && patchValid && verificationPassed,
     expectedChangedPaths: expectedPaths, changedPaths: actualPaths,
     verificationStatus: String(agentResult?.verification?.status || "not_run"),
-    baselineValidated: metrics.baselineValidated === true,
+    baselineValidated,
     latencyMs: Math.max(0, Math.round(Number(metrics.latencyMs) || 0)),
     tokens: { prompt: promptTokens, output: outputTokens, total: promptTokens + outputTokens },
     peakProcessRssBytes: Math.max(0, Math.round(Number(metrics.peakProcessRssBytes) || 0)),
