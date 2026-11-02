@@ -256,7 +256,7 @@ test("local token estimate is bounded and clearly marked as an estimate", async 
 });
 
 
-test("default model discovery caches short-lived misses to avoid repeated Ollama probes", async () => {
+test("automatic model discovery caches short-lived misses to avoid repeated Ollama probes", async () => {
   const originalFetch = globalThis.fetch;
   const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
   let calls = 0;
@@ -269,7 +269,7 @@ test("default model discovery caches short-lived misses to avoid repeated Ollama
   };
   try {
     delete process.env.SYNTRA_MODEL_PROVIDER;
-    const options = { requestedModel: "syntra-cache-regression-test" };
+    const options = { mode: "auto", requestedModel: "syntra-cache-regression-test" };
     assert.equal(await detectLocalModel(options), null);
     assert.equal(await detectLocalModel(options), null);
     assert.equal(calls, 1, "a repeated miss inside the short cache window should not probe Ollama twice");
