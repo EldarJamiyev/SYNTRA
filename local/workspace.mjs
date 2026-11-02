@@ -81,11 +81,23 @@ function normalizeRelativePath(relativePath) {
     throw new Error("Absolute file paths are not accepted for workspace operations.");
   }
   const normalized = relativePath.replace(/\\/g, "/");
-  if (normalized.split("/").some(part => part === ".." || part === "." || part === "")) {
+  const segments = normalized.split("/");
+  if (segments.some(part => part === ".." || part === "." || part === "")) {
     throw new Error("Relative path traversal or empty path segments are not allowed.");
   }
-  if (normalized.startsWith(".syntra/") || normalized === ".syntra") {
-    throw new Error("The .syntra state directory is reserved by SYNTRA.");
+  // The reserved state directory must remain reserved on case-insensitive filesystems.
+  // Also reject Win32 aliases and NTFS alternate-data-stream syntax on every OS so a
+  // workspace behaves consistently when moved between Windows and POSIX systems.
+  const lowerPath = normalized.toLowerCase();
+  if (lowerPath === ".syntra" || lowerPath.startsWith(".syntra/")) {
+    throw new Error("The .syntra state directory is reserved by SYNTRA (case-insensitive).");
+  }
+  const invalidWindowsName = /[<>:"|?*\\u0000-\\u001f]/u;
+  const reservedWindowsDevice = /^(?:con|prn|aux|nul|conin\\$|conout\\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\\..*)?$/iu;
+  for (const segment of segments) {
+    if (invalidWindowsName.test(segment) || /[. ]$/u.test(segment) || reservedWindowsDevice.test(segment)) {
+      throw new Error("Workspace paths cannot contain Windows-reserved names, alternate data streams, or trailing dots/spaces: " + segment);
+    }
   }
   return normalized;
 }

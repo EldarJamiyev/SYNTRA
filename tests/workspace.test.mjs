@@ -114,6 +114,34 @@ test("read exposes content hash and refuses secret files", async () => {
   assert.match(example.content, /APP_PORT=3000/);
 });
 
+test("workspace paths reject case-insensitive state aliases and Windows filesystem aliases", async () => {
+  const root = await createTempProject();
+  const rejectedPaths = [
+    ".SYNTRA/proposals/private.json",
+    ".SynTra/runs/run.json",
+    "src/network.ts:alternate-stream",
+    "src/CON.txt",
+    "src/conin$.log",
+    "src/COM1",
+    "src/LPT³.txt",
+    "src/trailing.",
+    "src/trailing "
+  ];
+  for (const relativePath of rejectedPaths) {
+    await assert.rejects(
+      () => readWorkspaceFile(root, relativePath),
+      error => error instanceof Error && /reserved|Windows-reserved|alternate data streams/i.test(error.message),
+      "unsafe path should be rejected: " + relativePath
+    );
+    await assert.rejects(
+      () => proposeFileChange(root, relativePath, "must not be staged"),
+      error => error instanceof Error && /reserved|Windows-reserved|alternate data streams/i.test(error.message),
+      "unsafe proposal path should be rejected: " + relativePath
+    );
+  }
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test("proposal requires confirmation and protects concurrent edits", async () => {
   const root = await createTempProject();
   const proposal = await proposeFileChange(root, "src/network.ts", "export const version = 2;\n");

@@ -31,3 +31,8 @@ Chat sessions are held in the browser's local storage and are not encrypted at r
 ## Residual risks
 
 The local session is a bearer secret available to JavaScript running in the same origin. Preventing same-origin script injection remains important. The loopback API and origin checks reduce browser-origin attack surface but are not a substitute for operating-system account isolation. The Docker runner still trusts the Docker engine and the mounted candidate directory.
+
+
+## Cross-platform workspace path policy
+
+Workspace-relative paths are validated against Windows filesystem aliases on every platform. The root `.syntra` state directory is reserved case-insensitively, and paths containing NTFS alternate-data-stream separators, Win32-invalid characters, reserved device names (including numbered COM/LPT aliases), or trailing dots/spaces are rejected before a workspace read or proposal is staged. This avoids hidden-stream access and path aliasing when a project is moved between case-sensitive and case-insensitive filesystems. It is a portability and boundary safeguard, not an operating-system isolation boundary.
