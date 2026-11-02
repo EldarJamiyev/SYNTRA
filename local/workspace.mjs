@@ -1805,8 +1805,15 @@ export function buildDockerCheckArgs(root, image, command) {
     "rust:1.84", "mcr.microsoft.com/dotnet/sdk:8.0"
   ]);
   if (typeof root !== "string" || !path.isAbsolute(root)) throw new Error("Docker candidate workspace path must be absolute.");
+  const workspacePath = path.resolve(root);
+  if ([10, 13, 0].some(code => workspacePath.includes(String.fromCharCode(code))) || workspacePath.includes(",")) {
+    throw new Error("Docker candidate workspace path contains characters that cannot be mounted safely.");
+  }
+  const mountSourcePath = process.platform === "win32"
+    ? workspacePath.split(String.fromCharCode(92)).join("/")
+    : workspacePath;
   if (!allowedImages.has(image)) throw new Error("Docker verification image is not in SYNTRA's allowlist.");
-  if (typeof command !== "string" || !command.trim() || command.length > 12000 || command.includes("\\0")) {
+  if (typeof command !== "string" || !command.trim() || command.length > 12000 || command.includes(String.fromCharCode(0))) {
     throw new Error("Docker verification command is invalid.");
   }
   return [
@@ -1815,7 +1822,7 @@ export function buildDockerCheckArgs(root, image, command) {
     "--pids-limit=128", "--memory=2g", "--memory-swap=2g", "--cpus=2",
     "--ulimit", "nofile=1024:1024",
     "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m", "--env", "HOME=/tmp",
-    "--mount", "type=bind,source=" + root + ",target=/workspace",
+    "--mount", "type=bind,source=" + mountSourcePath + ",target=/workspace",
     "--workdir", "/workspace", image, "/bin/sh", "-lc", command
   ];
 }
