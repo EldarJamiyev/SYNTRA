@@ -736,6 +736,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
   let totalCandidateTokens = 0;
   let usageObserved = false;
   let continuationHops = 0;
+  let initialLongStreamRetryUsed = false;
 
   for (let hop = 1; hop <= GEMINI_MAX_CONTINUATION_HOPS; hop += 1) {
     if (signal?.aborted) throw cancellationError();
@@ -775,6 +776,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
     let hopFinishReason = null;
     let hopContinuationToken = null;
     let hopUsage = {};
+    let restartFromBeginning = false;
     if (streaming) {
       if (!response.body || typeof response.body.getReader !== "function") {
         throw new Error("Gemini streaming response did not expose a readable event stream.");
@@ -783,6 +785,14 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
       const decoder = new TextDecoder();
       let buffer = "";
       let eventData = [];
+      let pendingCheckpointText = "";
+      let streamReadFailure = null;
+      const commitCheckpointText = () => {
+        if (!pendingCheckpointText) return;
+        text += pendingCheckpointText;
+        onToken(pendingCheckpointText, text);
+        pendingCheckpointText = "";
+      };
       const consumeEvent = () => {
         if (!eventData.length) return;
         const payloadText = eventData.join("\n").trim();
@@ -806,9 +816,13 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
           .map(part => typeof part?.text === "string" ? part.text : "").join("");
         if (delta) {
           hopText += delta;
-          text += delta;
-          onToken(delta, text);
+          if (useLongDecodeApi) pendingCheckpointText += delta;
+          else {
+            text += delta;
+            onToken(delta, text);
+          }
         }
+        if (useLongDecodeApi && hopContinuationToken) commitCheckpointText();
         if (chunk.usageMetadata && typeof chunk.usageMetadata === "object") hopUsage = chunk.usageMetadata;
       };
       const consumeLine = line => {
@@ -819,7 +833,14 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
       try {
         while (true) {
           if (signal?.aborted) throw cancellationError();
-          const { value, done } = await reader.read();
+          let readResult;
+          try { readResult = await reader.read(); }
+          catch (error) {
+            if (signal?.aborted) throw cancellationError();
+            streamReadFailure = error;
+            break;
+          }
+          const { value, done } = readResult;
           buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
           let newline;
           while ((newline = buffer.indexOf("\n")) !== -1) {
@@ -829,10 +850,36 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
           }
           if (done) break;
         }
-        if (buffer.length) consumeLine(buffer.replace(/\r$/, ""));
-        consumeEvent();
+        if (!streamReadFailure) {
+          if (buffer.length) consumeLine(buffer.replace(/\r$/, ""));
+          consumeEvent();
+        }
       } finally {
         reader.releaseLock();
+      }
+      if (streamReadFailure) {
+        if (useLongDecodeApi && validGeminiContinuationToken(hopContinuationToken)) {
+          hopFinishReason = "CONTINUATION";
+        } else if (useLongDecodeApi && !continuationToken && !initialLongStreamRetryUsed && !text) {
+          initialLongStreamRetryUsed = true;
+          restartFromBeginning = true;
+        } else {
+          throw providerError(
+            "Gemini stream was interrupted without a safe continuation checkpoint. SYNTRA rejected uncommitted output.",
+            "STREAM_INTERRUPTED",
+            true
+          );
+        }
+      }
+      if (restartFromBeginning) {
+        pendingCheckpointText = "";
+        continue;
+      }
+      if (!hopFinishReason && validGeminiContinuationToken(hopContinuationToken)) {
+        hopFinishReason = "CONTINUATION";
+      }
+      if (useLongDecodeApi && pendingCheckpointText) {
+        if (hopFinishReason) commitCheckpointText();
       }
     } else {
       const payload = await response.json().catch(() => ({}));
