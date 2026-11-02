@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot "launcher-helpers.ps1")
 Set-Location -LiteralPath $Root
 
 function Write-Step([string]$Message) {
@@ -135,6 +136,7 @@ try {
     $UseOllama = $false
     $UsableOllamaModels = @()
     $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "auto" }
+    $requestedLocalModel = if ($env:SYNTRA_LOCAL_MODEL) { $env:SYNTRA_LOCAL_MODEL.Trim() } else { "" }
     if (@("auto", "native", "ollama") -notcontains $providerMode) {
         throw "SYNTRA_MODEL_PROVIDER must be auto, native, or ollama."
     }
@@ -153,28 +155,37 @@ try {
             } while (-not $ollamaReady -and (Get-Date) -lt $ollamaDeadline)
         }
 
+        if ($requestedLocalModel -and -not $ollamaReady) {
+            throw "SYNTRA_LOCAL_MODEL is set to '$requestedLocalModel', but Ollama is not reachable at 127.0.0.1:11434. Start Ollama or clear SYNTRA_LOCAL_MODEL; SYNTRA will not silently switch to the native from-scratch runtime."
+        }
+
         if ($ollamaReady) {
             try {
                 $ollamaCatalog = Invoke-RestMethod -Uri $ollamaTagsUrl -TimeoutSec 3
-                $UsableOllamaModels = @($ollamaCatalog.models | Where-Object {
-                    $_.name -and $_.name -notmatch '(?i)(?:^|[:._-])cloud(?:$|[:._-])'
-                })
-                if ($env:SYNTRA_LOCAL_MODEL) {
-                    $UsableOllamaModels = @($UsableOllamaModels | Where-Object { $_.name -eq $env:SYNTRA_LOCAL_MODEL })
-                }
+                $ramBytes = 0.0
                 try {
                     $ramBytes = [double](Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
-                    if ($ramBytes -gt 0) {
-                        $UsableOllamaModels = @($UsableOllamaModels | Where-Object { -not $_.size -or [double]$_.size -le ($ramBytes * 0.70) })
-                    }
-                } catch {}
-                if ($UsableOllamaModels.Count -gt 0) { $UseOllama = $true }
+                } catch {
+                    Write-Warning "Could not read physical memory; the launcher's conservative Ollama model-size filter will be skipped."
+                }
+                $selection = Get-SyntraOllamaSelection -Models @($ollamaCatalog.models) -RequestedModel $requestedLocalModel -RamBytes $ramBytes
+                $UsableOllamaModels = @($selection.Models)
+                if ($selection.Status -eq "not_installed") {
+                    throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is not installed as a local Ollama model. Run 'ollama pull $requestedLocalModel' or correct the model name."
+                }
+                if ($selection.Status -eq "memory_limit") {
+                    throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is installed, but its reported weight size exceeds the launcher's 70% physical-RAM selection limit. Choose a smaller local model or clear SYNTRA_LOCAL_MODEL to allow automatic selection."
+                }
+                if ($selection.Status -eq "available" -and $UsableOllamaModels.Count -gt 0) { $UseOllama = $true }
             } catch {
+                if ($requestedLocalModel) {
+                    throw "SYNTRA could not validate the explicitly selected local model '$requestedLocalModel': $($_.Exception.Message)"
+                }
                 Write-Warning "Ollama answered, but its local model list could not be read: $($_.Exception.Message)"
             }
         }
         if ($providerMode -eq "ollama" -and -not $UseOllama) {
-            throw "SYNTRA is set to use Ollama, but no suitable local model is ready. Start Ollama and install a model such as qwen3-coder:30b, or set SYNTRA_MODEL_PROVIDER=auto."
+            throw "SYNTRA is set to use Ollama, but no suitable local model is ready. Start Ollama and install a local model, or set SYNTRA_MODEL_PROVIDER=auto."
         }
     }
 
