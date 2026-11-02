@@ -492,7 +492,16 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(inference_saved["step"], tuned["step"])
             self.assertNotIn("optimizer_state", inference_saved)
             from syntra_ai.runtime import evaluate
-            fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000, checkpoint=checkpoint)
+            import os
+            previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
+            os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
+            try:
+                fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000, checkpoint=checkpoint)
+            finally:
+                if previous_allowed_roots is None:
+                    os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
+                else:
+                    os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = previous_allowed_roots
             self.assertTrue(fresh_evaluation["evaluation_performed"])
             self.assertTrue(torch.isfinite(torch.tensor(fresh_evaluation["validation_loss"])).item())
             model, saved, device = load_model(checkpoint, "cpu")

@@ -1931,12 +1931,14 @@ export function buildVerificationCommand(root, selected, {
     image, ...command
   ];
   return {
-    executable: String(environment.SYNTRA_DOCKER_BIN || "docker"),
+    // The host executable is fixed; user environment values may select only
+    // a validated container image, never the process that SYNTRA launches.
+    executable: "docker",
     args,
     env: restrictedVerificationEnvironment(environment),
     mode: "docker",
     image,
-    command: "docker run " + image + " " + command.join(" ")
+    command: "docker run [isolated verification]"
   };
 }
 

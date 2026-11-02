@@ -16,6 +16,10 @@ For a workspace you personally trust, a user may explicitly opt into host execut
 
 The regression-test launcher sets the host opt-in only in its child test process because its temporary fixtures are controlled test inputs. This does not change the defaults of the launched SYNTRA application.
 
+## Native model data paths
+
+The native Python API does not treat an arbitrary absolute path supplied in an HTTP request as trusted. Training and evaluation roots, plus fine-tuning JSONL files, must resolve inside the repository root or an explicitly approved directory in `SYNTRA_ALLOWED_CORPUS_ROOTS`. The environment variable is a platform-separated list of existing directories (`;` on Windows, `:` on Linux/macOS). Resolution occurs before containment checks; filesystem-root inputs, traversal outside an approved directory, missing paths, and non-JSONL fine-tuning files are rejected. Keep approved directories as narrow as practical rather than allowing an entire home or system directory.
+
 ## Data retention
 
 Chat sessions are held in the browser's local storage and are not encrypted at rest. Sessions older than 30 days are pruned when history is loaded. Avoid putting passwords, API keys, private keys, or other credentials in chat. Workspace audit logs are bounded to a 5 MiB active file plus five rotated archives; individual records are capped.

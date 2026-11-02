@@ -16,10 +16,27 @@ function resolveStorage(storage) {
 }
 
 function createId() {
-  try {
-    if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
-  } catch {}
-  return "session-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+  const secureCrypto = globalThis.crypto;
+  if (typeof secureCrypto?.randomUUID === "function") {
+    try {
+      return "session-" + secureCrypto.randomUUID();
+    } catch {
+      // Fall through to the cryptographically secure byte generator.
+    }
+  }
+  if (typeof secureCrypto?.getRandomValues !== "function") {
+    throw new Error("SYNTRA requires Web Crypto to create secure chat session IDs.");
+  }
+  const bytes = new Uint8Array(16);
+  secureCrypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  const uuid = [
+    hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+    hex.slice(16, 20), hex.slice(20)
+  ].join("-");
+  return "session-" + uuid;
 }
 
 function validId(value) {

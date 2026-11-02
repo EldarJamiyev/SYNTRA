@@ -132,3 +132,12 @@ test("storage failures are non-fatal for session loading and saving", () => {
   assert.equal(loadSessionState(blocked).sessions.length, 1);
   assert.equal(saveSessionState(normalizeSessionState(null), blocked), false);
 });
+
+
+test("generated session IDs use cryptographically secure UUIDs", () => {
+  const first = createChatSession();
+  const second = createChatSession();
+  assert.match(first.id, /^session-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.match(second.id, /^session-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  assert.notEqual(first.id, second.id);
+});

@@ -55,6 +55,8 @@ Optional local semantic retrieval:
 
 If Ollama is unavailable, SYNTRA can use its own local PyTorch runtime. The native model starts with randomly initialized weights: training it from scratch on a small local corpus does not make it comparable to Claude or other frontier models.
 
+The native Python API accepts training/evaluation corpora and fine-tuning JSONL files only from the SYNTRA repository or explicitly approved local directories. Set `SYNTRA_ALLOWED_CORPUS_ROOTS` to a platform-separated list of existing directories before launching the Python API to approve additional locations (use `;` on Windows and `:` on Linux/macOS). Paths are resolved before checking containment, so parent-directory traversal and symlink escapes are rejected.
+
 ## Important boundary
 
 This app is designed to run locally at http://127.0.0.1:3000; the Node service binds to loopback and is not a hosted AI endpoint. A static GitHub Pages copy cannot execute your local model or workspace agent. Use the local launcher for real chat and code changes.

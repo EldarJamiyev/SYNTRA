@@ -14,6 +14,7 @@ from .training import (
 )
 from .data import MAX_CORPUS_TOKENS, load_corpus
 from .resources import validate_checkpoint_load_budget, validate_inference_memory_budget
+from .safe_paths import resolve_corpus_root
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "data" / "checkpoints" / "syntra.pt"
@@ -179,10 +180,11 @@ def evaluate(
         raise ValueError("batches must be between 1 and 1,000.")
     if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
+    corpus_root = resolve_corpus_root(root)
     model, saved, device = load_model(path=checkpoint, device_name=device_name)
     config = ModelConfig.from_dict(saved["config"])
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
-    corpus = load_corpus([str(Path(root).expanduser().resolve())], max_tokens=max_tokens)
+    corpus = load_corpus([str(corpus_root)], max_tokens=max_tokens)
     token_ids = _encode_documents(corpus.documents, tokenizer, max_tokens=max_tokens)
     split = int(len(token_ids) * 0.8)
     if split <= config.seq_len + 1 or len(token_ids) - split <= config.seq_len + 1:

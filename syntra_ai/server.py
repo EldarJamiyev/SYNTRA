@@ -11,6 +11,7 @@ from .config import ModelConfig
 from .runtime import evaluate, generate, status, tokenize_text
 from .training import train
 from .instruction import finetune
+from .safe_paths import resolve_corpus_root, resolve_instruction_dataset
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SYNTRA_AI_PORT", "3002"))
@@ -75,14 +76,7 @@ def _run_training(body: dict) -> None:
 
 def start_training(body: dict) -> dict:
     global _worker
-    root = body.get("root")
-    if not isinstance(root, str) or not Path(root).expanduser().is_absolute():
-        raise ValueError("Training requires an absolute local corpus root path.")
-    normalized = Path(root).expanduser().resolve()
-    if normalized == Path(normalized.anchor):
-        raise ValueError("A filesystem root cannot be used as the training corpus.")
-    if not normalized.is_dir():
-        raise ValueError("Training corpus root must be an existing directory.")
+    normalized = resolve_corpus_root(body.get("root"))
     body = dict(body)
     body["root"] = str(normalized)
     with _job_lock:
@@ -117,12 +111,7 @@ def _run_finetuning(body: dict) -> None:
 
 def start_finetuning(body: dict) -> dict:
     global _worker
-    dataset = body.get("dataset")
-    if not isinstance(dataset, str) or not Path(dataset).expanduser().is_absolute():
-        raise ValueError("Fine-tuning requires an absolute local JSONL file path.")
-    dataset_path = Path(dataset).expanduser().resolve()
-    if not dataset_path.is_file():
-        raise ValueError("Instruction dataset JSONL file does not exist.")
+    dataset_path = resolve_instruction_dataset(body.get("dataset"))
     with _job_lock:
         if _worker is not None and _worker.is_alive():
             raise ValueError("SYNTRA training is already running.")

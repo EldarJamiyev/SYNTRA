@@ -120,3 +120,28 @@ class LocalApiSmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeApiPathBoundaryTests(unittest.TestCase):
+    def test_training_and_finetuning_reject_unapproved_absolute_paths(self):
+        from syntra_ai.server import start_finetuning, start_training
+
+        previous = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
+        os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
+        try:
+            with tempfile.TemporaryDirectory(prefix="syntra-unapproved-api-") as temp:
+                dataset = Path(temp) / "instructions.jsonl"
+                dataset.write_text('{}\n', encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
+                    start_training({"root": temp})
+                with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
+                    start_finetuning({"dataset": str(dataset)})
+        finally:
+            if previous is None:
+                os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
+            else:
+                os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = previous
+
+
+if __name__ == "__main__":
+    unittest.main()

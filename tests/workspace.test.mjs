@@ -92,10 +92,14 @@ test("verification defaults to an offline Docker container and filters host envi
   const selected = { kind: "npm-script", command: "npm run test", script: "test" };
   const isolated = buildVerificationCommand(root, selected, {
     platform: "linux",
-    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+    environment: {
+      PATH: "/usr/bin",
+      SYNTRA_API_TOKEN: "must-not-be-forwarded",
+      SYNTRA_DOCKER_BIN: "/tmp/untrusted-docker"
+    }
   });
   assert.equal(isolated.mode, "docker");
-  assert.equal(isolated.executable, "docker");
+  assert.equal(isolated.executable, "docker", "the host-side Docker executable must not be environment-controlled");
   for (const flag of ["--init", "--network=none", "--ipc=private", "--read-only", "--cap-drop=ALL",
     "--pids-limit=128", "--memory=2g", "--memory-swap=2g", "nofile=1024:1024",
     "/tmp:rw,noexec,nosuid,nodev,size=512m", "--mount", "node:20-bookworm-slim"]) {
