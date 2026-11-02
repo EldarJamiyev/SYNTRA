@@ -92,8 +92,8 @@ function normalizeRelativePath(relativePath) {
   if (lowerPath === ".syntra" || lowerPath.startsWith(".syntra/")) {
     throw new Error("The .syntra state directory is reserved by SYNTRA (case-insensitive).");
   }
-  const invalidWindowsName = /[<>:"|?*\\u0000-\\u001f]/u;
-  const reservedWindowsDevice = /^(?:con|prn|aux|nul|conin\\$|conout\\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\\..*)?$/iu;
+  const invalidWindowsName = /[<>:"|?*\u0000-\u001f]/u;
+  const reservedWindowsDevice = /^(?:con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\..*)?$/iu;
   for (const segment of segments) {
     if (invalidWindowsName.test(segment) || /[. ]$/u.test(segment) || reservedWindowsDevice.test(segment)) {
       throw new Error("Workspace paths cannot contain Windows-reserved names, alternate data streams, or trailing dots/spaces: " + segment);
