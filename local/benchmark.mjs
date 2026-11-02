@@ -272,7 +272,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       if (baseline.timedOut || baseline.passed || baseline.exitCode === null) {
         throw new Error("Fixture baseline is invalid: its " + task.baselineCheck + " checks must fail before the requested change and finish within 30 seconds.");
       }
-      const baselineOutput = String(baseline.stdout || "") + "\\n" + String(baseline.stderr || "");
+      const baselineOutput = String(baseline.stdout || "") + "\n" + String(baseline.stderr || "");
       if (!baselineOutput.includes(task.expectedBaselineFailure)) {
         throw new Error("Fixture baseline failed for an unexpected reason. Its output did not contain the declared diagnostic substring.");
       }
