@@ -604,7 +604,10 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
         calls.push({ url, request });
         if (calls.length === 1) return makeSse([{
           candidates: [{
-            content: { parts: [{ text: "first-segment-" }] },
+            content: { parts: [
+              { text: "private reasoning must not be emitted", thought: true },
+              { text: "first-segment-" }
+            ] },
             finishReason: "CONTINUATION",
             continuationToken: "opaque-token-first-hop"
           }],
@@ -629,6 +632,7 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
     assert.deepEqual(calls[1].request.contents, calls[0].request.contents,
       "continuation must resend the original prompt unchanged, not append partial output");
     assert.equal(streaming.text, "first-segment-second-segment");
+    assert.doesNotMatch(streaming.text, /private reasoning/);
     assert.equal(streaming.finish_reason, "STOP");
     assert.equal(streaming.continuation_hops, 1);
     assert.equal(streaming.prompt_tokens, 80);
@@ -646,7 +650,10 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
         const request = JSON.parse(options.body);
         calls.push({ url, request });
         const candidate = calls.length === 1 ? {
-          content: { parts: [{ text: "yaml-prefix-" }] },
+          content: { parts: [
+            { text: "private nonstream reasoning", thought: true },
+            { text: "yaml-prefix-" }
+          ] },
           finishReason: "CONTINUATION",
           continuationToken: "opaque-token-nonstream"
         } : {
@@ -665,6 +672,7 @@ test("Gemini long decode resumes streaming and non-streaming responses with the 
     assert.equal(calls[1].request.continuationToken, "opaque-token-nonstream");
     assert.deepEqual(calls[1].request.contents, calls[0].request.contents);
     assert.equal(nonStreaming.text, "yaml-prefix-yaml-suffix");
+    assert.doesNotMatch(nonStreaming.text, /private nonstream reasoning/);
     assert.equal(nonStreaming.finish_reason, "STOP");
     assert.equal(nonStreaming.continuation_hops, 1);
   } finally {
@@ -851,6 +859,48 @@ test("Gemini long streaming retries once from the original request when interrup
     });
     assert.equal(calls, 2);
     assert.equal(output.text, "clean-retry-result");
+  } finally {
+    for (const [key, value] of Object.entries({
+      SYNTRA_GEMINI_API_KEY: previous.key,
+      SYNTRA_GEMINI_MODEL: previous.model,
+      SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: previous.allow,
+      SYNTRA_GEMINI_MAX_OUTPUT_TOKENS: previous.maxOutput
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
+test("Gemini 3.8 Flash clamps direct REST output to its documented non-streaming limit", async () => {
+  const previous = {
+    key: process.env.SYNTRA_GEMINI_API_KEY,
+    model: process.env.SYNTRA_GEMINI_MODEL,
+    allow: process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT,
+    maxOutput: process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS
+  };
+  process.env.SYNTRA_GEMINI_API_KEY = "test-key";
+  process.env.SYNTRA_GEMINI_MODEL = "gemini-3.8-flash";
+  process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
+  process.env.SYNTRA_GEMINI_MAX_OUTPUT_TOKENS = "131072";
+  try {
+    let requestUrl = "";
+    let requestBody = null;
+    const result = await handleGeminiModelRequest("POST", "/model/generate", {
+      prompt: "Return one short JSON response.", max_new_tokens: 64000
+    }, {
+      fetchImpl: async (url, options) => {
+        requestUrl = url;
+        requestBody = JSON.parse(options.body);
+        return new Response(JSON.stringify({
+          candidates: [{ content: { parts: [{ text: '{"ok":true}' }] }, finishReason: "STOP" }],
+          usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 4 }
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      },
+      timeoutMs: 1000
+    });
+    assert.match(requestUrl, /\/v1beta\/models\/gemini-3\.8-flash:generateContent$/);
+    assert.equal(requestBody.generationConfig.maxOutputTokens, 32768);
+    assert.equal(result.text, '{"ok":true}');
   } finally {
     for (const [key, value] of Object.entries({
       SYNTRA_GEMINI_API_KEY: previous.key,

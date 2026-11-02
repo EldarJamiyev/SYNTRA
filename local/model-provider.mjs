@@ -835,6 +835,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
           checkpointTokenUpdated = true;
         }
         const delta = (candidate?.content?.parts || [])
+          .filter(part => part?.thought !== true)
           .map(part => typeof part?.text === "string" ? part.text : "").join("");
         if (delta) {
           hopText += delta;
@@ -913,7 +914,9 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
         }
         hopContinuationToken = candidate.continuationToken;
       }
-      hopText = (candidate?.content?.parts || []).map(part => typeof part?.text === "string" ? part.text : "").join("");
+      hopText = (candidate?.content?.parts || [])
+        .filter(part => part?.thought !== true)
+        .map(part => typeof part?.text === "string" ? part.text : "").join("");
       if (hopText) text += hopText;
       hopUsage = payload?.usageMetadata || {};
     }
