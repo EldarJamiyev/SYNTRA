@@ -15,7 +15,7 @@ import {
 const INDEX_FILENAME = "workspace-index-v3.json";
 const INDEX_SCHEMA_VERSION = 3;
 const SEMANTIC_CACHE_FILENAME = "workspace-semantic-v2.json";
-const MAX_SEMANTIC_CACHE_BYTES = 12 * 1024 * 1024;
+const MAX_SEMANTIC_CACHE_BYTES = 20 * 1024 * 1024;
 const MAX_SEMANTIC_FILES = 64;
 const MAX_SEMANTIC_CHUNKS = 256;
 const MAX_SEMANTIC_CHUNKS_PER_FILE = 16;
@@ -1001,7 +1001,7 @@ async function readSemanticCache(root, model) {
     throw new Error("The semantic source cache must be a regular file, not a symbolic link.");
   }
   if (info.size > MAX_SEMANTIC_CACHE_BYTES) {
-    throw new Error("The semantic source cache exceeds its 12 MB storage limit.");
+    throw new Error("The semantic source cache exceeds its 20 MB storage limit.");
   }
   let value;
   try { value = JSON.parse(await fs.readFile(target, "utf8")); }
@@ -1056,7 +1056,7 @@ async function writeSemanticCache(root, model, dimension, entries) {
     updatedAt: new Date().toISOString(), entries
   });
   if (Buffer.byteLength(serialized, "utf8") > MAX_SEMANTIC_CACHE_BYTES) {
-    throw new Error("The semantic source cache exceeded its 8 MB storage limit.");
+    throw new Error("The semantic source cache exceeded its 20 MB storage limit.");
   }
   const temporary = target + "." + process.pid + "." + crypto.randomBytes(4).toString("hex") + ".tmp";
   await fs.writeFile(temporary, serialized + "\n", { encoding: "utf8", flag: "wx" });
