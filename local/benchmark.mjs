@@ -28,6 +28,11 @@ export function validateBenchmarkSuite(suite) {
     if (typeof task.goal !== "string" || !task.goal.trim() || task.goal.length > 5000) throw new Error("Benchmark task " + task.id + " has an invalid goal.");
     if (typeof task.fixture !== "string" || !task.fixture.trim() || path.isAbsolute(task.fixture) || task.fixture.split(/[\\/]+/).some(part => part === ".." || part === ".")) throw new Error("Benchmark task " + task.id + " has an unsafe fixture path.");
     if (!["node-script", "python-unittest", "typescript"].includes(task.baselineCheck)) throw new Error("Benchmark task " + task.id + " has an unsupported baseline check.");
+    if (typeof task.expectedBaselineFailure !== "string"
+      || task.expectedBaselineFailure.trim().length < 4
+      || task.expectedBaselineFailure.length > 300) {
+      throw new Error("Benchmark task " + task.id + " must declare a 4-300 character expected baseline failure diagnostic.");
+    }
     if (typeof task.testEntry !== "string" || !task.testEntry.trim() || path.isAbsolute(task.testEntry)
       || task.testEntry.split(/[\\/]+/).some(part => part === ".." || part === ".")) {
       throw new Error("Benchmark task " + task.id + " has an unsafe test-entry path.");
@@ -186,6 +191,7 @@ export function evaluateBenchmarkTask(task, agentResult, metrics = {}) {
     patchValid, verificationPassed, taskComplete: patchValid && verificationPassed,
     expectedChangedPaths: expectedPaths, changedPaths: actualPaths,
     verificationStatus: String(agentResult?.verification?.status || "not_run"),
+    baselineValidated: metrics.baselineValidated === true,
     latencyMs: Math.max(0, Math.round(Number(metrics.latencyMs) || 0)),
     tokens: { prompt: promptTokens, output: outputTokens, total: promptTokens + outputTokens },
     peakProcessRssBytes: Math.max(0, Math.round(Number(metrics.peakProcessRssBytes) || 0)),
@@ -252,6 +258,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
   let selectedModel = null;
   for (const task of selected) {
     let fixture = null, agentResult = null, taskError = null, progressModel = null;
+    let baselineValidated = false;
     const started = performance.now();
     let peakRss = process.memoryUsage().rss;
     const sampler = setInterval(() => { peakRss = Math.max(peakRss, process.memoryUsage().rss); }, 100);
@@ -265,7 +272,12 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       if (baseline.timedOut || baseline.passed || baseline.exitCode === null) {
         throw new Error("Fixture baseline is invalid: its " + task.baselineCheck + " checks must fail before the requested change and finish within 30 seconds.");
       }
-      await onProgress({ taskId: task.id, phase: "started", message: "Running the actual local coding agent against an isolated fixture." });
+      const baselineOutput = String(baseline.stdout || "") + "\\n" + String(baseline.stderr || "");
+      if (!baselineOutput.includes(task.expectedBaselineFailure)) {
+        throw new Error("Fixture baseline failed for an unexpected reason. Its output did not contain the declared diagnostic substring.");
+      }
+      baselineValidated = true;
+      await onProgress({ taskId: task.id, phase: "started", message: "The fixture failed for its expected reason. Running the actual local coding agent against an isolated fixture." });
       agentResult = await agentRunner({
         root: fixture.workspace, goal: task.goal, requestedPath: task.expectedChangedPaths[0],
         maxIterations: task.maxIterations, maxSlices: task.maxSlices,
@@ -284,7 +296,8 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       if (fixture?.parent) await fs.rm(fixture.parent, { recursive: true, force: true }).catch(() => {});
     }
     const result = evaluateBenchmarkTask(task, agentResult, {
-      latencyMs: performance.now() - started, peakProcessRssBytes: peakRss, error: taskError
+      latencyMs: performance.now() - started, peakProcessRssBytes: peakRss,
+      baselineValidated, error: taskError
     });
     if (!agentResult) {
       result.patchValid = false; result.verificationPassed = false;
