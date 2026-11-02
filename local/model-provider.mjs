@@ -652,6 +652,9 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
     const text = body?.text;
     if (typeof text !== "string") throw new Error("Text must be a string.");
     if (Buffer.byteLength(text, "utf8") > 300_000) throw new Error("Text exceeds the 300 KB token-count API limit.");
+    if (isRepositoryPrompt(text) && process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT !== "1") {
+      throw new Error("Cloud repository tokenization is disabled. Set SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1 only after reviewing Google's Gemini API data-use terms and your workspace confidentiality requirements.");
+    }
     if (signal?.aborted) throw cancellationError();
     const timeoutSignal = AbortSignal.timeout(Math.min(timeoutMs || 30000, 30000));
     let response;

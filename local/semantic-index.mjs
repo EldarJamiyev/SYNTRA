@@ -81,6 +81,7 @@ async function embed(texts, model, fetchImpl, signal) {
   const timeout = AbortSignal.timeout(120000);
   const response = await fetchImpl(resolveLocalOllamaBaseUrl() + "/api/embed", {
     method: "POST", headers: { "Content-Type": "application/json" },
+    redirect: "error",
     body: JSON.stringify({ model, input: texts, truncate: true }),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout
   });

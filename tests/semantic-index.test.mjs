@@ -33,6 +33,7 @@ test("semantic embedding endpoint accepts loopback only and rejects remote data 
 
 function fakeEmbeddings(url, options) {
   assert.equal(url, "http://127.0.0.1:11434/api/embed");
+  assert.equal(options.redirect, "error", "embedding requests must not follow redirects to remote hosts");
   const input = JSON.parse(options.body).input;
   return Promise.resolve(new Response(JSON.stringify({
     embeddings: input.map(text => {

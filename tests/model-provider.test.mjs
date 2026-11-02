@@ -451,6 +451,12 @@ test("Gemini provider requires repository-content consent and uses server-side A
       }, { fetchImpl: async () => { throw new Error("must not be called"); } }),
       /repository inference is disabled/
     );
+    await assert.rejects(
+      () => handleGeminiModelRequest("POST", "/model/tokenize", {
+        text: "SYNTRA_READ_ONLY_TOOL_PLAN: repository file contents and selected excerpts"
+      }, { fetchImpl: async () => { throw new Error("must not be called"); } }),
+      /repository tokenization is disabled/
+    );
     process.env.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT = "1";
     let requestUrl = "", requestOptions = null;
     const received = [];
