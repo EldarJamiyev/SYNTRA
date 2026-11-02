@@ -7,7 +7,7 @@ This checklist is the release gate for the current local-first SYNTRA applicatio
 - Confirm the intended branch and commit. Do not publish a draft feature branch as a stable release.
 - Keep a recoverable copy of active project workspaces before upgrading. Do not delete the project's `.syntra` directory: it contains local proposals, run/checkpoint history, memory, indexes and audit state.
 - Confirm the release notes identify the release commit, supported operating systems, Node.js requirement, optional Python requirement, and known limitations.
-- Check that `package-lock.json` matches `package.json`; use `npm ci` for a clean, lockfile-based dependency install.
+- Check dependency resolution before release. **The current repository does not commit `package-lock.json`**, so `npm ci` is not yet available and npm transitive dependency resolution can change between installs. Use `npm install` for the current branch, but treat a committed npm lockfile as an outstanding release-readiness requirement.
 
 ## 2. Automated quality gates
 
