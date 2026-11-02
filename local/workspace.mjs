@@ -1840,7 +1840,7 @@ function restrictedVerificationEnvironment(source = process.env) {
   return result;
 }
 
-function verificationContainerImage(selected, environment) {
+function verificationContainerImage(selected) {
   let runtime;
   if (selected.kind === "npm-script" || selected.kind === "node-test") runtime = "NODE";
   else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") runtime = "PYTHON";
@@ -1858,11 +1858,7 @@ function verificationContainerImage(selected, environment) {
     GO: "golang:1.23-bookworm",
     DOTNET: "mcr.microsoft.com/dotnet/sdk:8.0"
   };
-  const image = String(environment["SYNTRA_" + runtime + "_SANDBOX_IMAGE"] || defaults[runtime]);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,180}$/.test(image)) {
-    throw new Error("The configured " + runtime + " sandbox image name is invalid.");
-  }
-  return image;
+  return defaults[runtime];
 }
 
 export function buildVerificationCommand(root, selected, {
@@ -1907,7 +1903,7 @@ export function buildVerificationCommand(root, selected, {
   const mountSourcePath = process.platform === "win32"
     ? workspacePath.split(String.fromCharCode(92)).join("/")
     : workspacePath;
-  const image = verificationContainerImage(selected, environment);
+  const image = verificationContainerImage(selected);
   let command;
   if (selected.kind === "npm-script") command = ["npm", "run", selected.script];
   else if (selected.kind === "node-test") command = ["node", ...selected.args];

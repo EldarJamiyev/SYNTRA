@@ -95,7 +95,8 @@ test("verification defaults to an offline Docker container and filters host envi
     environment: {
       PATH: "/usr/bin",
       SYNTRA_API_TOKEN: "must-not-be-forwarded",
-      SYNTRA_DOCKER_BIN: "/tmp/untrusted-docker"
+      SYNTRA_DOCKER_BIN: "/tmp/untrusted-docker",
+      SYNTRA_NODE_SANDBOX_IMAGE: "attacker/image:latest"
     }
   });
   assert.equal(isolated.mode, "docker");
@@ -105,6 +106,8 @@ test("verification defaults to an offline Docker container and filters host envi
     "/tmp:rw,noexec,nosuid,nodev,size=512m", "--mount", "node:20-bookworm-slim"]) {
     assert.ok(isolated.args.includes(flag), "expected Docker flag " + flag);
   }
+  assert.ok(isolated.args.includes("node:20-bookworm-slim"), "container images must come from the fixed runtime allowlist");
+  assert.ok(!isolated.args.includes("attacker/image:latest"), "environment values must not choose executable images");
   const mountIndex = isolated.args.indexOf("--mount");
   assert.ok(isolated.args[mountIndex + 1].startsWith("type=bind,source="));
   assert.ok(isolated.args[mountIndex + 1].endsWith(",target=/workspace"));
