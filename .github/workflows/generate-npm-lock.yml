@@ -6,24 +6,39 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  generate:
+  generate-and-verify:
+    if: github.ref == 'refs/heads/feat/engineering-intelligence-upgrade'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: feat/engineering-intelligence-upgrade
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Resolve the manifest and verify lockfile installation
+      - name: Generate the lockfile from the committed manifest
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Verify a clean lockfile installation
+        run: npm ci
+      - name: Run project quality gates against the locked dependency tree
         run: |
-          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          npm ci --ignore-scripts --no-audit --no-fund
-      - name: Upload the generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: syntra-npm-lockfile
-          path: package-lock.json
-          if-no-files-found: error
-          retention-days: 3
+          npm run lint
+          npm test
+          npm run build
+      - name: Commit and push the generated lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          if git diff --cached --quiet; then
+            echo "package-lock.json is already up to date."
+          else
+            git commit -m "build: add reproducible npm dependency lockfile"
+            git push origin HEAD:refs/heads/feat/engineering-intelligence-upgrade
+            gh workflow run generate-npm-lock.yml --ref feat/engineering-intelligence-upgrade
+          fi
