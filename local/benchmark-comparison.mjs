@@ -90,11 +90,15 @@ function taskMap(report) {
 }
 
 export function compareBenchmarkReports(baselineInput, candidateInput) {
+  const baselineVersion = baselineInput?.suiteVersion;
+  const candidateVersion = candidateInput?.suiteVersion;
+  if (typeof baselineVersion === "string" && SEMVER.test(baselineVersion)
+    && typeof candidateVersion === "string" && SEMVER.test(candidateVersion)
+    && baselineVersion !== candidateVersion) {
+    throw new Error("Cannot compare suite versions " + baselineVersion + " and " + candidateVersion + ". Run the same benchmark suite version.");
+  }
   const baseline = validateBenchmarkReport(baselineInput);
   const candidate = validateBenchmarkReport(candidateInput);
-  if (baseline.suiteVersion !== candidate.suiteVersion) {
-    throw new Error("Cannot compare suite versions " + baseline.suiteVersion + " and " + candidate.suiteVersion + ". Run the same benchmark suite version.");
-  }
   const baselineTasks = taskMap(baseline);
   const candidateTasks = taskMap(candidate);
   const baselineIds = [...baselineTasks.keys()].sort();
