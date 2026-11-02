@@ -139,7 +139,7 @@ The final changes are staged as hash-bound proposals. Review the diff first; app
 | **Conversation UI** | Chat, history, workspace controls and proposal review | React 18 · TypeScript · Vite |
 | **Local orchestration** | Request routing, job state, workspace selection and tool permissions | Node.js 20+ |
 | **Model runtime** | Local inference for chat, patch generation and review | Ollama by default |
-| **Research runtime** | Experimental native model implementation | Python 3.11+ · PyTorch |
+| **Research runtime** | Experimental native model implementation | Python 3.12+ · PyTorch |
 | **Project intelligence** | File graph, symbol index, semantic retrieval and saved memory | Workspace-local files and metadata |
 | **Verification** | Candidate checks and whole-workspace evidence | Docker isolation by default |
 
@@ -191,7 +191,7 @@ Local-first is an architectural boundary, not just a marketing label.
 - Git
 - Ollama with a compatible pretrained local model
 
-Python 3.11+ is needed only for the experimental native research backend.
+Python 3.12+ is needed only for the experimental native research backend.
 
 **Launch an existing checkout**
 

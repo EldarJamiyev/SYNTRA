@@ -6,8 +6,8 @@ import venv
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV = ROOT / ".venv"
-if sys.version_info < (3, 11):
-    raise SystemExit("SYNTRA requires Python 3.11 or newer; current interpreter is " + sys.version.split()[0])
+if sys.version_info < (3, 12):
+    raise SystemExit("SYNTRA requires Python 3.12 or newer; current interpreter is " + sys.version.split()[0])
 
 if sys.platform == "win32":
     VENV_PYTHON = VENV / "Scripts" / "python.exe"
