@@ -640,6 +640,32 @@ export function getGeminiProviderStatus(model = process.env.SYNTRA_GEMINI_MODEL 
   };
 }
 
+function validateGeminiFinishReason(reason) {
+  const finishReason = typeof reason === "string" ? reason.trim() : "";
+  if (!finishReason) {
+    throw providerError(
+      "Gemini closed its response without a terminal finishReason. SYNTRA rejected the output as incomplete.",
+      "STREAM_INTERRUPTED",
+      true
+    );
+  }
+  if (finishReason === "CONTINUATION") {
+    throw providerError(
+      "Gemini reached a continuation boundary. SYNTRA does not yet resume Gemini continuation tokens, so this output is incomplete.",
+      "STREAM_CONTINUATION_REQUIRED",
+      false
+    );
+  }
+  if (!["STOP", "MAX_TOKENS"].includes(finishReason)) {
+    throw providerError(
+      "Gemini stopped with finishReason " + finishReason + "; SYNTRA rejected the blocked or incomplete response.",
+      "MODEL_FINISHED_UNEXPECTEDLY",
+      false
+    );
+  }
+  return finishReason;
+}
+
 export async function handleGeminiModelRequest(method, route, body = {}, {
   fetchImpl = globalThis.fetch, timeoutMs = 300000, onToken, signal
 } = {}) {
@@ -716,6 +742,7 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
   }
   let text = "";
   let usage = {};
+  let finishReason = null;
   if (streaming) {
     if (!response.body || typeof response.body.getReader !== "function") {
       throw new Error("Gemini streaming response did not expose a readable event stream.");
@@ -732,7 +759,11 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
       try { chunk = JSON.parse(payloadText); }
       catch { throw new Error("Gemini returned malformed Server-Sent Events data."); }
       if (chunk.error) throw new Error(String(chunk.error.message || "Gemini streaming failed."));
-      const delta = (chunk?.candidates?.[0]?.content?.parts || [])
+      const candidate = chunk?.candidates?.[0];
+      if (typeof candidate?.finishReason === "string" && candidate.finishReason.trim()) {
+        finishReason = candidate.finishReason.trim();
+      }
+      const delta = (candidate?.content?.parts || [])
         .map(part => typeof part?.text === "string" ? part.text : "").join("");
       if (delta) {
         text += delta;
@@ -759,12 +790,15 @@ export async function handleGeminiModelRequest(method, route, body = {}, {
     }
   } else {
     const payload = await response.json().catch(() => ({}));
-    text = (payload?.candidates?.[0]?.content?.parts || []).map(part => typeof part?.text === "string" ? part.text : "").join("");
+    const candidate = payload?.candidates?.[0];
+    finishReason = typeof candidate?.finishReason === "string" ? candidate.finishReason : null;
+    text = (candidate?.content?.parts || []).map(part => typeof part?.text === "string" ? part.text : "").join("");
     usage = payload?.usageMetadata || {};
   }
+  finishReason = validateGeminiFinishReason(finishReason);
   if (!text) throw new Error("Gemini returned no text. Check model availability, safety filters, and API quota.");
   return {
-    text, generated_tokens: Number(usage.candidatesTokenCount || estimateTokens(text)),
+    text, finish_reason: finishReason, generated_tokens: Number(usage.candidatesTokenCount || estimateTokens(text)),
     prompt_tokens: Number(usage.promptTokenCount || 0) || undefined,
     trained_steps: null, provider: "gemini-api", model_name: model,
     context_window_tokens: GEMINI_CONTEXT_TOKENS, is_model_output: true

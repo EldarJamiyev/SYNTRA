@@ -467,7 +467,7 @@ test("Gemini provider requires repository-content consent and uses server-side A
         requestUrl = url; requestOptions = options;
         const events = [
           { candidates: [{ content: { parts: [{ text: '{"calls":' }] } }] },
-          { candidates: [{ content: { parts: [{ text: '[]}' }] } }],
+          { candidates: [{ content: { parts: [{ text: '[]}' }] }, finishReason: "STOP" }],
             usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 8 } }
         ];
         const stream = new ReadableStream({
@@ -485,12 +485,47 @@ test("Gemini provider requires repository-content consent and uses server-side A
     assert.equal(requestOptions.headers.Authorization, undefined);
     assert.equal(JSON.parse(requestOptions.body).generationConfig.responseMimeType, "application/json");
     assert.equal(result.provider, "gemini-api");
+    assert.equal(result.finish_reason, "STOP");
     assert.equal(result.prompt_tokens, 50);
     assert.equal(result.generated_tokens, 8);
     assert.deepEqual(received, [
       { delta: '{"calls":', fullText: '{"calls":' },
       { delta: '[]}', fullText: '{"calls":[]}' }
     ]);
+    await assert.rejects(
+      () => handleGeminiModelRequest("POST", "/model/generate", { prompt: "Return one short sentence." }, {
+        fetchImpl: async () => {
+          const partial = new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(
+                'data: {"candidates":[{"content":{"parts":[{"text":"partial output"}]}}]}\\n\\n'
+              ));
+              controller.close();
+            }
+          });
+          return new Response(partial, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+        },
+        onToken: () => {}, timeoutMs: 1000
+      }),
+      error => error.code === "STREAM_INTERRUPTED" && /without a terminal finishReason/.test(error.message)
+    );
+    await assert.rejects(
+      () => handleGeminiModelRequest("POST", "/model/generate", { prompt: "Return a long answer." }, {
+        fetchImpl: async () => {
+          const continued = new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(
+                'data: {"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":"CONTINUATION"}]}\\n\\n'
+              ));
+              controller.close();
+            }
+          });
+          return new Response(continued, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+        },
+        onToken: () => {}, timeoutMs: 1000
+      }),
+      error => error.code === "STREAM_CONTINUATION_REQUIRED" && /does not yet resume/.test(error.message)
+    );
     const tokenCount = await handleGeminiModelRequest("POST", "/model/tokenize", { text: "count this prompt" }, {
       fetchImpl: async (url, options) => {
         assert.match(url, /models\/gemini-3\.8-flash:countTokens$/);
