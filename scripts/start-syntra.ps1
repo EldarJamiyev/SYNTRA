@@ -247,9 +247,9 @@ try {
 
     if (-not $UseOllama) {
     Write-Step "Preparing the isolated native AI environment"
-    $VenvPython = Join-Path $Root ".venv\\Scripts\\python.exe"
+    $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
     Write-Host "Checking the installed Python environment against requirements.lock.txt..."
-    & python (Join-Path $Root "scripts\\setup_syntra_env.py")
+    & python (Join-Path $Root "scripts\setup_syntra_env.py")
     if ($LASTEXITCODE -ne 0) {
         throw "Python setup or lock validation failed. Check the installation error above, then double-click Start-SYNTRA.bat again."
     }
