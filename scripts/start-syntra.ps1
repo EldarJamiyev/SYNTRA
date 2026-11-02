@@ -139,7 +139,7 @@ try {
     $requestedLocalModel = if ($env:SYNTRA_LOCAL_MODEL) { $env:SYNTRA_LOCAL_MODEL.Trim() } else { "" }
     if ($providerMode -eq "gemini" -and -not $env:SYNTRA_GEMINI_API_KEY) { throw "SYNTRA_MODEL_PROVIDER=gemini requires SYNTRA_GEMINI_API_KEY." }
     if (@("auto", "native", "ollama", "gemini") -notcontains $providerMode) {
-        throw "SYNTRA_MODEL_PROVIDER must be auto, native, or ollama."
+        throw "SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini."
     }
 
     if ($providerMode -ne "native" -and $providerMode -ne "gemini") {
