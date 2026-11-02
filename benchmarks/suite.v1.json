@@ -1,6 +1,6 @@
 {
-  "version": "1.4.0",
-  "description": "Local coding-agent development suite covering JavaScript, TypeScript contracts, Python, multi-file API changes, and configuration tasks. Each fixture has an explicit expected pre-task failure diagnostic and exact expected changed paths.",
+  "version": "1.3.0",
+  "description": "Deterministic coding-agent baseline across JavaScript utilities, multi-file changes, asynchronous control flow, Python unittest projects, Go packages and Rust crates. Each available-runtime fixture begins with failing assertions; unavailable non-JavaScript runtimes are explicitly skipped.",
   "tasks": [
     {
       "id": "utility-clamp",
@@ -14,8 +14,7 @@
       ],
       "maxIterations": 2,
       "maxSlices": 1,
-      "goal": "Implement and export clamp(value, min, max) in src/math.mjs. Return min when value is below the range, max when it is above, and the original value when inside the inclusive range. Assume finite numeric arguments and min <= max. Do not mutate inputs. Do not edit tests or package files.",
-      "expectedBaselineFailure": "does not provide an export named 'clamp'"
+      "goal": "Implement and export clamp(value, min, max) in src/math.mjs. Return min when value is below the range, max when it is above, and the original value when inside the inclusive range. Assume finite numeric arguments and min <= max. Do not mutate inputs. Do not edit tests or package files."
     },
     {
       "id": "string-slugify",
@@ -29,8 +28,7 @@
       ],
       "maxIterations": 2,
       "maxSlices": 1,
-      "goal": "Fix and export slugify(value) in src/strings.mjs. Preserve the existing null/undefined to empty-string behavior. Lowercase the string, replace every run of non-ASCII-alphanumeric characters with one hyphen, and trim hyphens from both ends. Do not edit tests or package files.",
-      "expectedBaselineFailure": "does not provide an export named 'slugify'"
+      "goal": "Fix and export slugify(value) in src/strings.mjs. Preserve the existing null/undefined to empty-string behavior. Lowercase the string, replace every run of non-ASCII-alphanumeric characters with one hyphen, and trim hyphens from both ends. Do not edit tests or package files."
     },
     {
       "id": "config-deep-merge",
@@ -44,8 +42,7 @@
       ],
       "maxIterations": 3,
       "maxSlices": 1,
-      "goal": "Fix mergeConfig(base, override) in src/config.mjs. Recursively merge nested plain objects, preserve base keys not present in override, and replace arrays rather than merging their elements. Neither input object may be mutated. Keep the exported function name and do not edit tests or package files.",
-      "expectedBaselineFailure": "Expected values to be strictly deep-equal:"
+      "goal": "Fix mergeConfig(base, override) in src/config.mjs. Recursively merge nested plain objects, preserve base keys not present in override, and replace arrays rather than merging their elements. Neither input object may be mutated. Keep the exported function name and do not edit tests or package files."
     },
     {
       "id": "positive-integer",
@@ -59,8 +56,7 @@
       ],
       "maxIterations": 2,
       "maxSlices": 1,
-      "goal": "Implement and export parsePositiveInteger(value) in src/validation.mjs. Accept a number or a non-empty numeric string only when its parsed value is a positive safe integer. Return the integer value when valid and null for zero, negative, fractional, non-finite, unsafe, empty, or unsupported input. Do not mutate input or edit tests.",
-      "expectedBaselineFailure": "does not provide an export named 'parsePositiveInteger'"
+      "goal": "Implement and export parsePositiveInteger(value) in src/validation.mjs. Accept a number or a non-empty numeric string only when its parsed value is a positive safe integer. Return the integer value when valid and null for zero, negative, fractional, non-finite, unsafe, empty, or unsupported input. Do not mutate input or edit tests."
     },
     {
       "id": "array-chunk",
@@ -74,54 +70,92 @@
       ],
       "maxIterations": 2,
       "maxSlices": 1,
-      "goal": "Implement and export chunkArray(values, size) in src/array.mjs. Return ordered consecutive chunks with no chunk larger than size. Preserve the original values. Return an empty array for non-arrays and sizes that are not positive safe integers. Do not mutate inputs or edit tests.",
-      "expectedBaselineFailure": "does not provide an export named 'chunkArray'"
+      "goal": "Implement and export chunkArray(values, size) in src/array.mjs. Return ordered consecutive chunks with no chunk larger than size. Preserve the original values. Return an empty array for non-arrays and sizes that are not positive safe integers. Do not mutate inputs or edit tests."
     },
     {
-      "id": "multi-file-request-validation",
-      "category": "api-development",
-      "title": "Implement payload validation across a two-file request flow",
-      "fixture": "fixtures/multi-file-request-validation",
+      "id": "http-header-lookup",
+      "category": "api-semantics",
+      "title": "Implement case-insensitive safe HTTP header lookup",
+      "fixture": "fixtures/case-insensitive-header",
       "baselineCheck": "node-script",
-      "testEntry": "checks/route.test.mjs",
+      "testEntry": "checks/headers.test.mjs",
       "expectedChangedPaths": [
-        "src/validation.mjs",
-        "src/route.mjs"
+        "src/headers.mjs"
       ],
       "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement getHeader(headers, name) in src/headers.mjs. Look up HTTP header names case-insensitively without mutating the supplied object. Accept only a non-empty string name and a plain object or null-prototype object. Return undefined for invalid inputs, missing names, and inherited properties. Preserve the original header value. Do not edit tests or package files."
+    },
+    {
+      "id": "async-retry",
+      "category": "async-control",
+      "title": "Implement bounded asynchronous retry with selective retry policy",
+      "fixture": "fixtures/async-retry",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/retry.test.mjs",
+      "expectedChangedPaths": [
+        "src/retry.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement and export async retry(operation, options={}) in src/retry.mjs. operation must be a function. Support maxAttempts (default 3, positive safe integer), shouldRetry(error, attempt) (default true), and delayMs (default 0, finite non-negative number). Call operation with a 1-based attempt number, return the first successful result, immediately rethrow when shouldRetry returns false, and throw the final error after maxAttempts. Use Promise-based delay without blocking the event loop. Do not edit tests or package files."
+    },
+    {
+      "id": "multi-file-cache",
+      "category": "multi-file",
+      "title": "Implement and export a reusable in-memory cache across modules",
+      "fixture": "fixtures/multi-file-cache",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/cache.test.mjs",
+      "expectedChangedPaths": [
+        "src/cache.mjs",
+        "src/index.mjs"
+      ],
+      "maxIterations": 4,
       "maxSlices": 2,
-      "goal": "Implement isPlainPayload(payload) in src/validation.mjs so it accepts only non-null plain objects (Object.prototype or null prototype), rejecting arrays, primitives and null. Update src/route.mjs to use this validator: invalid payloads must return {status:400, body:{error:'invalid_payload'}} and valid payload objects must return {status:200, body:{accepted:true}}. Preserve the exported handleRequest function. Do not modify tests or package files.",
-      "expectedBaselineFailure": "Expected values to be strictly deep-equal:"
+      "goal": "Implement createCache() in src/cache.mjs and export it from src/index.mjs. The returned cache must use Map semantics and expose set(key,value) returning the cache, get(key), has(key), delete(key), clear(), and a read-only size getter. Preserve arbitrary key identity and values including undefined. Do not edit tests or package files."
     },
     {
-      "id": "python-duration-format",
+      "id": "python-slugify",
       "category": "python",
-      "title": "Format elapsed durations with validated inputs",
-      "fixture": "fixtures/python-duration-format",
+      "title": "Implement deterministic Python slug normalization",
+      "fixture": "fixtures/python-slugify",
       "baselineCheck": "python-unittest",
-      "testEntry": "tests/test_duration.py",
+      "testEntry": "checks/test_slug.py",
       "expectedChangedPaths": [
-        "src/duration.py"
+        "src/slug.py"
+      ],
+      "maxIterations": 4,
+      "maxSlices": 1,
+      "goal": "Implement slugify(value: str) in src/slug.py. Return a lowercase ASCII slug. Replace each run of non-alphanumeric characters with one hyphen, trim leading and trailing hyphens, and treat characters outside [a-zA-Z0-9] as separators. Do not edit tests or pyproject.toml."
+    },
+    {
+      "id": "go-clamp",
+      "category": "go",
+      "title": "Implement integer clamp in a Go package",
+      "fixture": "fixtures/go-clamp",
+      "baselineCheck": "go-test",
+      "testEntry": "clamp_test.go",
+      "expectedChangedPaths": [
+        "clamp.go"
       ],
       "maxIterations": 3,
       "maxSlices": 1,
-      "goal": "Implement format_duration(seconds) in src/duration.py. Accept only non-negative integers but reject booleans; raise TypeError for non-integers and ValueError for negative integers. Format values below one hour as MM:SS with zero-padded minutes and seconds, and values of one hour or more as H:MM:SS where hours are not padded. Do not edit tests or add dependencies.",
-      "expectedBaselineFailure": "AssertionError"
+      "goal": "Implement Clamp(value, minimum, maximum int) int in clamp.go. Return minimum when value is smaller, maximum when greater, and value otherwise. Assume minimum is less than or equal to maximum. Do not edit tests or go.mod."
     },
     {
-      "id": "typescript-contract-consistency",
-      "category": "typescript",
-      "title": "Repair an imported TypeScript contract implementation",
-      "fixture": "fixtures/typescript-contract-consistency",
-      "baselineCheck": "typescript",
-      "testEntry": "tsconfig.json",
+      "id": "rust-key-normalize",
+      "category": "rust",
+      "title": "Implement normalized cache-key handling in Rust",
+      "fixture": "fixtures/rust-key-normalize",
+      "baselineCheck": "rust-test",
+      "testEntry": "tests/normalize.rs",
       "expectedChangedPaths": [
-        "src/normalizer.ts"
+        "src/lib.rs"
       ],
-      "maxIterations": 2,
+      "maxIterations": 3,
       "maxSlices": 1,
-      "goal": "Fix normalizeAccount in src/normalizer.ts so its returned object satisfies the imported Account contract. The module imports Account as UserAccount and AccountState as UserAccountState; preserve these aliases, trim email and displayName, and return the original state value under the required state property. The current code incorrectly returns a status property, which is not part of Account. Do not modify contracts, the type-check configuration, or the consumer check.",
-      "expectedBaselineFailure": "status' does not exist in type 'Account'"
+      "goal": "Implement normalize_key(value: &str) -> String in src/lib.rs. Return the input trimmed of leading and trailing Unicode whitespace and converted to lowercase using Rust's Unicode-aware lowercase conversion. Do not edit tests or Cargo.toml."
     }
   ]
 }

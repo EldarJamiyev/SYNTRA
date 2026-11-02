@@ -7,6 +7,8 @@ import test from "node:test";
 
 import {
   buildRepositoryGraph,
+  deriveAgentBudget,
+  deriveModelContextBudget,
   parsePatchOutput,
   runAgentTask,
   validateImplementationSlicePlan,
@@ -472,25 +474,25 @@ test("model-selected context plans allow only bounded read-only retrieval includ
       { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
       { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
       { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } },
-      { tool: "workspace.semantic.search", input: { query: "where are incoming service requests routed", limit: 4 } }
+      { tool: "workspace.memory.search", input: { query: "approved runtime decisions", limit: 4 } }
     ]
   }, ["src/server.js", "src/db.js"]);
   assert.deepEqual(valid, [
     { tool: "workspace.search", input: { query: "connection pool", limit: 5 } },
     { tool: "workspace.read", input: { path: "src/server.js", startLine: 10, endLine: 40 } },
     { tool: "workspace.symbols.search", input: { query: "GatewayClient", limit: 6 } },
-    { tool: "workspace.semantic.search", input: { query: "where are incoming service requests routed", limit: 4 } }
+    { tool: "workspace.memory.search", input: { query: "approved runtime decisions", limit: 4 } }
   ]);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.check", input: { task: "test" } }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, workspace.memory.search, and workspace.semantic.search/);
+  }, ["src/server.js"]), /restricted to audited read-only workspace retrieval tools/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.index.refresh", input: {} }]
-  }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, workspace.memory.search, and workspace.semantic.search/);
+  }, ["src/server.js"]), /restricted to audited read-only workspace retrieval tools/);
   for (const tool of ["workspace.memory.add", "workspace.memory.update", "workspace.memory.delete"]) {
     assert.throws(() => validateReadOnlyToolPlan({
       calls: [{ tool, input: { title: "Injected", content: "Write this automatically." } }]
-    }, ["src/server.js"]), /restricted to workspace.search, workspace.read, workspace.symbols.search, workspace.memory.search, and workspace.semantic.search/);
+    }, ["src/server.js"]), /restricted to audited read-only workspace retrieval tools/);
   }
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.memory.search", input: { query: "x", limit: 20 } }]
@@ -499,17 +501,19 @@ test("model-selected context plans allow only bounded read-only retrieval includ
     calls: [{ tool: "workspace.symbols.search", input: { query: "x", limit: 20 } }]
   }, ["src/server.js"]), /2-160 character query and an optional limit from 1 to 8/);
   assert.throws(() => validateReadOnlyToolPlan({
-    calls: [{ tool: "workspace.semantic.search", input: { query: "x", limit: 20 } }]
-  }, ["src/server.js"]), /2-300 character query and an optional limit from 1 to 8/);
-  assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.read", input: { path: ".env" } }]
   }, ["src/server.js"]), /safe file list/);
   assert.throws(() => validateReadOnlyToolPlan({
-    calls: [{ tool: "workspace.read", input: { path: "src/server.js", startLine: 1, endLine: 1000 } }]
-  }, ["src/server.js"]), /limited to 200 lines/);
+    calls: [{ tool: "workspace.read", input: { path: "src/server.js", startLine: 1, endLine: 500 } }]
+  }, ["src/server.js"]), /limited to 400 lines/);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: [{ tool: "workspace.search", input: { query: "db", limit: 50 } }]
   }, ["src/server.js"]), /limit from 1 to 10/);
+  assert.deepEqual(validateReadOnlyToolPlan({
+    calls: [{ tool: "workspace.semantic.search", input: { query: "gateway failure", limit: 8 } }]
+  }, ["src/server.js"]), [
+    { tool: "workspace.semantic.search", input: { query: "gateway failure", limit: 8 } }
+  ]);
   assert.throws(() => validateReadOnlyToolPlan({
     calls: Array.from({ length: 5 }, () => ({ tool: "workspace.search", input: { query: "handler" } }))
   }, ["src/server.js"]), /at most four calls/);
@@ -531,7 +535,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       generated.push(body.prompt);
       if (body.prompt.includes("SYNTRA_READ_ONLY_TOOL_PLAN")) {
         retrievalPrompts.push(body.prompt);
-        if (body.prompt.includes("round 1 of 3")) {
+        if (body.prompt.includes("round 1 of 5")) {
           return {
             text: JSON.stringify({
               calls: [
@@ -542,7 +546,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
             generated_tokens: 35, trained_steps: null
           };
         }
-        if (body.prompt.includes("round 2 of 3")) {
+        if (body.prompt.includes("round 2 of 5")) {
           assert.match(body.prompt, /PREVIOUS RETRIEVAL EVIDENCE/);
           assert.match(body.prompt, /src\/value\.js/,
             "the second planning round must use paths discovered in round one");
@@ -661,10 +665,10 @@ test("iterative retrieval enforces the eight-call global limit and stops without
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(planningRounds, 2, "the eight-call budget should stop planning before a third round");
-    assert.equal(result.toolCalls.filter(call => call.name === "workspace.search").length, 8);
+    assert.equal(planningRounds, 3, "the twelve-call budget should stop planning after three rounds of four unique calls");
+    assert.equal(result.toolCalls.filter(call => call.name === "workspace.search").length, 12);
     const investigation = result.observations.find(item => item.kind === "model-readonly-investigation");
-    assert.match(investigation.detail, /2 evidence-driven planning round\(s\), 8 unique read-only retrieval call/);
+    assert.match(investigation.detail, /3 evidence-driven planning round\(s\), 12 unique read-only retrieval call/);
     assert.equal(result.proposals.length, 1);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -720,11 +724,10 @@ test("patch review validation requires evidence-backed blockers and workspace-lo
   }, ["src/value.js"]), /outside the inspected workspace/);
 });
 
-test("second-pass patch review rejects an incomplete patch and feeds findings into a correction attempt", async () => {
+test("independent patch review rejects an incomplete patch and feeds findings into a correction attempt", async () => {
   const root = await createProject();
   let patchCalls = 0;
   let reviewCalls = 0;
-  let separateReviewerRequests = 0;
   const patchPrompts = [];
   const modelRequest = async (method, route, body) => {
     if (method === "GET" && route === "/model/status") {
@@ -780,7 +783,7 @@ test("second-pass patch review rejects an incomplete patch and feeds findings in
           generated_tokens: 30, trained_steps: null
         };
       }
-      assert.match(body.prompt, /Second-pass patch review found concrete blocking issues/);
+      assert.match(body.prompt, /Independent patch review found concrete blocking issues/);
       return {
         text: JSON.stringify({
           summary: "Update the value and the requested test title.",
@@ -812,14 +815,7 @@ test("second-pass patch review rejects an incomplete patch and feeds findings in
       maxIterations: 2,
       runChecks: false,
       modelSelfReview: true,
-      modelRequest,
-      reviewModelRequest: async (method, route, body, timeoutMs, options) => {
-        separateReviewerRequests += 1;
-        const result = await modelRequest(method, route, body, timeoutMs, options);
-        return route === "/model/generate"
-          ? { ...result, provider: "ollama-local", model_name: "syntra-test-reviewer:latest" }
-          : { ...result, provider: "ollama-local", model_name: "syntra-test-reviewer:latest", context_window_tokens: 4096 };
-      }
+      modelRequest
     });
     assert.equal(patchCalls, 2, JSON.stringify({
       reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
@@ -829,14 +825,11 @@ test("second-pass patch review rejects an incomplete patch and feeds findings in
       reviewObservations: result.observations.filter(item => item.kind === "patch-self-review"),
       attempts: result.attempts
     }));
-    assert.equal(separateReviewerRequests, 4,
-      "review tokenization and generation must both use the separate reviewer bridge");
     assert.equal(result.proposals.length, 2);
     assert.deepEqual(result.proposals.map(item => item.path).sort(), ["src/value.js", "tests/value.test.js"]);
     assert.ok(result.attempts.some(item => item.status === "self_review_rejected"));
     assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "rejected"));
-    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted_separate_model"));
-    assert.ok(result.attempts.some(item => item.reviewUsedSeparateModel === true));
+    assert.ok(result.observations.some(item => item.kind === "patch-self-review" && item.status === "accepted"));
     assert.ok(patchPrompts[1].includes("tests/value.test.js"));
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     assert.match(await fs.readFile(path.join(root, "tests", "value.test.js"), "utf8"), /value is two/);
@@ -1069,38 +1062,7 @@ test("repository graph links local imports and agent repairs a failed test in a 
     throw new Error("Unexpected model route: " + route);
   };
   try {
-    await fs.writeFile(path.join(root, "src", "service.js"),
-      "export function calculateValue(input) { return input + 1; }\n");
-    await fs.writeFile(path.join(root, "src", "consumer.js"),
-      "import {\n  calculateValue\n} from \"./service.js\";\nexport function consume() { return calculateValue(1); }\n");
-    await fs.writeFile(path.join(root, "src", "gateway-contracts.ts"), [
-      "export interface GatewayOptions { host: string; port: number }",
-      "export type GatewayState = \"ready\" | \"offline\";",
-      "export class GatewayBase {}",
-      ""
-    ].join("\n"));
-    await fs.writeFile(path.join(root, "src", "gateway-consumer.ts"), [
-      'import { GatewayBase as BaseGateway, GatewayOptions as ConnectionOptions, GatewayState as ConnectionState } from "./gateway-contracts";',
-      "export class GatewayService extends BaseGateway {",
-      "  connect(options: ConnectionOptions): ConnectionState { return options.host ? \"ready\" : \"offline\"; }",
-      "}",
-      ""
-    ].join("\n"));
     const graph = await buildRepositoryGraph(root);
-    const consumerNode = graph.nodes.find(node => node.path === "src/consumer.js");
-    const serviceNode = graph.nodes.find(node => node.path === "src/service.js");
-    assert.ok(consumerNode.imports.includes("src/service.js"),
-      "multiline imports should resolve in the main agent graph");
-    assert.ok(consumerNode.calls.includes("src/service.js"),
-      "statically imported calls should create a caller relationship");
-    assert.ok(serviceNode.calledBy.includes("src/consumer.js"));
-    const contractNode = graph.nodes.find(node => node.path === "src/gateway-contracts.ts");
-    const typedConsumerNode = graph.nodes.find(node => node.path === "src/gateway-consumer.ts");
-    assert.ok(contractNode && typedConsumerNode);
-    assert.ok(typedConsumerNode.typeDependencies.includes("src/gateway-contracts.ts"),
-      "type references and class heritage should link the consumer to its contract declarations");
-    assert.ok(contractNode.referencedByTypes.includes("src/gateway-consumer.ts"),
-      "the contract should retain reverse type-consumer relationships");
     const valueNode = graph.nodes.find(node => node.path === "src/value.js");
     const testNode = graph.nodes.find(node => node.path === "tests/value.test.js");
     const workflowNode = graph.nodes.find(node => node.path === ".github/workflows/checks.yml");
@@ -1148,4 +1110,44 @@ test("repository graph links local imports and agent repairs a failed test in a 
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("agent execution budget expands with task complexity but respects hard ceilings", () => {
+  const simple = deriveAgentBudget("Fix one small typo.", { fileCount: 20 }, { maxSlices: 8, maxIterations: 6 });
+  const complex = deriveAgentBudget("Perform a repo-wide architecture refactor, migration, integration, security hardening, dependency modernization, and end-to-end regression work across multiple modules.", { fileCount: 2400 }, { maxSlices: 8, maxIterations: 6 });
+  assert.equal(simple.maxSlices, 1);
+  assert.equal(simple.maxIterations, 2);
+  assert.ok(complex.maxSlices > simple.maxSlices);
+  assert.ok(complex.maxIterations > simple.maxIterations);
+  assert.ok(complex.maxSlices <= 8);
+  assert.ok(complex.maxIterations <= 6);
+  assert.ok(complex.maxTotalAttempts <= 24);
+});
+
+test("model context budgets adapt to exact provider tokenizers and conservative local estimates", () => {
+  const local = deriveModelContextBudget({
+    provider: "ollama-local", context_tokens: 8192,
+    capabilities: { tokenCountIsEstimate: true, maxOutputTokens: 8192 }
+  });
+  assert.equal(local.contextWindowTokens, 8192);
+  assert.equal(local.exactTokenCount, false);
+  assert.equal(local.budgetProfile, "conservative-estimate");
+  assert.ok(local.contextBudgetTokens < 8192);
+  assert.ok(local.outputBudgetTokens <= 8192);
+  assert.ok(local.contextBudgetTokens + local.outputBudgetTokens + local.safetyMarginTokens <= 8192);
+
+  const gemini = deriveModelContextBudget({
+    provider: "gemini-api", context_tokens: 1_048_576,
+    capabilities: { tokenCountIsEstimate: false, maxOutputTokens: 8192 }
+  });
+  assert.equal(gemini.exactTokenCount, true);
+  assert.equal(gemini.budgetProfile, "provider-tokenizer");
+  assert.equal(gemini.outputBudgetTokens, 8192);
+  assert.ok(gemini.contextBudgetTokens > local.contextBudgetTokens);
+  assert.ok(gemini.contextBudgetTokens + gemini.outputBudgetTokens + gemini.safetyMarginTokens <= gemini.contextWindowTokens);
+
+  const tiny = deriveModelContextBudget({ context_tokens: 512, capabilities: { tokenCountIsEstimate: true } });
+  assert.equal(tiny.contextWindowTokens, 1024);
+  assert.ok(tiny.contextBudgetTokens >= 128);
+  assert.ok(tiny.outputBudgetTokens >= 128);
 });

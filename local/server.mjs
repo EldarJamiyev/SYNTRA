@@ -6,7 +6,7 @@ import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
-import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
+import { detectLocalModel, handleLocalModelRequest, handleGeminiModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
@@ -69,6 +69,9 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
   const signal = options?.signal;
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
+  if (modelRoute && String(process.env.SYNTRA_MODEL_PROVIDER || "ollama").trim().toLowerCase() === "gemini") {
+    return handleGeminiModelRequest(method, route, body || {}, { timeoutMs, onToken, signal });
+  }
   if (modelRoute) {
     let provider = await detectLocalModel();
     let modelBody = body || {};

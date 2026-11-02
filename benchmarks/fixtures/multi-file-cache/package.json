@@ -1,0 +1,8 @@
+{
+  "name": "syntra-benchmark-multi-file-cache",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node checks/cache.test.mjs"
+  }
+}

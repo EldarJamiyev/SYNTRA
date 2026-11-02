@@ -288,6 +288,42 @@ test("candidate checkpoint storage rejects stale schemas, unsafe paths, invalid 
   }
 });
 
+test("unverified in-flight candidate checkpoints can be saved and safely restored", async () => {
+  const root = await createWorkspace();
+  try {
+    const run = await createAgentRun(root, "Resume an interrupted in-flight implementation slice.");
+    const original = "export const value = 1;\n";
+    const candidate = "export const value = 2;\n";
+    const baseHash = createHash("sha256").update(original).digest("hex");
+    const contentHash = createHash("sha256").update(candidate).digest("hex");
+    const payload = {
+      schemaVersion: 1, runId: run.id, root: run.root, stage: "slice_unverified", nextSliceIndex: 0,
+      slices: [
+        { id: "slice-1", goal: "Update the exported value.", acceptance: "The value regression test passes.", status: "running" },
+        { id: "slice-2", goal: "Add the exported metadata helper.", acceptance: "The helper is added and checked.", status: "pending" }
+      ],
+      files: [{ path: "src/index.js", existedBefore: true, baseHash, content: candidate, contentHash, reason: "Candidate patch before checks." }],
+      verification: { status: "candidate_ready", passed: false, checks: [] }
+    };
+    const saved = await saveAgentCandidateCheckpoint(root, run.id, payload);
+    assert.equal(saved.saved, true);
+    assert.equal(saved.nextSliceIndex, 0);
+    const restored = await getAgentCandidateCheckpoint(root, run.id);
+    assert.equal(restored.stage, "slice_unverified");
+    assert.equal(restored.slices[0].status, "running");
+    assert.equal(restored.verification.passed, false);
+    assert.equal(restored.files[0].content, candidate);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...payload, verification: { status: "passed", passed: true, checks: [] }
+    }), /verification state/);
+    await assert.rejects(() => saveAgentCandidateCheckpoint(root, run.id, {
+      ...payload, slices: [{ ...payload.slices[0], status: "pending" }, payload.slices[1]]
+    }), /slice statuses/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("candidate checkpoint files refuse symbolic-link redirection", async () => {
   const root = await createWorkspace();
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-candidate-outside-"));
