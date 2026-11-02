@@ -97,7 +97,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workspace.semantic.search",
-    description: "Search current source and test files by local Ollama semantic similarity. It embeds only bounded indexed workspace files, validates file hashes before returning excerpts, and falls back to lexical search when SYNTRA_EMBED_MODEL is unset or unavailable.",
+    description: "Search source and test code using bounded, overlapping content chunks and local Ollama embeddings. Returns the best matching hash-validated excerpt with exact line ranges, balances chunk coverage across files, caches vectors locally without storing source text, and falls back to lexical search when embeddings are unavailable.",
     permission: "read_only",
     approvalRequired: false,
     inputSchema: {
@@ -580,6 +580,8 @@ function summarizeOutput(name, output) {
       return {
         retrievalMode: output.retrievalMode, embeddingModel: output.embeddingModel || null,
         resultCount: output.results.length, semanticCoverage: output.semanticCoverage || 0,
+        semanticChunkCoverage: output.semanticChunkCoverage || 0,
+        indexedFiles: output.indexedFiles || 0, indexedChunks: output.indexedChunks || 0,
         staleFiles: output.staleFiles || 0,
         topPaths: output.results.slice(0, 8).map(item => item.path)
       };
