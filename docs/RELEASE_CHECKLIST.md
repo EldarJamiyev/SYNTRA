@@ -14,13 +14,13 @@ This checklist is the release gate for the current local-first SYNTRA applicatio
 Run these from the SYNTRA repository root:
 
 ```powershell
-npm ci
+npm install
 npm run lint
 npm test
 npm run build
 ```
 
-All commands must exit successfully. The test suite includes local API/origin-policy, workspace, agent checkpoint/recovery, security boundary, model-provider, semantic-index and Windows launcher regression coverage. `npm test` runs the cross-platform Node.js regression suite; it does not install or prove that the user's preferred Ollama model, Docker runtime, or Gemini API credentials work.
+All commands must exit successfully. The repository currently has no committed npm lockfile: `npm install` validates a fresh dependency resolution but is not a reproducible, lockfile-pinned install. Before a stable release, commit a reviewed `package-lock.json`, switch this gate to `npm ci`, and keep the lockfile synchronized with `package.json`. Python requirements also use bounded version ranges rather than a fully hashed lock. The test suite includes local API/origin-policy, workspace, agent checkpoint/recovery, security boundary, model-provider, semantic-index and Windows launcher regression coverage. `npm test` runs the cross-platform Node.js regression suite; it does not install or prove that the user's preferred Ollama model, Docker runtime, or Gemini API credentials work.
 
 On GitHub, require both the `SYNTRA checks` workflow and CodeQL to pass on the exact release-candidate commit. Review failed or skipped jobs rather than relying only on a green top-level badge.
 
@@ -94,6 +94,7 @@ Retain both reports. Interpret latency/RSS changes only when the recorded enviro
 Release only when all applicable gates are recorded:
 
 - [ ] The intended commit is identified and backed up.
+- [ ] A reviewed `package-lock.json` is committed, `npm ci` succeeds from a clean checkout, and Python dependency resolution/lock policy is documented.
 - [ ] GitHub `SYNTRA checks` and CodeQL pass on that exact commit.
 - [ ] Local lint, regression tests and production build pass.
 - [ ] The Windows launcher and local service smoke test pass on the target machine.

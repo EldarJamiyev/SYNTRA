@@ -173,6 +173,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Add provider selection and capability metadata that distinguishes locally measured/heuristic attributes from unmeasured engineering task performance. Local model selection scores remain heuristics; no model is labeled frontier-equivalent.
 - [x] Add bounded Ollama retries for transient transport/server failures; classify context-window and model-memory exhaustion; reject incomplete streams and never replay partial streamed output.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
+- [ ] Commit and enforce a reviewed npm dependency lockfile (`package-lock.json`), add a reproducible Python dependency lock/constraints policy, and define a routine dependency-update and vulnerability-review gate.
 - [x] Reject case-variant access to the reserved `.syntra` state directory and cross-platform Windows path aliases, including NTFS alternate data streams, reserved device names, and trailing-dot/space names.
 - [x] Add an explicitly opt-in Gemini API provider with server-side API-key handling, request cancellation, provider metadata, and a separate consent gate before repository context is sent to the cloud.
 - [x] Add optional local semantic retrieval using Ollama embeddings; persist only vectors, path/line metadata and source hashes; revalidate hashes before returning excerpts.
