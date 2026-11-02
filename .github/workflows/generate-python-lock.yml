@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   compile:
@@ -31,10 +31,14 @@ jobs:
           .venv/bin/python -m pip install --require-hashes -r requirements.lock.txt
           .venv/bin/python -m pip check
           .venv/bin/python -c "import numpy, torch; assert torch.version.cuda is None, 'Expected CPU-only PyTorch'; print('NumPy', numpy.__version__, 'PyTorch', torch.__version__, 'CUDA', torch.version.cuda)"
-      - name: Upload generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: syntra-python-lockfile
-          path: requirements.lock.txt
-          if-no-files-found: error
-          retention-days: 3
+      - name: Commit the verified lockfile to the feature branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements.lock.txt
+          if git diff --cached --quiet; then
+            echo "Python requirements lockfile is already up to date."
+          else
+            git commit -m "build: add universal hash-locked Python dependencies"
+            git push origin HEAD:refs/heads/feat/engineering-intelligence-upgrade
+          fi
