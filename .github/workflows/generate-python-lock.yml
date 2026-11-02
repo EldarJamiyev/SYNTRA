@@ -2,7 +2,7 @@ name: Generate Python dependency lock
 
 on:
   push:
-    branches: [main, feat/engineering-intelligence-upgrade]
+    branches: [feat/engineering-intelligence-upgrade]
     paths:
       - requirements.txt
       - .github/workflows/generate-python-lock.yml
@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   compile:
+    if: github.ref == 'refs/heads/feat/engineering-intelligence-upgrade'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
