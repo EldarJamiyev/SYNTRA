@@ -12,7 +12,7 @@ Start a local Ollama model that SYNTRA can select, or start SYNTRA's native AI s
 - Run selected tasks: npm run benchmark -- --task utility-clamp --task string-slugify
 - Choose a report path: npm run benchmark -- --output reports/local-model-run.json
 
-The default suite is benchmarks/suite.v1.json, currently version 1.3.0. It contains eight intentionally failing regression fixtures:
+The default suite is benchmarks/suite.v1.json, currently version 1.4.0. It contains eight intentionally failing regression fixtures:
 
 | Task | Capability | Acceptance |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ The default suite is benchmarks/suite.v1.json, currently version 1.3.0. It conta
 | python-duration-format | Python utility implementation | Input validation and MM:SS/H:MM:SS formatting through unittest |
 | typescript-contract-consistency | TypeScript API contracts | Aliased imports, interface conformance, and a real tsc noEmit baseline |
 
-Each fixture must fail its language-appropriate baseline check (Node.js assertions, Python unittest, or the installed TypeScript compiler in noEmit mode) before SYNTRA is invoked. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
+Each fixture must fail its language-appropriate baseline check (Node.js assertions/import contract, Python unittest, or the installed TypeScript compiler in noEmit mode) before SYNTRA is invoked. Every task declares an `expectedBaselineFailure` diagnostic substring; a nonzero exit code is insufficient. The runner requires that diagnostic in the captured baseline output before invoking the agent, so missing dependencies, malformed test files, runner startup errors, and unrelated failures cannot masquerade as a valid failing fixture. The task report records `baselineValidated`. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
 
 ## Measurements
 
