@@ -146,8 +146,8 @@ test("benchmark refuses to score a fixture that fails for the wrong reason", asy
   let agentInvocations = 0;
   await fs.mkdir(sourceDir, { recursive: true });
   await fs.mkdir(testDir, { recursive: true });
-  await fs.writeFile(path.join(sourceDir, "target.mjs"), "export const value = 1;\\n");
-  await fs.writeFile(path.join(testDir, "baseline.test.mjs"), 'throw new Error("fixture setup failed");\\n');
+  await fs.writeFile(path.join(sourceDir, "target.mjs"), "export const value = 1;\n");
+  await fs.writeFile(path.join(testDir, "baseline.test.mjs"), 'throw new Error("fixture setup failed");\n');
   const suite = { version: "1.0.0", tasks: [{
     id: "fixture-task", category: "test", title: "Reject invalid baseline",
     fixture: "fixture", baselineCheck: "node-script",
