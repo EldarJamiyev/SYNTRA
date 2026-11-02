@@ -25,7 +25,8 @@ test("Windows startup failures report HTTP response and the process listening on
 test("Windows startup defaults to pretrained Ollama and only selects the native research model explicitly", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
   assert.match(launcher, /else\s*\{\s*"ollama"\s*\}/);
-  assert.match(launcher, /@\("native", "ollama"\) -notcontains \$providerMode/);
+  assert.match(launcher, /@\("auto", "native", "ollama", "gemini"\) -notcontains \$providerMode/);
+  assert.match(launcher, /SYNTRA_GEMINI_API_KEY/);
   assert.match(launcher, /SYNTRA_MODEL_PROVIDER=native/);
   assert.doesNotMatch(launcher, /else\s*\{\s*"auto"\s*\}/);
 });
