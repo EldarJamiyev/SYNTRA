@@ -14,10 +14,14 @@ import {
 
 const INDEX_FILENAME = "workspace-index-v3.json";
 const INDEX_SCHEMA_VERSION = 3;
-const SEMANTIC_CACHE_FILENAME = "workspace-semantic-v1.json";
-const MAX_SEMANTIC_CACHE_BYTES = 8 * 1024 * 1024;
-const MAX_SEMANTIC_FILES = 48;
-const MAX_SEMANTIC_TEXT_CHARS = 3600;
+const SEMANTIC_CACHE_FILENAME = "workspace-semantic-v2.json";
+const MAX_SEMANTIC_CACHE_BYTES = 12 * 1024 * 1024;
+const MAX_SEMANTIC_FILES = 64;
+const MAX_SEMANTIC_CHUNKS = 256;
+const MAX_SEMANTIC_CHUNKS_PER_FILE = 16;
+const MAX_SEMANTIC_CHUNK_CHARS = 2400;
+const MAX_SEMANTIC_CHUNK_LINES = 48;
+const SEMANTIC_CHUNK_OVERLAP_LINES = 4;
 const MAX_EMBEDDING_BATCH = 32;
 const MAX_INDEX_CANDIDATES = 2000;
 const MAX_INDEX_SCAN_BYTES = 32 * 1024 * 1024;
@@ -893,8 +897,64 @@ export async function searchWorkspaceSymbols(inputRoot, query, limit = 10) {
 }
 
 
-function semanticEmbeddingText(file, content) {
-  const symbols = file.symbols.slice(0, 40).map(symbol => symbol.kind + " " + symbol.name).join("\n");
+function buildSemanticContentChunks(content) {
+  const lines = String(content).split(/\r?\n/);
+  const chunks = [];
+  let start = 0;
+
+  while (start < lines.length) {
+    let cursor = start;
+    let characterCount = 0;
+    const selectedLines = [];
+    while (cursor < lines.length && cursor - start < MAX_SEMANTIC_CHUNK_LINES) {
+      const line = lines[cursor];
+      const separatorLength = selectedLines.length ? 1 : 0;
+      const remaining = MAX_SEMANTIC_CHUNK_CHARS - characterCount - separatorLength;
+      if (remaining <= 0) break;
+      if (line.length > remaining) {
+        if (!selectedLines.length) {
+          selectedLines.push(line.slice(0, MAX_SEMANTIC_CHUNK_CHARS));
+          cursor += 1;
+        }
+        break;
+      }
+      selectedLines.push(line);
+      characterCount += line.length + separatorLength;
+      cursor += 1;
+    }
+
+    if (!selectedLines.length) {
+      selectedLines.push(lines[start].slice(0, MAX_SEMANTIC_CHUNK_CHARS));
+      cursor = start + 1;
+    }
+    chunks.push({
+      lineStart: start + 1,
+      lineEnd: Math.max(start + 1, cursor),
+      source: selectedLines.join("\n").slice(0, MAX_SEMANTIC_CHUNK_CHARS)
+    });
+    if (cursor >= lines.length) break;
+    start = Math.max(start + 1, cursor - SEMANTIC_CHUNK_OVERLAP_LINES);
+  }
+
+  if (chunks.length <= MAX_SEMANTIC_CHUNKS_PER_FILE) {
+    return { chunks, totalChunks: chunks.length, sampled: false };
+  }
+  const sampled = Array.from({ length: MAX_SEMANTIC_CHUNKS_PER_FILE }, (_, index) => {
+    const selectedIndex = Math.round(index * (chunks.length - 1) / (MAX_SEMANTIC_CHUNKS_PER_FILE - 1));
+    return chunks[selectedIndex];
+  });
+  return { chunks: sampled, totalChunks: chunks.length, sampled: true };
+}
+
+function semanticEmbeddingText(file, chunk) {
+  const nearbySymbols = file.symbols
+    .filter(symbol => symbol.line >= chunk.lineStart && symbol.line <= chunk.lineEnd)
+    .slice(0, 24)
+    .map(symbol => symbol.kind + " " + symbol.name + " (line " + symbol.line + ")")
+    .join("\n");
+  const symbols = nearbySymbols || file.symbols.slice(0, 12)
+    .map(symbol => symbol.kind + " " + symbol.name)
+    .join("\n");
   const relations = [
     "Imports: " + file.imports.slice(0, 12).join(", "),
     "Callers: " + file.calledBy.slice(0, 12).join(", "),
@@ -904,9 +964,10 @@ function semanticEmbeddingText(file, content) {
     "Path: " + file.path,
     "Role: " + file.role,
     "Language: " + path.posix.extname(file.path).slice(1),
+    "Chunk lines: " + chunk.lineStart + "-" + chunk.lineEnd,
     "Symbols: " + symbols,
     relations,
-    "Source:\n" + content.slice(0, MAX_SEMANTIC_TEXT_CHARS)
+    "Source:\n" + chunk.source
   ].join("\n");
 }
 
@@ -940,7 +1001,7 @@ async function readSemanticCache(root, model) {
     throw new Error("The semantic source cache must be a regular file, not a symbolic link.");
   }
   if (info.size > MAX_SEMANTIC_CACHE_BYTES) {
-    throw new Error("The semantic source cache exceeds its 8 MB storage limit.");
+    throw new Error("The semantic source cache exceeds its 12 MB storage limit.");
   }
   let value;
   try { value = JSON.parse(await fs.readFile(target, "utf8")); }
@@ -948,9 +1009,9 @@ async function readSemanticCache(root, model) {
     throw new Error("The semantic source cache contains invalid JSON and was not overwritten.");
   }
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || value.schemaVersion !== 1 || value.root !== root
+    || value.schemaVersion !== 2 || value.root !== root
     || typeof value.model !== "string" || !Array.isArray(value.entries)
-    || value.entries.length > MAX_SEMANTIC_FILES) {
+    || value.entries.length > MAX_SEMANTIC_CHUNKS) {
     throw new Error("The semantic source cache is invalid or belongs to another workspace.");
   }
   if (value.model !== model) return { dimension: null, entries: [] };
@@ -959,17 +1020,23 @@ async function readSemanticCache(root, model) {
   const seen = new Set();
   const entries = [];
   for (const entry of value.entries) {
+    const key = entry && typeof entry.path === "string" && Number.isInteger(entry.chunkIndex)
+      ? entry.path + "\\0" + entry.chunkIndex : "";
     if (!entry || typeof entry !== "object" || !safeIndexedPath(entry.path)
-      || seen.has(entry.path) || !HASH_PATTERN.test(entry.sha256 || "")
+      || !Number.isInteger(entry.chunkIndex) || entry.chunkIndex < 0
+      || entry.chunkIndex >= MAX_SEMANTIC_CHUNKS_PER_FILE
+      || seen.has(key) || !HASH_PATTERN.test(entry.textHash || "")
       || !validSemanticVector(entry.embedding, dimension)) {
-      throw new Error("The semantic source cache contains an invalid vector entry.");
+      throw new Error("The semantic source cache contains an invalid chunk vector entry.");
     }
-    seen.add(entry.path);
-    entries.push({ path: entry.path, sha256: entry.sha256, embedding: entry.embedding });
+    seen.add(key);
+    entries.push({
+      path: entry.path, chunkIndex: entry.chunkIndex,
+      textHash: entry.textHash, embedding: entry.embedding
+    });
   }
   return { dimension, entries };
 }
-
 async function writeSemanticCache(root, model, dimension, entries) {
   const target = await semanticCachePath(root, true);
   let existing;
@@ -1074,7 +1141,8 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
     const lexical = await searchWorkspace(root, normalized, limit);
     return {
       available: true, root, query: normalized, retrievalMode: "lexical_fallback",
-      embeddingModel: null, semanticCoverage: 0, results: lexical.results.map(item => ({
+      embeddingModel: null, semanticCoverage: 0, semanticChunkCoverage: 0,
+      results: lexical.results.map(item => ({
         ...item, role: path.posix.extname(item.path).toLowerCase() === ".test" ? "test" : "source"
       }))
     };
@@ -1084,21 +1152,26 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
     const lexical = await searchWorkspace(root, normalized, limit);
     return {
       available: false, root, query: normalized, retrievalMode: "lexical_fallback",
-      embeddingModel: model, semanticCoverage: 0, reason: "workspace_index_unavailable",
-      results: lexical.results
+      embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+      reason: "workspace_index_unavailable", results: lexical.results
     };
   }
 
   const sourceFiles = index.files.filter(file => file.role === "source" || file.role === "test");
   const candidates = [...sourceFiles].sort((left, right) => {
-    const leftStructure = left.symbols.length + left.imports.length * 2 + left.calledBy.length * 2 + left.ownedTests.length;
-    const rightStructure = right.symbols.length + right.imports.length * 2 + right.calledBy.length * 2 + right.ownedTests.length;
-    return rightStructure - leftStructure || left.path.localeCompare(right.path);
+    const leftStructure = left.symbols.length + left.imports.length * 2
+      + left.calledBy.length * 2 + left.ownedTests.length;
+    const rightStructure = right.symbols.length + right.imports.length * 2
+      + right.calledBy.length * 2 + right.ownedTests.length;
+    const leftScore = lexicalSourceScore(left, normalized) * 6 + Math.min(40, leftStructure);
+    const rightScore = lexicalSourceScore(right, normalized) * 6 + Math.min(40, rightStructure);
+    return rightScore - leftScore || left.path.localeCompare(right.path);
   }).slice(0, MAX_SEMANTIC_FILES);
   if (!candidates.length) {
     return {
       available: true, root, query: normalized, retrievalMode: "semantic",
-      embeddingModel: model, semanticCoverage: 0, results: [], truncated: false
+      embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+      results: [], truncated: false
     };
   }
 
@@ -1116,25 +1189,55 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
           staleFiles += 1;
           continue;
         }
-        const embeddingText = semanticEmbeddingText(indexed, current.content);
+        const built = buildSemanticContentChunks(current.content);
+        const chunks = built.chunks.map((chunk, chunkIndex) => {
+          const embeddingText = semanticEmbeddingText(indexed, chunk);
+          return {
+            path: indexed.path, indexed, sha256: current.sha256, content: current.content,
+            chunkIndex, lineStart: chunk.lineStart, lineEnd: chunk.lineEnd,
+            source: chunk.source, textHash: semanticTextHash(embeddingText), embeddingText
+          };
+        });
         currentFiles.push({
-          indexed, content: current.content, sha256: current.sha256,
-          textHash: semanticTextHash(embeddingText), embeddingText
+          indexed, sha256: current.sha256, chunks,
+          sampledChunks: built.sampled, totalChunks: built.totalChunks
         });
       } catch {
         staleFiles += 1;
       }
     }
 
+    // Round-robin chunks across files so a few very large modules cannot consume
+    // the entire embedding budget before smaller, relevant files are considered.
+    const selectedChunks = [];
+    const maximumRounds = Math.max(0, ...currentFiles.map(file => file.chunks.length));
+    for (let round = 0; round < maximumRounds && selectedChunks.length < MAX_SEMANTIC_CHUNKS; round += 1) {
+      for (const file of currentFiles) {
+        const chunk = file.chunks[round];
+        if (chunk) selectedChunks.push(chunk);
+        if (selectedChunks.length >= MAX_SEMANTIC_CHUNKS) break;
+      }
+    }
+    if (!selectedChunks.length) {
+      return {
+        available: true, root, query: normalized, retrievalMode: "semantic",
+        embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+        results: [], staleFiles, truncated: sourceFiles.length > candidates.length
+      };
+    }
+
     const cache = await readSemanticCache(root, model);
-    const cacheByPath = new Map(cache.entries.map(entry => [entry.path, entry]));
-    const vectorsByPath = new Map();
+    const cacheByKey = new Map(cache.entries.map(entry => [
+      entry.path + "\\0" + entry.chunkIndex, entry
+    ]));
+    const vectorsByKey = new Map();
     const missing = [];
-    for (const item of currentFiles) {
-      const cached = cacheByPath.get(item.indexed.path);
-      if (cached && cached.sha256 === item.sha256 && cache.dimension
+    for (const item of selectedChunks) {
+      const key = item.path + "\\0" + item.chunkIndex;
+      const cached = cacheByKey.get(key);
+      if (cached && cached.textHash === item.textHash && cache.dimension
         && validSemanticVector(cached.embedding, cache.dimension)) {
-        vectorsByPath.set(item.indexed.path, cached.embedding);
+        vectorsByKey.set(key, cached.embedding);
       } else {
         missing.push(item);
       }
@@ -1144,45 +1247,73 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
     const generated = [];
     let dimension = cache.dimension;
     for (let offset = 0; offset < inputs.length; offset += MAX_EMBEDDING_BATCH) {
-      const batch = await requestSourceEmbeddings(fetchImpl, model, inputs.slice(offset, offset + MAX_EMBEDDING_BATCH));
+      const batch = await requestSourceEmbeddings(
+        fetchImpl, model, inputs.slice(offset, offset + MAX_EMBEDDING_BATCH)
+      );
       if (dimension !== null && dimension !== batch.dimension) {
         throw new Error("The local semantic model returned a different vector dimension than the cached workspace index.");
       }
       dimension = batch.dimension;
       generated.push(...batch.embeddings);
     }
-    if (generated.length !== inputs.length) throw new Error("Local semantic embedding generation returned an incomplete vector set.");
+    if (generated.length !== inputs.length) {
+      throw new Error("Local semantic embedding generation returned an incomplete vector set.");
+    }
 
-    missing.forEach((item, index) => vectorsByPath.set(item.indexed.path, generated[index]));
+    missing.forEach((item, index) => {
+      vectorsByKey.set(item.path + "\\0" + item.chunkIndex, generated[index]);
+    });
     const queryEmbedding = generated[generated.length - 1];
-    const serializedEntries = currentFiles.filter(item => vectorsByPath.has(item.indexed.path)).map(item => ({
-      path: item.indexed.path, sha256: item.sha256, embedding: vectorsByPath.get(item.indexed.path)
+    const serializedEntries = selectedChunks.filter(item =>
+      vectorsByKey.has(item.path + "\\0" + item.chunkIndex)
+    ).map(item => ({
+      path: item.path, chunkIndex: item.chunkIndex,
+      textHash: item.textHash, embedding: vectorsByKey.get(item.path + "\\0" + item.chunkIndex)
     }));
     await writeSemanticCache(root, model, dimension, serializedEntries);
 
-    const results = currentFiles.map(item => {
-      const cosine = semanticCosineSimilarity(queryEmbedding, vectorsByPath.get(item.indexed.path));
-      return {
+    const bestByPath = new Map();
+    for (const item of selectedChunks) {
+      const key = item.path + "\\0" + item.chunkIndex;
+      const cosine = semanticCosineSimilarity(queryEmbedding, vectorsByKey.get(key));
+      const score = cosine === null ? 0 : Number(cosine.toFixed(6));
+      if (score <= 0) continue;
+      const previous = bestByPath.get(item.path);
+      if (previous && previous.score >= score) continue;
+      bestByPath.set(item.path, {
         ...semanticMetadata(item.indexed),
         sha256: item.sha256,
-        score: cosine === null ? 0 : Number(cosine.toFixed(6)),
-        excerpt: item.content.slice(0, 1600)
-      };
-    }).filter(item => item.score > 0)
+        score,
+        lineStart: item.lineStart,
+        lineEnd: item.lineEnd,
+        excerpt: item.source.slice(0, 1600)
+      });
+    }
+    const results = [...bestByPath.values()]
       .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
       .slice(0, limit);
+    const semanticFileCoverage = new Set(serializedEntries.map(item => item.path)).size;
+    const totalAvailableChunks = currentFiles.reduce((sum, file) => sum + file.totalChunks, 0);
     return {
       available: true, root, query: normalized, retrievalMode: "semantic",
-      embeddingModel: model, semanticCoverage: serializedEntries.length,
-      indexedCandidates: sourceFiles.length, staleFiles,
-      truncated: sourceFiles.length > candidates.length,
+      embeddingModel: model,
+      semanticCoverage: semanticFileCoverage,
+      semanticChunkCoverage: serializedEntries.length,
+      indexedCandidates: sourceFiles.length,
+      indexedFiles: currentFiles.length,
+      indexedChunks: selectedChunks.length,
+      staleFiles,
+      truncated: sourceFiles.length > candidates.length
+        || currentFiles.some(file => file.sampledChunks)
+        || totalAvailableChunks > selectedChunks.length,
       results
     };
   } catch (error) {
     const lexical = await searchWorkspace(root, normalized, limit);
     return {
       available: true, root, query: normalized, retrievalMode: "lexical_fallback",
-      embeddingModel: model, semanticCoverage: 0, semanticError: (error instanceof Error ? error.message : String(error)).slice(0, 240),
+      embeddingModel: model, semanticCoverage: 0, semanticChunkCoverage: 0,
+      semanticError: (error instanceof Error ? error.message : String(error)).slice(0, 240),
       results: lexical.results
     };
   }
