@@ -7,17 +7,26 @@ import { evaluateBenchmarkTask, loadBenchmarkSuite, runBenchmarkSuite, runTypeSc
 
 test("versioned benchmark manifest contains representative coding tasks", async () => {
   const { suite } = await loadBenchmarkSuite();
-  assert.equal(suite.version, "1.3.0");
+  assert.equal(suite.version, "1.4.0");
   assert.deepEqual(suite.tasks.map(task => task.id), ["utility-clamp","string-slugify","config-deep-merge","positive-integer","array-chunk","multi-file-request-validation","python-duration-format","typescript-contract-consistency"]);
   assert.equal(new Set(suite.tasks.map(task => task.expectedChangedPaths[0])).size, 7);
   assert.equal(suite.tasks.find(task => task.id === "multi-file-request-validation").expectedChangedPaths.length, 2);
   assert.equal(suite.tasks.find(task => task.id === "python-duration-format").baselineCheck, "python-unittest");
   assert.equal(suite.tasks.find(task => task.id === "typescript-contract-consistency").baselineCheck, "typescript");
+  assert.ok(suite.tasks.every(task => typeof task.expectedBaselineFailure === "string"
+    && task.expectedBaselineFailure.length >= 4),
+  "every fixture must declare the diagnostic that proves its baseline failure is intentional");
 });
 test("suite validation rejects duplicate IDs and fixture path traversal", () => {
-  const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-script", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
+  const task = { id: "safe-task", title: "Safe task", goal: "Implement the requested behavior.", fixture: "fixtures/safe", baselineCheck: "node-script", expectedBaselineFailure: "AssertionError", testEntry: "checks/safe.test.mjs", expectedChangedPaths: ["src/main.mjs"] };
   assert.throws(() => validateBenchmarkSuite({ version: "1.0.0", tasks: [task, { ...task }] }), /unique/i);
   assert.throws(() => validateBenchmarkSuite({ version: "1.0.0", tasks: [{ ...task, fixture: "../outside" }] }), /unsafe fixture/i);
+  assert.throws(() => validateBenchmarkSuite({
+    version: "1.0.0", tasks: [{ ...task, expectedBaselineFailure: undefined }]
+  }), /expected baseline failure diagnostic/i);
+  assert.throws(() => validateBenchmarkSuite({
+    version: "1.0.0", tasks: [{ ...task, expectedBaselineFailure: "x" }]
+  }), /expected baseline failure diagnostic/i);
 });
 test("TypeScript baseline invokes the installed compiler and detects then clears type errors", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-typescript-baseline-"));
@@ -93,7 +102,7 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
   ].join("\n"));
   const suite = { version: "1.0.0", tasks: [{
     id: "fixture-task", category: "test", title: "Disposable fixture test",
-    fixture: "fixture", baselineCheck: "node-script", testEntry: "checks/baseline.test.mjs", expectedChangedPaths: ["src/target.mjs"],
+    fixture: "fixture", baselineCheck: "node-script", expectedBaselineFailure: "Expected values to be strictly equal", testEntry: "checks/baseline.test.mjs", expectedChangedPaths: ["src/target.mjs"],
     goal: "Implement the expected source behavior without changing tests.", maxIterations: 1, maxSlices: 1
   }] };
   try {
@@ -121,7 +130,47 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
     assert.equal(report.model.name, "test-local-model");
     assert.equal(report.summary.completedTaskCount, 1, JSON.stringify(report.tasks));
     assert.equal(report.tasks[0].taskComplete, true);
+    assert.equal(report.tasks[0].baselineValidated, true);
     assert.deepEqual(JSON.parse(await fs.readFile(outputPath, "utf8")), report);
     assert.equal(await fs.readFile(path.join(sourceDir, "target.mjs"), "utf8"), original);
   } finally { await fs.rm(parent, { recursive: true, force: true }); }
+});
+
+
+test("benchmark refuses to score a fixture that fails for the wrong reason", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-benchmark-invalid-baseline-"));
+  const suiteDir = path.join(parent, "suite");
+  const fixtureDir = path.join(suiteDir, "fixture");
+  const sourceDir = path.join(fixtureDir, "src");
+  const testDir = path.join(fixtureDir, "checks");
+  let agentInvocations = 0;
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.mkdir(testDir, { recursive: true });
+  await fs.writeFile(path.join(sourceDir, "target.mjs"), "export const value = 1;\\n");
+  await fs.writeFile(path.join(testDir, "baseline.test.mjs"), 'throw new Error("fixture setup failed");\\n');
+  const suite = { version: "1.0.0", tasks: [{
+    id: "fixture-task", category: "test", title: "Reject invalid baseline",
+    fixture: "fixture", baselineCheck: "node-script",
+    expectedBaselineFailure: "Expected values to be strictly equal",
+    testEntry: "checks/baseline.test.mjs",
+    expectedChangedPaths: ["src/target.mjs"],
+    goal: "Implement the expected behavior without changing tests.",
+    maxIterations: 1, maxSlices: 1
+  }] };
+  try {
+    const { report } = await runBenchmarkSuite({
+      suite, suiteDir,
+      modelRequest: async () => ({ checkpoint_exists: true, provider: "ollama", model_name: "test-model" }),
+      agentRunner: async () => {
+        agentInvocations += 1;
+        throw new Error("The coding agent must not run for an invalid baseline.");
+      }
+    });
+    assert.equal(agentInvocations, 0);
+    assert.equal(report.tasks[0].baselineValidated, false);
+    assert.equal(report.tasks[0].taskComplete, false);
+    assert.match(report.tasks[0].error, /unexpected reason/);
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
 });
