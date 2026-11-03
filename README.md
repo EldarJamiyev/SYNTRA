@@ -136,6 +136,19 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 - **The native PyTorch model is experimental.** It starts with randomly initialized weights. Training it on a small local corpus is useful for researching tokenization, training, checkpoints, and inference; it does not make it comparable to a pretrained coding model.
 - **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
 
+#### Approving local training data directories
+
+The native corpus loader only reads from the repository itself and explicitly approved local directories. Set `SYNTRA_ALLOWED_CORPUS_ROOTS` to one or more existing absolute directory paths before running native training or corpus preparation. Separate multiple paths with the platform path separator (a semicolon on Windows, a colon on Linux/macOS).
+
+PowerShell example:
+
+```powershell
+$env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\Datasets\MySource"
+python scripts/run_syntra_module.py cli train --root "D:\Datasets\MySource"
+```
+
+The selected corpus root is resolved before traversal. Relative paths, home-directory shorthand, paths outside approved roots, and symlinks that resolve outside an approved root are rejected.
+
 ## 🚀 Get started
 
 ### Windows

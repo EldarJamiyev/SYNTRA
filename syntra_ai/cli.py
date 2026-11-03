@@ -17,11 +17,11 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     data = sub.add_parser("inspect-data", help="Index a local source corpus without reading likely secrets.")
-    data.add_argument("--root", required=True)
+    data.add_argument("--root", required=True, help="Absolute path inside the repository or SYNTRA_ALLOWED_CORPUS_ROOTS.")
     data.add_argument("--max-tokens", type=int, default=5_000_000)
 
     training = sub.add_parser("train", help="Train a decoder-only Transformer from random initialization.")
-    training.add_argument("--root", required=True, help="Absolute local source-code corpus path.")
+    training.add_argument("--root", required=True, help="Absolute approved source-code directory; external roots must be listed in SYNTRA_ALLOWED_CORPUS_ROOTS.")
     training.add_argument("--steps", type=int, default=1000)
     training.add_argument("--batch-size", type=int, default=4)
     training.add_argument("--seq-len", type=int, default=4096)
@@ -59,7 +59,7 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="Report actual local checkpoint and training metrics.")
     evaluation = sub.add_parser("evaluate", help="Run a fresh sampled loss evaluation on a local corpus.")
-    evaluation.add_argument("--root", required=True, help="Absolute local corpus directory to evaluate.")
+    evaluation.add_argument("--root", required=True, help="Absolute approved corpus directory; external roots must be listed in SYNTRA_ALLOWED_CORPUS_ROOTS.")
     evaluation.add_argument("--batches", type=int, default=16)
     evaluation.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     serve = sub.add_parser("serve", help="Start the loopback-only local AI API.")
