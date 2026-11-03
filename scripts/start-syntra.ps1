@@ -196,9 +196,9 @@ try {
 
     $BrainCheckpoint = Join-Path $Root "checkpoints\syntra-brain.pt"
     if (Test-Path -LiteralPath $BrainCheckpoint -PathType Leaf) {
-        Write-Host "A standalone SYNTRA brain checkpoint is available." -ForegroundColor Green
+        Write-Host "A standalone local PyTorch brain checkpoint is available." -ForegroundColor Green
     } else {
-        Write-Warning "No trained brain checkpoint exists yet. Start SYNTRA, open Active workspace, and select 'Train local brain on this workspace'."
+        Write-Warning "No trained local PyTorch brain checkpoint exists yet. Start SYNTRA, open Active workspace, and select 'Train local brain on this workspace'."
     }
 
     Write-Step "Starting the local services"
