@@ -237,7 +237,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
     throw new Error("Unknown benchmark task ID(s): " + missing.join(", "));
   }
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000);
-  if (!modelStatus?.checkpoint_exists) throw new Error("No usable local model is available. Start Ollama with a local model or start SYNTRA's native AI service before running benchmarks.");
+  if (!modelStatus?.checkpoint_exists) throw new Error("No trained SYNTRA checkpoint is available. Complete a local training epoch before running coding benchmarks.");
   const startedAt = new Date().toISOString(), results = [];
   let selectedModel = null;
   for (const task of selected) {
@@ -304,7 +304,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
     },
     model: {
       provider: String(selectedModel?.provider || modelStatus.provider || "local"),
-      name: String(selectedModel?.name || modelStatus.model_name || modelStatus.model || "unknown"),
+      name: String(selectedModel?.name || modelStatus.model_name || modelStatus.model || "SYNTRA local PyTorch brain"),
       contextWindowTokens: Number(selectedModel?.contextWindowTokens || modelStatus.context_tokens || 0) || null
     },
     summary: summarizeBenchmarkResults(results), tasks: results,
