@@ -1,7 +1,6 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Root = Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot "launcher-helpers.ps1")
 Set-Location -LiteralPath $Root
 
 function Write-Step([string]$Message) {
