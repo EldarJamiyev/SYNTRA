@@ -220,8 +220,6 @@ def train(
                 "Start a new checkpoint or use the original dataset to resume."
             )
         stored_config = TransformerConfig.from_dict(saved["config"])
-        if config is not None and stored_config != requested_config:
-            raise ValueError("Requested model architecture differs from the saved checkpoint.")
         if config is not None:
             comparable_requested = replace(requested_config, vocab_size=stored_config.vocab_size)
             if comparable_requested != stored_config:
