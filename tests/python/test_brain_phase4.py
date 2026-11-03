@@ -93,12 +93,12 @@ class PhaseFourCorpusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="syntra-phase4-byte-limit-") as temp:
             root = Path(temp) / "approved"
             root.mkdir()
-            (root / "one.py").write_text("def one():\n    return 'x' * 40\n", encoding="utf-8")
+            (root / "one.py").write_text("def one():\n    return 'x' * 1500\n", encoding="utf-8")
             old = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
             try:
                 with self.assertRaisesRegex(ValueError, "total source limit"):
-                    build_instruction_corpus([root], max_total_bytes=1024, max_file_bytes=1024, chunk_chars=200)
+                    build_instruction_corpus([root], max_total_bytes=1024, max_file_bytes=4096, chunk_chars=200)
             finally:
                 if old is None:
                     os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
