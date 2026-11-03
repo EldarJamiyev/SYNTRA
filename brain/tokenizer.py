@@ -69,6 +69,84 @@ class BytePairTokenizer:
         return cls(())
 
     @classmethod
+    def train_from_text(
+        cls,
+        text: str,
+        *,
+        vocab_size: int = 1024,
+        max_training_bytes: int = 100_000,
+        min_pair_frequency: int = 2,
+    ) -> "BytePairTokenizer":
+        """Learn deterministic BPE merges from a bounded local text sample."""
+        if not isinstance(text, str):
+            raise TypeError("Tokenizer training input must be a string.")
+        if type(vocab_size) is not int or not FIRST_MERGE_ID <= vocab_size <= MAX_VOCAB_SIZE:
+            raise ValueError(f"vocab_size must be between {FIRST_MERGE_ID} and {MAX_VOCAB_SIZE}.")
+        if (
+            type(max_training_bytes) is not int
+            or not 1024 <= max_training_bytes <= MAX_TRAINING_BYTES
+        ):
+            raise ValueError(
+                f"max_training_bytes must be between 1,024 and {MAX_TRAINING_BYTES:,}."
+            )
+        if type(min_pair_frequency) is not int or min_pair_frequency < 1:
+            raise ValueError("min_pair_frequency must be a positive integer.")
+
+        raw_sample = text.encode("utf-8")[:max_training_bytes]
+        if not raw_sample:
+            raise ValueError("The tokenizer training text is empty.")
+        try:
+            sample = raw_sample.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            # Truncation may end inside the final UTF-8 codepoint; never discard
+            # or replace invalid bytes from the middle of the selected sample.
+            if exc.reason == "unexpected end of data":
+                sample = raw_sample[:exc.start].decode("utf-8")
+            else:
+                raise ValueError("The tokenizer training text must be valid UTF-8.") from None
+        if not sample:
+            raise ValueError("The selected tokenizer training prefix contains no complete UTF-8 text.")
+
+        sequences = [list(sample.encode("utf-8"))]
+        merges: list[tuple[int, int]] = []
+        merge_target = vocab_size - FIRST_MERGE_ID
+
+        while len(merges) < merge_target:
+            pair_counts: Counter[tuple[int, int]] = Counter()
+            for sequence in sequences:
+                if len(sequence) > 1:
+                    pair_counts.update(zip(sequence, sequence[1:]))
+            if not pair_counts:
+                break
+            pair, frequency = max(
+                pair_counts.items(),
+                key=lambda item: (item[1], -item[0][0], -item[0][1]),
+            )
+            if frequency < min_pair_frequency:
+                break
+
+            new_id = FIRST_MERGE_ID + len(merges)
+            replacement_sequences: list[list[int]] = []
+            for sequence in sequences:
+                merged: list[int] = []
+                index = 0
+                while index < len(sequence):
+                    if (
+                        index + 1 < len(sequence)
+                        and (sequence[index], sequence[index + 1]) == pair
+                    ):
+                        merged.append(new_id)
+                        index += 2
+                    else:
+                        merged.append(sequence[index])
+                        index += 1
+                replacement_sequences.append(merged)
+            sequences = replacement_sequences
+            merges.append(pair)
+
+        return cls(tuple(merges))
+
+    @classmethod
     def train_from_file(
         cls,
         dataset_path: str | os.PathLike[str] = "dataset.txt",
