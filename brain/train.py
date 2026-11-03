@@ -13,7 +13,6 @@ import json
 import math
 import os
 from pathlib import Path
-import random
 import sys
 from time import perf_counter
 from typing import Callable, Iterable
@@ -38,7 +37,7 @@ ProgressCallback = Callable[[dict], None]
 def _read_local_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
-) -> tuple[str, str, list[str], int]:
+) -> tuple[str, str, list[str], int, str]:
     """Read bounded UTF-8 files and produce a stable content fingerprint."""
     documents: list[str] = []
     names: list[str] = []
@@ -223,9 +222,12 @@ def train(
         stored_config = TransformerConfig.from_dict(saved["config"])
         if config is not None and stored_config != requested_config:
             raise ValueError("Requested model architecture differs from the saved checkpoint.")
+        if config is not None:
+            comparable_requested = replace(requested_config, vocab_size=stored_config.vocab_size)
+            if comparable_requested != stored_config:
+                raise ValueError("Requested model architecture differs from the saved checkpoint.")
         requested_config = stored_config
         tokenizer = BytePairTokenizer.from_dict(saved["tokenizer"])
-        _restore_rng_state(saved.get("rng_state"), device)
     else:
         tokenizer = BytePairTokenizer.train_from_text(
             train_text,
@@ -274,6 +276,7 @@ def train(
     if saved is not None:
         model.load_state_dict(saved["model_state_dict"], strict=True)
         optimizer.load_state_dict(saved["optimizer_state_dict"])
+        _restore_rng_state(saved.get("rng_state"), device)
         start_epoch = int(saved["epoch"])
         start_step = int(saved["step"])
         best_validation_loss = saved.get("best_validation_loss")
