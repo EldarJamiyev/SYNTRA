@@ -794,11 +794,11 @@ async function runModelSelectedReadOnlyTools({
           content: String(item.content || "").slice(0, 1600),
           tags: (item.tags || []).slice(0, 8), updatedAt: item.updatedAt, owner: "user"
         }));
-        fragment = JSON.stringify({ tool: call.tool, query: call.input.query, total: toolRun.output.total, results });
+        fragment = JSON.stringify({ tool: call.tool, query: call.input.query, total: toolRun.output.total, retrievalMode: toolRun.output.retrievalMode, results });
         observations.push({
           kind: call.tool, stage: "model-selected-context",
           status: results.length ? "observed" : "empty",
-          detail: "Retrieved " + results.length + " user-approved project note(s) for '" + call.input.query + "'."
+          detail: "Local BM25 retrieved " + results.length + " user-authored project note(s) for '" + call.input.query + "'."
         });
       } else if (call.tool === "workspace.semantic.search") {
         const results = (toolRun.output.results || []).slice(0, 8).map(item => ({
