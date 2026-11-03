@@ -93,7 +93,7 @@ class PhaseFourCorpusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="syntra-phase4-byte-limit-") as temp:
             root = Path(temp) / "approved"
             root.mkdir()
-            (root / "one.py").write_text("def one():\n    return 'x' * 1500\n", encoding="utf-8")
+            (root / "one.py").write_text("def one():\n    return '" + ("x" * 1500) + "'\n", encoding="utf-8")
             old = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
             try:
