@@ -886,6 +886,8 @@ def train(
             if should_save:
                 save_checkpoint(target, payload_for_save(start_epoch, epoch_order, next_batch_index))
                 report("running", start_epoch, "Checkpoint saved; cross-entropy and held-out validation metrics updated.")
+            else:
+                report("running", start_epoch, "Optimizer update completed; local cross-entropy metrics refreshed.")
 
         start_epoch += 1
         epoch_order = None
