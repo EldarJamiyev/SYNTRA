@@ -146,7 +146,13 @@ Train from the default `dataset.txt`:
 python -m brain.train --dataset dataset.txt --epochs 3 --device auto
 ```
 
-Add more local corpora by repeating `--dataset`:
+Train directly from a selected local project directory (source files are discovered recursively):
+
+```powershell
+python -m brain.train --dataset .\path\to\your\project --epochs 3 --device auto
+```
+
+Or add multiple local text/code files and folders by repeating `--dataset`:
 
 ```powershell
 python -m brain.train --dataset .\corpus\python.txt --dataset .\corpus\docs.txt --epochs 2 --device auto
