@@ -157,7 +157,7 @@ async function readLocalTokenizer() {
 }
 
 function countByteBpe(text, tokenizer) {
-  const tokens = [...Buffer.from(text, "utf8")];
+  let tokens = [...Buffer.from(text, "utf8")];
   const ranks = new Map(tokenizer.merges.map((pair, rank) => [pair[0] + ":" + pair[1], rank]));
   while (tokens.length > 1) {
     let bestRank = Infinity;
@@ -181,8 +181,7 @@ function countByteBpe(text, tokenizer) {
         merged.push(tokens[index]);
       }
     }
-    tokens.length = 0;
-    tokens.push(...merged);
+    tokens = merged;
   }
   return tokens.length;
 }
@@ -244,6 +243,8 @@ export async function getBrainStatus() {
     pretrained_weights: false,
     external_ai_api: false,
     local_only: true,
+    is_estimate: false,
+    capabilities: { tokenCountIsEstimate: false, maxOutputTokens: 512 },
     training: { ...trainingState }
   };
 }
