@@ -34,48 +34,142 @@ MAX_DATASET_BYTES = 256 * 1024 * 1024
 ProgressCallback = Callable[[dict], None]
 
 
+SOURCE_EXTENSIONS = frozenset({
+    ".py", ".pyi", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+    ".java", ".kt", ".go", ".rs", ".c", ".h", ".cc", ".cpp", ".hpp",
+    ".cs", ".php", ".rb", ".swift", ".scala", ".sh", ".ps1", ".bat",
+    ".sql", ".html", ".htm", ".css", ".scss", ".sass", ".json", ".jsonl",
+    ".yaml", ".yml", ".toml", ".ini", ".cfg", ".md", ".rst", ".txt",
+    ".xml", ".graphql", ".gql", ".proto", ".vue", ".svelte", ".ipynb",
+})
+SKIP_DIRECTORIES = frozenset({
+    ".git", ".hg", ".svn", ".venv", "venv", "env", ".tox", ".mypy_cache",
+    ".pytest_cache", ".ruff_cache", "__pycache__", "node_modules", "vendor",
+    "dist", "build", "target", "coverage", ".next", ".nuxt", ".turbo",
+    ".cache", ".idea", ".vscode", "site-packages",
+})
+SENSITIVE_SUFFIXES = frozenset({
+    ".pem", ".key", ".p12", ".pfx", ".p7b", ".p7c", ".jks",
+    ".keystore", ".sqlite", ".db", ".dump", ".bak", ".log",
+})
+MAX_DATASET_FILES = 20_000
+
+
+def _is_sensitive_name(name: str) -> bool:
+    lower = name.casefold()
+    if lower == ".env" or lower.startswith(".env."):
+        return True
+    if lower in {
+        "credentials", "credentials.json", "secrets", "secrets.json",
+        "id_rsa", "id_ed25519", "known_hosts", "authorized_keys",
+    }:
+        return True
+    if any(marker in lower for marker in ("secret", "credential", "password", "private_key", "private-key")):
+        return True
+    if Path(lower).suffix in SENSITIVE_SUFFIXES:
+        return True
+    return False
+
+
+def _iter_local_source_files(source: Path):
+    """Yield approved text files in a file or project folder; never follow symlinks."""
+    resolved_source = source.resolve(strict=True)
+    if resolved_source.is_file():
+        if _is_sensitive_name(resolved_source.name):
+            raise ValueError(f"Refusing to train on an obviously sensitive file: {resolved_source.name}")
+        yield resolved_source, resolved_source.name, True
+        return
+    if not resolved_source.is_dir():
+        raise ValueError(f"Dataset path must be a local file or directory: {source}")
+
+    root = resolved_source
+
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for current, directory_names, filenames in os.walk(
+        root,
+        topdown=True,
+        followlinks=False,
+        onerror=raise_walk_error,
+    ):
+        current_path = Path(current)
+        directory_names[:] = sorted(
+            name for name in directory_names
+            if name.casefold() not in SKIP_DIRECTORIES
+            and not (current_path / name).is_symlink()
+        )
+        for filename in sorted(filenames):
+            candidate = current_path / filename
+            if candidate.is_symlink() or _is_sensitive_name(filename):
+                continue
+            if candidate.suffix.casefold() not in SOURCE_EXTENSIONS:
+                continue
+            resolved = candidate.resolve(strict=True)
+            try:
+                relative = resolved.relative_to(root)
+            except ValueError:
+                continue
+            if not resolved.is_file():
+                continue
+            yield resolved, relative.as_posix(), False
+
+
 def _read_local_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
 ) -> tuple[str, str, list[str], int, str]:
-    """Read bounded UTF-8 files and produce a stable content fingerprint."""
+    """Read bounded local text/code files and produce a stable corpus fingerprint."""
     documents: list[str] = []
     names: list[str] = []
     digest = sha256()
     total_bytes = 0
+    file_count = 0
     seen: set[Path] = set()
 
     for raw_path in paths:
         path = Path(raw_path).expanduser()
         try:
-            resolved = path.resolve(strict=True)
-            if not resolved.is_file():
-                raise ValueError(f"Dataset path is not a regular local file: {path}")
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            size = resolved.stat().st_size
-            if size < 1:
-                continue
-            if total_bytes + size > max_dataset_bytes:
-                raise ValueError(
-                    f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
-                )
-            raw = resolved.read_bytes()
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            raise ValueError(f"Dataset must contain valid UTF-8 text: {path}") from None
+            source = path.resolve(strict=True)
+            for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                if file_count >= MAX_DATASET_FILES:
+                    raise ValueError(f"Local training data exceeds the {MAX_DATASET_FILES:,}-file limit.")
+                size = resolved.stat().st_size
+                if size < 1:
+                    continue
+                if total_bytes + size > max_dataset_bytes:
+                    raise ValueError(
+                        f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
+                    )
+                raw = resolved.read_bytes()
+                try:
+                    source_text = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    if explicitly_selected:
+                        raise ValueError(f"Dataset must contain valid UTF-8 text: {resolved}") from None
+                    continue
+
+                total_bytes += len(raw)
+                file_count += 1
+                relative_bytes = relative_name.encode("utf-8")
+                digest.update(len(relative_bytes).to_bytes(8, "big"))
+                digest.update(relative_bytes)
+                digest.update(len(raw).to_bytes(8, "big"))
+                digest.update(raw)
+                documents.append(f"\n# SYNTRA_SOURCE_FILE: {relative_name}\n{source_text}")
+                names.append(str(resolved))
+        except ValueError:
+            raise
         except OSError as exc:
             raise ValueError(f"Cannot read local dataset {path}: {exc}") from None
 
-        total_bytes += len(raw)
-        digest.update(len(raw).to_bytes(8, "big"))
-        digest.update(raw)
-        documents.append(text)
-        names.append(str(resolved))
-
     if not documents or not any(document.strip() for document in documents):
-        raise ValueError("No readable text was found in the selected local dataset files.")
+        raise ValueError(
+            "No readable UTF-8 source files were found. Select a text/code file or a project folder."
+        )
 
     combined = "\n\n".join(documents)
     split_at = int(len(combined) * 0.9)
