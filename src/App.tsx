@@ -296,7 +296,10 @@ export default function App() {
   useEffect(() => {
     mountedRef.current = true;
     textareaRef.current?.focus();
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      activeStreamControllerRef.current?.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -668,6 +671,16 @@ export default function App() {
     }
   };
 
+  const cancelBrainTrainingRun = async () => {
+    try {
+      const result = await postJson<{ ok: boolean; message?: string }>('/local-api/brain/train/cancel', {});
+      if (!result.ok && result.message) setWorkspaceError(result.message);
+      await refreshBrainStatus();
+    } catch (cause) {
+      setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   const cancelActiveChat = async () => {
     const jobId = activeJobIdRef.current;
     if (!jobId) return;
@@ -797,8 +810,11 @@ export default function App() {
         setStreamingReply(partialReply);
       } else if (eventName === 'metrics') {
         const next = payload as BrainMetrics;
-        setBrainMetrics(next);
-        if (typeof next.train_loss === 'number' && Number.isFinite(next.train_loss)) {
+        setBrainMetrics(current => ({ ...current, ...next }));
+        const sampleKey = String(next.step ?? next.checkpoint_step ?? 0) + ':' + String(next.train_loss ?? '');
+        if (typeof next.train_loss === 'number' && Number.isFinite(next.train_loss)
+          && sampleKey !== lastBrainSampleRef.current) {
+          lastBrainSampleRef.current = sampleKey;
           setBrainLossHistory(current => [...current, next.train_loss as number].slice(-48));
         }
       } else if (eventName === 'error') {
@@ -1058,9 +1074,14 @@ export default function App() {
               {trainingActive || brainTrainingStarting ? 'Training local model…' : brainStatus?.checkpoint_exists ? 'Continue training on this workspace' : 'Train local brain on this workspace'}
             </button>
             {trainingActive && (
-              <div className="brain-training-progress" role="status">
-                Epoch {Number(brainStatus?.training?.epoch || 0)} · step {Number(brainStatus?.training?.step || 0)} · {brainStatus?.training?.message || 'Training'}
-              </div>
+              <>
+                <div className="brain-training-progress" role="status">
+                  Epoch {Number(brainStatus?.training?.epoch || 0)} · step {Number(brainStatus?.training?.step || 0)} · {brainStatus?.training?.message || 'Training'}
+                </div>
+                <button type="button" className="brain-training-cancel" onClick={() => void cancelBrainTrainingRun()}>
+                  Stop training
+                </button>
+              </>
             )}
           </section>
           <form className="workspace-switch-form" onSubmit={submitWorkspaceSwitch}>
