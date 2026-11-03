@@ -807,14 +807,14 @@ async function runModelSelectedReadOnlyTools({
         }));
         fragment = JSON.stringify({
           tool: call.tool, query: call.input.query, available: toolRun.output.available,
-          embeddingModel: toolRun.output.embeddingModel, staleResults: toolRun.output.staleResults, results
+          indexMethod: toolRun.output.indexMethod, staleResults: toolRun.output.staleResults, results
         });
         observations.push({
           kind: call.tool, stage: "model-selected-context",
           status: toolRun.output.available ? results.length ? "observed" : "empty" : "unavailable",
           detail: toolRun.output.available
-            ? "Semantic search returned " + results.length + " hash-validated code excerpt(s) for '" + call.input.query + "'."
-            : "Semantic index is unavailable; lexical and symbol retrieval remain available."
+            ? "Local BM25 search returned " + results.length + " hash-validated code excerpt(s) for '" + call.input.query + "'."
+            : "The local BM25 index is unavailable; direct source search and symbol retrieval remain available."
         });
       } else {
         fragment = JSON.stringify({
@@ -1245,7 +1245,7 @@ export async function runAgentTask({
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
-  if (!modelStatus.checkpoint_exists) throw new Error("No usable local model is available. Start a local Ollama model or train SYNTRA's native model before requesting an agent patch.");
+  if (!modelStatus.checkpoint_exists) throw new Error("No trained SYNTRA PyTorch checkpoint is available. Train the local brain before requesting an agent patch.");
   const contextPlan = deriveModelContextBudget(modelStatus);
   const contextWindow = contextPlan.contextWindowTokens;
   const contextBudget = contextPlan.contextBudgetTokens;
