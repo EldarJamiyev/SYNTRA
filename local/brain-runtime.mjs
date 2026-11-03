@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
@@ -10,6 +9,7 @@ const DEFAULT_CHECKPOINT = path.join(ROOT, "checkpoints", "syntra-brain.pt");
 const MAX_PROMPT_BYTES = 256 * 1024;
 const MAX_GENERATION_TOKENS = 2048;
 let trainingProcess = null;
+let trainingCancelled = false;
 let trainingState = {
   status: "idle",
   epoch: 0,
@@ -85,9 +85,9 @@ export async function getBrainStatus() {
     trained_steps: Number(metadata.step || 0),
     epoch: Number(metadata.epoch || 0),
     parameter_count: Number(metadata.parameter_count || 0),
-    train_loss: Number.isFinite(Number(metadata.train_loss)) ? Number(metadata.train_loss) : null,
-    validation_loss: Number.isFinite(Number(metadata.validation_loss)) ? Number(metadata.validation_loss) : null,
-    best_validation_loss: Number.isFinite(Number(metadata.best_validation_loss)) ? Number(metadata.best_validation_loss) : null,
+    train_loss: typeof metadata.train_loss === "number" && Number.isFinite(metadata.train_loss) ? metadata.train_loss : null,
+    validation_loss: typeof metadata.validation_loss === "number" && Number.isFinite(metadata.validation_loss) ? metadata.validation_loss : null,
+    best_validation_loss: typeof metadata.best_validation_loss === "number" && Number.isFinite(metadata.best_validation_loss) ? metadata.best_validation_loss : null,
     config: metadata.config || null,
     context_tokens: Number(metadata.config?.block_size || 0),
     tokenizer_vocab_size: Number(metadata.vocab_size || metadata.config?.vocab_size || 0),
@@ -311,6 +311,7 @@ export async function startBrainTraining({
     windowsHide: true
   });
   trainingProcess = child;
+  trainingCancelled = false;
   trainingState = {
     status: "running",
     epoch: 0,
@@ -353,7 +354,9 @@ export async function startBrainTraining({
   });
   child.on("close", (code, signalName) => {
     if (stdoutPending.trim()) consumeLine(stdoutPending);
-    if (code === 0) {
+    if (trainingCancelled) {
+      update({ status: "cancelled", message: "Training cancelled. The last atomic checkpoint is preserved.", error: null });
+    } else if (code === 0) {
       update({ status: "completed", message: "Local model training completed.", error: null });
     } else {
       const message = stderr.trim().slice(-4000) || "Training process exited with code " + code + (signalName ? " (" + signalName + ")" : "") + ".";
@@ -368,6 +371,7 @@ export function cancelBrainTraining() {
   if (!trainingProcess || trainingState.status !== "running") {
     return { ok: false, message: "No local training process is running." };
   }
+  trainingCancelled = true;
   trainingProcess.kill("SIGTERM");
   trainingState = {
     ...trainingState,
