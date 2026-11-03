@@ -9,6 +9,7 @@ import { isCodingTask } from "./chat-intent.mjs";
 import {
   cancelBrainTraining,
   generateBrainText,
+  tokenizeBrainText,
   getBrainStatus,
   getBrainTrainingStatus,
   startBrainTraining
@@ -112,7 +113,7 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
     };
   }
   if (method === "POST" && route === "/model/tokenize") {
-    throw new Error("SYNTRA no longer provides the legacy model-tokenize route. The standalone brain manages tokenizer context during inference.");
+    return tokenizeBrainText(body?.text ?? "");
   }
   throw new Error("Unsupported local brain operation: " + method + " " + route);
 }
