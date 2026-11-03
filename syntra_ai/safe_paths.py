@@ -19,7 +19,7 @@ def _approved_roots() -> tuple[Path, ...]:
         value = item.strip()
         if not value:
             continue
-        candidate = Path(value).expanduser()
+        candidate = Path(value)
         if not candidate.is_absolute():
             raise ValueError(
                 f"{_ALLOWED_ROOTS_ENV} entries must be absolute directory paths."
