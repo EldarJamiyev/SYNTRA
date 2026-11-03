@@ -36,7 +36,7 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
-    except OSError:
+    except Exception:
         if temporary:
             try:
                 os.unlink(temporary)
