@@ -1837,11 +1837,11 @@ function restrictedVerificationEnvironment(platform = process.platform) {
     const system32 = windowsRoot + "\\System32";
     result.SystemRoot = windowsRoot;
     result.WINDIR = windowsRoot;
-    result.ComSpec = path.join(system32, "cmd.exe");
+    result.ComSpec = system32 + "\\cmd.exe";
     result.PATHEXT = ".COM;.EXE;.BAT;.CMD";
     result.TEMP = windowsTemp;
     result.TMP = windowsTemp;
-    result.NPM_CONFIG_CACHE = path.join(windowsTemp, "syntra-npm-cache");
+    result.NPM_CONFIG_CACHE = windowsTemp + "\\syntra-npm-cache";
     result.PATH = [
       runtimeDirectory,
       system32,
