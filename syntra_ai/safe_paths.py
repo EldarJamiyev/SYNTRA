@@ -45,20 +45,26 @@ def _resolve_approved_path(value: str | Path, *, expected: str) -> Path:
     raw = os.fspath(value)
     if not raw or len(raw) > _MAX_PATH_CHARS or "\x00" in raw:
         raise ValueError(f"The selected {expected} path is invalid.")
-    candidate = Path(raw)
-    if not candidate.is_absolute():
+    if not os.path.isabs(raw):
         raise ValueError(f"The selected {expected} path must be absolute.")
     try:
-        resolved = candidate.resolve(strict=True)
+        resolved_text = os.path.realpath(raw, strict=True)
     except (OSError, RuntimeError):
         raise ValueError(f"The selected {expected} path does not exist or cannot be resolved.") from None
 
+    # Compare canonical paths, not raw input. The separator boundary prevents
+    # an approved root such as "/data/corpus" from matching "/data/corpus-evil".
+    normalized_path = os.path.normcase(resolved_text)
     roots = _approved_roots()
-    if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
-        raise ValueError(
-            f"The selected {expected} path is outside the SYNTRA project and approved local data directories."
-        )
-    return resolved
+    for root in roots:
+        normalized_root = os.path.normcase(os.path.realpath(os.fspath(root), strict=True))
+        root_prefix = normalized_root if normalized_root.endswith(os.sep) else normalized_root + os.sep
+        if normalized_path == normalized_root or normalized_path.startswith(root_prefix):
+            return Path(resolved_text)
+
+    raise ValueError(
+        f"The selected {expected} path is outside the SYNTRA project and approved local data directories."
+    )
 
 
 def resolve_corpus_root(value: str | Path) -> Path:
