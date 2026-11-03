@@ -5,6 +5,7 @@ from typing import Iterable
 import os
 
 from .model import BOS_ID, EOS_ID
+from .safe_paths import resolve_corpus_root
 
 MAX_CORPUS_FILES = 10_000
 MAX_CORPUS_FILE_BYTES = 1024 * 1024
@@ -81,12 +82,10 @@ def load_corpus(
     if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     for raw_root in roots:
-        root = Path(raw_root).expanduser()
-        if not root.is_absolute():
-            raise ValueError("Every corpus root must be an absolute path: " + str(raw_root))
-        if not root.exists() or not root.is_dir():
-            raise ValueError("Corpus root is not a directory: " + str(root))
-        root = root.resolve()
+        # Revalidate at the loader boundary as well as at the HTTP API. The
+        # resolved root must be inside the repository or an explicitly approved
+        # local corpus directory before os.walk can access its contents.
+        root = resolve_corpus_root(raw_root)
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             base = Path(current)
             dirnames[:] = [
