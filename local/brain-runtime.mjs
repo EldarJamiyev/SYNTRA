@@ -61,6 +61,155 @@ function metadataPath(checkpoint = brainCheckpointPath()) {
   return checkpoint + ".json";
 }
 
+let tokenizerCache = null;
+
+function tokenizerSidecarPath(checkpoint = brainCheckpointPath()) {
+  return checkpoint + ".tokenizer.json";
+}
+
+function validateTokenizerJson(value) {
+  if (!value || typeof value !== "object" || value.format !== "syntra-local-byte-bpe-v1"
+    || !Array.isArray(value.merges) || value.merges.length > 8192 - 258
+    || value.vocab_size !== value.merges.length + 258) {
+    throw new Error("The local checkpoint tokenizer sidecar is missing or invalid.");
+  }
+  let nextId = 258;
+  const seen = new Set();
+  for (const pair of value.merges) {
+    if (!Array.isArray(pair) || pair.length !== 2
+      || !pair.every(token => Number.isInteger(token) && token >= 0 && token < nextId)
+      || pair.some(token => token === 256 || token === 257)) {
+      throw new Error("The local checkpoint tokenizer merge table is malformed.");
+    }
+    const key = pair[0] + ":" + pair[1];
+    if (seen.has(key)) throw new Error("The local checkpoint tokenizer contains duplicate merges.");
+    seen.add(key);
+    nextId += 1;
+  }
+  return value;
+}
+
+async function exportTokenizerSidecar(checkpoint) {
+  const python = await selectedPython();
+  const script = [
+    "import json, sys",
+    "from brain.checkpoint import load_checkpoint",
+    "payload = load_checkpoint(sys.argv[1])",
+    "print(json.dumps(payload['tokenizer'], ensure_ascii=False, separators=(',', ':')))"
+  ].join("; ");
+  return await new Promise((resolve, reject) => {
+    const child = spawn(python, ["-c", script, checkpoint], {
+      cwd: ROOT,
+      env: runtimeEnvironment(),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => {
+      stdout += chunk.toString("utf8");
+      if (stdout.length > 2 * 1024 * 1024) child.kill("SIGTERM");
+    });
+    child.stderr.on("data", chunk => {
+      stderr += chunk.toString("utf8");
+      if (stderr.length > 8000) stderr = stderr.slice(-8000);
+    });
+    child.on("error", reject);
+    child.on("close", async code => {
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || "Could not export the tokenizer from the existing local checkpoint."));
+        return;
+      }
+      try {
+        const tokenizer = validateTokenizerJson(JSON.parse(stdout));
+        const destination = tokenizerSidecarPath(checkpoint);
+        const temporary = destination + "." + process.pid + ".tmp";
+        await fs.writeFile(temporary, JSON.stringify(tokenizer), { encoding: "utf8", flag: "wx" });
+        await fs.rename(temporary, destination);
+        resolve(tokenizer);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+async function readLocalTokenizer() {
+  const checkpoint = brainCheckpointPath();
+  const sidecar = tokenizerSidecarPath(checkpoint);
+  const checkpointStat = await fs.stat(checkpoint);
+  try {
+    const sidecarStat = await fs.stat(sidecar);
+    if (sidecarStat.isFile() && sidecarStat.size <= 2 * 1024 * 1024
+      && sidecarStat.mtimeMs >= checkpointStat.mtimeMs) {
+      if (tokenizerCache?.path === sidecar && tokenizerCache.mtimeMs === sidecarStat.mtimeMs) {
+        return tokenizerCache.value;
+      }
+      const value = validateTokenizerJson(JSON.parse(await fs.readFile(sidecar, "utf8")));
+      tokenizerCache = { path: sidecar, mtimeMs: sidecarStat.mtimeMs, value };
+      return value;
+    }
+  } catch {}
+  const value = await exportTokenizerSidecar(checkpoint);
+  const stat = await fs.stat(sidecar);
+  tokenizerCache = { path: sidecar, mtimeMs: stat.mtimeMs, value };
+  return value;
+}
+
+function countByteBpe(text, tokenizer) {
+  const tokens = [...Buffer.from(text, "utf8")];
+  const ranks = new Map(tokenizer.merges.map((pair, rank) => [pair[0] + ":" + pair[1], rank]));
+  while (tokens.length > 1) {
+    let bestRank = Infinity;
+    let bestLeft = -1;
+    let bestRight = -1;
+    for (let index = 0; index < tokens.length - 1; index += 1) {
+      const rank = ranks.get(tokens[index] + ":" + tokens[index + 1]);
+      if (rank !== undefined && rank < bestRank) {
+        bestRank = rank;
+        bestLeft = tokens[index];
+        bestRight = tokens[index + 1];
+      }
+    }
+    if (bestLeft < 0) break;
+    const merged = [];
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (index + 1 < tokens.length && tokens[index] === bestLeft && tokens[index + 1] === bestRight) {
+        merged.push(258 + bestRank);
+        index += 1;
+      } else {
+        merged.push(tokens[index]);
+      }
+    }
+    tokens.length = 0;
+    tokens.push(...merged);
+  }
+  return tokens.length;
+}
+
+export async function tokenizeBrainText(text) {
+  if (typeof text !== "string") throw new TypeError("Text must be a string.");
+  if (Buffer.byteLength(text, "utf8") > 300_000) {
+    throw new Error("Text exceeds the 300 KB local tokenizer limit.");
+  }
+  const checkpoint = brainCheckpointPath();
+  try { await fs.access(checkpoint); }
+  catch { throw new Error("No trained SYNTRA brain checkpoint exists. Train the local brain first."); }
+  const tokenizer = await readLocalTokenizer();
+  const tokenCount = countByteBpe(text, tokenizer);
+  const status = await getBrainStatus();
+  return {
+    token_count: tokenCount,
+    context_window_tokens: status.context_tokens,
+    vocabulary_size: tokenizer.vocab_size,
+    tokenizer: "byte-BPE",
+    tokens_over_context: Math.max(0, tokenCount - Math.max(0, status.context_tokens - 1)),
+    checkpoint,
+    trained_steps: status.trained_steps,
+    exact_token_count: true
+  };
+}
+
 export async function getBrainStatus() {
   const checkpoint = brainCheckpointPath();
   let checkpointExists = false;
