@@ -124,6 +124,8 @@ def save_checkpoint(
         "updated_at": payload.get("updated_at"),
     }
     _atomic_write_json(checkpoint_metadata_path(destination), metadata)
+    tokenizer_path = destination.with_suffix(destination.suffix + ".tokenizer.json")
+    _atomic_write_json(tokenizer_path, tokenizer.to_dict())
     return destination
 
 
