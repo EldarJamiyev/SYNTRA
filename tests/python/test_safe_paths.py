@@ -17,6 +17,17 @@ class ApprovedCorpusPathTests(unittest.TestCase):
         else:
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = self.previous
 
+    def test_request_paths_do_not_expand_home_shorthand(self):
+        with self.assertRaisesRegex(ValueError, "must be absolute"):
+            resolve_corpus_root(str(Path("~") / "not-a-corpus"))
+
+    def test_configured_roots_must_be_absolute_without_home_expansion(self):
+        os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(Path("~") / "not-an-approved-root")
+        from syntra_ai.safe_paths import PROJECT_ROOT
+
+        with self.assertRaisesRegex(ValueError, "entries must be absolute"):
+            resolve_corpus_root(str(PROJECT_ROOT))
+
     def test_repository_root_is_the_only_default_external_data_boundary(self):
         from syntra_ai.safe_paths import PROJECT_ROOT
 
@@ -39,6 +50,11 @@ class ApprovedCorpusPathTests(unittest.TestCase):
             self.assertEqual(resolve_corpus_root(str(corpus)), corpus.resolve())
             with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
                 resolve_corpus_root(str(approved / ".." / "outside"))
+
+            prefix_escape = parent / "approved-neighbor"
+            prefix_escape.mkdir()
+            with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
+                resolve_corpus_root(str(prefix_escape))
 
             escape = approved / "escape"
             try:

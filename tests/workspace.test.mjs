@@ -112,6 +112,9 @@ test("verification defaults to an offline Docker container and filters host envi
   assert.ok(isolated.args[mountIndex + 1].startsWith("type=bind,source="));
   assert.ok(isolated.args[mountIndex + 1].endsWith(",target=/workspace"));
   assert.equal(isolated.env.SYNTRA_API_TOKEN, undefined);
+  assert.notEqual(isolated.env.PATH, "/usr/bin");
+  assert.equal(isolated.env.COMSPEC, undefined);
+  assert.equal(isolated.env.SYNTRA_DOCKER_BIN, undefined);
   assert.throws(
     () => buildVerificationCommand(root + ",unsafe", selected, {
       platform: "linux", environment: { PATH: "/usr/bin" }
@@ -119,13 +122,48 @@ test("verification defaults to an offline Docker container and filters host envi
     /cannot be mounted safely/
   );
 
+  const hostileEnvironment = {
+    PATH: "/tmp/attacker-bin",
+    COMSPEC: "/tmp/attacker-shell.exe",
+    SYSTEMROOT: "/tmp/attacker-root",
+    SYNTRA_API_TOKEN: "must-not-be-forwarded"
+  };
   const host = buildVerificationCommand(root, selected, {
     allowUntrustedHost: true,
     platform: "linux",
-    environment: { PATH: "/usr/bin", SYNTRA_API_TOKEN: "must-not-be-forwarded" }
+    environment: hostileEnvironment
   });
   assert.equal(host.mode, "host_opt_in");
+  assert.equal(host.executable, process.execPath);
+  assert.notEqual(host.env.PATH, hostileEnvironment.PATH);
+  assert.equal(host.env.COMSPEC, undefined);
+  assert.equal(host.env.SYSTEMROOT, undefined);
   assert.equal(host.env.SYNTRA_API_TOKEN, undefined);
+  assert.ok(path.isAbsolute(host.args[0]), "host npm must use an absolute npm CLI path");
+  assert.equal(host.args[1], "run");
+  assert.equal(host.args[2], "test");
+
+  assert.throws(
+    () => buildVerificationCommand(root, {
+      kind: "command", executable: "/tmp/attacker-bin/go", args: ["test", "./..."]
+    }, { allowUntrustedHost: true }),
+    /Unsupported or untrusted verification runner/
+  );
+  assert.throws(
+    () => buildVerificationCommand(root, {
+      kind: "node-test", executable: "node", args: ["--test\0--require=/tmp/attacker.js"]
+    }, { allowUntrustedHost: true }),
+    /verification arguments are invalid/
+  );
+  const windowsHost = buildVerificationCommand(root, selected, {
+    allowUntrustedHost: true,
+    platform: "win32",
+    environment: hostileEnvironment
+  });
+  assert.equal(windowsHost.env.ComSpec, "C:\\Windows\\System32\\cmd.exe");
+  assert.equal(windowsHost.env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
+  assert.notEqual(windowsHost.env.ComSpec, hostileEnvironment.COMSPEC);
+  assert.notEqual(windowsHost.env.PATH, hostileEnvironment.PATH);
 });
 
 test("check discovery reports only runners that are actually configured", async () => {
