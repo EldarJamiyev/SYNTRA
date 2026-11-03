@@ -1,70 +1,254 @@
-# SYNTRA — Simple local AI chat
+<div align="center">
+  <img src="docs/assets/syntra-hero.svg" alt="SYNTRA — Local intelligence. Real engineering." width="100%" />
 
-SYNTRA is a deliberately minimal chat interface backed by a local model and a repository-aware coding agent. It keeps the conversation and message composer in focus instead of filling the screen with model controls. Multiple named conversations are saved locally on the current device; you can start, search, resume, rename, or delete a conversation from the history drawer. Session storage is bounded, invalid data is discarded safely, and the previous single-thread history is migrated automatically. Each conversation keeps its latest 60 messages, and prompts are saved immediately so a refresh during generation does not erase what you asked. Type /clear to clear the active conversation without deleting the other sessions.
+  <p><strong>A local-first AI workspace for conversation, repository understanding, and carefully controlled code changes.</strong></p>
 
-See [the staged product roadmap](docs/ROADMAP.md) for the planned path from the current local coding agent to a more complete, permissioned engineering assistant. See the [release checklist and upgrade notes](docs/RELEASE_CHECKLIST.md) for repeatable validation and deployment gates.
+  <p>
+    <a href="https://github.com/EldarJamiyev/SYNTRA"><img src="https://img.shields.io/badge/PROJECT-SYNTRA-7BE4CF?style=for-the-badge&labelColor=101827" alt="SYNTRA project" /></a>
+    <img src="https://img.shields.io/badge/INTERFACE-React%20%2B%20TypeScript-8AB8FF?style=for-the-badge&labelColor=101827" alt="React and TypeScript" />
+    <img src="https://img.shields.io/badge/INFERENCE-Local%20Ollama-B69BFF?style=for-the-badge&labelColor=101827" alt="Local Ollama inference" />
+    <a href="LICENSE"><img src="https://img.shields.io/badge/LICENSE-MIT-7BE4CF?style=for-the-badge&labelColor=101827" alt="MIT license" /></a>
+  </p>
 
-## Windows launch
+  <p>
+    <a href="#-why-syntra">Why SYNTRA</a> &nbsp;·&nbsp;
+    <a href="#-capabilities">Capabilities</a> &nbsp;·&nbsp;
+    <a href="#-how-the-agent-works">Agent workflow</a> &nbsp;·&nbsp;
+    <a href="#-get-started">Get started</a> &nbsp;·&nbsp;
+    <a href="#-documentation">Documentation</a>
+  </p>
+</div>
 
-Requirements: Node.js 20+ and Git. The test suite includes an HTTP smoke test for the local API's origin guards and request validation. Python 3.12+ is required only for the native model fallback. Its NumPy/PyTorch environment is installed from the universal, SHA-256 hash-locked `requirements.lock.txt`; the launcher checks the lock fingerprint and CPU-only runtime on startup, rebuilding the app-managed `.venv` when the lock or environment is stale. The default PyTorch build is CPU-only. A compatible local model in Ollama is preferred automatically. On Windows, set `SYNTRA_LOCAL_MODEL` to require an exact installed local Ollama model name; the launcher stops with a specific error if that model is missing or exceeds its conservative 70% physical-RAM selection threshold instead of silently switching to the native from-scratch runtime. The size threshold is a selection heuristic, not a guarantee that inference will fit in memory.
+---
 
-In your existing SYNTRA repository folder, run:
+## The idea
 
-~~~powershell
-git pull
-~~~
+SYNTRA brings a focused AI chat experience and a repository-aware coding agent into one application. It is designed to run on your machine, work with a project you select, gather relevant evidence, and make code changes through a reviewable workflow.
 
-Then double-click **Start-SYNTRA.bat**. Open http://127.0.0.1:3000 and keep the service windows open. On future runs, double-click the same file again.
+**The principle is simple: local control, real tools, observable work, and no pretending.**
 
-The launcher checks the page signature, detects stale app processes on the chat port, and uses `npm ci` when frontend dependencies are missing or the committed `package-lock.json` is newer than the installed dependency tree. This keeps local installation aligned with the lockfile instead of resolving new package versions on every setup.
+It is an evolving engineering project—not a claim of frontier-model intelligence or a finished autonomous software engineer.
 
-## Chat and coding behavior
+## ✦ Why SYNTRA
 
-The chat understands natural requests such as “Could you ping example.com?” and “Can you check port 443 on example.com?”, and can also run bounded local network checks without a trained model: `ping example.com`, `DNS lookup for example.com`, and `check port 443 on example.com`. Slash forms (`/ping`, `/dns`, `/port`) are available for explicit requests. Type /help in the chat (or ask “What can you do?”) for available commands; it works even when no model is installed. Type /status to see whether the local model backend responds. Ping is limited to four packets, TCP checks to one host/port, and targets are validated before any system utility or socket is called. These checks run locally and do not use a hosted service.
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>⌂ Local by design</h3>
+      Run inference through a locally installed Ollama model. Your workspace agent and application services are designed around loopback access rather than a hosted coding endpoint.
+    </td>
+    <td width="50%" valign="top">
+      <h3>⌘ Understands the repository</h3>
+      Inspects project structure, searches source, follows imports and symbols, and retrieves task-specific context before proposing changes.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>◇ Changes you can inspect</h3>
+      Produces structured patches, reviews proposed edits, checks candidates, and records proposal and run history locally.
+    </td>
+    <td width="50%" valign="top">
+      <h3>⛨ Bounded permissions</h3>
+      Separates read-only investigation from operations that change files or run project checks. There is no general-purpose terminal tool in the chat.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>◎ More than code generation</h3>
+      Supports ordinary conversation and bounded local network diagnostics, including ping, DNS lookup, and a single TCP port check.
+    </td>
+    <td width="50%" valign="top">
+      <h3>▤ Built for continuity</h3>
+      Keeps named conversations on the device and preserves workspace run records and recoverable proposals across local-service restarts.
+    </td>
+  </tr>
+</table>
 
+## ✧ Capabilities
 
-Normal requests such as writing an email, explaining a concept, or brainstorming stay in chat. Explicit software tasks—such as fixing an API endpoint, updating a component, or changing the project UI—are routed to the repository agent.
+### A focused chat workspace
 
-Assistant replies support Markdown, GitHub-flavored tables and lists, inline code, fenced code blocks, and safe links. Local Ollama replies and the optional Gemini provider stream into the conversation while the model generates; the native research model displays its response when generation completes. User prompts are rendered as literal text so HTML-like snippets are not silently removed. Raw assistant HTML is not rendered, and external links open with appropriate isolation.
+SYNTRA keeps the conversation at the center instead of surrounding it with a large control dashboard.
 
-The top bar shows the active local project folder. Use its folder control to switch projects; the selection is saved on this device and restored when the frontend reconnects to the local service. Staged changes are persisted under the selected project's `.syntra/proposals` directory. Type `/proposals` after a service restart to reconstruct the pending queue, `/apply` only after reviewing the saved proposal and its original diff in chat, or `/discard` to remove pending/stale proposal records without editing project files. Proposals whose source hash no longer matches are marked stale and cannot be applied. SYNTRA blocks a new coding task until the existing proposal queue is resolved.
+- Multiple named conversations with search, rename, resume, and delete.
+- Local session persistence and migration from the earlier single-thread history.
+- Streaming responses from the local Ollama backend.
+- Markdown, code blocks, tables, and safe external links.
+- A selected project folder that stays associated with the local workspace.
 
-Larger coding tasks receive a complexity-derived execution budget. The planner may create up to eight ordered implementation slices; SYNTRA enforces a per-slice attempt limit and a maximum total of 24 patch attempts. The global attempt counter and budget survive local-service restarts. Each slice is verified before the next begins. SYNTRA applies each slice to one temporary candidate workspace, runs the discovered project checks, validates the changed-file hashes, then re-inspects the candidate before generating the next slice. Failed checks trigger bounded repair attempts against freshly inspected candidate context. The final proposals combine all slice changes against the original project-file hashes. If any slice is incomplete, the combined result stays unverified and is not automatically applied. Candidate contents are checkpointed before verification as well as after successful slices; after restart, an in-flight candidate is restored only after source-hash validation and is re-verified before repair or continuation.
+### Practical local diagnostics
 
-After each successfully verified non-final slice, SYNTRA can persist a bounded candidate checkpoint beside the run record as `.syntra/runs/<run-id>.candidate.json`. It contains the cumulative changed-file contents, original-file hashes, slice plan/progression, and verification summary; it is limited to 24 files, 128 KB per file, and 512 KB total. On `/resume`, SYNTRA rechecks every original-file hash, reconstructs a fresh temporary candidate, re-inspects it, and continues at the next pending slice. Before project checks, SYNTRA also persists a bounded `slice_unverified` snapshot of the in-flight candidate, its slice state, and original-file hashes. If the process stops after that snapshot, `/resume` validates workspace identity, original-file hashes, candidate hashes, and slice progression; it reconstructs the candidate in a fresh temporary directory and re-runs the discovered checks plus candidate-integrity checks before continuing or repairing. Work interrupted before the in-flight snapshot is durable is regenerated from the last verified checkpoint. SYNTRA does not persist an all-slices-complete checkpoint, so a resumed task never skips final candidate checks based only on stored status. A stale or invalid checkpoint is rejected rather than applied, and candidate checkpoint persistence failure is reported rather than presented as restartable.
+Ask naturally, or use the explicit command forms:
 
-Coding runs are persisted in each workspace's `.syntra/runs` directory. Open the workspace control to inspect recent tasks; reopening it refreshes the run state after a local service restart. Stop cancels supported local inference and candidate checks, while transactional file application is allowed to finish once it has started. Single-slice saved patches are revalidated against their original source hashes before they can be reused. Multi-slice runs resume from either the last verified slice boundary or a validated in-flight candidate snapshot taken before checks; arbitrary mid-generation or mid-tool-operation state is not serialized. Run records retain bounded plans, context, tool calls, verification outcomes, and model/context metadata locally.
+| Request | Command |
+| --- | --- |
+| Ping a host | `ping example.com` or `/ping example.com` |
+| Resolve a hostname | `DNS lookup for example.com` or `/dns example.com` |
+| Check one TCP port | `check port 443 on example.com` or `/port example.com 443` |
+| Check local model availability | `/status` |
+| See available commands | `/help` |
 
-Before candidate verification, the local application runs an independent patch-review pass against the original request, the current implementation slice, the proposed before/after changes, and retrieved repository evidence. The reviewer can return bounded blocking or advisory findings; a concrete blocking finding is fed back into the next patch-generation attempt. The reviewer has no tools, cannot write files, and cannot run commands. Review output is validated against the selected workspace paths. If review generation is unavailable, malformed, or exceeds the context budget, SYNTRA records that state and does not claim the patch was reviewed. A restored saved patch is revalidated against its original hashes and anchors rather than silently regenerated by the reviewer.
+These are intentionally bounded local checks. Ping is limited to four packets, and a TCP check targets one host and port. Targets are validated before the local network operation runs.
 
-For coding tasks, SYNTRA maps the project files (including recognised CI/configuration folders such as .github and .devcontainer) and imports, asks the selected local model for a structured patch, validates exact source anchors and paths, and runs available project checks in a temporary copy. Inferred test runs are language-aware and require matching test files. Rust and Go use their native test commands; Python selects pytest or unittest from detected project configuration and prefers an existing .venv/venv interpreter; timed-out checks terminate their process tree. .NET requires a recognised test project. When several ecosystems exist without a configured test command, SYNTRA refuses to call a partial run a full pass. Changes are auto-applied only when discovered checks pass and the patch does not modify tests or verification configuration. Changes to dependency/build manifests and lockfiles are not auto-verified against stale sandbox dependencies; those proposals remain unapplied for explicit review. Test/CI/config changes also require review and explicit /apply. Check selection is based on a read-only discovery tool run against the temporary candidate workspace: only build/test/lint/type-check runners that SYNTRA can actually resolve are executed. Afterward, the agent re-reads every changed candidate file and compares its hash with the validated patch. A project script that mutates or removes a proposed source file causes verification to fail instead of producing a false pass. Bounded Git baseline, check-discovery, and candidate-integrity observations are stored in the local agent run record; recent runs show the number of evidence points.
-The agent keeps backups and audit records under .syntra. Coding-task replies include bounded per-file before/after diff previews and explain when a preview is truncated, so staged changes can be reviewed before typing `/apply`. The state directory and its proposal/backup/plan subdirectories plus audit log cannot be symlinks to another location, saved proposals are checked against their content hashes before applying, and multi-file changes are preflighted and applied as a transaction with a shared backup directory.
+### Repository-aware coding
 
-Before generating a code patch, SYNTRA can ask its selected model to choose up to four read-only context retrieval calls per round. The model may request `workspace.search`, `workspace.read`, `workspace.symbols.search`, `workspace.memory.search`, or `workspace.semantic.search`; file reads must target paths already present in the safe source graph and are limited to 400 lines. Memory results are drawn only from notes explicitly saved by the user for the selected workspace. They are treated as untrusted project context, not privileged instructions. Symbol results include validated local importers/imports, documentation links, and heuristic test-owner relationships. Each call is validated and audited by the tool runtime. Invalid plans fall back to deterministic file ranking. The model can conduct up to five evidence-driven retrieval rounds (twelve unique calls total): it reviews earlier search, symbol, memory, and file-read results before choosing targeted follow-up reads, and can stop early when the evidence is sufficient. Every round is constrained to the same audited, read-only tool allowlist and context budget. The model cannot use this investigation loop to run checks, modify files, apply proposals, execute shell commands, or access the network.
+For an explicit software-change request, SYNTRA can:
 
-SYNTRA's local tool runtime exposes a structured catalogue at `GET /local-api/tools` and accepts validated calls at `POST /local-api/tools/execute`. It currently provides 25 tools for workspace inspection, incremental source-symbol indexing/search, optional local semantic status/refresh/search, user-controlled project-memory list/search/write operations, file search/read, planning, proposal review/application/discard, approved project checks, check-runner discovery, and Git status/diff summaries. The workspace context index is local to each workspace, stores metadata and hashes rather than source/documentation contents, and reuses parsed declarations and references for unchanged files. It includes bounded import edges, Markdown/MDX/reStructuredText links, and heuristic test ownership. Each call has a run ID, a permission class, bounded input/output summaries, duration, result state, and an audit record in `.syntra/actions.jsonl`; raw file contents are not copied into tool audit events. The runtime serializes calls within a workspace. Ad-hoc project-check tool calls, applying source changes, discarding proposals, and adding, editing, or deleting project-memory notes require approval. A user-requested coding task authorizes SYNTRA's built-in checks in the temporary candidate copy and the existing verified-patch apply policy. The candidate copy alone is not a hardened sandbox. Project checks are disabled until an isolation mode is selected; with `SYNTRA_CHECK_ISOLATION=docker`, checks run in SYNTRA's restricted Docker container. Host execution requires both `SYNTRA_CHECK_ISOLATION=host` and `SYNTRA_ALLOW_UNSANDBOXED_CHECKS=1` and is only appropriate for trusted repositories. Git inspection uses fixed, non-interactive arguments and does not fetch from remotes. This is a permissioned tool foundation, not a general-purpose terminal or arbitrary command runner.
+- Map the selected project and build a local source/import context.
+- Search files, read bounded source ranges, and retrieve symbol, documentation, memory, or optional semantic-search results.
+- Plan larger requests as ordered implementation slices with acceptance criteria.
+- Generate structured, exact-anchor patches rather than blindly replacing whole files.
+- Run a read-only review pass against the request, candidate changes, and retrieved evidence.
+- Verify candidate changes using project checks that SYNTRA can actually discover.
+- Stage reviewable proposals with source hashes, previews, backups, and local audit records.
 
-## Local model
+The model-selected investigation loop is read-only. It cannot use that retrieval stage to run commands, write files, apply proposals, or access the network. Changes to tests, verification configuration, and dependency/build manifests receive additional review rather than being treated as ordinary source edits.
 
-SYNTRA prefers an installed local Ollama model and does not call a hosted AI API by default. Optional Gemini API inference is available only when explicitly selected with `SYNTRA_MODEL_PROVIDER=gemini` and `SYNTRA_GEMINI_API_KEY`. Repository-aware generation and token-count requests are blocked from cloud submission unless `SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT=1` is also set. The Gemini API provider uses the model's `:countTokens` endpoint and Server-Sent Events generation when streaming is requested. Long outputs can continue across up to 16 Gemini continuation hops when using `SYNTRA_GEMINI_MODEL=gemini-4-argon`, the Gemini model currently documented for long decoding. Its default request ceiling is 131,072 output tokens and can be lowered with `SYNTRA_GEMINI_MAX_OUTPUT_TOKENS`. The REST generation loop uses Google's documented `v1beta` endpoint and resumes with the returned continuation token. Streaming requests use a 20-minute client deadline and non-streaming REST requests use a 10-minute deadline; shorter agent-level defaults cannot truncate a valid long decode. Gemini 3.8 Flash remains capped at its documented 65,536-token streaming limit (32,768 for direct non-streaming REST calls) and does not advertise continuation support. Unpaid Gemini API content may be used by Google to improve products and may be reviewed by humans; do not send confidential, personal or credential-bearing content through unpaid quota. Its model selection excludes cloud-only models and rejects weights larger than 70% of physical RAM, leaving room for the OS and inference context/cache. That is a conservative file-size filter, not a guarantee that every remaining model will fit in practice. Model discovery is briefly cached between the status, token-count, and generation stages to avoid repeating the same probe. Inference speed and answer quality still depend on your hardware and the installed model. Ollama generation retries transient transport and server failures at most once by default (up to two retries with SYNTRA_OLLAMA_RETRIES=2). Set SYNTRA_OLLAMA_RETRIES=0 to disable retries. A streamed answer is never replayed after text has reached the chat, preventing duplicate output. Context-window and model-memory failures are reported separately with corrective guidance; they are not retried. Agent context allocation uses an exact-tokenizer profile for Gemini and a more conservative reserve for Ollama, whose token-count response is an estimate.
+## ⟡ How the agent works
 
-Optional local semantic retrieval:
-- Install an embedding model in Ollama, for example `ollama pull embeddinggemma`. The embedding endpoint is restricted to HTTP loopback addresses (localhost, 127.0.0.1 or ::1); SYNTRA rejects remote URLs to prevent accidental source-code disclosure.
-- Run `workspace.semantic.refresh` from the local tool catalogue to build the workspace-local vector index.
-- `workspace.semantic.search` is available to the read-only investigation planner. The index persists vectors, paths, line ranges and source hashes, not source text. Search rechecks hashes and workspace exclusions before returning excerpts.
+The workflow is evidence-driven. SYNTRA inspects the project before patching, checks the proposed result separately from the original workspace, and keeps incomplete work from being reported as verified.
 
-If Ollama is unavailable, SYNTRA can use its own local PyTorch runtime. The native model starts with randomly initialized weights: training it from scratch on a small local corpus does not make it comparable to Claude or other frontier models.
+<p align="center">
+  <img src="docs/assets/syntra-agent-loop.svg" alt="SYNTRA agent workflow: request, inspect, retrieve evidence, patch, review, verify, and approve application." width="100%" />
+</p>
 
-The native Python API accepts training/evaluation corpora and fine-tuning JSONL files only from the SYNTRA repository or explicitly approved local directories. Set `SYNTRA_ALLOWED_CORPUS_ROOTS` to a platform-separated list of existing directories before launching the Python API to approve additional locations (use `;` on Windows and `:` on Linux/macOS). Paths are resolved before checking containment, so parent-directory traversal and symlink escapes are rejected.
+**The important distinction:** generating a patch is not the same as verifying it. SYNTRA records the checks it actually ran and does not turn missing evidence into a successful verification claim.
 
-## Important boundary
+## ⌘ Architecture
 
-This app is designed to run locally at http://127.0.0.1:3000; the Node service binds to loopback and is not a hosted AI endpoint. A static GitHub Pages copy cannot execute your local model or workspace agent. Use the local launcher for real chat and code changes.
+SYNTRA uses a small local stack. The React/Vite interface talks to a loopback Node service, which coordinates the selected local model and the repository agent. The optional native Python runtime is a separate research path.
 
-## Development-server startup
+<p align="center">
+  <img src="docs/assets/syntra-architecture.svg" alt="SYNTRA local architecture connecting the React interface, loopback service, local model, repository intelligence, verification, and proposal workflow." width="100%" />
+</p>
 
-The Vite development configuration starts the Node workspace API automatically. It first checks `http://127.0.0.1:3001/local-api/health`, reuses a healthy SYNTRA API when one is already running, or starts `local/server.mjs` and waits for its health endpoint before Vite finishes starting. The API child started by Vite is stopped when the development server closes. Set `SYNTRA_AUTOSTART_LOCAL_API=0` only when managing the API process yourself.
+| Component | Responsibility |
+| --- | --- |
+| React + Vite | Conversation UI, local sessions, workspace selection |
+| Node.js service | Local API, chat routing, diagnostics, agent orchestration |
+| Ollama | Default local model inference |
+| Workspace engine | Project discovery, retrieval, symbol index, proposals, audit |
+| Python + PyTorch | Optional from-scratch model research runtime |
 
-The workspace API remains bound to loopback. Browser POST requests are restricted to the built-in local origins, exact same-origin requests forwarded by the Vite proxy, or exact additional origins listed in `SYNTRA_ALLOWED_ORIGINS` (comma-separated; no wildcard values).
+### Model reality
 
-**Hosted-preview boundary:** this starts the Node workspace API inside the same runtime as Vite; it does not connect that runtime to files, Ollama, or a Python model running on your personal computer. A hosted preview can use only files and model services available inside its own runtime. The native Python model remains a separate service and must be installed, started, and supplied with a valid checkpoint independently.
+- **Ollama is the default inference path.** SYNTRA selects from installed local models and excludes cloud-tagged model entries.
+- **The native PyTorch model is experimental.** It starts with randomly initialized weights. Training it on a small local corpus is useful for researching tokenization, training, checkpoints, and inference; it does not make it comparable to a pretrained coding model.
+- **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
+
+## 🚀 Get started
+
+### Windows
+
+**Requirements:** Node.js 20 or later and Git. Install Ollama and pull a local model that fits your hardware. Python 3.12+ is needed only for the optional native model runtime.
+
+1. Clone the repository:
+
+   ```powershell
+   git clone https://github.com/EldarJamiyev/SYNTRA.git
+   cd SYNTRA
+   ```
+
+2. Start Ollama and make sure your chosen model is available locally.
+3. Double-click **`Start-SYNTRA.bat`**.
+4. Open **http://127.0.0.1:3000** in your browser.
+5. Keep the service windows open while using SYNTRA.
+
+The launcher prepares the frontend dependencies when needed, checks the local services, and starts the application. On later launches, use the same `Start-SYNTRA.bat` file.
+
+### Development
+
+From the repository root:
+
+```bash
+npm ci
+npm run dev
+```
+
+The Vite development configuration starts or reuses the local workspace API. The application is intended for local use at `127.0.0.1`, not direct public internet exposure.
+
+## ⛨ Security and execution boundaries
+
+SYNTRA is designed around explicit boundaries rather than unrestricted model access.
+
+- The application service binds to loopback and validates browser origins and local API requests.
+- Workspace access is scoped to the selected project. Path traversal, symlink escapes, and recognised secret paths are rejected.
+- Model-selected context retrieval is limited to audited, read-only tools.
+- File changes are validated against source hashes and staged with previews and backups.
+- Project checks can run in a restricted Docker container with network access disabled and resource limits. Host execution requires an explicit opt-in and is **not** sandboxed.
+- Git inspection uses fixed, read-only operations and does not fetch from remotes.
+
+These controls reduce risk; they do not make arbitrary repositories or the host machine risk-free. Do not run untrusted project scripts with host execution enabled. See the [security model](docs/OPERATING_SECURITY.md) for the full boundary and residual-risk notes.
+
+## ◈ Benchmarking and evidence
+
+SYNTRA includes a versioned local coding-agent benchmark. The documented suite covers small JavaScript utilities, configuration merging, API validation, Python, and TypeScript tasks. It checks the expected changed-file set and candidate verification—not merely whether the model returned code.
+
+<p align="center">
+  <img src="docs/assets/syntra-benchmark.svg" alt="SYNTRA coding benchmark coverage and verification criteria." width="100%" />
+</p>
+
+Run the benchmark against the local model configured on your machine:
+
+```bash
+npm run benchmark
+```
+
+List tasks, run an individual fixture, or compare saved reports:
+
+```bash
+npm run benchmark -- --list
+npm run benchmark -- --task utility-clamp
+npm run benchmark:reports -- history
+```
+
+The suite is a development baseline, not a broad industry benchmark and not evidence of general coding ability. Reports preserve task-level outcomes and runtime metadata; memory measurements do not include the separate Ollama daemon or total system/GPU memory.
+
+## ◫ Project structure
+
+```text
+SYNTRA/
+├── src/                 # React interface and local chat experience
+├── local/               # Node service, agent, tools, workspace engine
+├── syntra_ai/           # Native Python/PyTorch research runtime
+├── scripts/             # Setup, launch, tests, benchmark utilities
+├── benchmarks/          # Versioned coding-agent fixtures
+├── tests/               # Unit and integration coverage
+├── e2e/                 # Browser-level tests
+└── docs/
+    ├── assets/          # README diagrams and visual assets
+    └── ...              # Architecture, security, roadmap, and model notes
+```
+
+## ◫ Quality checks
+
+Run the checks relevant to your change:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run build` | TypeScript project build and Vite production build |
+| `npm run lint` | TypeScript validation |
+| `npm test` | Node test suite |
+| `npm run test:e2e` | Playwright end-to-end tests |
+| `npm run benchmark` | Local coding-agent benchmark |
+
+## ◇ Documentation
+
+| Guide | What it covers |
+| --- | --- |
+| [Architecture](docs/ARCHITECTURE.md) | Runtime components, request lifecycle, agent orchestration, recovery |
+| [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, residual risks |
+| [Model capabilities](docs/MODEL_CAPABILITIES.md) | Local inference, review behavior, evaluation limits |
+| [Benchmarks](docs/BENCHMARKS.md) | Fixtures, scoring, reports, measurement boundaries |
+| [Data and hardware](docs/DATA_AND_HARDWARE.md) | Native model data handling and hardware constraints |
+| [Product roadmap](docs/ROADMAP.md) | Current baseline, delivery phases, planned work |
+| [Release checklist](docs/RELEASE_CHECKLIST.md) | Validation and release preparation |
+
+## About
+
+SYNTRA is developed by **[Eldar Jamiyev](https://github.com/EldarJamiyev)**.
+
+<p align="center">
+  <strong>Local intelligence. Real engineering. Your workspace stays yours.</strong><br />
+  <sub>Open source under the MIT License.</sub>
+</p>
