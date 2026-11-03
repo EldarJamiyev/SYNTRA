@@ -60,14 +60,11 @@ async function stopChild(child) {
 
 test("local API health, origin protections, and chat validation work over HTTP", async () => {
   const port = await reservePort();
-  const aiPort = await reservePort();
   const child = spawn(process.execPath, ["local/server.mjs"], {
     cwd: projectRoot,
     env: {
       ...process.env,
       SYNTRA_LOCAL_PORT: String(port),
-      SYNTRA_AI_PORT: String(aiPort),
-      SYNTRA_MODEL_PROVIDER: "native",
       SYNTRA_API_TOKEN: "syntra-test-token"
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -283,9 +280,38 @@ test("local API health, origin protections, and chat validation work over HTTP",
       await delay(40);
     }
     assert.equal(statusResult?.status, "completed");
-    assert.equal(statusResult?.modelStatus, "unavailable");
+    assert.equal(statusResult?.modelStatus, "reachable");
     assert.match(statusResult?.reply || "", /Workspace service: running/);
     assert.match(statusResult?.reply || "", /Network diagnostics: available without a model/);
+
+    const brainStatusResponse = await apiFetch(base + "/local-api/brain/status");
+    assert.equal(brainStatusResponse.status, 200);
+    const brainStatus = await brainStatusResponse.json();
+    assert.equal(brainStatus.provider, "syntra-brain-local");
+    assert.equal(brainStatus.external_ai_api, false);
+    assert.equal(brainStatus.pretrained_weights, false);
+    assert.equal(brainStatus.checkpoint_exists, false);
+
+    const streamResponse = await apiFetch(base + "/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ message: "/help", history: [] })
+    });
+    assert.equal(streamResponse.status, 200);
+    assert.match(streamResponse.headers.get("content-type") || "", /text\/event-stream/);
+    const streamText = await streamResponse.text();
+    assert.match(streamText, /event: start/);
+    assert.match(streamText, /event: delta/);
+    assert.match(streamText, /event: done/);
+    assert.match(streamText, /"status":"completed"/);
+    assert.match(streamText, /SYNTRA help/);
+
+    const unauthorizedStream = await fetch(base + "/api/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({ message: "/help" })
+    });
+    assert.equal(unauthorizedStream.status, 401);
 
     const unknownRoute = await apiFetch(base + "/not-a-route");
     assert.equal(unknownRoute.status, 404);
