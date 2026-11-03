@@ -144,7 +144,7 @@ PowerShell example:
 
 ```powershell
 $env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\Datasets\MySource"
-python scripts/run_syntra_module.py train --root "D:\Datasets\MySource"
+python scripts/run_syntra_module.py cli train --root "D:\Datasets\MySource"
 ```
 
 The selected corpus root is resolved before traversal. Relative paths, home-directory shorthand, paths outside approved roots, and symlinks that resolve outside an approved root are rejected.
