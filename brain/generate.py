@@ -43,7 +43,7 @@ def load_for_inference(
 
 
 def _token_bytes(tokenizer: BytePairTokenizer) -> list[bytes]:
-    table = [bytes((token_id,)) for token_id in range(256)]
+    table = [bytes((token_id,)) for token_id in range(256)] + [b"", b""]
     for left, right in tokenizer.merges:
         if left >= len(table) or right >= len(table):
             raise ValueError("Tokenizer merge table contains an invalid dependency.")
