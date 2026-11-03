@@ -6,7 +6,13 @@ import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
-import { detectLocalModel, handleLocalModelRequest, handleGeminiModelRequest } from "./model-provider.mjs";
+import {
+  cancelBrainTraining,
+  generateBrainText,
+  getBrainStatus,
+  getBrainTrainingStatus,
+  startBrainTraining
+} from "./brain-runtime.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
@@ -26,7 +32,6 @@ import {
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.SYNTRA_LOCAL_PORT || 3001);
-const AI_BASE = "http://127.0.0.1:" + Number(process.env.SYNTRA_AI_PORT || 3002);
 const MAX_BODY_BYTES = 600 * 1024;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let activeWorkspace = process.env.SYNTRA_WORKSPACE ? path.resolve(process.env.SYNTRA_WORKSPACE) : REPO_ROOT;
@@ -65,44 +70,51 @@ async function parseBody(request) {
 }
 
 async function aiRequest(method, route, body, timeoutMs = undefined, options = {}) {
-  const onToken = typeof options?.onToken === "function" ? options.onToken : undefined;
   const signal = options?.signal;
-  const modelRoute = (method === "GET" && route === "/model/status")
-    || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
-  if (modelRoute && String(process.env.SYNTRA_MODEL_PROVIDER || "ollama").trim().toLowerCase() === "gemini") {
-    return handleGeminiModelRequest(method, route, body || {}, { timeoutMs, onToken, signal });
+  if (method === "GET" && route === "/model/status") return getBrainStatus();
+  if (method === "GET" && route === "/model/train/status") {
+    return { ...getBrainTrainingStatus() };
   }
-  if (modelRoute) {
-    let provider = await detectLocalModel();
-    let modelBody = body || {};
-    if (typeof modelBody.model === "string" && modelBody.model.trim()) {
-      const requested = await detectLocalModel({ mode: "ollama", requestedModel: modelBody.model.trim() });
-      if (!requested) throw new Error("The configured SYNTRA_REVIEW_MODEL is not installed locally or exceeds the safe memory-selection limit.");
-      provider = requested;
-      modelBody = { ...modelBody };
-      delete modelBody.model;
-    }
-    if (provider) {
-      const localResult = await handleLocalModelRequest(provider, method, route, modelBody, { timeoutMs, onToken, signal });
-      if (localResult) return localResult;
-    }
-  }
-
-  let response;
-  try {
-    response = await fetch(AI_BASE + route, {
-      method,
-      headers: method === "GET" ? {} : { "Content-Type": "application/json" },
-      body: method === "GET" ? undefined : JSON.stringify(body || {}),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))]) : AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
+  if (method === "POST" && route === "/model/train") {
+    const root = await resolveWorkspace(body?.root || activeWorkspace);
+    return startBrainTraining({
+      datasetPaths: [root],
+      epochs: Number(body?.epochs || 1),
+      batchSize: Number(body?.batch_size || 4),
+      blockSize: Number(body?.block_size || 256),
+      layers: Number(body?.layers || 4),
+      heads: Number(body?.heads || 4),
+      width: Number(body?.width || 128),
+      vocabSize: Number(body?.vocab_size || 512),
+      learningRate: Number(body?.learning_rate || 3e-4),
+      device: String(body?.device || "auto"),
+      resume: body?.resume === true
     });
-  } catch (error) {
-    if (signal?.aborted || error?.name === "AbortError") throw error;
-    throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server', or install and run a local Ollama model for stronger local inference.");
   }
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "SYNTRA AI request failed with HTTP " + response.status);
-  return payload;
+  if (method === "POST" && route === "/model/generate") {
+    const generation = await generateBrainText({
+      prompt: body?.prompt,
+      maxNewTokens: Math.min(2048, Number(body?.max_new_tokens || 256)),
+      temperature: Number(body?.temperature ?? 0.7),
+      topK: Math.max(1, Number(body?.top_k || 40)),
+      topP: Number(body?.top_p ?? 1),
+      repetitionPenalty: Number(body?.repetition_penalty ?? 1.05),
+      device: String(body?.device || "auto"),
+      signal,
+      onToken: options?.onToken,
+      onMetrics: options?.onMetrics
+    });
+    return {
+      ...generation,
+      trained_steps: generation.step,
+      is_model_output: true,
+      generation_mode: "standalone-local-pytorch-brain"
+    };
+  }
+  if (method === "POST" && route === "/model/tokenize") {
+    throw new Error("SYNTRA no longer provides the legacy model-tokenize route. The standalone brain manages tokenizer context during inference.");
+  }
+  throw new Error("Unsupported local brain operation: " + method + " " + route);
 }
 
 async function generateAgentCompletion(body) {
