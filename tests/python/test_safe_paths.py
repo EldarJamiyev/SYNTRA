@@ -44,6 +44,11 @@ class ApprovedCorpusPathTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
                 resolve_corpus_root(str(approved / ".." / "outside"))
 
+            prefix_escape = parent / "approved-neighbor"
+            prefix_escape.mkdir()
+            with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
+                resolve_corpus_root(str(prefix_escape))
+
             escape = approved / "escape"
             try:
                 escape.symlink_to(outside, target_is_directory=True)
