@@ -45,7 +45,7 @@ def _resolve_approved_path(value: str | Path, *, expected: str) -> Path:
     raw = os.fspath(value)
     if not raw or len(raw) > _MAX_PATH_CHARS or "\x00" in raw:
         raise ValueError(f"The selected {expected} path is invalid.")
-    candidate = Path(raw).expanduser()
+    candidate = Path(raw)
     if not candidate.is_absolute():
         raise ValueError(f"The selected {expected} path must be absolute.")
     try:
