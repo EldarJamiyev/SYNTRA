@@ -1833,8 +1833,8 @@ function restrictedVerificationEnvironment(platform = process.platform) {
 
   if (platform === "win32") {
     const windowsRoot = "C:\\Windows";
-    const windowsTemp = path.join(windowsRoot, "Temp");
-    const system32 = path.join(windowsRoot, "System32");
+    const windowsTemp = windowsRoot + "\\Temp";
+    const system32 = windowsRoot + "\\System32";
     result.SystemRoot = windowsRoot;
     result.WINDIR = windowsRoot;
     result.ComSpec = path.join(system32, "cmd.exe");
@@ -1968,8 +1968,7 @@ export function buildVerificationCommand(root, selected, {
   // Docker --mount uses comma-delimited key/value options. On POSIX, colons
   // also delimit mount fields; reject them rather than emitting an ambiguous mount.
   const unsafeMountCharacters = [10, 13, 0].some(code => workspacePath.includes(String.fromCharCode(code)))
-    || workspacePath.includes(",")
-    || (process.platform !== "win32" && workspacePath.includes(":"));
+    || workspacePath.includes(",");
   if (unsafeMountCharacters) {
     throw new Error("The workspace path contains characters that cannot be mounted safely into a Docker container.");
   }
