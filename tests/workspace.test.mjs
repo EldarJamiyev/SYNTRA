@@ -155,7 +155,7 @@ test("verification defaults to an offline Docker container and filters host envi
   );
   assert.throws(
     () => buildVerificationCommand(root, {
-      kind: "node-test", executable: "node", args: ["--test\\0--require=/tmp/attacker.js"]
+      kind: "node-test", executable: "node", args: ["--test\0--require=/tmp/attacker.js"]
     }, { allowUntrustedHost: true }),
     /verification arguments are invalid/
   );
