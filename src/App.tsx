@@ -1072,6 +1072,10 @@ export default function App() {
             <polyline className="brain-loss-train" points={trainLossChartPoints} />
             <polyline className="brain-loss-validation" points={validationLossChartPoints} />
           </svg>
+          <span className="brain-loss-legend" aria-hidden="true">
+            <span><i className="brain-loss-legend-train" />Train</span>
+            <span><i className="brain-loss-legend-validation" />Validation</span>
+          </span>
         )}
       </div>
 
