@@ -30,7 +30,7 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /maxLength=\{12000\}/);
   assert.match(app, /setInput\(content\)/);
   assert.match(app, /content\.toLowerCase\(\) === '\/clear'/);
-  assert.match(app, /terminal\.partialReply/);
+  assert.match(app, /completedEvent\.partialReply/);
   assert.match(app, /local chat stream/);
   assert.match(app, /streamingReply/);
   assert.match(app, /fetch\('\/api\/chat\/stream'/);
