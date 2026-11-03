@@ -195,6 +195,38 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                     resume=True,
                 )
 
+    def test_directory_dataset_discovers_source_and_excludes_generated_and_sensitive_files(self):
+        from brain.train import _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-project-scan-") as temp:
+            root = Path(temp) / "project"
+            (root / "src").mkdir(parents=True)
+            (root / "node_modules" / "package").mkdir(parents=True)
+            (root / "dist").mkdir()
+            (root / "src" / "main.py").write_text("def main():\\n    return 42\\n", encoding="utf-8")
+            (root / "README.md").write_text("# Local project docs\\n", encoding="utf-8")
+            (root / ".env").write_text("API_KEY=do-not-train\\n", encoding="utf-8")
+            (root / "secrets.py").write_text("PRIVATE_TOKEN = 'do-not-train'\\n", encoding="utf-8")
+            (root / "node_modules" / "package" / "ignored.py").write_text("generated dependency\\n", encoding="utf-8")
+            (root / "dist" / "ignored.js").write_text("generated build output\\n", encoding="utf-8")
+
+            train_text, validation_text, names, byte_count, fingerprint = _read_local_datasets(
+                [root], 1024 * 1024
+            )
+            combined = train_text + validation_text
+            self.assertIn("src/main.py", combined)
+            self.assertIn("README.md", combined)
+            self.assertNotIn("API_KEY", combined)
+            self.assertNotIn("PRIVATE_TOKEN", combined)
+            self.assertNotIn("generated dependency", combined)
+            self.assertNotIn("generated build output", combined)
+            self.assertEqual(len(names), 2)
+            self.assertGreater(byte_count, 0)
+            self.assertEqual(len(fingerprint), 64)
+
+            with self.assertRaisesRegex(ValueError, "sensitive file"):
+                _read_local_datasets([root / ".env"], 1024 * 1024)
+
     def test_training_rejects_invalid_utf8_and_missing_files(self):
         from brain.train import train
 
