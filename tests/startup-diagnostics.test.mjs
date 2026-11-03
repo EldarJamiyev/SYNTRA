@@ -22,14 +22,12 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
-test("Windows startup defaults to pretrained Ollama and only selects the native research model explicitly", async () => {
+test("Windows startup prepares the standalone local PyTorch brain without external model providers", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.match(launcher, /else\s*\{\s*"ollama"\s*\}/);
-  assert.match(launcher, /@\("auto", "native", "ollama", "gemini"\) -notcontains \$providerMode/);
-  assert.match(launcher, /SYNTRA_GEMINI_API_KEY/);
-  assert.match(launcher, /SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini/);
-  assert.match(launcher, /\$providerMode -ne "native" -and \$providerMode -ne "gemini"/);
-  assert.doesNotMatch(launcher, /else\s*\{\s*"auto"\s*\}/);
+  assert.match(launcher, /scripts\\setup_syntra_env\.py/);
+  assert.match(launcher, /checkpoints\\syntra-brain\.pt/);
+  assert.match(launcher, /local PyTorch brain/);
+  assert.doesNotMatch(launcher, /ollama|gemini|SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL/i);
 });
 
 test("Vite startup keeps console output visible in its own service window", async () => {
