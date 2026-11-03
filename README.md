@@ -132,14 +132,14 @@ SYNTRA uses a self-contained local stack. The React/Vite interface streams chat 
 
 ### Model reality
 
-- **The standalone PyTorch brain is the only model provider in the workspace chat.** There is no Ollama or Gemini fallback.
+- **The standalone PyTorch brain is the only model provider in the workspace chat.** There is no external model-provider fallback.
 - **The model starts from random weights.** It must be trained locally before model-backed chat and coding assistance can run.
 - **No hosted AI API or external model registry is used.** The application launches the local Python generator as a child process and streams its output through the authenticated Node API.
 - **Capability remains experimental.** Local training and passing software tests do not establish professional coding ability; instruction-following and task-level performance depend on training data, compute, and evaluation.
 
 ### Standalone `/brain` training and inference (Phase 2)
 
-The standalone `brain/` package can now train its own randomly initialized PyTorch Transformer from local UTF-8 text/code files. It does not download model weights or contact Ollama, Hugging Face, or a hosted AI API.
+The standalone `brain/` package can now train its own randomly initialized PyTorch Transformer from local UTF-8 text/code files. It does not download model weights or contact an external model registry or hosted AI API.
 
 Train from the default `dataset.txt`:
 
@@ -205,7 +205,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
 
 ### Windows
 
-**Requirements:** Node.js 20 or later, Python 3.11 or later, and Git. The launcher installs the repository's hash-locked CPU PyTorch environment into `.venv`. No Ollama, model registry, or external AI service is required.
+**Requirements:** Node.js 20 or later, Python 3.11 or later, and Git. The launcher installs the repository's hash-locked CPU PyTorch environment into `.venv`. No external model registry or AI service is required.
 
 1. Clone the repository:
 
