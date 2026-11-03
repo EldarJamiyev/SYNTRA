@@ -7,7 +7,7 @@ if ($launcher -match "(?i)ollama|gemini|SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL
 if (-not $launcher.Contains("scripts\setup_syntra_env.py")) {
     throw "The launcher must prepare the isolated local PyTorch environment."
 }
-if (-not $launcher.Contains("brain\syntra-brain.pt")) {
+if (-not $launcher.Contains("checkpoints\syntra-brain.pt")) {
     throw "The launcher must check the standalone brain checkpoint."
 }
 if (-not $launcher.Contains("local PyTorch brain")) {
