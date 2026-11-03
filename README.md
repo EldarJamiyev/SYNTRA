@@ -143,8 +143,8 @@ The native corpus loader only reads from the repository itself and explicitly ap
 PowerShell example:
 
 ```powershell
-$env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\\Datasets\\MySource"
-python scripts/run_syntra_module.py train --root "D:\\Datasets\\MySource"
+$env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\Datasets\MySource"
+python scripts/run_syntra_module.py train --root "D:\Datasets\MySource"
 ```
 
 The selected corpus root is resolved before traversal. Relative paths, home-directory shorthand, paths outside approved roots, and symlinks that resolve outside an approved root are rejected.
