@@ -1884,7 +1884,7 @@ function resolveNpmCli() {
 function validatedRunnerArguments(selected) {
   if (!Array.isArray(selected.args) || selected.args.length > 64
     || selected.args.some(argument => typeof argument !== "string"
-      || argument.length > 4096 || argument.includes("\\0"))) {
+      || argument.length > 4096 || argument.includes("\0"))) {
     throw new Error("The project verification arguments are invalid.");
   }
   return [...selected.args];
@@ -1941,7 +1941,7 @@ export function buildVerificationCommand(root, selected, {
       executable = process.execPath;
       args = argsForRunner;
     } else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") {
-      if (typeof selected.executable !== "string" || !selected.executable || selected.executable.includes("\\0")) {
+      if (typeof selected.executable !== "string" || !selected.executable || selected.executable.includes("\0")) {
         throw new Error("The selected Python interpreter is invalid.");
       }
       executable = selected.executable;
