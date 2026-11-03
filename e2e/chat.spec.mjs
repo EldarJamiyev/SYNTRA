@@ -9,11 +9,11 @@ async function mockLocalApi(page) {
     const body = request.postDataJSON();
     const reply = "Browser integration response: " + body.message;
     const frames = [
-      "event: start\\ndata: " + JSON.stringify({ jobId: "e2e-chat-job", status: "running" }) + "\\n\\n",
-      "event: phase\\ndata: " + JSON.stringify({ phase: "streaming", message: "Responding" }) + "\\n\\n",
-      "event: delta\\ndata: " + JSON.stringify({ text: reply }) + "\\n\\n",
-      "event: metrics\\ndata: " + JSON.stringify({ epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 18.4, device: "cpu" }) + "\\n\\n",
-      "event: done\\ndata: " + JSON.stringify({ status: "completed", jobId: "e2e-chat-job", reply, metrics: { epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 18.4, device: "cpu" } }) + "\\n\\n"
+      "event: start\ndata: " + JSON.stringify({ jobId: "e2e-chat-job", status: "running" }) + "\n\n",
+      "event: phase\ndata: " + JSON.stringify({ phase: "streaming", message: "Responding" }) + "\n\n",
+      "event: delta\ndata: " + JSON.stringify({ text: reply }) + "\n\n",
+      "event: metrics\ndata: " + JSON.stringify({ epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 18.4, device: "cpu" }) + "\n\n",
+      "event: done\ndata: " + JSON.stringify({ status: "completed", jobId: "e2e-chat-job", reply, metrics: { epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 18.4, device: "cpu" } }) + "\n\n"
     ].join("");
     return route.fulfill({
       status: 200,
@@ -40,7 +40,7 @@ async function mockLocalApi(page) {
       return json({
         service: "SYNTRA standalone PyTorch brain",
         provider: "syntra-brain-local",
-        checkpoint: WORKSPACE + "\\\\checkpoints\\\\syntra-brain.pt",
+        checkpoint: WORKSPACE + "\\checkpoints\\syntra-brain.pt",
         checkpoint_exists: true,
         trained_steps: 12,
         epoch: 1,
