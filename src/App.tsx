@@ -629,15 +629,20 @@ export default function App() {
     if (!mountedRef.current) return;
     setBrainStatus(result);
     const training = result.training || {};
+    const liveTraining = training.status === 'running' || training.status === 'cancelling';
     const nextMetrics: BrainMetrics = {
-      epoch: Number(training.epoch ?? result.epoch ?? 0),
-      step: Number(training.step ?? result.trained_steps ?? 0),
+      epoch: Number(liveTraining ? training.epoch ?? result.epoch ?? 0 : result.epoch ?? training.epoch ?? 0),
+      step: Number(liveTraining ? training.step ?? result.trained_steps ?? 0 : result.trained_steps ?? training.step ?? 0),
       train_loss: training.train_loss ?? result.train_loss,
       validation_loss: training.validation_loss ?? result.validation_loss,
-      tokens_per_second: Number(training.tokens_per_second || 0),
+      tokens_per_second: Number(liveTraining ? training.tokens_per_second || 0 : 0),
       device: typeof training.device === 'string' ? training.device : undefined
     };
-    setBrainMetrics(current => ({ ...current, ...nextMetrics }));
+    setBrainMetrics(current => ({
+      ...current,
+      ...nextMetrics,
+      tokens_per_second: nextMetrics.tokens_per_second || current.tokens_per_second || 0
+    }));
     const sampleKey = String(nextMetrics.step || 0) + ':' + String(nextMetrics.train_loss ?? '');
     if (nextMetrics.train_loss !== null && nextMetrics.train_loss !== undefined
       && Number.isFinite(nextMetrics.train_loss) && sampleKey !== lastBrainSampleRef.current) {
