@@ -746,9 +746,10 @@ async function runChatTurn(jobId, message, history, signal) {
           .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-1800) }))
       : [];
     let userMessage = message.slice(-6000);
-    const contextTokens = Number(modelStatus.context_tokens || modelStatus.config?.block_size || 256);
-    const promptByteBudget = Math.max(512, Math.min(200_000, contextTokens * 3));
+    const contextPlan = deriveModelContextBudget(modelStatus);
+    const contextTokens = contextPlan.contextWindowTokens;
     let prompt = "";
+    let tokenInfo = null;
     while (true) {
       prompt = [
         "SYNTRA ASSISTANT",
@@ -757,10 +758,15 @@ async function runChatTurn(jobId, message, history, signal) {
         "USER: " + userMessage,
         "ASSISTANT:"
       ].join("\n\n");
-      if (Buffer.byteLength(prompt, "utf8") <= promptByteBudget) break;
+      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000, { signal });
+      if (tokenInfo.token_count <= contextPlan.contextBudgetTokens) break;
       if (recentHistory.length) recentHistory.shift();
       else if (userMessage.length > 256) userMessage = userMessage.slice(-Math.max(256, Math.floor(userMessage.length * 0.7)));
       else break;
+    }
+    if (tokenInfo.token_count + contextPlan.outputBudgetTokens > contextTokens) {
+      finishChat(jobId, "This prompt does not fit the trained model's context window. Please shorten the message or split it into smaller parts.");
+      return;
     }
     updateChat(jobId, {
       phase: "generating",
@@ -776,7 +782,7 @@ async function runChatTurn(jobId, message, history, signal) {
     });
     const generation = await aiRequest("POST", "/model/generate", {
       prompt,
-      max_new_tokens: Math.min(512, Math.max(16, Math.floor(contextTokens * 0.75))),
+      max_new_tokens: Math.max(16, Math.min(512, contextTokens - tokenInfo.token_count - 1)),
       temperature: 0.7,
       top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 512)),
       top_p: 0.95,
