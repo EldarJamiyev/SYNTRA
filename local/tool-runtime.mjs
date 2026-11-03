@@ -588,7 +588,7 @@ function summarizeOutput(name, output) {
     case "workspace.memory.list":
       return { noteCount: output.total, categories: [...new Set(output.notes.map(note => note.category))] };
     case "workspace.memory.search":
-      return { resultCount: output.results.length, totalNotes: output.total };
+      return { retrievalMode: output.retrievalMode, resultCount: output.results.length, totalNotes: output.total };
     case "workspace.memory.add":
     case "workspace.memory.update":
       return { noteId: output.note.id, category: output.note.category, noteCount: output.total, storedLocally: output.storedLocally };
