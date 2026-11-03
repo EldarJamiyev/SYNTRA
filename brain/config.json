@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "model": {
+    "block_size": 512,
+    "n_layer": 4,
+    "n_head": 4,
+    "n_embd": 128,
+    "dropout": 0.1,
+    "vocab_size": 1024
+  },
+  "training": {
+    "epochs": 1,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.05,
+    "warmup_steps": 10,
+    "min_learning_rate_ratio": 0.1,
+    "gradient_clip_norm": 1,
+    "evaluation_batches": 4,
+    "save_every_steps": 50,
+    "tokenizer_bytes": 1000000,
+    "max_dataset_bytes": 134217728,
+    "seed": 1337,
+    "device": "auto",
+    "instruction_mode": true
+  },
+  "evaluation": {
+    "benchmark_each_epoch": true,
+    "benchmark_tasks": [
+      "utility-clamp",
+      "python-slugify"
+    ],
+    "benchmark_timeout_seconds": 900
+  }
+}
