@@ -29,6 +29,11 @@ MAX_FILES = 10_000
 MAX_FILE_BYTES = 512 * 1024
 MAX_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_RECORDS = 50_000
+IGNORED_FILENAMES = frozenset({
+    "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock",
+    "bun.lock", "bun.lockb", "cargo.lock", "poetry.lock", "uv.lock",
+    "pipfile.lock", "composer.lock", "gemfile.lock", "go.sum",
+})
 BOILERPLATE_LINE_PATTERNS = (
     re.compile(r"^\s*!\[[^]]*\]\([^)]*(?:shields\.io|badge|travis|codecov)[^)]*\)\s*$", re.I),
     re.compile(r"^\s*<!--\s*(?:generated|auto-generated|table of contents|toc).*?-->\s*$", re.I),
@@ -65,6 +70,13 @@ def _sensitive_name(name: str) -> bool:
     if any(value in lowered for value in ("secret", "credential", "password", "private_key", "private-key")):
         return True
     return Path(lowered).suffix in SENSITIVE_SUFFIXES
+
+def _ignored_source_filename(name: str) -> bool:
+    lowered = name.casefold()
+    if lowered in IGNORED_FILENAMES:
+        return True
+    return any(marker in lowered for marker in (".min.", ".bundle.", ".chunk.", ".generated."))
+
 
 def _is_hidden_or_sensitive(path: Path, root: Path) -> bool:
     try:
@@ -194,7 +206,7 @@ def build_instruction_corpus(
                 if candidate.is_symlink() or _is_hidden_or_sensitive(candidate, root):
                     skipped += 1
                     continue
-                if candidate.suffix.lower() not in SOURCE_SUFFIXES:
+                if candidate.suffix.lower() not in SOURCE_SUFFIXES or _ignored_source_filename(filename):
                     skipped += 1
                     continue
                 try:
