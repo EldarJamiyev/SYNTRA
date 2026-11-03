@@ -43,7 +43,7 @@ test('the frontend stays a simple chat rather than a model dashboard', async () 
   assert.match(app, /Epoch fixture evaluation/);
   assert.match(app, /patch_validity_rate/);
   assert.match(app, /verification_pass_rate/);
-  assert.match(app, /brain\\/config\\.json/);
+  assert.ok(app.includes("brain/config.json"));
   assert.match(app, /aria-label="Conversation"/);
   assert.match(app, /aria-live="off"/);
   assert.match(app, /SYNTRA response/);
