@@ -10,6 +10,14 @@ SYNTRA uses a small local stack rather than a cloud AI service.
 
 The Node workspace server binds to 127.0.0.1. The frontend runs at 127.0.0.1:3000; the authenticated workspace and SSE API is proxied to 127.0.0.1:3001. There is no separate model HTTP service or embedding daemon. Workspace exclusion rules live in each project's `.syntra/workspace-exclusions-v1.json`; they filter recursive discovery, full-text search, symbol-index refresh and lookup, direct reads, proposal file access, and read-only Git status/diff observations. Patterns are relative to the workspace root and support `*`, `?`, and `**`.
 
+## Phase 4 training and evaluation
+
+4. **Instruction corpus builder** — `brain/corpus.py` scans only the repository or roots explicitly approved through `SYNTRA_ALLOWED_CORPUS_ROOTS`. It excludes hidden/private paths, dependencies, build output, sensitive file patterns, binaries, and common Markdown boilerplate. `scripts/prepare_corpus.py` emits deterministic local JSONL examples and a source manifest.
+5. **Instruction trainer** — `brain/train.py` token-packs prompt/completion examples, masks prompt positions from the supervised cross-entropy objective, splits validation by source, accumulates gradients across micro-batches, applies warmup and cosine decay, and selects CUDA, MPS, or CPU.
+6. **Epoch fixture evaluator** — after the checkpoint is saved, a Node child process invokes the existing disposable coding-agent fixture runner through the native-only bridge. The `utility-clamp` and `python-slugify` reports are retained locally and streamed into the training status object; no model-provider fallback is available.
+
+The UI loss sparkline displays training-loss samples; the workspace training panel also shows the most recent fixture completion, exact-patch validity, and candidate verification rates. Loss and fixture scores are complementary measurements and do not establish general coding ability.
+
 ## Chat request lifecycle
 
 1. The Node service checks whether the request is a clear software-change command. Broad verbs alone are insufficient: “write a poem” and “write an email” stay on the conversation path.

@@ -80,15 +80,29 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
     const root = await resolveWorkspace(body?.root || activeWorkspace);
     return startBrainTraining({
       datasetPaths: [root],
-      epochs: Number(body?.epochs || 1),
-      batchSize: Number(body?.batch_size || 4),
-      blockSize: Number(body?.block_size || 256),
-      layers: Number(body?.layers || 4),
-      heads: Number(body?.heads || 4),
-      width: Number(body?.width || 128),
-      vocabSize: Number(body?.vocab_size || 512),
-      learningRate: Number(body?.learning_rate || 3e-4),
-      device: String(body?.device || "auto"),
+      epochs: body?.epochs === undefined ? undefined : Number(body.epochs),
+      batchSize: body?.batch_size ?? body?.batchSize,
+      blockSize: body?.block_size ?? body?.blockSize,
+      layers: body?.layers,
+      heads: body?.heads,
+      width: body?.width,
+      vocabSize: body?.vocab_size ?? body?.vocabSize,
+      learningRate: body?.learning_rate ?? body?.learningRate,
+      weightDecay: body?.weight_decay ?? body?.weightDecay,
+      gradientAccumulationSteps: body?.gradient_accumulation_steps ?? body?.gradientAccumulationSteps,
+      warmupSteps: body?.warmup_steps ?? body?.warmupSteps,
+      minLearningRateRatio: body?.min_lr_ratio ?? body?.minLearningRateRatio,
+      gradientClipNorm: body?.gradient_clip_norm ?? body?.gradientClipNorm,
+      evaluationBatches: body?.evaluation_batches ?? body?.evaluationBatches,
+      saveEverySteps: body?.save_every_steps ?? body?.saveEverySteps,
+      tokenizerBytes: body?.tokenizer_bytes ?? body?.tokenizerBytes,
+      maxDatasetBytes: body?.max_dataset_bytes ?? body?.maxDatasetBytes,
+      seed: body?.seed,
+      device: body?.device,
+      instructionMode: body?.instruction_mode ?? body?.instructionMode,
+      runBenchmarks: body?.benchmark_each_epoch ?? body?.runBenchmarks,
+      benchmarkTasks: body?.benchmark_tasks ?? body?.benchmarkTasks,
+      benchmarkTimeoutSeconds: body?.benchmark_timeout_seconds ?? body?.benchmarkTimeoutSeconds,
       resume: body?.resume === true
     });
   }
@@ -1021,19 +1035,33 @@ async function streamChat(request, response) {
   });
 }
 
-async function trainLocalBrain(body) {
+async function trainLocalBrain(body = {}) {
   const root = await resolveWorkspace(body.root || activeWorkspace);
   return startBrainTraining({
     datasetPaths: [root],
-    epochs: Number(body.epochs || 1),
-    batchSize: Number(body.batchSize || body.batch_size || 4),
-    blockSize: Number(body.blockSize || body.block_size || 256),
-    layers: Number(body.layers || 4),
-    heads: Number(body.heads || 4),
-    width: Number(body.width || 128),
-    vocabSize: Number(body.vocabSize || body.vocab_size || 512),
-    learningRate: Number(body.learningRate || body.learning_rate || 3e-4),
-    device: String(body.device || "auto"),
+    epochs: body.epochs === undefined ? undefined : Number(body.epochs),
+    batchSize: body.batchSize ?? body.batch_size,
+    blockSize: body.blockSize ?? body.block_size,
+    layers: body.layers,
+    heads: body.heads,
+    width: body.width,
+    vocabSize: body.vocabSize ?? body.vocab_size,
+    learningRate: body.learningRate ?? body.learning_rate,
+    weightDecay: body.weightDecay ?? body.weight_decay,
+    gradientAccumulationSteps: body.gradientAccumulationSteps ?? body.gradient_accumulation_steps,
+    warmupSteps: body.warmupSteps ?? body.warmup_steps,
+    minLearningRateRatio: body.minLearningRateRatio ?? body.min_lr_ratio,
+    gradientClipNorm: body.gradientClipNorm ?? body.gradient_clip_norm,
+    evaluationBatches: body.evaluationBatches ?? body.evaluation_batches,
+    saveEverySteps: body.saveEverySteps ?? body.save_every_steps,
+    tokenizerBytes: body.tokenizerBytes ?? body.tokenizer_bytes,
+    maxDatasetBytes: body.maxDatasetBytes ?? body.max_dataset_bytes,
+    seed: body.seed,
+    device: body.device,
+    instructionMode: body.instructionMode ?? body.instruction_mode,
+    runBenchmarks: body.runBenchmarks ?? body.benchmark_each_epoch,
+    benchmarkTasks: body.benchmarkTasks ?? body.benchmark_tasks,
+    benchmarkTimeoutSeconds: body.benchmarkTimeoutSeconds ?? body.benchmark_timeout_seconds,
     resume: body.resume === true
   });
 }

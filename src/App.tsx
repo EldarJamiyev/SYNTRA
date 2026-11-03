@@ -93,6 +93,8 @@ type BrainStatus = {
   validation_loss: number | null;
   context_tokens: number;
   tokenizer_vocab_size: number;
+  instruction_mode?: boolean;
+  last_benchmark?: BrainStatus['training']['benchmark'];
   training: {
     status: string;
     epoch?: number;
@@ -102,6 +104,17 @@ type BrainStatus = {
     tokens_per_second?: number;
     device?: string;
     message?: string;
+    instruction_mode?: boolean;
+    benchmark?: {
+      status: string;
+      task_count?: number;
+      completed_task_count?: number;
+      task_completion_rate?: number;
+      patch_validity_rate?: number;
+      verification_pass_rate?: number;
+      report_path?: string | null;
+      error?: string | null;
+    } | null;
   };
 };
 
@@ -263,6 +276,7 @@ export default function App() {
   const [brainStatus, setBrainStatus] = useState<BrainStatus | null>(null);
   const [brainMetrics, setBrainMetrics] = useState<BrainMetrics>({});
   const [brainLossHistory, setBrainLossHistory] = useState<number[]>([]);
+  const [brainValidationLossHistory, setBrainValidationLossHistory] = useState<number[]>([]);
   const [brainTrainingStarting, setBrainTrainingStarting] = useState(false);
   const [error, setError] = useState('');
   const sessions = sessionState.sessions;
@@ -649,6 +663,9 @@ export default function App() {
       && Number.isFinite(nextMetrics.train_loss) && sampleKey !== lastBrainSampleRef.current) {
       lastBrainSampleRef.current = sampleKey;
       setBrainLossHistory(current => [...current, Number(nextMetrics.train_loss)].slice(-48));
+      if (typeof nextMetrics.validation_loss === 'number' && Number.isFinite(nextMetrics.validation_loss)) {
+        setBrainValidationLossHistory(current => [...current, Number(nextMetrics.validation_loss)].slice(-48));
+      }
     }
   };
 
@@ -658,16 +675,13 @@ export default function App() {
     setBrainTrainingStarting(true);
     setWorkspaceError('');
     try {
+      // brain/config.json is the single source of truth for model size,
+      // accumulation, cosine schedule, instruction mode, and epoch fixtures.
       await postJson('/local-api/brain/train', {
         root,
         epochs: 1,
-        batchSize: 4,
-        blockSize: 256,
-        layers: 4,
-        heads: 4,
-        width: 128,
-        vocabSize: 512,
-        device: 'auto'
+        device: 'auto',
+        resume: brainStatus?.instruction_mode === true && brainStatus.context_tokens === 512
       });
       await refreshBrainStatus();
     } catch (cause) {
@@ -965,13 +979,18 @@ export default function App() {
   };
 
   const trainingActive = brainStatus?.training?.status === 'running' || brainStatus?.training?.status === 'cancelling';
+  const epochBenchmark = brainStatus?.training?.benchmark || brainStatus?.last_benchmark || null;
   const lossValues = brainLossHistory.slice(-32);
-  const maxLoss = Math.max(1, ...lossValues);
-  const lossChartPoints = lossValues.map((loss, index) => {
-    const x = lossValues.length < 2 ? 0 : (index / (lossValues.length - 1)) * 96;
+  const validationLossValues = brainValidationLossHistory.slice(-32);
+  const maxLoss = Math.max(1, ...lossValues, ...validationLossValues);
+  const makeLossPoints = (values: number[]) => values.map((loss, index) => {
+    const x = values.length < 2 ? 0 : (index / (values.length - 1)) * 96;
     const y = 24 - (Math.min(loss, maxLoss) / maxLoss) * 20;
     return x.toFixed(1) + ',' + y.toFixed(1);
   }).join(' ');
+  const trainLossChartPoints = makeLossPoints(lossValues);
+  const validationLossChartPoints = makeLossPoints(validationLossValues);
+
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1047,8 +1066,9 @@ export default function App() {
         <span>Val loss {typeof brainMetrics.validation_loss === 'number' ? brainMetrics.validation_loss.toFixed(4) : '—'}</span>
         <span>{Number(brainMetrics.tokens_per_second || 0).toFixed(1)} tok/s</span>
         {lossValues.length > 1 && (
-          <svg className="brain-loss-sparkline" viewBox="0 0 96 28" role="img" aria-label="Recent training loss trend">
-            <polyline points={lossChartPoints} />
+          <svg className="brain-loss-sparkline" viewBox="0 0 96 28" role="img" aria-label="Recent training and validation cross-entropy loss trends">
+            <polyline className="brain-loss-train" points={trainLossChartPoints} />
+            <polyline className="brain-loss-validation" points={validationLossChartPoints} />
           </svg>
         )}
       </div>
@@ -1080,6 +1100,28 @@ export default function App() {
               <span>Train loss: {typeof brainStatus?.train_loss === 'number' ? brainStatus.train_loss.toFixed(4) : '—'}</span>
               <span>Validation: {typeof brainStatus?.validation_loss === 'number' ? brainStatus.validation_loss.toFixed(4) : '—'}</span>
               <span>Generation: {Number(brainMetrics.tokens_per_second || 0).toFixed(1)} tok/s</span>
+            {epochBenchmark && (
+              <div className="brain-training-benchmark" role="status">
+                <strong>Epoch fixture evaluation</strong>
+                <span>
+                  {Number(epochBenchmark.completed_task_count || 0)}/
+                  {Number(epochBenchmark.task_count || 0)} tasks passed ·
+                  {typeof epochBenchmark.task_completion_rate === 'number'
+                    ? ' ' + (brainStatus.training.benchmark.task_completion_rate * 100).toFixed(0) + '% completion'
+                    : ' pending'}
+                </span>
+                <span>
+                  Patch validity {typeof epochBenchmark.patch_validity_rate === 'number'
+                    ? (brainStatus.training.benchmark.patch_validity_rate * 100).toFixed(0) + '%'
+                    : '—'} · Verification {typeof epochBenchmark.verification_pass_rate === 'number'
+                    ? (brainStatus.training.benchmark.verification_pass_rate * 100).toFixed(0) + '%'
+                    : '—'}
+                </span>
+                {epochBenchmark.error && (
+                  <span className="brain-training-benchmark-error">{brainStatus.training.benchmark.error}</span>
+                )}
+              </div>
+            )}
             </div>
             <button
               type="button"
@@ -1087,7 +1129,7 @@ export default function App() {
               onClick={() => void startBrainTrainingFromWorkspace()}
               disabled={!workspaceStatus?.root || pending || brainTrainingStarting || trainingActive}
             >
-              {trainingActive || brainTrainingStarting ? 'Training local model…' : brainStatus?.checkpoint_exists ? 'Continue training on this workspace' : 'Train local brain on this workspace'}
+              {trainingActive || brainTrainingStarting ? 'Training local model…' : brainStatus?.instruction_mode === true && brainStatus.checkpoint_exists ? 'Continue Phase 4 training on this workspace' : 'Train local brain on this workspace'}
             </button>
             {trainingActive && (
               <>
