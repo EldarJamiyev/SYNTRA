@@ -136,6 +136,44 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 - **The native PyTorch model is experimental.** It starts with randomly initialized weights. Training it on a small local corpus is useful for researching tokenization, training, checkpoints, and inference; it does not make it comparable to a pretrained coding model.
 - **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
 
+### Standalone `/brain` training and inference (Phase 2)
+
+The standalone `brain/` package can now train its own randomly initialized PyTorch Transformer from local UTF-8 text/code files. It does not download model weights or contact Ollama, Hugging Face, or a hosted AI API.
+
+Train from the default `dataset.txt`:
+
+```powershell
+python -m brain.train --dataset dataset.txt --epochs 3 --device auto
+```
+
+Train directly from a selected local project directory (source files are discovered recursively):
+
+```powershell
+python -m brain.train --dataset .\path\to\your\project --epochs 3 --device auto
+```
+
+Or add multiple local text/code files and folders by repeating `--dataset`:
+
+```powershell
+python -m brain.train --dataset .\corpus\python.txt --dataset .\corpus\docs.txt --epochs 2 --device auto
+```
+
+Checkpoints are written to `checkpoints/syntra-brain.pt` by default. They include the model weights, tokenizer merge table, AdamW optimizer state, training progress, dataset fingerprint, and random-number-generator state. Checkpoints are atomically replaced and can be resumed against the exact same corpus:
+
+```powershell
+python -m brain.train --dataset dataset.txt --epochs 2 --resume
+```
+
+Generate text from a trained checkpoint with temperature, top-k, top-p, and repetition controls:
+
+```powershell
+python -m brain.generate --checkpoint checkpoints/syntra-brain.pt --prompt "def calculate_total(" --max-new-tokens 128 --temperature 0.7 --top-k 40
+```
+
+The generator emits decoded text incrementally and uses a KV cache between tokens. Training reports epoch progress, loss, validation loss, and throughput. The dataset reader enforces a configurable size limit and rejects invalid UTF-8. Keep private keys, credentials, customer data, and other secrets out of training corpora.
+
+**Phase 2 scope:** this provides a callable training and inference engine. It does not yet replace the provider routing in the current React chat or expose an SSE endpoint; that is Phase 3. A from-scratch small model is an experiment, not a substitute for a pretrained professional coding model, and low validation loss alone does not establish coding ability.
+
 #### Approving local training data directories
 
 The native corpus loader only reads from the repository itself and explicitly approved local directories. Set `SYNTRA_ALLOWED_CORPUS_ROOTS` to one or more existing absolute directory paths before running native training or corpus preparation. Separate multiple paths with the platform path separator (a semicolon on Windows, a colon on Linux/macOS).
