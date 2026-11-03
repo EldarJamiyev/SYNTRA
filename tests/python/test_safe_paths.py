@@ -77,9 +77,18 @@ class ApprovedCorpusPathTests(unittest.TestCase):
             wrong_extension.write_text("not jsonl\n", encoding="utf-8")
             external = outside / "outside.jsonl"
             external.write_text("{}\n", encoding="utf-8")
+            escaped_link = approved / "external-link.jsonl"
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(approved)
 
+            try:
+                escaped_link.symlink_to(external)
+            except (OSError, NotImplementedError):
+                escaped_link = None
+
             self.assertEqual(resolve_instruction_dataset(str(valid)), valid.resolve())
+            if escaped_link is not None:
+                with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
+                    resolve_instruction_dataset(str(escaped_link))
             with self.assertRaisesRegex(ValueError, "must use the .jsonl"):
                 resolve_instruction_dataset(str(wrong_extension))
             with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
