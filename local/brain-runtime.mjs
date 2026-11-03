@@ -157,7 +157,7 @@ async function readLocalTokenizer() {
   return value;
 }
 
-function countByteBpe(text, tokenizer) {
+export function countByteBpe(text, tokenizer) {
   let tokens = [...Buffer.from(text, "utf8")];
   const ranks = new Map(tokenizer.merges.map((pair, rank) => [pair[0] + ":" + pair[1], rank]));
   while (tokens.length > 1) {
