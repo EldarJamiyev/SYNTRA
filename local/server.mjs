@@ -861,6 +861,174 @@ function readChatStatus(body) {
   return visible;
 }
 
+function writeSse(response, event, value) {
+  if (response.destroyed || response.writableEnded) return false;
+  response.write("event: " + event + "\n");
+  response.write("data: " + JSON.stringify(value) + "\n\n");
+  return true;
+}
+
+async function streamChat(request, response) {
+  let started;
+  try {
+    const body = await parseBody(request);
+    started = startChat(body);
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not start the local chat turn." });
+    return;
+  }
+
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+    "X-Content-Type-Options": "nosniff"
+  });
+  response.flushHeaders?.();
+  writeSse(response, "start", started);
+
+  let sentText = "";
+  let lastPhase = "";
+  let lastMetrics = "";
+  let completed = false;
+  const job = chatJobs.get(started.jobId);
+  if (!job) {
+    writeSse(response, "error", { error: "Chat job disappeared before streaming started." });
+    response.end();
+    return;
+  }
+
+  const finish = () => {
+    if (completed) return;
+    completed = true;
+    clearInterval(pump);
+    clearInterval(heartbeat);
+    response.end();
+  };
+
+  const pump = setInterval(() => {
+    if (response.destroyed || response.writableEnded) {
+      finish();
+      return;
+    }
+    const current = chatJobs.get(started.jobId);
+    if (!current) {
+      writeSse(response, "error", { error: "Chat job expired before completion." });
+      finish();
+      return;
+    }
+
+    if (current.phase && current.phase !== lastPhase) {
+      lastPhase = current.phase;
+      writeSse(response, "phase", { phase: current.phase, message: current.message || "" });
+    }
+
+    const output = current.status === "failed"
+      ? String(current.partialReply || "")
+      : String(current.reply || "");
+    if (output !== sentText) {
+      if (output.startsWith(sentText)) {
+        const delta = output.slice(sentText.length);
+        sentText = output;
+        if (delta) writeSse(response, "delta", { text: delta });
+      } else {
+        sentText = output;
+        writeSse(response, "replace", { text: output });
+      }
+    }
+
+    if (current.metrics) {
+      const signature = JSON.stringify(current.metrics);
+      if (signature !== lastMetrics) {
+        lastMetrics = signature;
+        writeSse(response, "metrics", current.metrics);
+      }
+    }
+
+    if (current.status === "running") return;
+
+    if (current.status === "completed") {
+      const finalText = String(current.reply || "");
+      if (finalText && finalText !== sentText) {
+        if (finalText.startsWith(sentText)) {
+          const delta = finalText.slice(sentText.length);
+          if (delta) writeSse(response, "delta", { text: delta });
+        } else {
+          writeSse(response, "replace", { text: finalText });
+        }
+      }
+      writeSse(response, "done", {
+        status: "completed",
+        jobId: current.jobId,
+        reply: finalText,
+        metrics: current.metrics || null,
+        trainedSteps: current.trainedSteps || null
+      });
+      finish();
+      return;
+    }
+
+    if (current.status === "cancelled") {
+      writeSse(response, "done", {
+        status: "cancelled",
+        jobId: current.jobId,
+        reply: current.reply || "Generation cancelled.",
+        partialReply: current.partialReply || sentText,
+        metrics: current.metrics || null
+      });
+      finish();
+      return;
+    }
+
+    if (current.status === "failed") {
+      writeSse(response, "error", {
+        error: current.error || current.reply || "Local chat generation failed.",
+        partialReply: current.partialReply || sentText
+      });
+      writeSse(response, "done", {
+        status: "failed",
+        jobId: current.jobId,
+        reply: current.partialReply || sentText,
+        error: current.error || current.reply || "Local chat generation failed.",
+        metrics: current.metrics || null
+      });
+      finish();
+    }
+  }, 35);
+
+  const heartbeat = setInterval(() => {
+    if (!completed && !response.destroyed && !response.writableEnded) {
+      response.write(": keep-alive\n\n");
+    }
+  }, 15_000);
+
+  response.on("close", () => {
+    if (!completed) {
+      const current = chatJobs.get(started.jobId);
+      if (current?.status === "running") current.controller?.abort();
+      finish();
+    }
+  });
+}
+
+async function trainLocalBrain(body) {
+  const root = await resolveWorkspace(body.root || activeWorkspace);
+  return startBrainTraining({
+    datasetPaths: [root],
+    epochs: Number(body.epochs || 1),
+    batchSize: Number(body.batchSize || body.batch_size || 4),
+    blockSize: Number(body.blockSize || body.block_size || 256),
+    layers: Number(body.layers || 4),
+    heads: Number(body.heads || 4),
+    width: Number(body.width || 128),
+    vocabSize: Number(body.vocabSize || body.vocab_size || 512),
+    learningRate: Number(body.learningRate || body.learning_rate || 3e-4),
+    device: String(body.device || "auto"),
+    resume: body.resume === true
+  });
+}
+
 function hasValidApiToken(request) {
   const value = String(request.headers?.authorization || "");
   const supplied = Buffer.from(value.startsWith("Bearer ") ? value.slice(7) : "", "utf8");
@@ -900,6 +1068,13 @@ function consumeApprovalCapability(token, root, name, input) {
 
 const routeHandlers = {
   "GET /local-api/session": async () => ({ token: API_TOKEN }),
+  "GET /local-api/brain/status": getBrainStatus,
+  "GET /local-api/brain/train/status": async () => getBrainTrainingStatus(),
+  "POST /local-api/brain/train": trainLocalBrain,
+  "POST /local-api/brain/train/cancel": async () => cancelBrainTraining(),
+  "GET /local-api/ai/status": getBrainStatus,
+  "GET /local-api/ai/train/status": async () => getBrainTrainingStatus(),
+  "POST /local-api/ai/train": trainLocalBrain,
   "POST /local-api/approvals": issueApprovalCapability,
   "GET /": async () => ({
     status: "ok",
@@ -913,7 +1088,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning"]
+    capabilities: ["local-chat", "sse-chat-streaming", "standalone-pytorch-brain", "local-model-training", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
@@ -932,10 +1107,6 @@ const routeHandlers = {
   "GET /local-api/workspace/exclusions": async () => getWorkspaceExclusions(activeWorkspace),
   "POST /local-api/workspace/exclusions": async body => updateWorkspaceExclusions(activeWorkspace, body),
   "POST /local-api/workspace/switch": switchWorkspace,
-  "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
-  "GET /local-api/ai/train/status": async () => aiRequest("GET", "/model/train/status"),
-  "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", body),
-  "POST /local-api/ai/finetune": async body => aiRequest("POST", "/model/finetune", body),
   "POST /local-api/agent/generate": generateAgentCompletion,
   "POST /local-api/workspace/inspect": async body => executeToolOutput({
     root: body.root || activeWorkspace, name: "workspace.inspect", input: {}
@@ -983,6 +1154,10 @@ const server = http.createServer(async (request, response) => {
   if (!publicRoute && !hasValidApiToken(request)) {
     sendJson(response, 401, { error: "A valid SYNTRA local session token is required." }); return;
   }
+  if (key === "POST /local-api/chat/stream" || key === "POST /api/chat/stream") {
+    await streamChat(request, response);
+    return;
+  }
   const handler = routeHandlers[key];
   if (!handler) { sendJson(response, 404, { error: "Route not found." }); return; }
   try {
@@ -1006,7 +1181,7 @@ try {
 
 server.listen(PORT, HOST, () => {
   process.stdout.write("SYNTRA local workspace service listening on http://" + HOST + ":" + PORT + "\n");
-  process.stdout.write("This service is loopback-only. Chat and code-task execution use the selected local model.\n");
+  process.stdout.write("This service is loopback-only. Chat and code tasks run through the standalone local PyTorch brain.\n");
 });
 process.on("SIGINT", () => server.close(() => process.exit(0)));
 process.on("SIGTERM", () => server.close(() => process.exit(0)));
