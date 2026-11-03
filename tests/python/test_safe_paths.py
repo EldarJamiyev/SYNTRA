@@ -21,6 +21,13 @@ class ApprovedCorpusPathTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be absolute"):
             resolve_corpus_root(str(Path("~") / "not-a-corpus"))
 
+    def test_configured_roots_must_be_absolute_without_home_expansion(self):
+        os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(Path("~") / "not-an-approved-root")
+        from syntra_ai.safe_paths import PROJECT_ROOT
+
+        with self.assertRaisesRegex(ValueError, "entries must be absolute"):
+            resolve_corpus_root(str(PROJECT_ROOT))
+
     def test_repository_root_is_the_only_default_external_data_boundary(self):
         from syntra_ai.safe_paths import PROJECT_ROOT
 
