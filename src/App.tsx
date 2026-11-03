@@ -72,6 +72,38 @@ type ChatJob = {
   partialReply?: string;
 };
 
+type BrainMetrics = {
+  epoch?: number;
+  step?: number;
+  checkpoint_step?: number;
+  tokens_generated?: number;
+  tokens_per_second?: number;
+  train_loss?: number | null;
+  validation_loss?: number | null;
+  best_validation_loss?: number | null;
+  device?: string;
+};
+
+type BrainStatus = {
+  checkpoint_exists: boolean;
+  checkpoint: string;
+  epoch: number;
+  trained_steps: number;
+  train_loss: number | null;
+  validation_loss: number | null;
+  context_tokens: number;
+  tokenizer_vocab_size: number;
+  training: {
+    status: string;
+    epoch?: number;
+    step?: number;
+    train_loss?: number | null;
+    validation_loss?: number | null;
+    tokens_per_second?: number;
+    message?: string;
+  };
+};
+
 type AgentRunSummary = {
   id: string;
   goal: string;
@@ -227,6 +259,10 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [phase, setPhase] = useState('');
   const [streamingReply, setStreamingReply] = useState('');
+  const [brainStatus, setBrainStatus] = useState<BrainStatus | null>(null);
+  const [brainMetrics, setBrainMetrics] = useState<BrainMetrics>({});
+  const [brainLossHistory, setBrainLossHistory] = useState<number[]>([]);
+  const [brainTrainingStarting, setBrainTrainingStarting] = useState(false);
   const [error, setError] = useState('');
   const sessions = sessionState.sessions;
   const activeSession = sessions.find(session => session.id === sessionState.activeSessionId) || sessions[0];
@@ -254,6 +290,7 @@ export default function App() {
   const shouldFollowRef = useRef(true);
   const mountedRef = useRef(true);
   const activeJobIdRef = useRef<string | null>(null);
+  const activeStreamControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -637,32 +674,117 @@ export default function App() {
     setInput('');
     setError('');
     setPending(true);
-    setPhase('Thinking');
+    setPhase('Connecting to local brain');
     setStreamingReply('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-    let requestStarted = false;
     let partialReply = '';
-    try {
-      const started = await postJson<ChatJob>('/local-api/chat', { message: content, history });
-      requestStarted = true;
-      activeJobIdRef.current = started.jobId;
-      let job = started;
-      while (job.status === 'running') {
-        if (!mountedRef.current) return;
-        setPhase(job.message || 'Thinking');
-        if (job.reply && job.status === 'running') {
-          partialReply = job.reply;
-          setStreamingReply(partialReply);
-        }
-        await new Promise(resolve => window.setTimeout(resolve, 800));
-        job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
+    let terminal: { status?: string; reply?: string; error?: string; partialReply?: string } | null = null;
+    const controller = new AbortController();
+    activeStreamControllerRef.current = controller;
+
+    const handleSseFrame = (frame: string) => {
+      let eventName = 'message';
+      const dataLines: string[] = [];
+      for (const line of frame.split(/\r?\n/)) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
       }
+      if (!dataLines.length) return;
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(dataLines.join('\n')) as Record<string, unknown>;
+      } catch {
+        throw new Error('SYNTRA received a malformed streaming event from its local brain service.');
+      }
+
+      if (eventName === 'start') {
+        if (typeof payload.jobId === 'string') activeJobIdRef.current = payload.jobId;
+      } else if (eventName === 'phase') {
+        setPhase(typeof payload.message === 'string' && payload.message
+          ? payload.message
+          : String(payload.phase || 'Working'));
+      } else if (eventName === 'delta') {
+        const delta = typeof payload.text === 'string' ? payload.text : '';
+        partialReply += delta;
+        setStreamingReply(partialReply);
+        setPhase('Responding');
+      } else if (eventName === 'replace') {
+        partialReply = typeof payload.text === 'string' ? payload.text : '';
+        setStreamingReply(partialReply);
+      } else if (eventName === 'metrics') {
+        const next = payload as BrainMetrics;
+        setBrainMetrics(next);
+        if (typeof next.train_loss === 'number' && Number.isFinite(next.train_loss)) {
+          setBrainLossHistory(current => [...current, next.train_loss as number].slice(-48));
+        }
+      } else if (eventName === 'error') {
+        terminal = {
+          status: 'failed',
+          error: typeof payload.error === 'string' ? payload.error : 'The local brain generation failed.',
+          partialReply: typeof payload.partialReply === 'string' ? payload.partialReply : partialReply
+        };
+      } else if (eventName === 'done') {
+        terminal = {
+          status: typeof payload.status === 'string' ? payload.status : 'completed',
+          reply: typeof payload.reply === 'string' ? payload.reply : undefined,
+          error: typeof payload.error === 'string' ? payload.error : undefined,
+          partialReply: typeof payload.partialReply === 'string' ? payload.partialReply : partialReply
+        };
+        if (payload.metrics && typeof payload.metrics === 'object') {
+          setBrainMetrics(payload.metrics as BrainMetrics);
+        }
+      }
+    };
+
+    try {
+      const token = await getLocalApiToken();
+      const response = await fetch('/local-api/chat/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: 'Bearer ' + token,
+        },
+        body: JSON.stringify({ message: content, history }),
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const raw = await response.text();
+        let detail = raw;
+        try {
+          const payload = JSON.parse(raw) as { error?: string };
+          detail = payload.error || raw;
+        } catch {}
+        throw new Error(detail || 'The local chat stream returned HTTP ' + response.status + '.');
+      }
+      if (!response.body) throw new Error('The browser did not provide a readable local chat stream.');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (frame.trim()) handleSseFrame(frame);
+          boundary = buffer.indexOf('\n\n');
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleSseFrame(buffer);
+      if (!terminal) throw new Error('The local brain stream ended before it sent a completion event.');
       if (!mountedRef.current) return;
-      if (job.status === 'cancelled') {
+
+      if (terminal.status === 'cancelled') {
         setStreamingReply('');
-        const partial = partialReply || job.partialReply || '';
-        const cancellation = job.reply || 'Task cancelled. Any staged proposals remain available in workspace review.';
+        const partial = terminal.partialReply || partialReply;
+        const cancellation = terminal.reply || 'Generation cancelled. The last checkpoint remains unchanged.';
         setMessages(current => [...current, {
           role: 'assistant' as const,
           content: partial ? partial + '\n\n---\n\n' + cancellation : cancellation
@@ -671,9 +793,9 @@ export default function App() {
         try { await refreshWorkspaceStatus(); } catch {}
         return;
       }
-      if (job.status === 'failed') {
+      if (terminal.status === 'failed') {
         setStreamingReply('');
-        const interrupted = partialReply || job.partialReply || '';
+        const interrupted = terminal.partialReply || partialReply;
         setMessages(current => {
           const last = current[current.length - 1];
           const restored = last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
@@ -684,18 +806,20 @@ export default function App() {
           }].slice(-MAX_VISIBLE_MESSAGES);
         });
         setInput(content);
-        setError(job.error || job.reply || 'The local request failed.');
+        setError(terminal.error || 'The local request failed.');
         return;
       }
-      const answer = job.reply || 'No response was returned.';
+
+      const answer = terminal.reply || partialReply || 'No response was returned.';
       setStreamingReply('');
       setMessages(current => [...current, { role: 'assistant' as const, content: answer }].slice(-MAX_VISIBLE_MESSAGES));
       try {
         await refreshWorkspaceStatus();
         await refreshAgentRuns();
       } catch {
-        // A transient status refresh must not turn a completed chat answer into a failure.
+        // Workspace refresh failures must not change a successful model response.
       }
+      try { await refreshBrainStatus(); } catch {}
     } catch (cause) {
       if (mountedRef.current) {
         setStreamingReply('');
@@ -710,11 +834,12 @@ export default function App() {
         });
         setInput(content);
         const detail = cause instanceof Error && cause.name === 'TimeoutError'
-          ? "SYNTRA's local service did not respond within 15 seconds. Check the service windows and try again."
+          ? "SYNTRA's local service timed out while generating. Check available system memory and try a shorter prompt."
           : cause instanceof Error ? cause.message : String(cause);
         setError(detail);
       }
     } finally {
+      activeStreamControllerRef.current = null;
       activeJobIdRef.current = null;
       if (mountedRef.current) {
         setPending(false);
