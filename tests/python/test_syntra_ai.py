@@ -196,7 +196,7 @@ class TransformerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="syntra-unapproved-corpus-") as temp:
             root = Path(temp)
-            (root / "safe.py").write_text("def safe(): return 1\\n", encoding="utf-8")
+            (root / "safe.py").write_text("def safe(): return 1\n", encoding="utf-8")
 
             with patch.dict(os.environ):
                 os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
