@@ -541,7 +541,9 @@ button:disabled { cursor: not-allowed; }
 .brain-state-dot.missing { background: #c49a55; }
 .brain-training-label { color: #c8a76c; }
 .brain-loss-sparkline { width: 76px; height: 24px; overflow: visible; }
-.brain-loss-sparkline polyline { fill: none; stroke: #79caa6; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.brain-loss-sparkline polyline { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.brain-loss-validation { stroke: #d6ae72; stroke-dasharray: 3 2; opacity: .95; }
+.brain-loss-train { stroke: #79caa6; }
 .brain-workspace-panel {
   margin-top: 12px;
   padding: 11px 0 12px;
