@@ -49,7 +49,7 @@ SKIP_DIRECTORIES = frozenset({
     ".cache", ".idea", ".vscode", "site-packages",
 })
 SENSITIVE_SUFFIXES = frozenset({
-    ".pem", ".key", ".p12", ".pfx", ".p7b", ".p7c", ".jks",
+    ".pem", ".key", ".p12", ".pfx", ".p7b", ".p7c", ".jks", ".crt", ".cer", ".der",
     ".keystore", ".sqlite", ".db", ".dump", ".bak", ".log",
 })
 MAX_DATASET_FILES = 20_000
@@ -62,6 +62,7 @@ def _is_sensitive_name(name: str) -> bool:
     if lower in {
         "credentials", "credentials.json", "secrets", "secrets.json",
         "id_rsa", "id_ed25519", "known_hosts", "authorized_keys",
+        "access_token", "access_token.txt", "refresh_token", "token.txt",
     }:
         return True
     if any(marker in lower for marker in ("secret", "credential", "password", "private_key", "private-key")):
@@ -97,6 +98,8 @@ def _iter_local_source_files(source: Path):
         directory_names[:] = sorted(
             name for name in directory_names
             if name.casefold() not in SKIP_DIRECTORIES
+            and name.casefold() not in {"secrets", "private", "credentials", "certs", "certificates"}
+            and not _is_sensitive_name(name)
             and not (current_path / name).is_symlink()
         )
         for filename in sorted(filenames):
