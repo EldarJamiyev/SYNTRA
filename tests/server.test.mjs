@@ -292,6 +292,19 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.equal(brainStatus.pretrained_weights, false);
     assert.equal(brainStatus.checkpoint_exists, false);
 
+    const trainingStatusResponse = await apiFetch(base + "/local-api/brain/train/status");
+    assert.equal(trainingStatusResponse.status, 200);
+    const trainingStatus = await trainingStatusResponse.json();
+    assert.equal(trainingStatus.status, "idle");
+
+    const cancelTrainingResponse = await apiFetch(base + "/local-api/brain/train/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
+      body: JSON.stringify({})
+    });
+    assert.equal(cancelTrainingResponse.status, 200);
+    assert.equal((await cancelTrainingResponse.json()).ok, false);
+
     const streamResponse = await apiFetch(base + "/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" },
