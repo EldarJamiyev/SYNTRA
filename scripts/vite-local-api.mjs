@@ -79,7 +79,7 @@ async function startOrReuseApi({ root, port, stdio, timeoutMs, env }) {
 
 /**
  * Starts the Node workspace API whenever Vite's development server starts.
- * The native Python model remains a separately managed, optional service.
+ * The local PyTorch brain is spawned directly by the authenticated Node workspace API.
  */
 export function syntraLocalApiPlugin(options = {}) {
   const root = path.resolve(options.root || DEFAULT_ROOT);
