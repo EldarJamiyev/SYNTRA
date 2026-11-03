@@ -46,7 +46,8 @@ SKIP_DIRECTORIES = frozenset({
     ".git", ".hg", ".svn", ".venv", "venv", "env", ".tox", ".mypy_cache",
     ".pytest_cache", ".ruff_cache", "__pycache__", "node_modules", "vendor",
     "dist", "build", "target", "coverage", ".next", ".nuxt", ".turbo",
-    ".cache", ".idea", ".vscode", "site-packages",
+    ".cache", ".idea", ".vscode", "site-packages", "checkpoints", "artifacts",
+    "logs", ".syntra",
 })
 SENSITIVE_SUFFIXES = frozenset({
     ".pem", ".key", ".p12", ".pfx", ".p7b", ".p7c", ".jks", ".crt", ".cer", ".der",
