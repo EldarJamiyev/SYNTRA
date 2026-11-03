@@ -6,14 +6,7 @@ import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { isCodingTask } from "./chat-intent.mjs";
-import {
-  cancelBrainTraining,
-  generateBrainText,
-  tokenizeBrainText,
-  getBrainStatus,
-  getBrainTrainingStatus,
-  startBrainTraining
-} from "./brain-runtime.mjs";
+import { detectLocalModel, handleLocalModelRequest, handleGeminiModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
@@ -33,6 +26,7 @@ import {
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.SYNTRA_LOCAL_PORT || 3001);
+const AI_BASE = "http://127.0.0.1:" + Number(process.env.SYNTRA_AI_PORT || 3002);
 const MAX_BODY_BYTES = 600 * 1024;
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let activeWorkspace = process.env.SYNTRA_WORKSPACE ? path.resolve(process.env.SYNTRA_WORKSPACE) : REPO_ROOT;
@@ -71,65 +65,46 @@ async function parseBody(request) {
 }
 
 async function aiRequest(method, route, body, timeoutMs = undefined, options = {}) {
+  const onToken = typeof options?.onToken === "function" ? options.onToken : undefined;
   const signal = options?.signal;
-  if (method === "GET" && route === "/model/status") return getBrainStatus();
-  if (method === "GET" && route === "/model/train/status") {
-    return { ...getBrainTrainingStatus() };
+  const modelRoute = (method === "GET" && route === "/model/status")
+    || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
+  const hasGeminiKey = Boolean(String(process.env.SYNTRA_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim());
+  const providerMode = String(process.env.SYNTRA_MODEL_PROVIDER || (hasGeminiKey ? "gemini" : "ollama")).trim().toLowerCase();
+  if (modelRoute && providerMode === "gemini") {
+    return handleGeminiModelRequest(method, route, body || {}, { timeoutMs, onToken, signal });
   }
-  if (method === "POST" && route === "/model/train") {
-    const root = await resolveWorkspace(body?.root || activeWorkspace);
-    return startBrainTraining({
-      datasetPaths: [root],
-      epochs: body?.epochs === undefined ? undefined : Number(body.epochs),
-      batchSize: body?.batch_size ?? body?.batchSize,
-      blockSize: body?.block_size ?? body?.blockSize,
-      layers: body?.layers,
-      heads: body?.heads,
-      width: body?.width,
-      vocabSize: body?.vocab_size ?? body?.vocabSize,
-      learningRate: body?.learning_rate ?? body?.learningRate,
-      weightDecay: body?.weight_decay ?? body?.weightDecay,
-      gradientAccumulationSteps: body?.gradient_accumulation_steps ?? body?.gradientAccumulationSteps,
-      warmupSteps: body?.warmup_steps ?? body?.warmupSteps,
-      minLearningRateRatio: body?.min_lr_ratio ?? body?.minLearningRateRatio,
-      gradientClipNorm: body?.gradient_clip_norm ?? body?.gradientClipNorm,
-      evaluationBatches: body?.evaluation_batches ?? body?.evaluationBatches,
-      saveEverySteps: body?.save_every_steps ?? body?.saveEverySteps,
-      tokenizerBytes: body?.tokenizer_bytes ?? body?.tokenizerBytes,
-      maxDatasetBytes: body?.max_dataset_bytes ?? body?.maxDatasetBytes,
-      seed: body?.seed,
-      device: body?.device,
-      instructionMode: body?.instruction_mode ?? body?.instructionMode,
-      runBenchmarks: body?.benchmark_each_epoch ?? body?.runBenchmarks,
-      benchmarkTasks: body?.benchmark_tasks ?? body?.benchmarkTasks,
-      benchmarkTimeoutSeconds: body?.benchmark_timeout_seconds ?? body?.benchmarkTimeoutSeconds,
-      resume: body?.resume === true
+  if (modelRoute) {
+    let provider = await detectLocalModel();
+    let modelBody = body || {};
+    if (typeof modelBody.model === "string" && modelBody.model.trim()) {
+      const requested = await detectLocalModel({ mode: "ollama", requestedModel: modelBody.model.trim() });
+      if (!requested) throw new Error("The configured SYNTRA_REVIEW_MODEL is not installed locally or exceeds the safe memory-selection limit.");
+      provider = requested;
+      modelBody = { ...modelBody };
+      delete modelBody.model;
+    }
+    if (provider) {
+      const localResult = await handleLocalModelRequest(provider, method, route, modelBody, { timeoutMs, onToken, signal });
+      if (localResult) return localResult;
+    }
+  }
+
+  let response;
+  try {
+    response = await fetch(AI_BASE + route, {
+      method,
+      headers: method === "GET" ? {} : { "Content-Type": "application/json" },
+      body: method === "GET" ? undefined : JSON.stringify(body || {}),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))]) : AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
     });
+  } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError") throw error;
+    throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server', or install and run a local Ollama model for stronger local inference.");
   }
-  if (method === "POST" && route === "/model/generate") {
-    const generation = await generateBrainText({
-      prompt: body?.prompt,
-      maxNewTokens: Math.min(2048, Number(body?.max_new_tokens || 256)),
-      temperature: Number(body?.temperature ?? 0.7),
-      topK: Math.max(1, Number(body?.top_k || 40)),
-      topP: Number(body?.top_p ?? 1),
-      repetitionPenalty: Number(body?.repetition_penalty ?? 1.05),
-      device: String(body?.device || "auto"),
-      signal,
-      onToken: options?.onToken,
-      onMetrics: options?.onMetrics
-    });
-    return {
-      ...generation,
-      trained_steps: generation.step,
-      is_model_output: true,
-      generation_mode: "standalone-local-pytorch-brain"
-    };
-  }
-  if (method === "POST" && route === "/model/tokenize") {
-    return tokenizeBrainText(body?.text ?? "");
-  }
-  throw new Error("Unsupported local brain operation: " + method + " " + route);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "SYNTRA AI request failed with HTTP " + response.status);
+  return payload;
 }
 
 async function generateAgentCompletion(body) {
@@ -215,13 +190,11 @@ function updateChat(jobId, value) {
 function cancelChatJob(jobId, reply = "Task cancelled. Any proposals already staged remain in the workspace; type /proposals to inspect them.") {
   const job = chatJobs.get(jobId);
   if (!job) return;
-  const partialReply = typeof job.reply === "string" ? job.reply : "";
   Object.assign(job, {
     status: "cancelled",
     phase: "cancelled",
     message: "Task cancelled.",
     reply,
-    partialReply,
     error: null,
     updatedAt: new Date().toISOString()
   });
@@ -546,7 +519,7 @@ async function runChatTurn(jobId, message, history, signal) {
         "- /status checks whether the local model backend is reachable.",
         "- /clear clears this conversation and its saved browser history.",
         "",
-        "Normal chat and coding assistance run only on the locally trained SYNTRA PyTorch brain. Train a checkpoint with the local training command before using model-backed chat."
+        "Normal chat and code edits need a compatible local Ollama model or a trained SYNTRA checkpoint. No hosted AI API is used."
       ].join("\n"));
       return;
     }
@@ -555,7 +528,9 @@ async function runChatTurn(jobId, message, history, signal) {
       updateChat(jobId, { phase: "status", message: "Checking the local model backend" });
       try {
         const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000);
-        const provider = modelStatus.provider || "SYNTRA local PyTorch brain";
+        const provider = modelStatus.provider === "ollama-local"
+          ? "Ollama local model"
+          : modelStatus.provider || "Native local backend";
         const lines = [
           "**SYNTRA status**",
           "",
@@ -574,7 +549,7 @@ async function runChatTurn(jobId, message, history, signal) {
         if (modelStatus.pretrained_weights === true) lines.push("Weights: pretrained, installed locally");
         else if (modelStatus.checkpoint_exists) lines.push("Weights: local SYNTRA checkpoint");
         lines.push("", "Network diagnostics: available without a model.");
-        if (!modelStatus.checkpoint_exists) lines.push("Train SYNTRA locally with: python -m brain.train --dataset \"" + activeWorkspace + "\" --epochs 1");
+        if (!modelStatus.checkpoint_exists) lines.push("Install a compatible local Ollama model or train the native model to enable ordinary chat and code edits.");
         finishChat(jobId, lines.join("\n"), { modelStatus: "reachable" });
       } catch (error) {
         finishChat(jobId, [
@@ -584,7 +559,7 @@ async function runChatTurn(jobId, message, history, signal) {
           "Model backend: unavailable",
           "Network diagnostics: available without a model.",
           "",
-          "The local PyTorch checkpoint is not available. Train it from the active workspace, then retry.",
+          "Check the service windows opened by Start-SYNTRA.bat. Ordinary chat and code edits need a reachable local model backend.",
           error instanceof Error ? error.message : String(error)
         ].join("\n"), { modelStatus: "unavailable" });
       }
@@ -610,9 +585,11 @@ async function runChatTurn(jobId, message, history, signal) {
     const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000, { signal });
     if (!modelStatus.checkpoint_exists) {
       finishChat(jobId,
-        "SYNTRA is running without a trained brain checkpoint. Train the local model from your selected workspace:\n\n"
-        + "python -m brain.train --dataset \"" + activeWorkspace + "\" --epochs 1 --device auto\n\n"
-        + "Then return here and retry. The model starts from random weights; this training step does not guarantee professional coding-assistant capability.");
+        "The local AI backend is running, but there is no trained checkpoint yet. Train once from the repository folder, then return here:\n\n"
+        + "npm run ai:install\n"
+        + "npm run ai:cli -- train --root \"" + activeWorkspace + "\" --seq-len 1024 --steps 1000\n"
+        + "npm run ai:server\n\n"
+        + "This is a from-scratch model: training is required and does not guarantee strong instruction-following.");
       return;
     }
 
@@ -683,6 +660,10 @@ async function runChatTurn(jobId, message, history, signal) {
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
+        reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim()
+          ? (method, route, body, timeoutMs, options = {}) =>
+              aiRequest(method, route, { ...(body || {}), model: process.env.SYNTRA_REVIEW_MODEL.trim() }, timeoutMs, { ...options, signal })
+          : null,
         onProgress: async update => {
           const phase = update.phase || "working";
           const messageText = update.message || "Working on the requested change";
@@ -757,78 +738,49 @@ async function runChatTurn(jobId, message, history, signal) {
 
     const recentHistory = Array.isArray(history)
       ? history.filter(item => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
-          .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-1800) }))
+          .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-2500) }))
       : [];
-    let userMessage = message.slice(-6000);
-    const contextPlan = deriveModelContextBudget(modelStatus);
-    const contextTokens = contextPlan.contextWindowTokens;
+    let userMessage = message.slice(-10000);
     let prompt = "";
     let tokenInfo = null;
+    const contextTokens = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 1024);
+    const contextLimit = Math.max(64, contextTokens - 64);
     while (true) {
       prompt = [
         "SYNTRA ASSISTANT",
-        "You are a locally trained experimental language model. Respond to the latest user message. Do not claim to have executed tools or verified facts that are not present in the conversation.",
+        "Answer the user's latest message directly and clearly. Do not claim facts or tools you do not have.",
         ...recentHistory.map(item => (item.role === "user" ? "USER: " : "ASSISTANT: ") + item.content),
         "USER: " + userMessage,
         "ASSISTANT:"
       ].join("\n\n");
-      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000, { signal });
-      if (tokenInfo.token_count <= contextPlan.contextBudgetTokens) break;
+      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000);
+      if (tokenInfo.token_count <= contextLimit) break;
       if (recentHistory.length) recentHistory.shift();
-      else if (userMessage.length > 256) userMessage = userMessage.slice(-Math.max(256, Math.floor(userMessage.length * 0.7)));
+      else if (userMessage.length > 1000) userMessage = userMessage.slice(-Math.max(1000, Math.floor(userMessage.length * 0.65)));
       else break;
     }
-    if (tokenInfo.token_count + contextPlan.outputBudgetTokens > contextTokens) {
-      finishChat(jobId, "This prompt does not fit the trained model's context window. Please shorten the message or split it into smaller parts.");
+    if (tokenInfo.token_count >= contextTokens) {
+      finishChat(jobId, "Your message exceeds the trained model's context window. Please split it into a shorter message.");
       return;
     }
-    updateChat(jobId, {
-      phase: "generating",
-      message: "Generating with the local PyTorch brain",
-      metrics: {
-        epoch: Number(modelStatus.epoch || 0),
-        step: Number(modelStatus.trained_steps || 0),
-        train_loss: modelStatus.train_loss,
-        validation_loss: modelStatus.validation_loss,
-        tokens_per_second: 0,
-        device: "starting"
-      }
-    });
+    updateChat(jobId, { phase: "generating", message: "Generating a local response" });
     const generation = await aiRequest("POST", "/model/generate", {
       prompt,
-      max_new_tokens: Math.max(16, Math.min(512, contextTokens - tokenInfo.token_count - 1)),
+      max_new_tokens: Math.min(512, Math.max(16, contextTokens - tokenInfo.token_count - 1)),
       temperature: 0.7,
-      top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 512)),
-      top_p: 0.95,
-      repetition_penalty: 1.08,
+      top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
       device: "auto"
     }, 300000, {
-      signal,
-      onToken: (_delta, fullText, metrics) => updateChat(jobId, {
+      onToken: (_delta, fullText) => updateChat(jobId, {
         phase: "streaming",
-        message: "Responding with the local brain",
-        reply: fullText,
-        metrics: { ...(job.metrics || {}), ...(metrics || {}) }
-      }),
-      onMetrics: metrics => updateChat(jobId, {
-        metrics: { ...(job.metrics || {}), ...(metrics || {}) }
+        message: "Responding",
+        reply: fullText
       })
     });
     const reply = String(generation.text || "").trim();
-    finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more local training or instruction examples may be needed.", {
-      trainedSteps: generation.trained_steps,
-      metrics: {
-        ...(job.metrics || {}),
-        tokens_generated: generation.tokens_generated,
-        tokens_per_second: generation.tokens_per_second,
-        epoch: generation.epoch,
-        step: generation.step,
-        train_loss: generation.train_loss,
-        validation_loss: generation.validation_loss,
-        device: generation.device
-      }
+    finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more training is needed.", {
+      contextTokensUsed: tokenInfo.token_count, trainedSteps: generation.trained_steps
     });
-
   } catch (error) {
     const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
     if (agentRunId) {
@@ -884,188 +836,6 @@ function readChatStatus(body) {
   return visible;
 }
 
-function writeSse(response, event, value) {
-  if (response.destroyed || response.writableEnded) return false;
-  response.write("event: " + event + "\n");
-  response.write("data: " + JSON.stringify(value) + "\n\n");
-  return true;
-}
-
-async function streamChat(request, response) {
-  let started;
-  try {
-    const body = await parseBody(request);
-    started = startChat(body);
-  } catch (error) {
-    sendJson(response, 400, { error: error instanceof Error ? error.message : "Could not start the local chat turn." });
-    return;
-  }
-
-  response.writeHead(200, {
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-cache, no-transform",
-    "Connection": "keep-alive",
-    "X-Accel-Buffering": "no",
-    "X-Content-Type-Options": "nosniff"
-  });
-  response.flushHeaders?.();
-  writeSse(response, "start", started);
-
-  let sentText = "";
-  let lastPhase = "";
-  let lastMetrics = "";
-  let completed = false;
-  const job = chatJobs.get(started.jobId);
-  if (!job) {
-    writeSse(response, "error", { error: "Chat job disappeared before streaming started." });
-    response.end();
-    return;
-  }
-
-  const finish = () => {
-    if (completed) return;
-    completed = true;
-    clearInterval(pump);
-    clearInterval(heartbeat);
-    response.end();
-  };
-
-  const pump = setInterval(() => {
-    if (response.destroyed || response.writableEnded) {
-      finish();
-      return;
-    }
-    const current = chatJobs.get(started.jobId);
-    if (!current) {
-      writeSse(response, "error", { error: "Chat job expired before completion." });
-      finish();
-      return;
-    }
-
-    if (current.phase && current.phase !== lastPhase) {
-      lastPhase = current.phase;
-      writeSse(response, "phase", { phase: current.phase, message: current.message || "" });
-    }
-
-    const output = current.status === "failed" || current.status === "cancelled"
-      ? String(current.partialReply || "")
-      : String(current.reply || "");
-    if (output !== sentText) {
-      if (output.startsWith(sentText)) {
-        const delta = output.slice(sentText.length);
-        sentText = output;
-        if (delta) writeSse(response, "delta", { text: delta });
-      } else {
-        sentText = output;
-        writeSse(response, "replace", { text: output });
-      }
-    }
-
-    if (current.metrics) {
-      const signature = JSON.stringify(current.metrics);
-      if (signature !== lastMetrics) {
-        lastMetrics = signature;
-        writeSse(response, "metrics", current.metrics);
-      }
-    }
-
-    if (current.status === "running") return;
-
-    if (current.status === "completed") {
-      const finalText = String(current.reply || "");
-      if (finalText && finalText !== sentText) {
-        if (finalText.startsWith(sentText)) {
-          const delta = finalText.slice(sentText.length);
-          if (delta) writeSse(response, "delta", { text: delta });
-        } else {
-          writeSse(response, "replace", { text: finalText });
-        }
-      }
-      writeSse(response, "done", {
-        status: "completed",
-        jobId: current.jobId,
-        reply: finalText,
-        metrics: current.metrics || null,
-        trainedSteps: current.trainedSteps || null
-      });
-      finish();
-      return;
-    }
-
-    if (current.status === "cancelled") {
-      writeSse(response, "done", {
-        status: "cancelled",
-        jobId: current.jobId,
-        reply: current.reply || "Generation cancelled.",
-        partialReply: current.partialReply || sentText,
-        metrics: current.metrics || null
-      });
-      finish();
-      return;
-    }
-
-    if (current.status === "failed") {
-      writeSse(response, "error", {
-        error: current.error || current.reply || "Local chat generation failed.",
-        partialReply: current.partialReply || sentText
-      });
-      writeSse(response, "done", {
-        status: "failed",
-        jobId: current.jobId,
-        reply: current.partialReply || sentText,
-        error: current.error || current.reply || "Local chat generation failed.",
-        metrics: current.metrics || null
-      });
-      finish();
-    }
-  }, 35);
-
-  const heartbeat = setInterval(() => {
-    if (!completed && !response.destroyed && !response.writableEnded) {
-      response.write(": keep-alive\n\n");
-    }
-  }, 15_000);
-
-  response.on("close", () => {
-    if (!completed) {
-      const current = chatJobs.get(started.jobId);
-      if (current?.status === "running") current.controller?.abort();
-      finish();
-    }
-  });
-}
-
-async function trainLocalBrain(body = {}) {
-  const root = await resolveWorkspace(body.root || activeWorkspace);
-  return startBrainTraining({
-    datasetPaths: [root],
-    epochs: body.epochs === undefined ? undefined : Number(body.epochs),
-    batchSize: body.batchSize ?? body.batch_size,
-    blockSize: body.blockSize ?? body.block_size,
-    layers: body.layers,
-    heads: body.heads,
-    width: body.width,
-    vocabSize: body.vocabSize ?? body.vocab_size,
-    learningRate: body.learningRate ?? body.learning_rate,
-    weightDecay: body.weightDecay ?? body.weight_decay,
-    gradientAccumulationSteps: body.gradientAccumulationSteps ?? body.gradient_accumulation_steps,
-    warmupSteps: body.warmupSteps ?? body.warmup_steps,
-    minLearningRateRatio: body.minLearningRateRatio ?? body.min_lr_ratio,
-    gradientClipNorm: body.gradientClipNorm ?? body.gradient_clip_norm,
-    evaluationBatches: body.evaluationBatches ?? body.evaluation_batches,
-    saveEverySteps: body.saveEverySteps ?? body.save_every_steps,
-    tokenizerBytes: body.tokenizerBytes ?? body.tokenizer_bytes,
-    maxDatasetBytes: body.maxDatasetBytes ?? body.max_dataset_bytes,
-    seed: body.seed,
-    device: body.device,
-    instructionMode: body.instructionMode ?? body.instruction_mode,
-    runBenchmarks: body.runBenchmarks ?? body.benchmark_each_epoch,
-    benchmarkTasks: body.benchmarkTasks ?? body.benchmark_tasks,
-    benchmarkTimeoutSeconds: body.benchmarkTimeoutSeconds ?? body.benchmark_timeout_seconds,
-    resume: body.resume === true
-  });
-}
-
 function hasValidApiToken(request) {
   const value = String(request.headers?.authorization || "");
   const supplied = Buffer.from(value.startsWith("Bearer ") ? value.slice(7) : "", "utf8");
@@ -1105,13 +875,6 @@ function consumeApprovalCapability(token, root, name, input) {
 
 const routeHandlers = {
   "GET /local-api/session": async () => ({ token: API_TOKEN }),
-  "GET /local-api/brain/status": getBrainStatus,
-  "GET /local-api/brain/train/status": async () => getBrainTrainingStatus(),
-  "POST /local-api/brain/train": trainLocalBrain,
-  "POST /local-api/brain/train/cancel": async () => cancelBrainTraining(),
-  "GET /local-api/ai/status": getBrainStatus,
-  "GET /local-api/ai/train/status": async () => getBrainTrainingStatus(),
-  "POST /local-api/ai/train": trainLocalBrain,
   "POST /local-api/approvals": issueApprovalCapability,
   "GET /": async () => ({
     status: "ok",
@@ -1125,7 +888,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "sse-chat-streaming", "standalone-pytorch-brain", "local-model-training", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
@@ -1144,6 +907,10 @@ const routeHandlers = {
   "GET /local-api/workspace/exclusions": async () => getWorkspaceExclusions(activeWorkspace),
   "POST /local-api/workspace/exclusions": async body => updateWorkspaceExclusions(activeWorkspace, body),
   "POST /local-api/workspace/switch": switchWorkspace,
+  "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
+  "GET /local-api/ai/train/status": async () => aiRequest("GET", "/model/train/status"),
+  "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", body),
+  "POST /local-api/ai/finetune": async body => aiRequest("POST", "/model/finetune", body),
   "POST /local-api/agent/generate": generateAgentCompletion,
   "POST /local-api/workspace/inspect": async body => executeToolOutput({
     root: body.root || activeWorkspace, name: "workspace.inspect", input: {}
@@ -1191,10 +958,6 @@ const server = http.createServer(async (request, response) => {
   if (!publicRoute && !hasValidApiToken(request)) {
     sendJson(response, 401, { error: "A valid SYNTRA local session token is required." }); return;
   }
-  if (key === "POST /local-api/chat/stream" || key === "POST /api/chat/stream") {
-    await streamChat(request, response);
-    return;
-  }
   const handler = routeHandlers[key];
   if (!handler) { sendJson(response, 404, { error: "Route not found." }); return; }
   try {
@@ -1218,7 +981,7 @@ try {
 
 server.listen(PORT, HOST, () => {
   process.stdout.write("SYNTRA local workspace service listening on http://" + HOST + ":" + PORT + "\n");
-  process.stdout.write("This service is loopback-only. Chat and code tasks run through the standalone local PyTorch brain.\n");
+  process.stdout.write("This service is loopback-only. Chat and code-task execution use the selected local model.\n");
 });
 process.on("SIGINT", () => server.close(() => process.exit(0)));
 process.on("SIGTERM", () => server.close(() => process.exit(0)));

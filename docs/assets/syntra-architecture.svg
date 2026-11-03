@@ -23,12 +23,12 @@
  <rect x="677" y="180" width="230" height="164" rx="15" fill="#1d2340" stroke="#9b9be8" stroke-opacity=".8"/>
  <text x="700" y="211" fill="#d8d5ff" font-size="12" font-weight="700" letter-spacing="1.5">INFERENCE</text>
  <text x="700" y="241" fill="#f2f0ff" font-size="16" font-weight="700">Local model runtime</text>
- <rect x="700" y="260" width="184" height="28" rx="8" fill="#343a60"/><text x="792" y="279" text-anchor="middle" fill="#e4e4ff" font-size="12">PyTorch · local weights</text>
- <rect x="700" y="296" width="184" height="28" rx="8" fill="#2d2a49"/><text x="792" y="315" text-anchor="middle" fill="#d8ceff" font-size="12">BPE · local training</text>
+ <rect x="700" y="260" width="184" height="28" rx="8" fill="#343a60"/><text x="792" y="279" text-anchor="middle" fill="#e4e4ff" font-size="12">Ollama · pretrained</text>
+ <rect x="700" y="296" width="184" height="28" rx="8" fill="#2d2a49"/><text x="792" y="315" text-anchor="middle" fill="#d8ceff" font-size="12">PyTorch · research mode</text>
  <rect x="988" y="180" width="214" height="164" rx="15" fill="#28233b" stroke="#b59aff" stroke-opacity=".85"/>
  <text x="1012" y="211" fill="#d9c9ff" font-size="12" font-weight="700" letter-spacing="1.5">PROJECT CONTEXT</text>
  <text x="1012" y="241" fill="#f4edff" font-size="16" font-weight="700">Workspace intelligence</text>
- <text x="1012" y="270" fill="#c4b5e5" font-size="12">Source / import graph</text><text x="1012" y="291" fill="#c4b5e5" font-size="12">BM25 + symbol search</text><text x="1012" y="312" fill="#c4b5e5" font-size="12">User-authored project memory</text>
+ <text x="1012" y="270" fill="#c4b5e5" font-size="12">Source / import graph</text><text x="1012" y="291" fill="#c4b5e5" font-size="12">Semantic + symbol search</text><text x="1012" y="312" fill="#c4b5e5" font-size="12">User-authored project memory</text>
  <path d="M286 262H360M594 262H666M907 262H978" fill="none" stroke="#8baee6" stroke-width="2" marker-end="url(#arr)"/>
  <text x="323" y="246" fill="#8298b9" text-anchor="middle" font-size="10">HTTP</text><text x="630" y="246" fill="#8298b9" text-anchor="middle" font-size="10">PROMPTS</text><text x="943" y="246" fill="#8298b9" text-anchor="middle" font-size="10">READ ONLY</text>
  <rect x="370" y="399" width="224" height="116" rx="15" fill="#20283a" stroke="#8ca4c7" stroke-opacity=".8"/>

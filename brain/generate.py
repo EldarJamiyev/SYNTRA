@@ -301,9 +301,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Generate text from a locally trained SYNTRA checkpoint.",
     )
     parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT))
-    prompt_group = parser.add_mutually_exclusive_group(required=True)
-    prompt_group.add_argument("--prompt")
-    prompt_group.add_argument("--prompt-stdin", action="store_true", help="Read prompt text from standard input.")
+    parser.add_argument("--prompt", required=True)
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
@@ -317,9 +315,6 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        prompt = sys.stdin.read(256 * 1024 + 1) if args.prompt_stdin else args.prompt
-        if len(prompt.encode("utf-8")) > 256 * 1024:
-            raise ValueError("Prompt exceeds the 256 KB generation input limit.")
         model, tokenizer, device, saved = load_for_inference(args.checkpoint, args.device)
 
         def progress(_text: str, count: int, speed: float) -> None:
@@ -329,9 +324,6 @@ def main(argv: list[str] | None = None) -> int:
                     "tokens_per_second": round(speed, 2),
                     "device": str(device),
                     "checkpoint_step": saved["step"],
-                    "epoch": saved.get("epoch", 0),
-                    "train_loss": saved.get("train_loss"),
-                    "validation_loss": saved.get("validation_loss"),
                 }),
                 file=sys.stderr,
                 flush=True,
@@ -340,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         for fragment in stream_generate(
             model,
             tokenizer,
-            prompt,
+            args.prompt,
             max_new_tokens=args.max_new_tokens,
             temperature=args.temperature,
             top_k=args.top_k,
@@ -350,8 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             on_token=progress,
         ):
             print(fragment, end="", flush=True)
-        if not args.prompt_stdin:
-            print()
+        print()
         return 0
     except (OSError, ValueError, RuntimeError, TypeError) as exc:
         print(f"SYNTRA generation failed: {exc}", file=sys.stderr)

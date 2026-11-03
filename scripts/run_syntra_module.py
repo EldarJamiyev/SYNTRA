@@ -4,12 +4,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-MODULES = {
-    "server": "syntra_ai.server",
-    "cli": "syntra_ai.cli",
-    "brain-train": "brain.train",
-    "brain-generate": "brain.generate",
-}
+MODULES = {"server": "syntra_ai.server", "cli": "syntra_ai.cli"}
 
 
 def selected_python() -> Path:
@@ -22,7 +17,7 @@ def selected_python() -> Path:
 
 def main() -> int:
     if len(sys.argv) < 2 or sys.argv[1] not in MODULES:
-        print("Usage: python scripts/run_syntra_module.py server|cli|brain-train|brain-generate [arguments...]", file=sys.stderr)
+        print("Usage: python scripts/run_syntra_module.py server|cli [arguments...]", file=sys.stderr)
         return 2
     module = MODULES[sys.argv[1]]
     command = [str(selected_python()), "-m", module, *sys.argv[2:]]

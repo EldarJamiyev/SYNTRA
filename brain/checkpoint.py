@@ -118,17 +118,12 @@ def save_checkpoint(
         "validation_loss": payload.get("validation_loss"),
         "dataset_sha256": payload["dataset_sha256"],
         "dataset_files": payload.get("dataset_files", []),
-        "instruction_mode": payload.get("instruction_mode") is True,
-        "training_settings": payload.get("training_settings", {}),
-        "benchmark": payload.get("benchmark"),
         "config": config.to_dict(),
         "vocab_size": tokenizer.vocab_size,
         "parameter_count": int(payload.get("parameter_count", 0)),
         "updated_at": payload.get("updated_at"),
     }
     _atomic_write_json(checkpoint_metadata_path(destination), metadata)
-    tokenizer_path = destination.with_suffix(destination.suffix + ".tokenizer.json")
-    _atomic_write_json(tokenizer_path, tokenizer.to_dict())
     return destination
 
 

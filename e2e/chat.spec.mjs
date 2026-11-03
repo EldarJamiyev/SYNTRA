@@ -4,25 +4,6 @@ const API_TOKEN = "syntra-e2e-session-token-" + "x".repeat(48);
 const WORKSPACE = "C:\\SYNTRA-E2E";
 
 async function mockLocalApi(page) {
-  await page.route("**/api/chat/stream", async route => {
-    const request = route.request();
-    const body = request.postDataJSON();
-    const reply = "Browser integration response: " + body.message;
-    const frames = [
-      "event: start\ndata: " + JSON.stringify({ jobId: "e2e-chat-job", status: "running" }) + "\n\n",
-      "event: phase\ndata: " + JSON.stringify({ phase: "streaming", message: "Responding" }) + "\n\n",
-      "event: delta\ndata: " + JSON.stringify({ text: reply }) + "\n\n",
-      "event: metrics\ndata: " + JSON.stringify({ epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 18.4, device: "cpu" }) + "\n\n",
-      "event: done\ndata: " + JSON.stringify({ status: "completed", jobId: "e2e-chat-job", reply, metrics: { epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 18.4, device: "cpu" } }) + "\n\n"
-    ].join("");
-    return route.fulfill({
-      status: 200,
-      contentType: "text/event-stream; charset=utf-8",
-      headers: { "Cache-Control": "no-cache", "X-Accel-Buffering": "no" },
-      body: frames
-    });
-  });
-
   await page.route("**/local-api/**", async route => {
     const request = route.request();
     const { pathname } = new URL(request.url());
@@ -35,29 +16,6 @@ async function mockLocalApi(page) {
 
     if (pathname === "/local-api/session") {
       return json({ token: API_TOKEN });
-    }
-    if (pathname === "/local-api/brain/status") {
-      return json({
-        service: "SYNTRA standalone PyTorch brain",
-        provider: "syntra-brain-local",
-        checkpoint: WORKSPACE + "\\checkpoints\\syntra-brain.pt",
-        checkpoint_exists: true,
-        trained_steps: 12,
-        epoch: 1,
-        parameter_count: 123456,
-        train_loss: 2.3,
-        validation_loss: 2.5,
-        context_tokens: 256,
-        tokenizer_vocab_size: 512,
-        pretrained_weights: false,
-        external_ai_api: false,
-        local_only: true,
-        is_estimate: false,
-        training: { status: "idle", epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 0 }
-      });
-    }
-    if (pathname === "/local-api/brain/train/status") {
-      return json({ status: "idle", epoch: 1, step: 12, train_loss: 2.3, validation_loss: 2.5, tokens_per_second: 0 });
     }
     if (pathname === "/local-api/workspace/status") {
       return json({ root: WORKSPACE, pendingProposals: [], staleProposals: [] });

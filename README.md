@@ -6,7 +6,7 @@
   <p>
     <a href="https://github.com/EldarJamiyev/SYNTRA"><img src="https://img.shields.io/badge/PROJECT-SYNTRA-7BE4CF?style=for-the-badge&labelColor=101827" alt="SYNTRA project" /></a>
     <img src="https://img.shields.io/badge/INTERFACE-React%20%2B%20TypeScript-8AB8FF?style=for-the-badge&labelColor=101827" alt="React and TypeScript" />
-    <img src="https://img.shields.io/badge/INFERENCE-Standalone%20PyTorch%20Brain-B69BFF?style=for-the-badge&labelColor=101827" alt="Standalone local PyTorch brain" />
+    <img src="https://img.shields.io/badge/INFERENCE-Local%20Ollama-B69BFF?style=for-the-badge&labelColor=101827" alt="Local Ollama inference" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/LICENSE-MIT-7BE4CF?style=for-the-badge&labelColor=101827" alt="MIT license" /></a>
   </p>
 
@@ -35,7 +35,7 @@ It is an evolving engineering project—not a claim of frontier-model intelligen
   <tr>
     <td width="50%" valign="top">
       <h3>⌂ Local by design</h3>
-      Run inference through SYNTRA's own PyTorch Transformer and locally saved checkpoint. The workspace service launches the Python inference process directly; no external model daemon or hosted coding endpoint is used.
+      Run inference through a locally installed Ollama model. Your workspace agent and application services are designed around loopback access rather than a hosted coding endpoint.
     </td>
     <td width="50%" valign="top">
       <h3>⌘ Understands the repository</h3>
@@ -72,7 +72,7 @@ SYNTRA keeps the conversation at the center instead of surrounding it with a lar
 
 - Multiple named conversations with search, rename, resume, and delete.
 - Local session persistence and migration from the earlier single-thread history.
-- Real-time Server-Sent Events (SSE) from the standalone PyTorch brain, with incremental token text and generation metrics.
+- Streaming responses from the local Ollama backend.
 - Markdown, code blocks, tables, and safe external links.
 - A selected project folder that stays associated with the local workspace.
 
@@ -116,7 +116,7 @@ The workflow is evidence-driven. SYNTRA inspects the project before patching, ch
 
 ## ⌘ Architecture
 
-SYNTRA uses a self-contained local stack. The React/Vite interface streams chat through the authenticated loopback Node service, which starts the Python/PyTorch brain and coordinates the repository agent. Model weights, tokenizer, training data, and checkpoints remain local.
+SYNTRA uses a small local stack. The React/Vite interface talks to a loopback Node service, which coordinates the selected local model and the repository agent. The optional native Python runtime is a separate research path.
 
 <p align="center">
   <img src="docs/assets/syntra-architecture.svg" alt="SYNTRA local architecture connecting the React interface, loopback service, local model, repository intelligence, verification, and proposal workflow." width="100%" />
@@ -126,20 +126,19 @@ SYNTRA uses a self-contained local stack. The React/Vite interface streams chat 
 | --- | --- |
 | React + Vite | Conversation UI, local sessions, workspace selection |
 | Node.js service | Local API, chat routing, diagnostics, agent orchestration |
-| Python + PyTorch brain | Randomly initialized Transformer, local tokenizer, training, checkpointing, cached inference |
+| Ollama | Default local model inference |
 | Workspace engine | Project discovery, retrieval, symbol index, proposals, audit |
-| SSE bridge | Authenticated localhost streaming, metrics, cancellation, training status |
+| Python + PyTorch | Optional from-scratch model research runtime |
 
 ### Model reality
 
-- **The standalone PyTorch brain is the only model provider in the workspace chat.** There is no external model-provider fallback.
-- **The model starts from random weights.** It must be trained locally before model-backed chat and coding assistance can run.
-- **No hosted AI API or external model registry is used.** The application launches the local Python generator as a child process and streams its output through the authenticated Node API.
-- **Capability remains experimental.** Local training and passing software tests do not establish professional coding ability; instruction-following and task-level performance depend on training data, compute, and evaluation.
+- **Ollama is the default inference path.** SYNTRA selects from installed local models and excludes cloud-tagged model entries.
+- **The native PyTorch model is experimental.** It starts with randomly initialized weights. Training it on a small local corpus is useful for researching tokenization, training, checkpoints, and inference; it does not make it comparable to a pretrained coding model.
+- **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
 
 ### Standalone `/brain` training and inference (Phase 2)
 
-The standalone `brain/` package can now train its own randomly initialized PyTorch Transformer from local UTF-8 text/code files. It does not download model weights or contact an external model registry or hosted AI API.
+The standalone `brain/` package can now train its own randomly initialized PyTorch Transformer from local UTF-8 text/code files. It does not download model weights or contact Ollama, Hugging Face, or a hosted AI API.
 
 Train from the default `dataset.txt`:
 
@@ -173,44 +172,7 @@ python -m brain.generate --checkpoint checkpoints/syntra-brain.pt --prompt "def 
 
 The generator emits decoded text incrementally and uses a KV cache between tokens. Training reports epoch progress, loss, validation loss, and throughput. The dataset reader enforces a configurable size limit and rejects invalid UTF-8. Keep private keys, credentials, customer data, and other secrets out of training corpora.
 
-### Phase 3 integration
-
-The workspace UI now uses the standalone brain directly. The loopback Node service exposes an authenticated `POST /api/chat/stream` endpoint that emits SSE events:
-
-- `start` and `phase` describe the current chat turn.
-- `delta` streams decoded text as the Python generator produces it.
-- `metrics` reports checkpoint epoch, step, saved train/validation loss, device, and live tokens per second.
-- `done` or `error` closes the turn with its final state.
-
-The existing Stop control aborts the active chat job and terminates its Python generation process. The interface also shows checkpoint state, recent loss, epoch, and generation speed. Open **Active workspace** and select **Train local brain on this workspace** to start a local training job. Progress and loss are polled from the local service; the last atomic checkpoint is preserved when training is cancelled.
-
-The SSE endpoint is loopback-only and requires the same short-lived local API session token as the workspace API. The frontend sends it as a Bearer token. There is no external provider fallback.
-
-A from-scratch small model is an experiment, not a substitute for a pretrained professional coding model, and low validation loss alone does not establish coding ability.
-
-
-### Phase 4 — instruction corpus and intelligence evaluation
-
-The Phase 4 training path converts approved local projects into grounded prompt/completion examples. It trains on assistant responses while masking instruction tokens from cross-entropy loss, holds out source files for validation where possible, uses AdamW with gradient accumulation, warmup, cosine learning-rate decay, weight decay, and gradient clipping, then runs a bounded local fixture evaluation at every epoch boundary.
-
-Prepare a reusable JSONL corpus:
-
-\`\`\`powershell
-$env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\Datasets\MySource"
-python scripts/prepare_corpus.py --root "D:\Datasets\MySource" --output "data\corpus\phase4-instructions.jsonl"
-\`\`\`
-
-Train directly from that prepared corpus:
-
-\`\`\`powershell
-python -m brain.train --dataset "data\corpus\phase4-instructions.jsonl" --instruction-mode --epochs 1 --device auto
-\`\`\`
-
-Or train from the active workspace in the application. The checked-in \`brain/config.json\` is the source of truth for model dimensions, a 512-token context, micro-batch size 1 with four-step gradient accumulation, learning rate, cosine floor, warmup, checkpoint cadence, and benchmark task selection. Device auto-selection prefers CUDA, then Apple MPS, and falls back to CPU.
-
-At each epoch boundary, the configured benchmark runs only the small \`utility-clamp\` JavaScript and \`python-slugify\` fixtures against the just-saved checkpoint. Reports are written to \`benchmark-results/phase4-epoch-*.json\`. The workspace panel exposes task completion, patch validity, and verification rates alongside train/validation loss. Run the full suite manually with \`npm run benchmark\`.
-
-**Interpretation matters:** lower token loss measures next-token prediction on the selected corpus; it does not prove the model can solve software tasks. Fixture completion requires the expected changed-file set and successful candidate checks. These small tasks are a regression signal, not a comprehensive coding benchmark. The model still starts from random weights; this pipeline does not create pretrained knowledge or guarantee ChatGPT/Claude-level capability. Use clean, legally usable source material and never include customer data, credentials, secrets, or proprietary content without authorization.
+**Phase 2 scope:** this provides a callable training and inference engine. It does not yet replace the provider routing in the current React chat or expose an SSE endpoint; that is Phase 3. A from-scratch small model is an experiment, not a substitute for a pretrained professional coding model, and low validation loss alone does not establish coding ability.
 
 #### Approving local training data directories
 
@@ -229,7 +191,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
 
 ### Windows
 
-**Requirements:** Node.js 20 or later, Python 3.11 or later, and Git. The launcher installs the repository's hash-locked CPU PyTorch environment into `.venv`. No external model registry or AI service is required.
+**Requirements:** Node.js 20 or later and Git. Install Ollama and pull a local model that fits your hardware. Python 3.12+ is needed only for the optional native model runtime.
 
 1. Clone the repository:
 
@@ -238,12 +200,12 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
    cd SYNTRA
    ```
 
-2. Double-click **`Start-SYNTRA.bat`**. It prepares the local Python environment and starts the Node/Vite services.
-3. Open **http://127.0.0.1:3000** in your browser.
-4. Open **Active workspace**, select your project folder, and choose **Train local brain on this workspace**.
-5. Wait for the local training job to complete, then use the chat. Keep the service windows open while using SYNTRA.
+2. Start Ollama and make sure your chosen model is available locally.
+3. Double-click **`Start-SYNTRA.bat`**.
+4. Open **http://127.0.0.1:3000** in your browser.
+5. Keep the service windows open while using SYNTRA.
 
-The launcher prepares frontend and hash-locked Python dependencies, checks the Node workspace service, and starts the application. It does not automatically spend time training a model at startup. When no checkpoint exists, train it explicitly from the Active workspace panel. On later launches, use the same `Start-SYNTRA.bat` file.
+The launcher prepares the frontend dependencies when needed, checks the local services, and starts the application. On later launches, use the same `Start-SYNTRA.bat` file.
 
 ### Development
 
@@ -291,16 +253,15 @@ npm run benchmark -- --task utility-clamp
 npm run benchmark:reports -- history
 ```
 
-The suite is a development baseline, not a broad industry benchmark and not evidence of general coding ability. Reports preserve task-level outcomes and runtime metadata; memory measurements do not represent total system/GPU memory.
+The suite is a development baseline, not a broad industry benchmark and not evidence of general coding ability. Reports preserve task-level outcomes and runtime metadata; memory measurements do not include the separate Ollama daemon or total system/GPU memory.
 
 ## ◫ Project structure
 
 ```text
 SYNTRA/
 ├── src/                 # React interface and local chat experience
-├── local/               # Node service, SSE bridge, agent, tools, workspace engine
-├── brain/               # Standalone PyTorch model, tokenizer, trainer, checkpoints, inference
-├── syntra_ai/           # Earlier native Python research runtime
+├── local/               # Node service, agent, tools, workspace engine
+├── syntra_ai/           # Native Python/PyTorch research runtime
 ├── scripts/             # Setup, launch, tests, benchmark utilities
 ├── benchmarks/          # Versioned coding-agent fixtures
 ├── tests/               # Unit and integration coverage
