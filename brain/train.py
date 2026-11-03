@@ -692,7 +692,18 @@ def train(
     steps_per_epoch = math.ceil(chunk_count / batch_size)
     optimizer_steps_per_epoch = math.ceil(steps_per_epoch / gradient_accumulation_steps)
     model = LocalTransformer(requested_config).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    decay_parameters = []
+    no_decay_parameters = []
+    for parameter in model.parameters():
+        if not parameter.requires_grad:
+            continue
+        (decay_parameters if parameter.ndim >= 2 else no_decay_parameters).append(parameter)
+    optimizer_groups = []
+    if decay_parameters:
+        optimizer_groups.append({"params": decay_parameters, "weight_decay": weight_decay})
+    if no_decay_parameters:
+        optimizer_groups.append({"params": no_decay_parameters, "weight_decay": 0.0})
+    optimizer = torch.optim.AdamW(optimizer_groups, lr=learning_rate)
 
     start_epoch = 0
     start_step = 0
