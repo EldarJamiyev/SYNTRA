@@ -567,3 +567,16 @@ button:disabled { cursor: not-allowed; }
   .brain-status-strip { justify-content: flex-start; gap: 5px 9px; padding-inline: 12px; font-size: 9px; }
   .brain-loss-sparkline { width: 56px; }
 }
+
+.brain-training-cancel {
+  display: block;
+  width: 100%;
+  min-height: 27px;
+  margin-top: 6px;
+  color: #d6b9b9;
+  border: 1px solid #5a3a3a;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 9px;
+}
+.brain-training-cancel:hover { background: #3a2929; }
