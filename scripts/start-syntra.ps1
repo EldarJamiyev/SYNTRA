@@ -190,7 +190,7 @@ try {
     $runtimeCheck = & $VenvPython -c "import torch, numpy; assert torch.version.cuda is None, 'SYNTRA requires CPU-only PyTorch'; import brain; print('READY PyTorch=' + torch.__version__ + ' NumPy=' + numpy.__version__ + ' CUDA=' + str(torch.version.cuda))" 2>&1
     if ($LASTEXITCODE -ne 0 -or (($runtimeCheck | Out-String) -notmatch 'READY PyTorch=.*CUDA=None')) {
         $runtimeCheck | ForEach-Object { Write-Host $_ }
-        throw "The local Python brain failed its environment health check. Run npm run ai:install and inspect the error."
+        throw "The local Python brain failed its environment health check. Run scripts/setup_syntra_env.py and inspect the error."
     }
     $runtimeCheck | ForEach-Object { Write-Host $_ -ForegroundColor Green }
 
