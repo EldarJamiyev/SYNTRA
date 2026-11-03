@@ -932,6 +932,15 @@ export default function App() {
     }
   };
 
+  const trainingActive = brainStatus?.training?.status === 'running' || brainStatus?.training?.status === 'cancelling';
+  const lossValues = brainLossHistory.slice(-32);
+  const maxLoss = Math.max(1, ...lossValues);
+  const lossChartPoints = lossValues.map((loss, index) => {
+    const x = lossValues.length < 2 ? 0 : (index / (lossValues.length - 1)) * 96;
+    const y = 24 - (Math.min(loss, maxLoss) / maxLoss) * 20;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -997,6 +1006,21 @@ export default function App() {
         </button>
       </header>
 
+      <div className="brain-status-strip" role="status" aria-label="Local brain status">
+        <span className={'brain-state-dot ' + (brainStatus?.checkpoint_exists ? 'ready' : 'missing')} />
+        <span className="brain-status-name">{brainStatus?.checkpoint_exists ? 'Local brain ready' : 'Local brain untrained'}</span>
+        {trainingActive && <span className="brain-training-label">Training · epoch {Number(brainStatus?.training?.epoch || 0)}</span>}
+        <span>Epoch {Number(brainMetrics.epoch ?? brainStatus?.epoch ?? 0)}</span>
+        <span>Train loss {typeof brainMetrics.train_loss === 'number' ? brainMetrics.train_loss.toFixed(4) : '—'}</span>
+        <span>Val loss {typeof brainMetrics.validation_loss === 'number' ? brainMetrics.validation_loss.toFixed(4) : '—'}</span>
+        <span>{Number(brainMetrics.tokens_per_second || 0).toFixed(1)} tok/s</span>
+        {lossValues.length > 1 && (
+          <svg className="brain-loss-sparkline" viewBox="0 0 96 28" role="img" aria-label="Recent training loss trend">
+            <polyline points={lossChartPoints} />
+          </svg>
+        )}
+      </div>
+
       {workspaceOpen && (
         <section className="workspace-popover" role="dialog" aria-label="Active workspace">
           <div className="workspace-popover-header">
@@ -1008,6 +1032,37 @@ export default function App() {
           <div className="workspace-current-path" title={workspaceStatus?.root || ''}>
             {workspaceStatus?.root || (workspaceLoading ? 'Connecting to the local service…' : 'Workspace unavailable')}
           </div>
+          <section className="brain-workspace-panel" aria-label="Local brain training">
+            <div className="brain-workspace-heading">
+              <div>
+                <div className="workspace-agent-runs-heading">Local PyTorch brain</div>
+                <div className="workspace-memory-subtitle">
+                  {brainStatus?.checkpoint_exists
+                    ? 'Checkpoint ready · epoch ' + Number(brainStatus.epoch || 0) + ' · ' + Number(brainStatus.trained_steps || 0).toLocaleString() + ' steps'
+                    : 'No trained checkpoint found. Train locally on this project.'}
+                </div>
+              </div>
+              <span className={'brain-state-dot ' + (brainStatus?.checkpoint_exists ? 'ready' : 'missing')} />
+            </div>
+            <div className="brain-workspace-metrics">
+              <span>Train loss: {typeof brainStatus?.train_loss === 'number' ? brainStatus.train_loss.toFixed(4) : '—'}</span>
+              <span>Validation: {typeof brainStatus?.validation_loss === 'number' ? brainStatus.validation_loss.toFixed(4) : '—'}</span>
+              <span>Generation: {Number(brainMetrics.tokens_per_second || 0).toFixed(1)} tok/s</span>
+            </div>
+            <button
+              type="button"
+              className="brain-train-button"
+              onClick={() => void startBrainTrainingFromWorkspace()}
+              disabled={!workspaceStatus?.root || pending || brainTrainingStarting || trainingActive}
+            >
+              {trainingActive || brainTrainingStarting ? 'Training local model…' : brainStatus?.checkpoint_exists ? 'Continue training on this workspace' : 'Train local brain on this workspace'}
+            </button>
+            {trainingActive && (
+              <div className="brain-training-progress" role="status">
+                Epoch {Number(brainStatus?.training?.epoch || 0)} · step {Number(brainStatus?.training?.step || 0)} · {brainStatus?.training?.message || 'Training'}
+              </div>
+            )}
+          </section>
           <form className="workspace-switch-form" onSubmit={submitWorkspaceSwitch}>
             <label htmlFor="workspace-path">Project folder path</label>
             <input
