@@ -713,10 +713,13 @@ export default function App() {
           step: Number(training.step ?? result.trained_steps ?? 0),
           train_loss: training.train_loss ?? result.train_loss,
           validation_loss: training.validation_loss ?? result.validation_loss,
-          tokens_per_second: Number(training.tokens_per_second || brainMetrics.tokens_per_second || 0),
-          device: brainMetrics.device
+          tokens_per_second: Number(training.tokens_per_second || 0)
         };
-        setBrainMetrics(current => ({ ...current, ...nextMetrics }));
+        setBrainMetrics(current => ({
+          ...current,
+          ...nextMetrics,
+          tokens_per_second: nextMetrics.tokens_per_second || current.tokens_per_second || 0
+        }));
         const sampleKey = String(nextMetrics.step || 0) + ':' + String(nextMetrics.train_loss ?? '');
         if (nextMetrics.train_loss !== null && nextMetrics.train_loss !== undefined
           && Number.isFinite(nextMetrics.train_loss) && sampleKey !== lastBrainSampleRef.current) {
