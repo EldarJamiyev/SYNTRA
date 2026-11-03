@@ -8,6 +8,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_CHECKPOINT = path.join(ROOT, "checkpoints", "syntra-brain.pt");
 const MAX_PROMPT_BYTES = 256 * 1024;
 const MAX_GENERATION_TOKENS = 2048;
+let activeGenerations = 0;
 let trainingProcess = null;
 let trainingCancelled = false;
 let trainingState = {
@@ -22,7 +23,7 @@ let trainingState = {
 };
 
 export function brainCheckpointPath() {
-  const configured = process.env.SYNTRA_BRAIN_CHECKPOINT || process.env.SYNTRA_CHECKPOINT;
+  const configured = process.env.SYNTRA_BRAIN_CHECKPOINT;
   return path.resolve(configured || DEFAULT_CHECKPOINT);
 }
 
@@ -301,6 +302,9 @@ export async function generateBrainText({
     throw new Error("repetition_penalty must be between 1 and 2.");
   }
   if (signal?.aborted) throw abortError();
+  if (trainingProcess && ["running", "cancelling"].includes(trainingState.status)) {
+    throw new Error("Local model training is active. Stop training before starting chat generation.");
+  }
 
   const python = await selectedPython();
   const args = [
@@ -330,6 +334,7 @@ export async function generateBrainText({
     let latestMetrics = {};
     let settled = false;
     const startedAt = Date.now();
+    activeGenerations += 1;
 
     const abort = () => {
       if (!child.killed) child.kill("SIGTERM");
@@ -339,6 +344,7 @@ export async function generateBrainText({
     const finish = (error, code, signalName) => {
       if (settled) return;
       settled = true;
+      activeGenerations = Math.max(0, activeGenerations - 1);
       signal?.removeEventListener("abort", abort);
       const tail = decoder.end();
       if (tail) {
@@ -430,8 +436,11 @@ export async function startBrainTraining({
   device = "auto",
   resume = false
 }) {
-  if (trainingProcess && trainingState.status === "running") {
+  if (trainingProcess && ["running", "cancelling"].includes(trainingState.status)) {
     throw new Error("A SYNTRA brain training process is already running.");
+  }
+  if (activeGenerations > 0) {
+    throw new Error("Chat generation is active. Finish or cancel the current turn before starting training.");
   }
   if (!Array.isArray(datasetPaths) || datasetPaths.length < 1 || datasetPaths.length > 32
     || datasetPaths.some(item => typeof item !== "string" || !item.trim())) {
