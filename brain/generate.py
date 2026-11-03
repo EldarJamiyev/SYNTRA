@@ -350,7 +350,8 @@ def main(argv: list[str] | None = None) -> int:
             on_token=progress,
         ):
             print(fragment, end="", flush=True)
-        print()
+        if not args.prompt_stdin:
+            print()
         return 0
     except (OSError, ValueError, RuntimeError, TypeError) as exc:
         print(f"SYNTRA generation failed: {exc}", file=sys.stderr)
