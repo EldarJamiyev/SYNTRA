@@ -1169,22 +1169,32 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 }
 
 export function deriveModelContextBudget(modelStatus = {}) {
-  const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
+  const rawContext = Number(
+    modelStatus.context_tokens
+    || modelStatus.context_window_tokens
+    || modelStatus.config?.block_size
+    || modelStatus.config?.seq_len
+    || 4096
+  );
   const contextWindowTokens = Number.isFinite(rawContext)
-    ? Math.max(1024, Math.min(1_048_576, Math.floor(rawContext)))
+    ? Math.max(128, Math.min(1_048_576, Math.floor(rawContext)))
     : 4096;
   const capabilities = modelStatus.capabilities && typeof modelStatus.capabilities === "object"
     ? modelStatus.capabilities : {};
   const exactTokenCount = capabilities.tokenCountIsEstimate === false || modelStatus.is_estimate === false;
   const outputCap = Number(capabilities.maxOutputTokens || modelStatus.max_output_tokens || 1024);
-  const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(128, Math.min(8192, Math.floor(outputCap))) : 1024;
+  const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(16, Math.min(8192, Math.floor(outputCap))) : 1024;
   const promptFraction = exactTokenCount ? 0.76 : 0.64;
   const outputFraction = exactTokenCount ? 0.18 : 0.20;
   const reserveFraction = exactTokenCount ? 0.06 : 0.16;
-  const outputBudgetTokens = Math.max(128, Math.min(maxOutputTokens, Math.floor(contextWindowTokens * outputFraction)));
-  const safetyMarginTokens = Math.max(128, Math.floor(contextWindowTokens * reserveFraction));
-  const promptCapacity = Math.max(128, contextWindowTokens - outputBudgetTokens - safetyMarginTokens);
-  const contextBudgetTokens = Math.max(128, Math.min(
+  const safetyMarginTokens = Math.max(16, Math.floor(contextWindowTokens * reserveFraction));
+  const outputBudgetTokens = Math.max(16, Math.min(
+    maxOutputTokens,
+    Math.floor(contextWindowTokens * outputFraction),
+    Math.max(16, contextWindowTokens - safetyMarginTokens - 16)
+  ));
+  const promptCapacity = Math.max(16, contextWindowTokens - outputBudgetTokens - safetyMarginTokens);
+  const contextBudgetTokens = Math.max(16, Math.min(
     Math.floor(contextWindowTokens * promptFraction), promptCapacity
   ));
   return {
