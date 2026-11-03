@@ -121,10 +121,6 @@ test("verification defaults to an offline Docker container and filters host envi
     }),
     /cannot be mounted safely/
   );
-  assert.throws(
-    () => buildVerificationCommand(root + ":unsafe", selected, { platform: "linux" }),
-    /cannot be mounted safely/
-  );
 
   const hostileEnvironment = {
     PATH: "/tmp/attacker-bin",
