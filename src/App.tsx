@@ -102,6 +102,17 @@ type BrainStatus = {
     tokens_per_second?: number;
     device?: string;
     message?: string;
+    instruction_mode?: boolean;
+    benchmark?: {
+      status: string;
+      task_count?: number;
+      completed_task_count?: number;
+      task_completion_rate?: number;
+      patch_validity_rate?: number;
+      verification_pass_rate?: number;
+      report_path?: string | null;
+      error?: string | null;
+    } | null;
   };
 };
 
@@ -658,17 +669,9 @@ export default function App() {
     setBrainTrainingStarting(true);
     setWorkspaceError('');
     try {
-      await postJson('/local-api/brain/train', {
-        root,
-        epochs: 1,
-        batchSize: 4,
-        blockSize: 256,
-        layers: 4,
-        heads: 4,
-        width: 128,
-        vocabSize: 512,
-        device: 'auto'
-      });
+      // brain/config.json is the single source of truth for model size,
+      // accumulation, cosine schedule, instruction mode, and epoch fixtures.
+      await postJson('/local-api/brain/train', { root, epochs: 1, device: 'auto' });
       await refreshBrainStatus();
     } catch (cause) {
       setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
@@ -1080,6 +1083,28 @@ export default function App() {
               <span>Train loss: {typeof brainStatus?.train_loss === 'number' ? brainStatus.train_loss.toFixed(4) : '—'}</span>
               <span>Validation: {typeof brainStatus?.validation_loss === 'number' ? brainStatus.validation_loss.toFixed(4) : '—'}</span>
               <span>Generation: {Number(brainMetrics.tokens_per_second || 0).toFixed(1)} tok/s</span>
+            {brainStatus?.training?.benchmark && (
+              <div className="brain-training-benchmark" role="status">
+                <strong>Epoch fixture evaluation</strong>
+                <span>
+                  {Number(brainStatus.training.benchmark.completed_task_count || 0)}/
+                  {Number(brainStatus.training.benchmark.task_count || 0)} tasks passed ·
+                  {typeof brainStatus.training.benchmark.task_completion_rate === 'number'
+                    ? ' ' + (brainStatus.training.benchmark.task_completion_rate * 100).toFixed(0) + '% completion'
+                    : ' pending'}
+                </span>
+                <span>
+                  Patch validity {typeof brainStatus.training.benchmark.patch_validity_rate === 'number'
+                    ? (brainStatus.training.benchmark.patch_validity_rate * 100).toFixed(0) + '%'
+                    : '—'} · Verification {typeof brainStatus.training.benchmark.verification_pass_rate === 'number'
+                    ? (brainStatus.training.benchmark.verification_pass_rate * 100).toFixed(0) + '%'
+                    : '—'}
+                </span>
+                {brainStatus.training.benchmark.error && (
+                  <span className="brain-training-benchmark-error">{brainStatus.training.benchmark.error}</span>
+                )}
+              </div>
+            )}
             </div>
             <button
               type="button"
