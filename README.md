@@ -188,6 +188,30 @@ The SSE endpoint is loopback-only and requires the same short-lived local API se
 
 A from-scratch small model is an experiment, not a substitute for a pretrained professional coding model, and low validation loss alone does not establish coding ability.
 
+
+### Phase 4 — instruction corpus and intelligence evaluation
+
+The Phase 4 training path converts approved local projects into grounded prompt/completion examples. It trains on assistant responses while masking instruction tokens from cross-entropy loss, holds out source files for validation where possible, uses AdamW with gradient accumulation, warmup, cosine learning-rate decay, weight decay, and gradient clipping, then runs a bounded local fixture evaluation at every epoch boundary.
+
+Prepare a reusable JSONL corpus:
+
+\`\`\`powershell
+$env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\Datasets\MySource"
+python scripts/prepare_corpus.py --root "D:\Datasets\MySource" --output "data\corpus\phase4-instructions.jsonl"
+\`\`\`
+
+Train directly from that prepared corpus:
+
+\`\`\`powershell
+python -m brain.train --dataset "data\corpus\phase4-instructions.jsonl" --instruction-mode --epochs 1 --device auto
+\`\`\`
+
+Or train from the active workspace in the application. The checked-in \`brain/config.json\` is the source of truth for model dimensions, a 512-token context, micro-batch size 1 with four-step gradient accumulation, learning rate, cosine floor, warmup, checkpoint cadence, and benchmark task selection. Device auto-selection prefers CUDA, then Apple MPS, and falls back to CPU.
+
+At each epoch boundary, the configured benchmark runs only the small \`utility-clamp\` JavaScript and \`python-slugify\` fixtures against the just-saved checkpoint. Reports are written to \`benchmark-results/phase4-epoch-*.json\`. The workspace panel exposes task completion, patch validity, and verification rates alongside train/validation loss. Run the full suite manually with \`npm run benchmark\`.
+
+**Interpretation matters:** lower token loss measures next-token prediction on the selected corpus; it does not prove the model can solve software tasks. Fixture completion requires the expected changed-file set and successful candidate checks. These small tasks are a regression signal, not a comprehensive coding benchmark. The model still starts from random weights; this pipeline does not create pretrained knowledge or guarantee ChatGPT/Claude-level capability. Use clean, legally usable source material and never include customer data, credentials, secrets, or proprietary content without authorization.
+
 #### Approving local training data directories
 
 The native corpus loader only reads from the repository itself and explicitly approved local directories. Set `SYNTRA_ALLOWED_CORPUS_ROOTS` to one or more existing absolute directory paths before running native training or corpus preparation. Separate multiple paths with the platform path separator (a semicolon on Windows, a colon on Linux/macOS).
