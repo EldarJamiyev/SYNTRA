@@ -72,6 +72,39 @@ type ChatJob = {
   partialReply?: string;
 };
 
+type BrainMetrics = {
+  epoch?: number;
+  step?: number;
+  checkpoint_step?: number;
+  tokens_generated?: number;
+  tokens_per_second?: number;
+  train_loss?: number | null;
+  validation_loss?: number | null;
+  best_validation_loss?: number | null;
+  device?: string;
+};
+
+type BrainStatus = {
+  checkpoint_exists: boolean;
+  checkpoint: string;
+  epoch: number;
+  trained_steps: number;
+  train_loss: number | null;
+  validation_loss: number | null;
+  context_tokens: number;
+  tokenizer_vocab_size: number;
+  training: {
+    status: string;
+    epoch?: number;
+    step?: number;
+    train_loss?: number | null;
+    validation_loss?: number | null;
+    tokens_per_second?: number;
+    device?: string;
+    message?: string;
+  };
+};
+
 type AgentRunSummary = {
   id: string;
   goal: string;
@@ -227,6 +260,10 @@ export default function App() {
   const [pending, setPending] = useState(false);
   const [phase, setPhase] = useState('');
   const [streamingReply, setStreamingReply] = useState('');
+  const [brainStatus, setBrainStatus] = useState<BrainStatus | null>(null);
+  const [brainMetrics, setBrainMetrics] = useState<BrainMetrics>({});
+  const [brainLossHistory, setBrainLossHistory] = useState<number[]>([]);
+  const [brainTrainingStarting, setBrainTrainingStarting] = useState(false);
   const [error, setError] = useState('');
   const sessions = sessionState.sessions;
   const activeSession = sessions.find(session => session.id === sessionState.activeSessionId) || sessions[0];
@@ -254,11 +291,16 @@ export default function App() {
   const shouldFollowRef = useRef(true);
   const mountedRef = useRef(true);
   const activeJobIdRef = useRef<string | null>(null);
+  const activeStreamControllerRef = useRef<AbortController | null>(null);
+  const lastBrainSampleRef = useRef('');
 
   useEffect(() => {
     mountedRef.current = true;
     textareaRef.current?.focus();
-    return () => { mountedRef.current = false; };
+    return () => {
+      mountedRef.current = false;
+      activeStreamControllerRef.current?.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -583,6 +625,68 @@ export default function App() {
     if (mountedRef.current) setAgentRuns(result.runs || []);
   };
 
+  const refreshBrainStatus = async () => {
+    const result = await getJson<BrainStatus>('/local-api/brain/status');
+    if (!mountedRef.current) return;
+    setBrainStatus(result);
+    const training = result.training || {};
+    const liveTraining = training.status === 'running' || training.status === 'cancelling';
+    const nextMetrics: BrainMetrics = {
+      epoch: Number(liveTraining ? training.epoch ?? result.epoch ?? 0 : result.epoch ?? training.epoch ?? 0),
+      step: Number(liveTraining ? training.step ?? result.trained_steps ?? 0 : result.trained_steps ?? training.step ?? 0),
+      train_loss: training.train_loss ?? result.train_loss,
+      validation_loss: training.validation_loss ?? result.validation_loss,
+      tokens_per_second: Number(liveTraining ? training.tokens_per_second || 0 : 0),
+      device: typeof training.device === 'string' ? training.device : undefined
+    };
+    setBrainMetrics(current => ({
+      ...current,
+      ...nextMetrics,
+      tokens_per_second: nextMetrics.tokens_per_second || current.tokens_per_second || 0
+    }));
+    const sampleKey = String(nextMetrics.step || 0) + ':' + String(nextMetrics.train_loss ?? '');
+    if (nextMetrics.train_loss !== null && nextMetrics.train_loss !== undefined
+      && Number.isFinite(nextMetrics.train_loss) && sampleKey !== lastBrainSampleRef.current) {
+      lastBrainSampleRef.current = sampleKey;
+      setBrainLossHistory(current => [...current, Number(nextMetrics.train_loss)].slice(-48));
+    }
+  };
+
+  const startBrainTrainingFromWorkspace = async () => {
+    const root = workspaceStatus?.root || workspacePath;
+    if (!root || brainTrainingStarting || brainStatus?.training?.status === 'running') return;
+    setBrainTrainingStarting(true);
+    setWorkspaceError('');
+    try {
+      await postJson('/local-api/brain/train', {
+        root,
+        epochs: 1,
+        batchSize: 4,
+        blockSize: 256,
+        layers: 4,
+        heads: 4,
+        width: 128,
+        vocabSize: 512,
+        device: 'auto'
+      });
+      await refreshBrainStatus();
+    } catch (cause) {
+      setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBrainTrainingStarting(false);
+    }
+  };
+
+  const cancelBrainTrainingRun = async () => {
+    try {
+      const result = await postJson<{ ok: boolean; message?: string }>('/local-api/brain/train/cancel', {});
+      if (!result.ok && result.message) setWorkspaceError(result.message);
+      await refreshBrainStatus();
+    } catch (cause) {
+      setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   const cancelActiveChat = async () => {
     const jobId = activeJobIdRef.current;
     if (!jobId) return;
@@ -601,6 +705,45 @@ export default function App() {
     const distanceFromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
     shouldFollowRef.current = distanceFromBottom < 120;
   };
+
+  useEffect(() => {
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const result = await getJson<BrainStatus>('/local-api/brain/status');
+        if (stopped || !mountedRef.current) return;
+        setBrainStatus(result);
+        const training = result.training || {};
+        const trainingLive = training.status === 'running' || training.status === 'cancelling';
+        const nextMetrics: BrainMetrics = {
+          epoch: Number(trainingLive ? training.epoch ?? result.epoch ?? 0 : result.epoch ?? training.epoch ?? 0),
+          step: Number(trainingLive ? training.step ?? result.trained_steps ?? 0 : result.trained_steps ?? training.step ?? 0),
+          train_loss: training.train_loss ?? result.train_loss,
+          validation_loss: training.validation_loss ?? result.validation_loss,
+          tokens_per_second: Number(training.tokens_per_second || 0)
+        };
+        setBrainMetrics(current => ({
+          ...current,
+          ...nextMetrics,
+          tokens_per_second: nextMetrics.tokens_per_second || current.tokens_per_second || 0
+        }));
+        const sampleKey = String(nextMetrics.step || 0) + ':' + String(nextMetrics.train_loss ?? '');
+        if (nextMetrics.train_loss !== null && nextMetrics.train_loss !== undefined
+          && Number.isFinite(nextMetrics.train_loss) && sampleKey !== lastBrainSampleRef.current) {
+          lastBrainSampleRef.current = sampleKey;
+          setBrainLossHistory(current => [...current, Number(nextMetrics.train_loss)].slice(-48));
+        }
+      } catch {
+        // The chat surface remains available for diagnostics when the model is not trained.
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => { void refresh(); }, 2500);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     if (!shouldFollowRef.current) return;
@@ -637,32 +780,126 @@ export default function App() {
     setInput('');
     setError('');
     setPending(true);
-    setPhase('Thinking');
+    setPhase('Connecting to local brain');
     setStreamingReply('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-    let requestStarted = false;
     let partialReply = '';
-    try {
-      const started = await postJson<ChatJob>('/local-api/chat', { message: content, history });
-      requestStarted = true;
-      activeJobIdRef.current = started.jobId;
-      let job = started;
-      while (job.status === 'running') {
-        if (!mountedRef.current) return;
-        setPhase(job.message || 'Thinking');
-        if (job.reply && job.status === 'running') {
-          partialReply = job.reply;
-          setStreamingReply(partialReply);
-        }
-        await new Promise(resolve => window.setTimeout(resolve, 800));
-        job = await postJson<ChatJob>('/local-api/chat/status', { jobId: started.jobId });
+    let terminal: { status?: string; reply?: string; error?: string; partialReply?: string } | null = null;
+    const controller = new AbortController();
+    activeStreamControllerRef.current = controller;
+
+    const handleSseFrame = (frame: string) => {
+      let eventName = 'message';
+      const dataLines: string[] = [];
+      for (const line of frame.split(/\r?\n/)) {
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
       }
+      if (!dataLines.length) return;
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(dataLines.join('\n')) as Record<string, unknown>;
+      } catch {
+        throw new Error('SYNTRA received a malformed streaming event from its local brain service.');
+      }
+
+      if (eventName === 'start') {
+        if (typeof payload.jobId === 'string') activeJobIdRef.current = payload.jobId;
+      } else if (eventName === 'phase') {
+        setPhase(typeof payload.message === 'string' && payload.message
+          ? payload.message
+          : String(payload.phase || 'Working'));
+      } else if (eventName === 'delta') {
+        const delta = typeof payload.text === 'string' ? payload.text : '';
+        partialReply += delta;
+        setStreamingReply(partialReply);
+        setPhase('Responding');
+      } else if (eventName === 'replace') {
+        partialReply = typeof payload.text === 'string' ? payload.text : '';
+        setStreamingReply(partialReply);
+      } else if (eventName === 'metrics') {
+        const next = payload as BrainMetrics;
+        setBrainMetrics(current => ({ ...current, ...next }));
+        const sampleKey = String(next.step ?? next.checkpoint_step ?? 0) + ':' + String(next.train_loss ?? '');
+        if (typeof next.train_loss === 'number' && Number.isFinite(next.train_loss)
+          && sampleKey !== lastBrainSampleRef.current) {
+          lastBrainSampleRef.current = sampleKey;
+          setBrainLossHistory(current => [...current, next.train_loss as number].slice(-48));
+        }
+      } else if (eventName === 'error') {
+        terminal = {
+          status: 'failed',
+          error: typeof payload.error === 'string' ? payload.error : 'The local brain generation failed.',
+          partialReply: typeof payload.partialReply === 'string' ? payload.partialReply : partialReply
+        };
+      } else if (eventName === 'done') {
+        terminal = {
+          status: typeof payload.status === 'string' ? payload.status : 'completed',
+          reply: typeof payload.reply === 'string' ? payload.reply : undefined,
+          error: typeof payload.error === 'string' ? payload.error : undefined,
+          partialReply: typeof payload.partialReply === 'string' ? payload.partialReply : partialReply
+        };
+        if (payload.metrics && typeof payload.metrics === 'object') {
+          setBrainMetrics(payload.metrics as BrainMetrics);
+        }
+      }
+    };
+
+    try {
+      const token = await getLocalApiToken();
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: 'Bearer ' + token,
+        },
+        body: JSON.stringify({ message: content, history }),
+        signal: controller.signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        const raw = await response.text();
+        let detail = raw;
+        try {
+          const payload = JSON.parse(raw) as { error?: string };
+          detail = payload.error || raw;
+        } catch {}
+        throw new Error(detail || 'The local chat stream returned HTTP ' + response.status + '.');
+      }
+      if (!response.body) throw new Error('The browser did not provide a readable local chat stream.');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary >= 0) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (frame.trim()) handleSseFrame(frame);
+          boundary = buffer.indexOf('\n\n');
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleSseFrame(buffer);
+      const completedEvent = terminal as {
+        status?: string;
+        reply?: string;
+        error?: string;
+        partialReply?: string;
+      } | null;
+      if (!completedEvent) throw new Error('The local brain stream ended before it sent a completion event.');
       if (!mountedRef.current) return;
-      if (job.status === 'cancelled') {
+
+      if (completedEvent.status === 'cancelled') {
         setStreamingReply('');
-        const partial = partialReply || job.partialReply || '';
-        const cancellation = job.reply || 'Task cancelled. Any staged proposals remain available in workspace review.';
+        const partial = completedEvent.partialReply || partialReply;
+        const cancellation = completedEvent.reply || 'Generation cancelled. The last checkpoint remains unchanged.';
         setMessages(current => [...current, {
           role: 'assistant' as const,
           content: partial ? partial + '\n\n---\n\n' + cancellation : cancellation
@@ -671,9 +908,9 @@ export default function App() {
         try { await refreshWorkspaceStatus(); } catch {}
         return;
       }
-      if (job.status === 'failed') {
+      if (completedEvent.status === 'failed') {
         setStreamingReply('');
-        const interrupted = partialReply || job.partialReply || '';
+        const interrupted = completedEvent.partialReply || partialReply;
         setMessages(current => {
           const last = current[current.length - 1];
           const restored = last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
@@ -684,18 +921,20 @@ export default function App() {
           }].slice(-MAX_VISIBLE_MESSAGES);
         });
         setInput(content);
-        setError(job.error || job.reply || 'The local request failed.');
+        setError(completedEvent.error || 'The local request failed.');
         return;
       }
-      const answer = job.reply || 'No response was returned.';
+
+      const answer = completedEvent.reply || partialReply || 'No response was returned.';
       setStreamingReply('');
       setMessages(current => [...current, { role: 'assistant' as const, content: answer }].slice(-MAX_VISIBLE_MESSAGES));
       try {
         await refreshWorkspaceStatus();
         await refreshAgentRuns();
       } catch {
-        // A transient status refresh must not turn a completed chat answer into a failure.
+        // Workspace refresh failures must not change a successful model response.
       }
+      try { await refreshBrainStatus(); } catch {}
     } catch (cause) {
       if (mountedRef.current) {
         setStreamingReply('');
@@ -710,11 +949,12 @@ export default function App() {
         });
         setInput(content);
         const detail = cause instanceof Error && cause.name === 'TimeoutError'
-          ? "SYNTRA's local service did not respond within 15 seconds. Check the service windows and try again."
+          ? "SYNTRA's local service timed out while generating. Check available system memory and try a shorter prompt."
           : cause instanceof Error ? cause.message : String(cause);
         setError(detail);
       }
     } finally {
+      activeStreamControllerRef.current = null;
       activeJobIdRef.current = null;
       if (mountedRef.current) {
         setPending(false);
@@ -723,6 +963,15 @@ export default function App() {
       }
     }
   };
+
+  const trainingActive = brainStatus?.training?.status === 'running' || brainStatus?.training?.status === 'cancelling';
+  const lossValues = brainLossHistory.slice(-32);
+  const maxLoss = Math.max(1, ...lossValues);
+  const lossChartPoints = lossValues.map((loss, index) => {
+    const x = lossValues.length < 2 ? 0 : (index / (lossValues.length - 1)) * 96;
+    const y = 24 - (Math.min(loss, maxLoss) / maxLoss) * 20;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -789,6 +1038,21 @@ export default function App() {
         </button>
       </header>
 
+      <div className="brain-status-strip" role="status" aria-label="Local brain status">
+        <span className={'brain-state-dot ' + (brainStatus?.checkpoint_exists ? 'ready' : 'missing')} />
+        <span className="brain-status-name">{brainStatus?.checkpoint_exists ? 'Local brain ready' : 'Local brain untrained'}</span>
+        {trainingActive && <span className="brain-training-label">Training · epoch {Number(brainStatus?.training?.epoch || 0)}</span>}
+        <span>Epoch {Number(brainMetrics.epoch ?? brainStatus?.epoch ?? 0)}</span>
+        <span>Train loss {typeof brainMetrics.train_loss === 'number' ? brainMetrics.train_loss.toFixed(4) : '—'}</span>
+        <span>Val loss {typeof brainMetrics.validation_loss === 'number' ? brainMetrics.validation_loss.toFixed(4) : '—'}</span>
+        <span>{Number(brainMetrics.tokens_per_second || 0).toFixed(1)} tok/s</span>
+        {lossValues.length > 1 && (
+          <svg className="brain-loss-sparkline" viewBox="0 0 96 28" role="img" aria-label="Recent training loss trend">
+            <polyline points={lossChartPoints} />
+          </svg>
+        )}
+      </div>
+
       {workspaceOpen && (
         <section className="workspace-popover" role="dialog" aria-label="Active workspace">
           <div className="workspace-popover-header">
@@ -800,6 +1064,42 @@ export default function App() {
           <div className="workspace-current-path" title={workspaceStatus?.root || ''}>
             {workspaceStatus?.root || (workspaceLoading ? 'Connecting to the local service…' : 'Workspace unavailable')}
           </div>
+          <section className="brain-workspace-panel" aria-label="Local brain training">
+            <div className="brain-workspace-heading">
+              <div>
+                <div className="workspace-agent-runs-heading">Local PyTorch brain</div>
+                <div className="workspace-memory-subtitle">
+                  {brainStatus?.checkpoint_exists
+                    ? 'Checkpoint ready · epoch ' + Number(brainStatus.epoch || 0) + ' · ' + Number(brainStatus.trained_steps || 0).toLocaleString() + ' steps'
+                    : 'No trained checkpoint found. Train locally on this project.'}
+                </div>
+              </div>
+              <span className={'brain-state-dot ' + (brainStatus?.checkpoint_exists ? 'ready' : 'missing')} />
+            </div>
+            <div className="brain-workspace-metrics">
+              <span>Train loss: {typeof brainStatus?.train_loss === 'number' ? brainStatus.train_loss.toFixed(4) : '—'}</span>
+              <span>Validation: {typeof brainStatus?.validation_loss === 'number' ? brainStatus.validation_loss.toFixed(4) : '—'}</span>
+              <span>Generation: {Number(brainMetrics.tokens_per_second || 0).toFixed(1)} tok/s</span>
+            </div>
+            <button
+              type="button"
+              className="brain-train-button"
+              onClick={() => void startBrainTrainingFromWorkspace()}
+              disabled={!workspaceStatus?.root || pending || brainTrainingStarting || trainingActive}
+            >
+              {trainingActive || brainTrainingStarting ? 'Training local model…' : brainStatus?.checkpoint_exists ? 'Continue training on this workspace' : 'Train local brain on this workspace'}
+            </button>
+            {trainingActive && (
+              <>
+                <div className="brain-training-progress" role="status">
+                  Epoch {Number(brainStatus?.training?.epoch || 0)} · step {Number(brainStatus?.training?.step || 0)} · {brainStatus?.training?.message || 'Training'}
+                </div>
+                <button type="button" className="brain-training-cancel" onClick={() => void cancelBrainTrainingRun()}>
+                  Stop training
+                </button>
+              </>
+            )}
+          </section>
           <form className="workspace-switch-form" onSubmit={submitWorkspaceSwitch}>
             <label htmlFor="workspace-path">Project folder path</label>
             <input

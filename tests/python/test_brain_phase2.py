@@ -117,6 +117,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertIsNotNone(first["validation_loss"])
             self.assertTrue(checkpoint.is_file())
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
+            self.assertTrue(Path(str(checkpoint) + ".tokenizer.json").is_file())
 
             saved = load_checkpoint(checkpoint)
             self.assertEqual(saved["epoch"], 1)

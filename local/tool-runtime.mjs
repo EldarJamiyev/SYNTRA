@@ -78,21 +78,21 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workspace.semantic.status",
-    description: "Read status for the optional local Ollama semantic embedding index.",
+    description: "Read status for the deterministic local BM25 source retrieval index.",
     permission: "read_only",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
   },
   {
     name: "workspace.semantic.refresh",
-    description: "Build or refresh a local vector index with Ollama embeddings. Stores vectors and source hashes, never source text; requires an installed local embedding model.",
+    description: "Build or refresh a deterministic local BM25 index from approved workspace source files. Stores term frequencies and source hashes only; no model, daemon, or network connection is required.",
     permission: "local_state_write",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
   },
   {
     name: "workspace.semantic.search",
-    description: "Search the workspace's local semantic vector index. Source hashes and workspace exclusions are revalidated before returning excerpts.",
+    description: "Search the workspace's local BM25 retrieval index. Source hashes and workspace exclusions are revalidated before returning excerpts.",
     permission: "read_only",
     approvalRequired: false,
     inputSchema: {
@@ -579,16 +579,16 @@ function summarizeOutput(name, output) {
         staleFiles: output.staleFiles, topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))]
       };
     case "workspace.semantic.status":
-      return { available: output.available, embeddingModel: output.embeddingModel, chunkCount: output.chunkCount };
+      return { available: output.available, indexMethod: output.indexMethod, chunkCount: output.chunkCount };
     case "workspace.semantic.refresh":
-      return { available: output.available, embeddingModel: output.embeddingModel, chunkCount: output.chunkCount, reusedChunks: output.reusedChunks, truncated: output.truncated };
+      return { available: output.available, indexMethod: output.indexMethod, chunkCount: output.chunkCount, reusedChunks: output.reusedChunks, truncated: output.truncated };
     case "workspace.semantic.search":
       return { available: output.available, resultCount: output.results.length, staleResults: output.staleResults,
         topPaths: [...new Set(output.results.slice(0, 8).map(item => item.path))] };
     case "workspace.memory.list":
       return { noteCount: output.total, categories: [...new Set(output.notes.map(note => note.category))] };
     case "workspace.memory.search":
-      return { resultCount: output.results.length, totalNotes: output.total };
+      return { retrievalMode: output.retrievalMode, resultCount: output.results.length, totalNotes: output.total };
     case "workspace.memory.add":
     case "workspace.memory.update":
       return { noteId: output.note.id, category: output.note.category, noteCount: output.total, storedLocally: output.storedLocally };

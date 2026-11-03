@@ -51,7 +51,7 @@ test("project memory is explicitly user-authored, local to a workspace, and sear
   }
 });
 
-test("semantic project-memory retrieval uses local embeddings and caches only user-authored notes", async () => {
+test("project-memory retrieval uses only local BM25 and never contacts a model service", async () => {
   const root = await createWorkspace();
   try {
     const network = await addWorkspaceMemory(root, {
@@ -67,66 +67,28 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
       tags: ["frontend", "design"]
     });
     let requests = 0;
-    const fetchImpl = async (url, options) => {
+    const forbiddenFetch = async () => {
       requests += 1;
-      assert.equal(url, "http://127.0.0.1:11434/api/embed");
-      const body = JSON.parse(options.body);
-      assert.equal(body.model, "test-embedding-model");
-      assert.equal(body.truncate, false);
-      const embeddings = body.input.map(input => {
-        const text = input.toLowerCase();
-        return /dns|network access|service name|name resolution|lookup timeout/.test(text)
-          ? [1, 0, 0, 0, 0, 0, 0, 0]
-          : [0, 1, 0, 0, 0, 0, 0, 0];
-      });
-      return new Response(JSON.stringify({ embeddings }), {
-        status: 200, headers: { "Content-Type": "application/json" }
-      });
+      throw new Error("Project memory must not call an embedding service.");
     };
-    const first = await searchWorkspaceMemory(root, "name resolution policy", 6, {
-      embedModel: "test-embedding-model", fetchImpl
+    const first = await searchWorkspaceMemory(root, "dns resolver timeout", 6, {
+      embedModel: "removed-embedding-provider",
+      fetchImpl: forbiddenFetch
     });
-    assert.equal(first.retrievalMode, "hybrid_semantic");
-    assert.equal(first.embeddingModel, "test-embedding-model");
+    assert.equal(first.retrievalMode, "bm25");
     assert.equal(first.results[0].id, network.note.id);
-    assert.equal(first.semanticCoverage, 2);
-    assert.equal(requests, 1);
+    assert.equal(first.results.length, 1);
+    assert.equal(requests, 0);
 
-    const second = await searchWorkspaceMemory(root, "dns resolver convention", 6, {
-      embedModel: "test-embedding-model", fetchImpl
-    });
-    assert.equal(second.retrievalMode, "hybrid_semantic");
+    const second = await searchWorkspaceMemory(root, "network dns convention", 6);
+    assert.equal(second.retrievalMode, "bm25");
     assert.equal(second.results[0].id, network.note.id);
-    assert.equal(requests, 2, "the second search should reuse cached note vectors and embed only the query");
+    assert.equal(requests, 0);
 
-    const cache = JSON.parse(await fs.readFile(
-      path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"
-    ));
-    assert.equal(cache.schemaVersion, 1);
-    assert.equal(cache.model, "test-embedding-model");
-    assert.equal(cache.root, await fs.realpath(root));
-    assert.equal(cache.entries.length, 2);
-    assert.ok(cache.entries.every(entry => !("content" in entry)));
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
-
-test("semantic project-memory search falls back to BM25 when the local embedding model is unavailable", async () => {
-  const root = await createWorkspace();
-  try {
-    await addWorkspaceMemory(root, {
-      title: "Error response",
-      content: "Return stable API error codes and request identifiers.",
-      category: "convention"
-    });
-    const results = await searchWorkspaceMemory(root, "request identifiers", 6, {
-      embedModel: "missing-local-embedding-model",
-      fetchImpl: async () => { throw new Error("connection refused"); }
-    });
-    assert.equal(results.retrievalMode, "bm25_fallback");
-    assert.match(results.semanticError, /connection refused/);
-    assert.equal(results.results.length, 1);
+    await assert.rejects(
+      () => fs.readFile(path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"),
+      error => error?.code === "ENOENT"
+    );
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

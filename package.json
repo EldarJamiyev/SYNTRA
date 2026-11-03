@@ -11,12 +11,11 @@
     "server": "node local/server.mjs",
     "cli": "node bin/syntra.mjs",
     "test": "node scripts/run-node-tests.mjs",
-    "ai:install": "python scripts/setup_syntra_env.py",
-    "ai:server": "python scripts/run_syntra_module.py server",
-    "ai:cli": "python scripts/run_syntra_module.py cli",
     "benchmark": "node scripts/benchmark-agent.mjs",
     "benchmark:reports": "node scripts/benchmark-report.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "brain:train": "python scripts/run_syntra_module.py brain-train",
+    "brain:generate": "python scripts/run_syntra_module.py brain-generate"
   },
   "dependencies": {
     "lucide-react": "^1.65.0",

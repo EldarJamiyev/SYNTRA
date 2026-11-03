@@ -794,11 +794,11 @@ async function runModelSelectedReadOnlyTools({
           content: String(item.content || "").slice(0, 1600),
           tags: (item.tags || []).slice(0, 8), updatedAt: item.updatedAt, owner: "user"
         }));
-        fragment = JSON.stringify({ tool: call.tool, query: call.input.query, total: toolRun.output.total, results });
+        fragment = JSON.stringify({ tool: call.tool, query: call.input.query, total: toolRun.output.total, retrievalMode: toolRun.output.retrievalMode, results });
         observations.push({
           kind: call.tool, stage: "model-selected-context",
           status: results.length ? "observed" : "empty",
-          detail: "Retrieved " + results.length + " user-approved project note(s) for '" + call.input.query + "'."
+          detail: "Local BM25 retrieved " + results.length + " user-authored project note(s) for '" + call.input.query + "'."
         });
       } else if (call.tool === "workspace.semantic.search") {
         const results = (toolRun.output.results || []).slice(0, 8).map(item => ({
@@ -807,14 +807,14 @@ async function runModelSelectedReadOnlyTools({
         }));
         fragment = JSON.stringify({
           tool: call.tool, query: call.input.query, available: toolRun.output.available,
-          embeddingModel: toolRun.output.embeddingModel, staleResults: toolRun.output.staleResults, results
+          indexMethod: toolRun.output.indexMethod, staleResults: toolRun.output.staleResults, results
         });
         observations.push({
           kind: call.tool, stage: "model-selected-context",
           status: toolRun.output.available ? results.length ? "observed" : "empty" : "unavailable",
           detail: toolRun.output.available
-            ? "Semantic search returned " + results.length + " hash-validated code excerpt(s) for '" + call.input.query + "'."
-            : "Semantic index is unavailable; lexical and symbol retrieval remain available."
+            ? "Local BM25 search returned " + results.length + " hash-validated code excerpt(s) for '" + call.input.query + "'."
+            : "The local BM25 index is unavailable; direct source search and symbol retrieval remain available."
         });
       } else {
         fragment = JSON.stringify({
@@ -1169,22 +1169,32 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 }
 
 export function deriveModelContextBudget(modelStatus = {}) {
-  const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
+  const rawContext = Number(
+    modelStatus.context_tokens
+    || modelStatus.context_window_tokens
+    || modelStatus.config?.block_size
+    || modelStatus.config?.seq_len
+    || 4096
+  );
   const contextWindowTokens = Number.isFinite(rawContext)
-    ? Math.max(1024, Math.min(1_048_576, Math.floor(rawContext)))
+    ? Math.max(128, Math.min(1_048_576, Math.floor(rawContext)))
     : 4096;
   const capabilities = modelStatus.capabilities && typeof modelStatus.capabilities === "object"
     ? modelStatus.capabilities : {};
   const exactTokenCount = capabilities.tokenCountIsEstimate === false || modelStatus.is_estimate === false;
   const outputCap = Number(capabilities.maxOutputTokens || modelStatus.max_output_tokens || 1024);
-  const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(128, Math.min(8192, Math.floor(outputCap))) : 1024;
+  const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(16, Math.min(8192, Math.floor(outputCap))) : 1024;
   const promptFraction = exactTokenCount ? 0.76 : 0.64;
   const outputFraction = exactTokenCount ? 0.18 : 0.20;
   const reserveFraction = exactTokenCount ? 0.06 : 0.16;
-  const outputBudgetTokens = Math.max(128, Math.min(maxOutputTokens, Math.floor(contextWindowTokens * outputFraction)));
-  const safetyMarginTokens = Math.max(128, Math.floor(contextWindowTokens * reserveFraction));
-  const promptCapacity = Math.max(128, contextWindowTokens - outputBudgetTokens - safetyMarginTokens);
-  const contextBudgetTokens = Math.max(128, Math.min(
+  const safetyMarginTokens = Math.max(16, Math.floor(contextWindowTokens * reserveFraction));
+  const outputBudgetTokens = Math.max(16, Math.min(
+    maxOutputTokens,
+    Math.floor(contextWindowTokens * outputFraction),
+    Math.max(16, contextWindowTokens - safetyMarginTokens - 16)
+  ));
+  const promptCapacity = Math.max(16, contextWindowTokens - outputBudgetTokens - safetyMarginTokens);
+  const contextBudgetTokens = Math.max(16, Math.min(
     Math.floor(contextWindowTokens * promptFraction), promptCapacity
   ));
   return {
@@ -1245,7 +1255,7 @@ export async function runAgentTask({
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
-  if (!modelStatus.checkpoint_exists) throw new Error("No usable local model is available. Start a local Ollama model or train SYNTRA's native model before requesting an agent patch.");
+  if (!modelStatus.checkpoint_exists) throw new Error("No trained SYNTRA PyTorch checkpoint is available. Train the local brain before requesting an agent patch.");
   const contextPlan = deriveModelContextBudget(modelStatus);
   const contextWindow = contextPlan.contextWindowTokens;
   const contextBudget = contextPlan.contextBudgetTokens;

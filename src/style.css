@@ -512,3 +512,71 @@ button:disabled { cursor: not-allowed; }
 }
 .workspace-exclusions-actions button:hover:not(:disabled) { background: #ffffff; }
 .workspace-exclusions-actions button:disabled { opacity: .45; cursor: not-allowed; }
+
+
+/* Standalone local PyTorch brain status and training controls */
+.brain-status-strip {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 7px 15px;
+  padding: 5px 18px;
+  color: #8f9690;
+  border-bottom: 1px solid #292929;
+  background: #202020;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.brain-status-name { color: #d4ddd7; font-weight: 600; }
+.brain-state-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #777;
+}
+.brain-state-dot.ready { background: #63c99b; box-shadow: 0 0 0 3px rgb(99 201 155 / 12%); }
+.brain-state-dot.missing { background: #c49a55; }
+.brain-training-label { color: #c8a76c; }
+.brain-loss-sparkline { width: 76px; height: 24px; overflow: visible; }
+.brain-loss-sparkline polyline { fill: none; stroke: #79caa6; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.brain-workspace-panel {
+  margin-top: 12px;
+  padding: 11px 0 12px;
+  border-top: 1px solid #383838;
+}
+.brain-workspace-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.brain-workspace-metrics { display: flex; flex-wrap: wrap; gap: 6px 13px; margin-top: 8px; color: #969696; font-size: 9px; font-variant-numeric: tabular-nums; }
+.brain-train-button {
+  width: 100%;
+  min-height: 31px;
+  margin-top: 9px;
+  color: #242424;
+  border: 0;
+  border-radius: 7px;
+  background: #d8e5dc;
+  font-size: 10px;
+  font-weight: 650;
+}
+.brain-train-button:hover:not(:disabled) { background: #f0f7f2; }
+.brain-train-button:disabled { opacity: .45; cursor: not-allowed; }
+.brain-training-progress { margin-top: 7px; color: #c8a76c; font-size: 9px; line-height: 1.5; }
+@media (max-width: 560px) {
+  .brain-status-strip { justify-content: flex-start; gap: 5px 9px; padding-inline: 12px; font-size: 9px; }
+  .brain-loss-sparkline { width: 56px; }
+}
+
+.brain-training-cancel {
+  display: block;
+  width: 100%;
+  min-height: 27px;
+  margin-top: 6px;
+  color: #d6b9b9;
+  border: 1px solid #5a3a3a;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 9px;
+}
+.brain-training-cancel:hover { background: #3a2929; }

@@ -1135,30 +1135,24 @@ test("agent execution budget expands with task complexity but respects hard ceil
   assert.ok(complex.maxTotalAttempts <= 24);
 });
 
-test("model context budgets adapt to exact provider tokenizers and conservative local estimates", () => {
+test("model context budgets use the exact standalone brain tokenizer", () => {
   const local = deriveModelContextBudget({
-    provider: "ollama-local", context_tokens: 8192,
-    capabilities: { tokenCountIsEstimate: true, maxOutputTokens: 8192 }
+    provider: "syntra-brain-local",
+    context_tokens: 1024,
+    is_estimate: false,
+    capabilities: { tokenCountIsEstimate: false, maxOutputTokens: 512 }
   });
-  assert.equal(local.contextWindowTokens, 8192);
-  assert.equal(local.exactTokenCount, false);
-  assert.equal(local.budgetProfile, "conservative-estimate");
-  assert.ok(local.contextBudgetTokens < 8192);
-  assert.ok(local.outputBudgetTokens <= 8192);
-  assert.ok(local.contextBudgetTokens + local.outputBudgetTokens + local.safetyMarginTokens <= 8192);
+  assert.equal(local.contextWindowTokens, 1024);
+  assert.equal(local.exactTokenCount, true);
+  assert.equal(local.budgetProfile, "provider-tokenizer");
+  assert.equal(local.outputBudgetTokens, 184);
+  assert.ok(local.contextBudgetTokens + local.outputBudgetTokens + local.safetyMarginTokens <= 1024);
 
-  const gemini = deriveModelContextBudget({
-    provider: "gemini-api", context_tokens: 1_048_576,
-    capabilities: { tokenCountIsEstimate: false, maxOutputTokens: 8192 }
+  const small = deriveModelContextBudget({
+    context_tokens: 256,
+    is_estimate: false,
+    capabilities: { tokenCountIsEstimate: false, maxOutputTokens: 128 }
   });
-  assert.equal(gemini.exactTokenCount, true);
-  assert.equal(gemini.budgetProfile, "provider-tokenizer");
-  assert.equal(gemini.outputBudgetTokens, 8192);
-  assert.ok(gemini.contextBudgetTokens > local.contextBudgetTokens);
-  assert.ok(gemini.contextBudgetTokens + gemini.outputBudgetTokens + gemini.safetyMarginTokens <= gemini.contextWindowTokens);
-
-  const tiny = deriveModelContextBudget({ context_tokens: 512, capabilities: { tokenCountIsEstimate: true } });
-  assert.equal(tiny.contextWindowTokens, 1024);
-  assert.ok(tiny.contextBudgetTokens >= 128);
-  assert.ok(tiny.outputBudgetTokens >= 128);
+  assert.equal(small.contextWindowTokens, 256);
+  assert.ok(small.contextBudgetTokens + small.outputBudgetTokens + small.safetyMarginTokens <= 256);
 });
