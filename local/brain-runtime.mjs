@@ -423,18 +423,49 @@ export function getBrainTrainingStatus() {
   return { ...trainingState };
 }
 
+async function loadTrainingConfig() {
+  const configPath = path.join(ROOT, "brain", "config.json");
+  let parsed;
+  try {
+    parsed = JSON.parse(await fs.readFile(configPath, "utf8"));
+  } catch (error) {
+    throw new Error("Could not load brain/config.json: " + (error instanceof Error ? error.message : String(error)));
+  }
+  if (!parsed || typeof parsed !== "object" || parsed.schema_version !== 1
+    || !parsed.model || typeof parsed.model !== "object"
+    || !parsed.training || typeof parsed.training !== "object"
+    || !parsed.evaluation || typeof parsed.evaluation !== "object") {
+    throw new Error("brain/config.json does not match the supported Phase 4 training configuration schema.");
+  }
+  return parsed;
+}
+
 export async function startBrainTraining({
   datasetPaths,
-  epochs = 1,
-  batchSize = 4,
-  blockSize = 256,
-  layers = 4,
-  heads = 4,
-  width = 128,
-  vocabSize = 512,
-  learningRate = 3e-4,
-  device = "auto",
-  resume = false
+  epochs,
+  batchSize,
+  blockSize,
+  layers,
+  heads,
+  width,
+  vocabSize,
+  learningRate,
+  weightDecay,
+  tokenizerBytes,
+  maxDatasetBytes,
+  gradientAccumulationSteps,
+  warmupSteps,
+  minLearningRateRatio,
+  gradientClipNorm,
+  evaluationBatches,
+  saveEverySteps,
+  seed,
+  device,
+  resume = false,
+  instructionMode,
+  runBenchmarks,
+  benchmarkTasks,
+  benchmarkTimeoutSeconds
 }) {
   if (trainingProcess && ["running", "cancelling"].includes(trainingState.status)) {
     throw new Error("A SYNTRA brain training process is already running.");
@@ -446,20 +477,70 @@ export async function startBrainTraining({
     || datasetPaths.some(item => typeof item !== "string" || !item.trim())) {
     throw new Error("Select between 1 and 32 local dataset files or project directories.");
   }
+
+  const config = await loadTrainingConfig();
+  const model = config.model;
+  const settings = config.training;
+  const evaluation = config.evaluation;
+  const choose = (value, configured, fallback) => value ?? configured ?? fallback;
+  const selected = {
+    epochs: choose(epochs, settings.epochs, 1),
+    batchSize: choose(batchSize, settings.batch_size, 1),
+    blockSize: choose(blockSize, model.block_size, 512),
+    layers: choose(layers, model.n_layer, 4),
+    heads: choose(heads, model.n_head, 4),
+    width: choose(width, model.n_embd, 128),
+    vocabSize: choose(vocabSize, model.vocab_size, 1024),
+    learningRate: choose(learningRate, settings.learning_rate, 0.0002),
+    weightDecay: choose(weightDecay, settings.weight_decay, 0.05),
+    tokenizerBytes: choose(tokenizerBytes, settings.tokenizer_bytes, 1_000_000),
+    maxDatasetBytes: choose(maxDatasetBytes, settings.max_dataset_bytes, 128 * 1024 * 1024),
+    gradientAccumulationSteps: choose(gradientAccumulationSteps, settings.gradient_accumulation_steps, 4),
+    warmupSteps: choose(warmupSteps, settings.warmup_steps, 10),
+    minLearningRateRatio: choose(minLearningRateRatio, settings.min_learning_rate_ratio, 0.1),
+    gradientClipNorm: choose(gradientClipNorm, settings.gradient_clip_norm, 1.0),
+    evaluationBatches: choose(evaluationBatches, settings.evaluation_batches, 4),
+    saveEverySteps: choose(saveEverySteps, settings.save_every_steps, 50),
+    seed: choose(seed, settings.seed, 1337),
+    device: choose(device, settings.device, "auto"),
+    instructionMode: choose(instructionMode, settings.instruction_mode, true),
+    runBenchmarks: choose(runBenchmarks, evaluation.benchmark_each_epoch, true),
+    benchmarkTasks: choose(benchmarkTasks, evaluation.benchmark_tasks, ["utility-clamp", "python-slugify"]),
+    benchmarkTimeoutSeconds: choose(benchmarkTimeoutSeconds, evaluation.benchmark_timeout_seconds, 900)
+  };
+  if (!Array.isArray(selected.benchmarkTasks) || selected.benchmarkTasks.length < 1
+    || selected.benchmarkTasks.length > 4 || selected.benchmarkTasks.some(item => typeof item !== "string")) {
+    throw new Error("The configured local benchmark task list is invalid.");
+  }
+
   const python = await selectedPython();
   const args = [
     "-m", "brain.train",
     "--checkpoint", brainCheckpointPath(),
-    "--epochs", String(epochs),
-    "--batch-size", String(batchSize),
-    "--block-size", String(blockSize),
-    "--layers", String(layers),
-    "--heads", String(heads),
-    "--width", String(width),
-    "--vocab-size", String(vocabSize),
-    "--learning-rate", String(learningRate),
-    "--device", device
+    "--epochs", String(selected.epochs),
+    "--batch-size", String(selected.batchSize),
+    "--block-size", String(selected.blockSize),
+    "--layers", String(selected.layers),
+    "--heads", String(selected.heads),
+    "--width", String(selected.width),
+    "--vocab-size", String(selected.vocabSize),
+    "--learning-rate", String(selected.learningRate),
+    "--weight-decay", String(selected.weightDecay),
+    "--tokenizer-bytes", String(selected.tokenizerBytes),
+    "--max-dataset-bytes", String(selected.maxDatasetBytes),
+    "--gradient-accumulation-steps", String(selected.gradientAccumulationSteps),
+    "--warmup-steps", String(selected.warmupSteps),
+    "--min-lr-ratio", String(selected.minLearningRateRatio),
+    "--gradient-clip-norm", String(selected.gradientClipNorm),
+    "--evaluation-batches", String(selected.evaluationBatches),
+    "--save-every-steps", String(selected.saveEverySteps),
+    "--seed", String(selected.seed),
+    "--device", String(selected.device)
   ];
+  if (selected.instructionMode) args.push("--instruction-mode");
+  if (selected.runBenchmarks) args.push("--benchmark-each-epoch");
+  for (const task of selected.benchmarkTasks) args.push("--benchmark-task", task);
+  args.push("--benchmark-timeout-seconds", String(selected.benchmarkTimeoutSeconds));
   for (const dataset of datasetPaths) args.push("--dataset", path.resolve(dataset));
   if (resume) args.push("--resume");
 
@@ -478,7 +559,8 @@ export async function startBrainTraining({
     train_loss: null,
     validation_loss: null,
     tokens_per_second: 0,
-    message: "Starting local PyTorch training.",
+    benchmark: null,
+    message: "Starting local instruction training with the Phase 4 schedule.",
     updated_at: new Date().toISOString()
   };
 
@@ -492,9 +574,7 @@ export async function startBrainTraining({
       updated_at: new Date().toISOString()
     };
   };
-  const consumeLine = line => {
-    parseProgressLine(line, update);
-  };
+  const consumeLine = line => { parseProgressLine(line, update); };
   child.stdout.on("data", chunk => {
     stdoutPending += chunk.toString("utf8");
     let newline;
@@ -516,16 +596,15 @@ export async function startBrainTraining({
     if (trainingCancelled) {
       update({ status: "cancelled", message: "Training cancelled. The last atomic checkpoint is preserved.", error: null });
     } else if (code === 0) {
-      update({ status: "completed", message: "Local model training completed.", error: null });
+      update({ status: "completed", message: "Local instruction training and configured epoch evaluations completed.", error: null });
     } else {
       const message = stderr.trim().slice(-4000) || "Training process exited with code " + code + (signalName ? " (" + signalName + ")" : "") + ".";
       update({ status: "failed", message, error: message });
     }
     trainingProcess = null;
   });
-  return { ...trainingState, pid: child.pid || null };
+  return { ...trainingState, pid: child.pid || null, applied_config: selected };
 }
-
 export function cancelBrainTraining() {
   if (!trainingProcess || trainingState.status !== "running") {
     return { ok: false, message: "No local training process is running." };
