@@ -30,10 +30,19 @@ def parser() -> argparse.ArgumentParser:
 
 
 def write_atomic(destination: Path, content: str) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    # Resolve the parent after creation, reject symlink redirection, and require
-    # it to be within the project or an explicitly approved corpus directory.
-    parent = resolve_corpus_root(destination.parent.resolve(strict=True))
+    # Resolve and authorize the destination before creating any directories.
+    candidate_parent = destination.parent.resolve(strict=False)
+    allowed_roots = [PROJECT_ROOT.resolve()]
+    for raw_root in os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS", "").split(os.pathsep):
+        if not raw_root.strip():
+            continue
+        configured = Path(raw_root).expanduser()
+        if configured.is_absolute() and configured.is_dir():
+            allowed_roots.append(configured.resolve())
+    if not any(candidate_parent == root or root in candidate_parent.parents for root in allowed_roots):
+        raise ValueError("Corpus output must be inside the repository or an approved local directory.")
+    candidate_parent.mkdir(parents=True, exist_ok=True)
+    parent = resolve_corpus_root(candidate_parent.resolve(strict=True))
     target = parent / destination.name
     if target.is_symlink():
         raise ValueError("Refusing to overwrite a symlink corpus output.")
