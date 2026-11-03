@@ -93,6 +93,8 @@ type BrainStatus = {
   validation_loss: number | null;
   context_tokens: number;
   tokenizer_vocab_size: number;
+  instruction_mode?: boolean;
+  last_benchmark?: BrainStatus['training']['benchmark'];
   training: {
     status: string;
     epoch?: number;
@@ -671,7 +673,12 @@ export default function App() {
     try {
       // brain/config.json is the single source of truth for model size,
       // accumulation, cosine schedule, instruction mode, and epoch fixtures.
-      await postJson('/local-api/brain/train', { root, epochs: 1, device: 'auto' });
+      await postJson('/local-api/brain/train', {
+        root,
+        epochs: 1,
+        device: 'auto',
+        resume: brainStatus?.instruction_mode === true && brainStatus.context_tokens === 512
+      });
       await refreshBrainStatus();
     } catch (cause) {
       setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
@@ -1112,7 +1119,7 @@ export default function App() {
               onClick={() => void startBrainTrainingFromWorkspace()}
               disabled={!workspaceStatus?.root || pending || brainTrainingStarting || trainingActive}
             >
-              {trainingActive || brainTrainingStarting ? 'Training local model…' : brainStatus?.checkpoint_exists ? 'Continue training on this workspace' : 'Train local brain on this workspace'}
+              {trainingActive || brainTrainingStarting ? 'Training local model…' : brainStatus?.instruction_mode === true && brainStatus.checkpoint_exists ? 'Continue Phase 4 training on this workspace' : 'Train local brain on this workspace'}
             </button>
             {trainingActive && (
               <>
