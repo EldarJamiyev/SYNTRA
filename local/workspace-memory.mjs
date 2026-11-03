@@ -265,10 +265,17 @@ async function requestLocalEmbeddings(fetchImpl, model, input) {
   if (!Array.isArray(input) || input.length < 1 || input.length > EMBEDDING_BATCH_SIZE) {
     throw new Error("Local embedding batches must contain 1-32 texts.");
   }
-  const response = await fetchImpl("http://127.0.0.1:11434/api/embed", {
+  const isNative = model === "syntra-native" || String(model || "").startsWith("syntra-");
+  const endpoint = isNative
+    ? `http://127.0.0.1:${Number(process.env.SYNTRA_AI_PORT || 3002)}/model/embed`
+    : "http://127.0.0.1:11434/api/embed";
+  const body = isNative
+    ? { texts: input, max_length: 256, device: "auto" }
+    : { model, input, truncate: false };
+  const response = await fetchImpl(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, input, truncate: false }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(25000)
   });
   if (!response.ok) throw new Error("Local Ollama embedding request failed with HTTP " + response.status + ".");
@@ -492,3 +499,64 @@ export async function deleteWorkspaceMemory(inputRoot, input) {
   await writeMemory(root, { schemaVersion: MEMORY_SCHEMA_VERSION, root, updatedAt: now, notes });
   return { id: current.id, deleted: true, total: notes.length };
 }
+
+export function synthesizeMemoryNoteFromAgentRun(run) {
+  if (!run || typeof run !== "object") return null;
+  if (run.verification?.passed !== true && run.status !== "verified_proposals_ready") return null;
+  const files = (Array.isArray(run.changedFiles) ? run.changedFiles : [])
+    .map(item => String(item?.path || "").trim())
+    .filter(Boolean);
+  if (!files.length) return null;
+  const primaryFile = path.posix.basename(files[0].replace(/\\/g, "/"));
+  const goalSnippet = String(run.goal || "Verified change").replace(/\s+/g, " ").trim().slice(0, 72);
+  const title = `Verified pattern: ${primaryFile} — ${goalSnippet}`.slice(0, MAX_TITLE_LENGTH).trim();
+  const reasons = (Array.isArray(run.changedFiles) ? run.changedFiles : [])
+    .map(item => item?.reason ? `${item.path}: ${item.reason}` : item?.path)
+    .filter(Boolean)
+    .slice(0, 6);
+  const checkNames = (Array.isArray(run.verification?.checks) ? run.verification.checks : [])
+    .filter(check => check?.passed)
+    .map(check => check.task)
+    .filter(Boolean);
+  const contentLines = [
+    `Goal: ${String(run.goal || "").trim().slice(0, 360)}`,
+    `Modified files (${files.length}): ${files.slice(0, 8).join(", ")}`,
+    ...(reasons.length ? [`Implementation notes: ${reasons.join(" | ").slice(0, 800)}`] : []),
+    ...(checkNames.length ? [`Verified checks: ${checkNames.join(", ")}`] : [])
+  ];
+  const content = contentLines.join("\n").slice(0, MAX_CONTENT_LENGTH).trim();
+  if (!title || !content || hasCredentialPattern(title + "\n" + content)) return null;
+  const tags = [];
+  for (const file of files.slice(0, 5)) {
+    const base = path.posix.basename(file.replace(/\\/g, "/")).replace(/[^a-zA-Z0-9_.-]/g, "").slice(0, 28);
+    if (base && TAG_PATTERN.test(base) && !tags.includes(base)) tags.push(base);
+  }
+  if (!tags.includes("verified") && tags.length < MAX_TAGS) tags.push("verified");
+  return {
+    title,
+    content,
+    category: "workflow",
+    tags: tags.slice(0, MAX_TAGS)
+  };
+}
+
+export async function recordVerifiedAgentMemory(inputRoot, run) {
+  const candidate = synthesizeMemoryNoteFromAgentRun(run);
+  if (!candidate) return null;
+  const root = await resolveWorkspace(inputRoot);
+  const store = await readMemory(root);
+  const existing = store.notes.find(note => note.title.toLowerCase() === candidate.title.toLowerCase());
+  if (existing) {
+    return updateWorkspaceMemory(root, {
+      id: existing.id,
+      expectedUpdatedAt: existing.updatedAt,
+      title: candidate.title,
+      content: candidate.content,
+      category: candidate.category,
+      tags: candidate.tags
+    });
+  }
+  if (store.notes.length >= MAX_NOTES) return null;
+  return addWorkspaceMemory(root, candidate);
+}
+

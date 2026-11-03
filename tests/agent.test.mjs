@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  analyzeCheckFailure,
   buildRepositoryGraph,
   deriveAgentBudget,
   deriveModelContextBudget,
@@ -1162,3 +1163,18 @@ test("model context budgets adapt to exact provider tokenizers and conservative 
   assert.ok(tiny.contextBudgetTokens >= 128);
   assert.ok(tiny.outputBudgetTokens >= 128);
 });
+
+test("analyzeCheckFailure classifies verification failures and pinpoints workspace fault locations", () => {
+  const assertionDiagnosis = analyzeCheckFailure([{
+    task: "test",
+    passed: false,
+    exitCode: 1,
+    stderr: "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n+ actual - expected\n  at TestContext.<anonymous> (file:///workspace/tests/value.test.js:14:10)\n  at clamp (file:///workspace/src/value.js:8:5)"
+  }], ["src/value.js", "tests/value.test.js"]);
+  assert.ok(assertionDiagnosis);
+  assert.equal(assertionDiagnosis.category, "assertion_failure");
+  assert.ok(assertionDiagnosis.faultPaths.includes("src/value.js"));
+  assert.ok(assertionDiagnosis.locations.some(item => item.path === "src/value.js" && item.line === 8));
+  assert.match(assertionDiagnosis.summary, /assertion_failure/);
+});
+

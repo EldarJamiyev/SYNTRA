@@ -5,8 +5,8 @@ import crypto from "node:crypto";
 import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
-import { isCodingTask } from "./chat-intent.mjs";
-import { detectLocalModel, handleLocalModelRequest, handleGeminiModelRequest } from "./model-provider.mjs";
+import { classifyChatIntent, isCodingTask } from "./chat-intent.mjs";
+import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
@@ -69,11 +69,6 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
   const signal = options?.signal;
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
-  const hasGeminiKey = Boolean(String(process.env.SYNTRA_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim());
-  const providerMode = String(process.env.SYNTRA_MODEL_PROVIDER || (hasGeminiKey ? "gemini" : "ollama")).trim().toLowerCase();
-  if (modelRoute && providerMode === "gemini") {
-    return handleGeminiModelRequest(method, route, body || {}, { timeoutMs, onToken, signal });
-  }
   if (modelRoute) {
     let provider = await detectLocalModel();
     let modelBody = body || {};
@@ -90,17 +85,50 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
     }
   }
 
+  const useNativeStream = Boolean(onToken && method === "POST" && route === "/model/generate");
+  const requestBody = method === "GET" ? undefined : JSON.stringify(useNativeStream ? { ...(body || {}), stream: true } : (body || {}));
+  const requestTimeout = timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000);
   let response;
   try {
     response = await fetch(AI_BASE + route, {
       method,
       headers: method === "GET" ? {} : { "Content-Type": "application/json" },
-      body: method === "GET" ? undefined : JSON.stringify(body || {}),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))]) : AbortSignal.timeout(timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000))
+      body: requestBody,
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(requestTimeout)]) : AbortSignal.timeout(requestTimeout)
     });
   } catch (error) {
     if (signal?.aborted || error?.name === "AbortError") throw error;
     throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server', or install and run a local Ollama model for stronger local inference.");
+  }
+  const contentType = String(response.headers?.get?.("content-type") || "");
+  if (response.ok && useNativeStream && contentType.includes("application/x-ndjson") && response.body) {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    let finalPayload = null;
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line);
+        if (typeof event.delta === "string" && event.delta) {
+          fullText += event.delta;
+          onToken(event.delta, fullText);
+        }
+        if (event.done) finalPayload = event;
+      }
+    }
+    if (buffer.trim()) {
+      const event = JSON.parse(buffer.trim());
+      if (typeof event.delta === "string" && event.delta) {
+        fullText += event.delta;
+        onToken(event.delta, fullText);
+      }
+      if (event.done) finalPayload = event;
+    }
+    return finalPayload || { text: fullText, is_model_output: true };
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || "SYNTRA AI request failed with HTTP " + response.status);
@@ -607,7 +635,9 @@ async function runChatTurn(jobId, message, history, signal) {
       taskGoal = resumeRecord.goal;
     }
 
-    if (isCodingTask(message) || resumeRecord) {
+    const intent = classifyChatIntent(message, history);
+
+    if (intent.kind === "coding_task" || isCodingTask(message) || resumeRecord) {
       const saved = await listPendingProposals(activeWorkspace);
       if (saved.pending.length || saved.stale.length) {
         finishChat(jobId, "This workspace already has saved proposals. Type /proposals to inspect them, then use /apply or /discard before starting or resuming a code task.");
@@ -642,6 +672,7 @@ async function runChatTurn(jobId, message, history, signal) {
       const result = await runAgentTask({
         root: activeWorkspace,
         goal: taskGoal,
+        requestedPath: intent.targetPaths[0] || undefined,
         maxIterations: 3,
         maxSlices: 3,
         runChecks: true,
@@ -736,6 +767,46 @@ async function runChatTurn(jobId, message, history, signal) {
       return;
     }
 
+    const chatToolCalls = [];
+    let workspaceGrounding = "";
+    if (intent.kind === "workspace_query") {
+      updateChat(jobId, { phase: "inspecting", message: "Retrieving relevant workspace evidence" });
+      const groundingSnippets = [];
+      for (const relPath of intent.targetPaths.slice(0, 2)) {
+        const readRun = await executeWorkspaceTool({
+          root: activeWorkspace, auditRoot: activeWorkspace,
+          name: "workspace.read", input: { path: relPath, startLine: 1, endLine: 70 }, signal
+        });
+        chatToolCalls.push({
+          runId: readRun.runId, name: readRun.name, status: readRun.status,
+          permission: readRun.permission, durationMs: readRun.durationMs, auditRecorded: readRun.auditRecorded
+        });
+        if (readRun.ok && readRun.output?.content) {
+          groundingSnippets.push(`FILE ${readRun.output.path}:\n${String(readRun.output.content).slice(0, 1200)}`);
+        }
+      }
+      if (intent.searchQuery && intent.searchQuery.length >= 2) {
+        const symRun = await executeWorkspaceTool({
+          root: activeWorkspace, auditRoot: activeWorkspace,
+          name: "workspace.symbols.search", input: { query: intent.searchQuery.slice(0, 160), limit: 4 }, signal
+        });
+        chatToolCalls.push({
+          runId: symRun.runId, name: symRun.name, status: symRun.status,
+          permission: symRun.permission, durationMs: symRun.durationMs, auditRecorded: symRun.auditRecorded
+        });
+        if (symRun.ok && Array.isArray(symRun.output?.symbols) && symRun.output.symbols.length) {
+          groundingSnippets.push(
+            "MATCHED SYMBOLS:\n" + symRun.output.symbols
+              .map(s => `- ${s.kind} ${s.name} in ${s.path}:${s.line}`)
+              .join("\n")
+          );
+        }
+      }
+      if (groundingSnippets.length) {
+        workspaceGrounding = "WORKSPACE EVIDENCE (read-only repository context):\n" + groundingSnippets.join("\n\n").slice(0, 2400);
+      }
+    }
+
     const recentHistory = Array.isArray(history)
       ? history.filter(item => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
           .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-2500) }))
@@ -749,13 +820,15 @@ async function runChatTurn(jobId, message, history, signal) {
       prompt = [
         "SYNTRA ASSISTANT",
         "Answer the user's latest message directly and clearly. Do not claim facts or tools you do not have.",
+        ...(workspaceGrounding ? [workspaceGrounding] : []),
         ...recentHistory.map(item => (item.role === "user" ? "USER: " : "ASSISTANT: ") + item.content),
         "USER: " + userMessage,
         "ASSISTANT:"
       ].join("\n\n");
       tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000);
       if (tokenInfo.token_count <= contextLimit) break;
-      if (recentHistory.length) recentHistory.shift();
+      if (workspaceGrounding) workspaceGrounding = "";
+      else if (recentHistory.length) recentHistory.shift();
       else if (userMessage.length > 1000) userMessage = userMessage.slice(-Math.max(1000, Math.floor(userMessage.length * 0.65)));
       else break;
     }
@@ -779,7 +852,9 @@ async function runChatTurn(jobId, message, history, signal) {
     });
     const reply = String(generation.text || "").trim();
     finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more training is needed.", {
-      contextTokensUsed: tokenInfo.token_count, trainedSteps: generation.trained_steps
+      contextTokensUsed: tokenInfo.token_count,
+      trainedSteps: generation.trained_steps,
+      ...(chatToolCalls.length ? { toolCalls: chatToolCalls } : {})
     });
   } catch (error) {
     const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
@@ -888,7 +963,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning", "failure-root-cause-diagnosis", "repository-curriculum-synthesis", "native-semantic-embeddings"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,
@@ -909,8 +984,11 @@ const routeHandlers = {
   "POST /local-api/workspace/switch": switchWorkspace,
   "GET /local-api/ai/status": async () => aiRequest("GET", "/model/status"),
   "GET /local-api/ai/train/status": async () => aiRequest("GET", "/model/train/status"),
-  "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", body),
+  "POST /local-api/ai/train": async body => aiRequest("POST", "/model/train", { ...body, root: await resolveWorkspace(body.root || activeWorkspace) }),
   "POST /local-api/ai/finetune": async body => aiRequest("POST", "/model/finetune", body),
+  "POST /local-api/ai/curriculum": async body => aiRequest("POST", "/model/curriculum", { ...body, root: await resolveWorkspace(body.root || activeWorkspace) }),
+  "POST /local-api/ai/embed": async body => aiRequest("POST", "/model/embed", body),
+  "POST /local-api/ai/evaluate": async body => aiRequest("POST", "/model/evaluate", { ...body, root: await resolveWorkspace(body.root || activeWorkspace) }),
   "POST /local-api/agent/generate": generateAgentCompletion,
   "POST /local-api/workspace/inspect": async body => executeToolOutput({
     root: body.root || activeWorkspace, name: "workspace.inspect", input: {}

@@ -82,6 +82,21 @@ type AgentRunSummary = {
   recoveryAvailable: boolean;
   checkpoint?: { stage?: string; iteration?: number };
   observations?: Array<{ kind: string; status: string; path?: string | null }>;
+  verification?: {
+    passed?: boolean;
+    status?: string;
+    diagnosis?: { category?: string; summary?: string; faultPaths?: string[] } | null;
+  } | null;
+};
+
+type NativeAiStatus = {
+  provider?: string;
+  model_name?: string;
+  checkpoint_exists?: boolean;
+  parameters?: number;
+  context_tokens?: number;
+  resident_cached?: boolean;
+  tokenizer_vocab_size?: number;
 };
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
@@ -221,6 +236,10 @@ export default function App() {
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memorySaving, setMemorySaving] = useState(false);
   const [memoryError, setMemoryError] = useState('');
+  const [nativeAiStatus, setNativeAiStatus] = useState<NativeAiStatus | null>(null);
+  const [nativeAiBusy, setNativeAiBusy] = useState(false);
+  const [nativeAiNotice, setNativeAiNotice] = useState('');
+  const [expandedProposalId, setExpandedProposalId] = useState<string | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [input, setInput] = useState('');
@@ -583,6 +602,75 @@ export default function App() {
     if (mountedRef.current) setAgentRuns(result.runs || []);
   };
 
+  const refreshNativeAiStatus = async () => {
+    try {
+      const status = await getJson<NativeAiStatus>('/local-api/ai/status');
+      if (mountedRef.current) setNativeAiStatus(status);
+    } catch {
+      if (mountedRef.current) setNativeAiStatus(null);
+    }
+  };
+
+  const runCurriculumSynthesis = async () => {
+    if (nativeAiBusy || pending) return;
+    setNativeAiBusy(true);
+    setNativeAiNotice('Synthesizing repository curriculum…');
+    try {
+      const root = workspaceStatus?.root || workspacePath || undefined;
+      const result = await postJson<{ examples_written?: number; scanned_files?: number }>(
+        '/local-api/ai/curriculum',
+        { ...(root ? { root } : {}), max_examples: 240 },
+      );
+      if (mountedRef.current) {
+        setNativeAiNotice(
+          `Synthesized ${Number(result.examples_written || 0)} instruction records from ${Number(result.scanned_files || 0)} files.`,
+        );
+      }
+      await refreshNativeAiStatus();
+    } catch (cause) {
+      if (mountedRef.current) setNativeAiNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (mountedRef.current) setNativeAiBusy(false);
+    }
+  };
+
+  const triggerNativeBrainJob = async (mode: 'train' | 'finetune') => {
+    if (nativeAiBusy || pending) return;
+    setNativeAiBusy(true);
+    setNativeAiNotice(mode === 'train' ? 'Starting local pretraining…' : 'Starting instruction fine-tuning…');
+    try {
+      const root = workspaceStatus?.root || workspacePath || undefined;
+      const endpoint = mode === 'train' ? '/local-api/ai/train' : '/local-api/ai/finetune';
+      const started = await postJson<{ jobId: string; status: string }>(endpoint, {
+        ...(mode === 'train' && root ? { root } : {}),
+        steps: mode === 'train' ? 16 : 12,
+        batch_size: 4,
+      });
+      let pollCount = 0;
+      while (pollCount < 45 && mountedRef.current) {
+        await new Promise(resolve => window.setTimeout(resolve, 600));
+        pollCount += 1;
+        const job = await postJson<{ status: string; error?: string; result?: { final_loss?: number } }>(
+          '/local-api/ai/train/status',
+          { jobId: started.jobId },
+        );
+        if (job.status === 'completed') {
+          const loss = typeof job.result?.final_loss === 'number' ? ` (loss ${job.result.final_loss.toFixed(4)})` : '';
+          setNativeAiNotice((mode === 'train' ? 'Pretraining completed' : 'Fine-tuning completed') + loss + '.');
+          break;
+        }
+        if (job.status === 'failed') {
+          throw new Error(job.error || 'Local optimization job did not complete.');
+        }
+      }
+      await refreshNativeAiStatus();
+    } catch (cause) {
+      if (mountedRef.current) setNativeAiNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (mountedRef.current) setNativeAiBusy(false);
+    }
+  };
+
   const cancelActiveChat = async () => {
     const jobId = activeJobIdRef.current;
     if (!jobId) return;
@@ -764,6 +852,7 @@ export default function App() {
               // Fetch its recovered run state when the workspace panel is reopened.
               void refreshAgentRuns().catch(() => {});
               void refreshWorkspaceStatus().catch(() => {});
+              void refreshNativeAiStatus().catch(() => {});
               void refreshWorkspaceExclusions().catch(cause => {
                 if (mountedRef.current) setExclusionsError(cause instanceof Error ? cause.message : String(cause));
               });
@@ -817,6 +906,33 @@ export default function App() {
             </button>
           </form>
           {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
+          <section className="workspace-native-ai-panel" aria-label="Native AI runtime">
+            <div className="workspace-memory-heading">
+              <div>
+                <div className="workspace-agent-runs-heading">Native AI runtime</div>
+                <div className="workspace-memory-subtitle">
+                  {nativeAiStatus
+                    ? `${nativeAiStatus.provider || 'local'} · ${nativeAiStatus.checkpoint_exists ? 'Weights ready' : 'Untrained weights'}${nativeAiStatus.context_tokens ? ` · ${nativeAiStatus.context_tokens} ctx` : ''}`
+                    : 'Local runtime status'}
+                </div>
+              </div>
+              <span className="workspace-memory-count">
+                {nativeAiStatus?.resident_cached ? 'Resident' : nativeAiStatus?.checkpoint_exists ? 'Ready' : 'Standby'}
+              </span>
+            </div>
+            <div className="workspace-native-ai-actions">
+              <button type="button" onClick={() => void runCurriculumSynthesis()} disabled={nativeAiBusy || pending}>
+                Synthesize curriculum
+              </button>
+              <button type="button" onClick={() => void triggerNativeBrainJob('train')} disabled={nativeAiBusy || pending}>
+                Train native brain
+              </button>
+              <button type="button" onClick={() => void triggerNativeBrainJob('finetune')} disabled={nativeAiBusy || pending}>
+                Fine-tune brain
+              </button>
+            </div>
+            {nativeAiNotice && <div className="workspace-memory-footnote" role="status">{nativeAiNotice}</div>}
+          </section>
           <section className="workspace-exclusions-panel" aria-label="Agent path exclusions">
             <div className="workspace-memory-heading">
               <div>
@@ -986,6 +1102,11 @@ export default function App() {
                         {run.observations?.length} evidence points
                       </span>
                     )}
+                    {run.verification?.diagnosis?.category && (
+                      <span className="agent-run-diagnosis" title={run.verification.diagnosis.summary || ''}>
+                        {run.verification.diagnosis.category}
+                      </span>
+                    )}
                   </span>
                 </div>
                 {run.status === 'interrupted' && (
@@ -1005,9 +1126,20 @@ export default function App() {
               </div>
               <div className="workspace-proposal-files">
                 {[...workspaceStatus.pendingProposals, ...workspaceStatus.staleProposals].slice(0, 5).map(proposal => (
-                  <div className="workspace-proposal-file" key={proposal.id}>
-                    <span>{proposal.path}</span>
-                    <span>{proposal.summary ? '+' + Number(proposal.summary.addedLines || 0) + ' / −' + Number(proposal.summary.removedLines || 0) : 'Stale'}</span>
+                  <div className="workspace-proposal-item" key={proposal.id}>
+                    <div className="workspace-proposal-file">
+                      <button
+                        type="button"
+                        className="workspace-proposal-toggle"
+                        onClick={() => setExpandedProposalId(current => current === proposal.id ? null : proposal.id)}
+                      >
+                        {proposal.path}
+                      </button>
+                      <span>{proposal.summary ? '+' + Number(proposal.summary.addedLines || 0) + ' / −' + Number(proposal.summary.removedLines || 0) : 'Stale'}</span>
+                    </div>
+                    {expandedProposalId === proposal.id && proposal.summary?.preview && (
+                      <pre className="workspace-proposal-preview">{proposal.summary.preview}</pre>
+                    )}
                   </div>
                 ))}
                 {workspaceStatus.pendingProposals.length + workspaceStatus.staleProposals.length > 5 && (

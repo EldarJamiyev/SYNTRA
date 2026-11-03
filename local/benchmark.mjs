@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
-import { runAgentTask } from "./agent.mjs";
+import { analyzeCheckFailure, runAgentTask } from "./agent.mjs";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DEFAULT_BENCHMARK_SUITE = path.join(REPO_ROOT, "benchmarks", "suite.v1.json");
 const OUTPUT_LIMIT = 12000;
@@ -140,15 +140,32 @@ export function evaluateBenchmarkTask(task, agentResult, metrics = {}) {
   const exactPaths = actualPaths.length === expectedPaths.length && actualPaths.every((item, index) => item === expectedPaths[index]);
   const patchValid = actualPaths.length > 0 && exactPaths;
   const verificationPassed = agentResult?.verification?.passed === true;
-  const promptTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.promptTokens) || 0), 0);
-  const outputTokens = (Array.isArray(agentResult?.attempts) ? agentResult.attempts : []).reduce((sum, item) => sum + Math.max(0, Number(item?.outputTokens) || 0), 0);
+  const attempts = Array.isArray(agentResult?.attempts) ? agentResult.attempts : [];
+  const attemptCount = attempts.length;
+  const repairAttempts = Math.max(0, attemptCount - 1);
+  const promptTokens = attempts.reduce((sum, item) => sum + Math.max(0, Number(item?.promptTokens) || 0), 0);
+  const outputTokens = attempts.reduce((sum, item) => sum + Math.max(0, Number(item?.outputTokens) || 0), 0);
+  const taskComplete = !skipped && patchValid && verificationPassed;
+  const diagnosisCategory = agentResult?.verification?.diagnosis?.category
+    || analyzeCheckFailure(agentResult?.verification?.checks || [])?.category
+    || null;
+  const failureCategory = skipped
+    ? "skipped"
+    : taskComplete
+      ? null
+      : !patchValid
+        ? "invalid_or_incomplete_patch"
+        : (diagnosisCategory || "verification_failed");
   return {
     id: task.id, category: String(task.category || "general"), title: task.title,
     agentStatus: skipped ? "skipped" : String(agentResult?.status || "unknown"),
     skipped,
     patchValid: !skipped && patchValid,
     verificationPassed: !skipped && verificationPassed,
-    taskComplete: !skipped && patchValid && verificationPassed,
+    taskComplete,
+    attemptCount,
+    repairAttempts,
+    failureCategory,
     expectedChangedPaths: expectedPaths, changedPaths: actualPaths,
     verificationStatus: String(agentResult?.verification?.status || "not_run"),
     latencyMs: Math.max(0, Math.round(Number(metrics.latencyMs) || 0)),

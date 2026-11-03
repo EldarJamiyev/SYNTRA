@@ -3,12 +3,17 @@ import os
 import tempfile
 import threading
 import unittest
-import torch
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+try:
+    import torch
+except ImportError:
+    torch = None
 
+
+@unittest.skipIf(torch is None, "Install requirements.txt to run local API smoke tests.")
 class LocalApiSmokeTests(unittest.TestCase):
     def test_health_status_missing_checkpoint_and_origin_guard(self):
         from syntra_ai.server import Handler

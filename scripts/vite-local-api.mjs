@@ -85,21 +85,9 @@ export function syntraLocalApiPlugin(options = {}) {
   const root = path.resolve(options.root || DEFAULT_ROOT);
   const stdio = options.stdio || "inherit";
   const timeoutMs = options.timeoutMs || 20000;
-  const baseEnv = options.env || process.env;
-  const env = options.env
-    ? baseEnv
-    : {
-        ...baseEnv,
-        ...(baseEnv.GEMINI_API_KEY && !baseEnv.SYNTRA_GEMINI_API_KEY
-          ? { SYNTRA_GEMINI_API_KEY: baseEnv.GEMINI_API_KEY }
-          : {}),
-        ...(baseEnv.GEMINI_API_KEY && !baseEnv.SYNTRA_MODEL_PROVIDER
-          ? { SYNTRA_MODEL_PROVIDER: "gemini" }
-          : {}),
-        ...(baseEnv.GEMINI_API_KEY && baseEnv.SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT === undefined
-          ? { SYNTRA_GEMINI_ALLOW_REPOSITORY_CONTENT: "1" }
-          : {})
-      };
+  // Tests and embedders can supply an isolated environment without mutating
+  // the host process environment shared by concurrent Node test workers.
+  const env = options.env || process.env;
 
   return {
     name: "syntra-local-api",

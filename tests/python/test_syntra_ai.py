@@ -14,8 +14,11 @@ from syntra_ai.config import ModelConfig
 from syntra_ai.tokenizer import ByteBPETokenizer
 
 
-@unittest.skipIf(torch is None, "Install requirements.txt to run neural model tests.")
+TORCH_SKIP_REASON = "Install requirements.txt to run neural model tests."
+
+
 class TransformerTests(unittest.TestCase):
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_random_initialized_transformer_forward_and_loss(self):
         from syntra_ai.model import SyntraTransformer
         config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
@@ -29,6 +32,7 @@ class TransformerTests(unittest.TestCase):
         loss.backward()
         self.assertIsNotNone(model.token_embedding.weight.grad)
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_cached_incremental_logits_match_full_forward(self):
         from syntra_ai.model import BOS_ID, SyntraTransformer
 
@@ -56,6 +60,7 @@ class TransformerTests(unittest.TestCase):
         self.assertEqual(cache[0][0].shape[-2], tokens.shape[1])
         self.assertEqual(cache[0][1].shape[-2], tokens.shape[1])
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_cached_generation_recomputes_context_at_window_saturation(self):
         from syntra_ai.model import BOS_ID, EOS_ID, SyntraTransformer
 
@@ -80,6 +85,7 @@ class TransformerTests(unittest.TestCase):
         self.assertIn(1, input_lengths, "incremental generation should pass one new token into the cache")
         self.assertIn(config.seq_len, input_lengths, "generation should rebuild the rolling window at context saturation")
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_model_generation_uses_actual_neural_forward(self):
         from syntra_ai.model import BOS_ID, SyntraTransformer
         config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
@@ -105,6 +111,7 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ModelConfig(seq_len=16385).validate()
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_inference_loader_falls_back_when_companion_is_stale(self):
         from syntra_ai.model import SyntraTransformer
         from syntra_ai.runtime import _read_checkpoint
@@ -414,6 +421,7 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "safety budget"):
             validate_inference_memory_budget(large, 1, 8192, "cpu", available_bytes=8 * 1024 ** 3)
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_instruction_finetuning_rejects_oversized_config_before_model_allocation(self):
         from syntra_ai.instruction import finetune
 
@@ -460,6 +468,83 @@ class TransformerTests(unittest.TestCase):
             self.assertNotIn(".env", joined_paths)
             self.assertNotIn(b"API_TOKEN", bytes(token for token in corpus.token_ids if token < 256))
 
+    def test_unified_brain_checkpoint_normalization_and_modern_config(self):
+        from syntra_ai.runtime import _normalize_checkpoint_payload
+
+        config = ModelConfig.from_dict({
+            "vocab_size": 300,
+            "block_size": 64,
+            "n_layer": 2,
+            "n_head": 2,
+            "n_embd": 32,
+            "dropout": 0.0,
+            "use_rope": True,
+            "use_rmsnorm": True,
+            "use_swiglu": True,
+        })
+        self.assertEqual(config.seq_len, 64)
+        self.assertEqual(config.block_size, 64)
+        self.assertTrue(config.use_rope)
+        self.assertTrue(config.use_rmsnorm)
+        self.assertTrue(config.use_swiglu)
+
+        brain_payload = {
+            "format": "syntra-brain-checkpoint",
+            "version": 1,
+            "step": 12,
+            "config": {"vocab_size": 258, "block_size": 32, "n_layer": 1, "n_head": 2, "n_embd": 32, "dropout": 0.0},
+            "tokenizer": {"format": "syntra-local-byte-bpe-v1", "merges": []},
+            "model_state_dict": {
+                "token_embedding.weight": "w_tok",
+                "blocks.0.norm_attention.weight": "w_ln1",
+                "blocks.0.attention.qkv.weight": "w_qkv",
+                "blocks.0.attention.projection.weight": "w_proj",
+                "blocks.0.norm_feed_forward.weight": "w_ln2",
+                "blocks.0.feed_forward.layers.0.weight": "w_mlp0",
+                "blocks.0.feed_forward.layers.2.weight": "w_mlp2",
+                "language_model_head.weight": "w_head",
+            },
+        }
+        normalized = _normalize_checkpoint_payload(brain_payload)
+        self.assertEqual(normalized["format"], "syntra-transformer-v1")
+        self.assertEqual(normalized["source_format"], "syntra-brain-checkpoint")
+        self.assertEqual(normalized["config"]["seq_len"], 32)
+        self.assertEqual(normalized["tokenizer"]["format"], "syntra-byte-bpe-v1")
+        self.assertIn("blocks.0.ln_1.weight", normalized["model_state"])
+        self.assertIn("blocks.0.attn.qkv.weight", normalized["model_state"])
+        self.assertIn("blocks.0.attn.proj.weight", normalized["model_state"])
+        self.assertIn("blocks.0.ln_2.weight", normalized["model_state"])
+        self.assertIn("blocks.0.mlp.0.weight", normalized["model_state"])
+        self.assertIn("blocks.0.mlp.2.weight", normalized["model_state"])
+        self.assertIn("lm_head.weight", normalized["model_state"])
+
+    def test_synthesize_repository_curriculum_creates_audited_jsonl(self):
+        from syntra_ai.instruction import synthesize_repository_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-") as temp:
+            root = Path(temp)
+            (root / "math_utils.py").write_text(
+                "def clamp_value(value, minimum, maximum):\n"
+                "    if value < minimum:\n"
+                "        return minimum\n"
+                "    if value > maximum:\n"
+                "        return maximum\n"
+                "    return value\n\n"
+                "def normalize_scores(items):\n"
+                "    total = sum(items) or 1.0\n"
+                "    return [round(item / total, 4) for item in items]\n",
+                encoding="utf-8",
+            )
+            out_file = root / "curriculum.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_repository_curriculum(root=root, output_path=out_file, max_examples=20)
+            self.assertTrue(out_file.is_file())
+            self.assertGreaterEqual(result["example_count"], 4)
+            self.assertTrue(result["audit"]["valid"])
+            self.assertTrue(result["audit"]["split_available"])
+            self.assertEqual(result["audit"]["prompt_leakage_groups"], 0)
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_real_training_checkpoint_and_supervised_prompt_masking(self):
         from syntra_ai.instruction import finetune, load_instruction_examples
         from syntra_ai.runtime import load_model

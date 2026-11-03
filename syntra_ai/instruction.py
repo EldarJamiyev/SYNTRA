@@ -1,18 +1,26 @@
 """Supervised prompt/completion fine-tuning with the checkpoint's exact BPE tokenizer."""
+from __future__ import annotations
 from pathlib import Path
 from time import monotonic
-from typing import Callable
+from typing import Any, Callable
 import hashlib
 import json
+import re
 import unicodedata
 
-import torch
+try:
+    import torch
+    from .model import SyntraTransformer
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    SyntraTransformer = None  # type: ignore[assignment]
 
 from .config import ModelConfig
-from .model import BOS_ID, EOS_ID, SyntraTransformer
+from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
-from .runtime import checkpoint_path
-from .tokenizer import ByteBPETokenizer
+from .runtime import _normalize_checkpoint_payload, checkpoint_path, clear_resident_cache
+from .safe_paths import PROJECT_ROOT, resolve_corpus_root
+from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
     _atomic_checkpoint, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
 )
@@ -254,7 +262,7 @@ def audit_instruction_dataset(
         "tokenization_note": "Byte-level fallback used for audit unless a checkpoint tokenizer is supplied; fine-tuning uses the checkpoint tokenizer.",
     }
 
-def _instruction_batch(examples: list[dict], batch_size: int, device: torch.device):
+def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
     indices = torch.randint(0, len(examples), (batch_size,)).tolist()
     chosen = [examples[index] for index in indices]
     length = max(len(example["input_ids"]) for example in chosen)
@@ -266,19 +274,19 @@ def _instruction_batch(examples: list[dict], batch_size: int, device: torch.devi
     return torch.tensor(inputs, dtype=torch.long, device=device), torch.tensor(targets, dtype=torch.long, device=device)
 
 
-@torch.no_grad()
-def _instruction_loss(model, examples: list[dict], device: torch.device, batch_size: int, batches: int = 4) -> float:
-    model.eval()
-    values = []
-    for _ in range(batches):
-        x, y = _instruction_batch(examples, batch_size, device)
-        _, loss = model(x, y)
-        if loss is not None and torch.isfinite(loss):
-            values.append(float(loss.item()))
-    model.train()
-    if not values:
-        raise ValueError("Validation batch contained no supervised completion tokens.")
-    return sum(values) / len(values)
+def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int, batches: int = 4) -> float:
+    with torch.no_grad():
+        model.eval()
+        values = []
+        for _ in range(batches):
+            x, y = _instruction_batch(examples, batch_size, device)
+            _, loss = model(x, y)
+            if loss is not None and torch.isfinite(loss):
+                values.append(float(loss.item()))
+        model.train()
+        if not values:
+            raise ValueError("Validation batch contained no supervised completion tokens.")
+        return sum(values) / len(values)
 
 
 def finetune(
@@ -304,9 +312,8 @@ def finetune(
     validate_checkpoint_load_budget(load_target)
     # Read model-only checkpoint tensors on CPU first; run the resource guard before
     # moving weights, gradients, and optimizer state to an accelerator.
-    saved = torch.load(load_target, map_location="cpu", weights_only=True)
-    if saved.get("format") != "syntra-transformer-v1":
-        raise ValueError("Selected checkpoint is not a SYNTRA Transformer checkpoint.")
+    raw_saved = torch.load(load_target, map_location="cpu", weights_only=True)
+    saved = _normalize_checkpoint_payload(raw_saved)
     config = ModelConfig.from_dict(saved["config"])
     config.validate()
     validate_training_memory_budget(config, batch_size, device)
@@ -379,6 +386,7 @@ def finetune(
             }
             _atomic_checkpoint(checkpoint_path_value, payload)
             _save_inference_checkpoint(checkpoint_path_value, payload)
+            clear_resident_cache()
             metadata_path = checkpoint_path_value.with_suffix(checkpoint_path_value.suffix + ".json")
             metadata = {
                 "checkpoint": str(checkpoint_path_value), "step": step, "config": config.to_dict(),
@@ -393,3 +401,172 @@ def finetune(
             metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
             report("running" if step < base_step + steps else "completed", step, "Checkpoint saved with measured supervised validation loss.")
     return report("completed", base_step + steps, "Supervised fine-tuning finished; the local BPE-tokenized checkpoint was updated.")
+
+
+_DECLARATION_PATTERNS = (
+    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(([^)]*)\)"),
+    re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)"),
+    re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)"),
+    re.compile(r"^\s*func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)"),
+    re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)"),
+)
+
+
+def _extract_symbol_blocks(rel_path: str, content: str) -> list[dict]:
+    lines = content.splitlines()
+    blocks: list[dict] = []
+    for idx, line in enumerate(lines):
+        for pattern in _DECLARATION_PATTERNS:
+            match = pattern.match(line)
+            if not match:
+                continue
+            name = match.group(1)
+            params = match.group(2).strip() if match.lastindex and match.lastindex >= 2 else ""
+            end_idx = min(len(lines), idx + 28)
+            snippet_lines = [lines[idx]]
+            brace_depth = line.count("{") - line.count("}")
+            for cursor in range(idx + 1, end_idx):
+                current = lines[cursor]
+                if any(p.match(current) for p in _DECLARATION_PATTERNS) and len(snippet_lines) >= 4:
+                    break
+                snippet_lines.append(current)
+                brace_depth += current.count("{") - current.count("}")
+                if brace_depth <= 0 and current.strip().endswith("}") and len(snippet_lines) >= 3:
+                    break
+            body_text = "\n".join(snippet_lines).strip()
+            if len(body_text) >= 32:
+                blocks.append({
+                    "name": name,
+                    "params": params,
+                    "line": idx + 1,
+                    "signature": line.strip(),
+                    "body": body_text[:1800],
+                    "path": rel_path,
+                })
+            break
+    return blocks
+
+
+def synthesize_repository_curriculum(
+    root: str | Path | None = None,
+    output_path: str | Path | None = None,
+    max_examples: int = 240,
+) -> dict:
+    """Synthesize a high-diversity, deduplicated instruction-tuning JSONL curriculum from local code."""
+    if not isinstance(max_examples, int) or max_examples < 4 or max_examples > MAX_INSTRUCTION_EXAMPLES:
+        raise ValueError(f"max_examples must be between 4 and {MAX_INSTRUCTION_EXAMPLES:,}.")
+    corpus_root = resolve_corpus_root(root or PROJECT_ROOT)
+    if output_path:
+        raw_out = Path(output_path).expanduser()
+        if not raw_out.is_absolute():
+            raw_out = (PROJECT_ROOT / raw_out).resolve()
+        else:
+            raw_out = raw_out.resolve()
+    else:
+        raw_out = (PROJECT_ROOT / "data" / "curricula" / "workspace-instructions.jsonl").resolve()
+    if raw_out.suffix.lower() != ".jsonl":
+        raise ValueError("Synthesized curriculum output path must end with .jsonl.")
+    if not (raw_out == corpus_root or raw_out.is_relative_to(corpus_root) or raw_out.is_relative_to(PROJECT_ROOT)):
+        raise ValueError("Curriculum output path must reside inside the active workspace or SYNTRA project directory.")
+
+    corpus = load_corpus([corpus_root])
+    documents, files = corpus.documents, corpus.files
+    seen_prompts: set[str] = set()
+    records: list[dict[str, str]] = []
+
+    def add_pair(prompt_text: str, completion_text: str) -> None:
+        if len(records) >= max_examples:
+            return
+        prompt_clean = prompt_text.strip()
+        completion_clean = completion_text.strip()
+        if len(prompt_clean) < 16 or len(completion_clean) < 16:
+            return
+        norm_prompt = _normalized_instruction_text(prompt_clean)
+        if norm_prompt in seen_prompts:
+            return
+        seen_prompts.add(norm_prompt)
+        records.append({"prompt": prompt_clean, "completion": completion_clean})
+
+    for doc, file_str in zip(documents, files):
+        if len(records) >= max_examples:
+            break
+        try:
+            rel_path = Path(file_str).resolve().relative_to(corpus_root).as_posix()
+        except ValueError:
+            rel_path = Path(file_str).name
+        content = doc.strip()
+        if not content:
+            continue
+        lines = content.splitlines()
+        blocks = _extract_symbol_blocks(rel_path, content)
+
+        if blocks:
+            symbol_list = ", ".join(f"`{b['name']}` (line {b['line']})" for b in blocks[:8])
+            preview = "\n".join(lines[:min(18, len(lines))])
+            add_pair(
+                f"SYNTRA WORKSPACE QUERY\nSummarize the primary declarations and structure of `{rel_path}`.",
+                f"`{rel_path}` defines {len(blocks)} primary symbol(s): {symbol_list}.\n\nModule header excerpt:\n```\n{preview}\n```",
+            )
+
+        for block in blocks:
+            if len(records) >= max_examples:
+                break
+            add_pair(
+                f"SYNTRA CODE IMPLEMENTATION\nFile: {rel_path}\nSymbol: {block['name']}\nWrite the implementation starting from `{block['signature']}`.",
+                block["body"],
+            )
+            add_pair(
+                f"SYNTRA SYMBOL COMPREHENSION\nExplain the signature and implementation of `{block['name']}` in `{rel_path}`.",
+                f"In `{rel_path}` (line {block['line']}), `{block['signature']}` implements `{block['name']}`"
+                + (f" accepting parameters ({block['params']})" if block["params"] else "")
+                + f":\n```\n{block['body']}\n```",
+            )
+            block_lines = block["body"].splitlines()
+            if len(block_lines) >= 3:
+                mid = max(1, len(block_lines) // 2)
+                anchor = "\n".join(block_lines[:mid])
+                target = "\n".join(block_lines[:min(len(block_lines), mid + 3)])
+                patch_obj = {
+                    "summary": f"Complete `{block['name']}` implementation in {rel_path}",
+                    "edits": [
+                        {
+                            "path": rel_path,
+                            "find": anchor,
+                            "replace": target,
+                            "reason": f"Ensure `{block['name']}` includes the subsequent logic in {rel_path}.",
+                        }
+                    ],
+                }
+                add_pair(
+                    f"SYNTRA_AGENT_PATCH_V1\nTASK: Complete the implementation of `{block['name']}` in `{rel_path}`.\nSOURCE ANCHOR ({rel_path}):\n{anchor}",
+                    json.dumps(patch_obj, ensure_ascii=False),
+                )
+
+    if len(records) < 2:
+        for idx, doc in enumerate(documents[:max_examples]):
+            header, _, content = doc.partition("\n")
+            rel_path = header.replace("FILE:", "").strip() if header.startswith("FILE:") else f"file-{idx + 1}"
+            snippet = "\n".join(content.strip().splitlines()[:24])
+            if snippet:
+                add_pair(
+                    f"Provide the opening source excerpt for `{rel_path}` (section {idx + 1}).",
+                    snippet,
+                )
+
+    if len(records) < 2:
+        raise ValueError("Could not extract at least two distinct instruction examples from the selected corpus.")
+
+    raw_out.parent.mkdir(parents=True, exist_ok=True)
+    with raw_out.open("w", encoding="utf-8") as handle:
+        for item in records:
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+    audit = audit_instruction_dataset(raw_out)
+    return {
+        "dataset_path": str(raw_out),
+        "workspace_root": str(corpus_root),
+        "source_files": len(files),
+        "example_count": len(records),
+        "audit": audit,
+    }
+

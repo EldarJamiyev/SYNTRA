@@ -8,7 +8,9 @@ import {
   addWorkspaceMemory,
   deleteWorkspaceMemory,
   listWorkspaceMemory,
+  recordVerifiedAgentMemory,
   searchWorkspaceMemory,
+  synthesizeMemoryNoteFromAgentRun,
   updateWorkspaceMemory
 } from "../local/workspace-memory.mjs";
 
@@ -253,3 +255,38 @@ test("project memory refuses symbolic-link stores", async t => {
     await fs.rm(outside, { force: true });
   }
 });
+
+test("verified agent runs can synthesize and deduplicate safe project-memory notes", async () => {
+  const root = await createWorkspace();
+  try {
+    const candidate = synthesizeMemoryNoteFromAgentRun({
+      status: "verified_proposals_ready",
+      goal: "Clamp numeric inputs to inclusive bounds in src/math.mjs",
+      changedFiles: [{ path: "src/math.mjs", reason: "Handle inverted min/max bounds safely." }],
+      verification: { passed: true, checks: [{ task: "test", passed: true }] }
+    });
+    assert.ok(candidate);
+    assert.equal(candidate.category, "workflow");
+    assert.ok(candidate.tags.includes("verified"));
+
+    const saved = await recordVerifiedAgentMemory(root, {
+      status: "verified_proposals_ready",
+      goal: "Clamp numeric inputs to inclusive bounds in src/math.mjs",
+      changedFiles: [{ path: "src/math.mjs", reason: "Handle inverted min/max bounds safely." }],
+      verification: { passed: true, checks: [{ task: "test", passed: true }] }
+    });
+    assert.ok(saved?.note?.id);
+    assert.equal(saved.total, 1);
+
+    const updated = await recordVerifiedAgentMemory(root, {
+      status: "verified_proposals_ready",
+      goal: "Clamp numeric inputs to inclusive bounds in src/math.mjs",
+      changedFiles: [{ path: "src/math.mjs", reason: "Updated reason after second verified run." }],
+      verification: { passed: true, checks: [{ task: "test", passed: true }] }
+    });
+    assert.equal(updated.total, 1, "repeated runs for the same verified goal should update in place");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+

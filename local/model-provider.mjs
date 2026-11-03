@@ -727,7 +727,7 @@ function isRepositoryPrompt(prompt) {
 }
 
 export function getGeminiProviderStatus(model = process.env.SYNTRA_GEMINI_MODEL || DEFAULT_GEMINI_MODEL) {
-  const configured = Boolean(String(process.env.SYNTRA_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim());
+  const configured = Boolean(String(process.env.SYNTRA_GEMINI_API_KEY || "").trim());
   return {
     service: "SYNTRA model router", status: configured ? "ok" : "not_configured",
     provider: "gemini-api", model_name: model, checkpoint_exists: configured,
@@ -774,9 +774,9 @@ function validateGeminiFinishReason(reason) {
 export async function handleGeminiModelRequest(method, route, body = {}, {
   fetchImpl = globalThis.fetch, timeoutMs, onToken, signal
 } = {}) {
-  const apiKey = String(process.env.SYNTRA_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+  const apiKey = String(process.env.SYNTRA_GEMINI_API_KEY || "").trim();
   const model = String(body?.model || process.env.SYNTRA_GEMINI_MODEL || DEFAULT_GEMINI_MODEL).trim();
-  if (!apiKey) throw new Error("Gemini provider is selected but SYNTRA_GEMINI_API_KEY or GEMINI_API_KEY is not configured.");
+  if (!apiKey) throw new Error("Gemini provider is selected but SYNTRA_GEMINI_API_KEY is not configured.");
   if (!/^[a-zA-Z0-9._-]{3,100}$/.test(model)) throw new Error("SYNTRA_GEMINI_MODEL contains an invalid model identifier.");
   if (method === "GET" && route === "/model/status") return getGeminiProviderStatus(model);
   if (method === "POST" && route === "/model/tokenize") {

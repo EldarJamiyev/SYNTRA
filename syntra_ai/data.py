@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Iterable
 import os
 
-from .model import BOS_ID, EOS_ID
+from .tokenizer import BOS_ID, EOS_ID
 from .safe_paths import resolve_corpus_root
 
 MAX_CORPUS_FILES = 10_000

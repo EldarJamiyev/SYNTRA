@@ -1,4 +1,5 @@
 """Neural training loop with corpus-trained BPE tokenization and local checkpoints."""
+from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
@@ -8,13 +9,17 @@ import os
 import random
 import tempfile
 
-import torch
+try:
+    import torch
+    from .model import SyntraTransformer
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    SyntraTransformer = None  # type: ignore[assignment]
 
 from .config import ModelConfig
 from .data import MAX_CORPUS_TOKENS, load_corpus
-from .model import BOS_ID, EOS_ID, SyntraTransformer
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
-from .tokenizer import ByteBPETokenizer
+from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 
 ProgressCallback = Callable[[dict], None]
 
@@ -34,7 +39,7 @@ def choose_device(requested: str = "auto") -> torch.device:
     return device
 
 
-def _batch(data: torch.Tensor, batch_size: int, seq_len: int, device: torch.device):
+def _batch(data, batch_size: int, seq_len: int, device):
     if data.numel() <= seq_len + 1:
         raise ValueError("The tokenized corpus split is too small for the configured context length.")
     starts = torch.randint(0, data.numel() - seq_len - 1, (batch_size,))
@@ -43,18 +48,18 @@ def _batch(data: torch.Tensor, batch_size: int, seq_len: int, device: torch.devi
     return x.to(device), y.to(device)
 
 
-@torch.no_grad()
 def _estimate_loss(model, data, batch_size, seq_len, device, batches=8) -> float:
-    model.eval()
-    values = []
-    for _ in range(batches):
-        x, y = _batch(data, batch_size, seq_len, device)
-        _, loss = model(x, y)
-        if loss is None or not torch.isfinite(loss):
-            raise RuntimeError("Validation produced a non-finite loss.")
-        values.append(float(loss.item()))
-    model.train()
-    return sum(values) / len(values)
+    with torch.no_grad():
+        model.eval()
+        values = []
+        for _ in range(batches):
+            x, y = _batch(data, batch_size, seq_len, device)
+            _, loss = model(x, y)
+            if loss is None or not torch.isfinite(loss):
+                raise RuntimeError("Validation produced a non-finite loss.")
+            values.append(float(loss.item()))
+        model.train()
+        return sum(values) / len(values)
 
 
 def _atomic_checkpoint(path: Path, payload: dict) -> None:

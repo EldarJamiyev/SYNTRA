@@ -35,14 +35,28 @@ function cosineSimilarity(a, b) {
   }
   return normA > 0 && normB > 0 ? dot / Math.sqrt(normA * normB) : -1;
 }
-function splitIntoChunks(relativePath, content) {
-  const lines = content.split(/\r?\n/), chunks = [];
-  const step = Math.max(1, CHUNK_LINES - CHUNK_OVERLAP);
-  for (let start = 0; start < lines.length; start += step) {
-    const end = Math.min(lines.length, start + CHUNK_LINES);
+const DECLARATION_BOUNDARY = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function|class|interface|type|enum|const|let|def|fn|pub\s+fn|func|struct|impl)\b/;
+
+export function splitIntoChunks(relativePath, content) {
+  const lines = String(content || "").split(/\r?\n/), chunks = [];
+  const defaultStep = Math.max(1, CHUNK_LINES - CHUNK_OVERLAP);
+  let start = 0;
+  while (start < lines.length && chunks.length < MAX_CHUNKS) {
+    let end = Math.min(lines.length, start + CHUNK_LINES);
+    let nextStart = start + defaultStep;
+    if (end < lines.length) {
+      for (let probe = start + 14; probe < end; probe += 1) {
+        if (DECLARATION_BOUNDARY.test(lines[probe].trim())) {
+          end = probe;
+          nextStart = Math.max(start + 1, probe - Math.min(CHUNK_OVERLAP, 2));
+          break;
+        }
+      }
+    }
     const text = lines.slice(start, end).join("\n").slice(0, MAX_CHUNK_CHARS);
     if (text.trim().length >= 40) chunks.push({ path: relativePath, startLine: start + 1, endLine: end, text });
     if (end >= lines.length || chunks.length >= MAX_CHUNKS) break;
+    start = Math.max(start + 1, nextStart);
   }
   return chunks;
 }
@@ -76,15 +90,49 @@ async function writeIndex(root, index) {
   try { await fs.rename(temporary, target); }
   catch (error) { await fs.rm(temporary, { force: true }); throw error; }
 }
-async function embed(texts, model, fetchImpl, signal) {
-  if (!texts.length) return [];
+async function embedViaNativeRuntime(texts, fetchImpl, signal) {
+  const aiPort = Number(process.env.SYNTRA_AI_PORT || 3002);
   const timeout = AbortSignal.timeout(120000);
-  const response = await fetchImpl(resolveLocalOllamaBaseUrl() + "/api/embed", {
+  const response = await fetchImpl(`http://127.0.0.1:${aiPort}/model/embed`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     redirect: "error",
-    body: JSON.stringify({ model, input: texts, truncate: true }),
+    body: JSON.stringify({ texts, max_length: 256, device: "auto" }),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout
   });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(String(payload.error || "Native embeddings request failed with HTTP " + response.status));
+  if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length) {
+    throw new Error("Native runtime returned an invalid embedding batch.");
+  }
+  const dims = payload.embeddings[0]?.length;
+  if (!Number.isInteger(dims) || dims < 8 || dims > 4096
+    || payload.embeddings.some(v => !Array.isArray(v) || v.length !== dims || v.some(n => !Number.isFinite(n)))) {
+    throw new Error("Native runtime returned inconsistent or invalid embedding dimensions.");
+  }
+  return payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5))));
+}
+
+async function embed(texts, model, fetchImpl, signal) {
+  if (!texts.length) return [];
+  if (model === "syntra-native" || String(model || "").startsWith("syntra-")) {
+    return embedViaNativeRuntime(texts, fetchImpl, signal);
+  }
+  const timeout = AbortSignal.timeout(120000);
+  let response;
+  try {
+    response = await fetchImpl(resolveLocalOllamaBaseUrl() + "/api/embed", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      redirect: "error",
+      body: JSON.stringify({ model, input: texts, truncate: true }),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout
+    });
+  } catch (ollamaError) {
+    if (fetchImpl === globalThis.fetch) {
+      try { return await embedViaNativeRuntime(texts, fetchImpl, signal); }
+      catch { /* preserve original Ollama error when native runtime is also offline */ }
+    }
+    throw ollamaError;
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(String(payload.error || "Ollama embeddings request failed with HTTP " + response.status));
   if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length) throw new Error("Ollama returned an invalid embedding batch.");

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { refreshWorkspaceSemanticIndex, searchWorkspaceSemantic, getSemanticIndexStatus, resolveLocalOllamaBaseUrl } from "../local/semantic-index.mjs";
+import { refreshWorkspaceSemanticIndex, searchWorkspaceSemantic, getSemanticIndexStatus, resolveLocalOllamaBaseUrl, splitIntoChunks } from "../local/semantic-index.mjs";
 
 async function makeWorkspace() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-semantic-test-"));
@@ -63,3 +63,18 @@ test("semantic index stores vectors and revalidates source hashes before returni
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("splitIntoChunks aligns chunks to declaration boundaries when source exceeds one window", () => {
+  const lines = [
+    ...Array.from({ length: 18 }, (_, i) => `const line${i} = ${i}; // setup preamble line`),
+    "export function computeChecksum(payload) {",
+    ...Array.from({ length: 24 }, (_, i) => `  const step${i} = payload + ${i};`),
+    "  return payload;",
+    "}"
+  ].join("\n");
+  const chunks = splitIntoChunks("src/checksum.mjs", lines);
+  assert.ok(chunks.length >= 2);
+  assert.equal(chunks[0].endLine, 18);
+  assert.match(chunks[1].text, /export function computeChecksum/);
+});
+

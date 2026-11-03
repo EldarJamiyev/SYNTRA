@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isCodingTask } from "../local/chat-intent.mjs";
+import { classifyChatIntent, extractTargetPaths, extractTargetSymbols, isCodingTask } from "../local/chat-intent.mjs";
 
 test("routes explicit software changes to the coding agent", () => {
   for (const message of [
@@ -18,6 +18,7 @@ test("routes explicit software changes to the coding agent", () => {
     "Test the endpoint and fix the failing unit test",
     "Could you please build a React app?",
     "Can you help me fix the API endpoint?",
+    "In local/agent.mjs, update rankGraph to boost test files",
   ]) assert.equal(isCodingTask(message), true, message);
 });
 
@@ -52,3 +53,22 @@ test("keeps the command classifier bounded and tolerant of casing/spacing", () =
   assert.equal(isCodingTask("  PLEASE FIX the React component  "), true);
   assert.equal(isCodingTask("Write a poem. ".repeat(1200)), false);
 });
+
+test("classifyChatIntent distinguishes coding tasks, workspace queries, and general conversation", () => {
+  const coding = classifyChatIntent("Refactor `rankGraph` in local/agent.mjs to weight symbol matches");
+  assert.equal(coding.kind, "coding_task");
+  assert.deepEqual(coding.targetPaths, ["local/agent.mjs"]);
+  assert.ok(coding.targetSymbols.includes("rankGraph"));
+
+  const query = classifyChatIntent("How does `ByteBPETokenizer` work in syntra_ai/tokenizer.py?");
+  assert.equal(query.kind, "workspace_query");
+  assert.deepEqual(query.targetPaths, ["syntra_ai/tokenizer.py"]);
+  assert.ok(query.targetSymbols.includes("ByteBPETokenizer"));
+  assert.equal(query.searchQuery, "ByteBPETokenizer");
+
+  const convo = classifyChatIntent("Write a poem about the sea");
+  assert.equal(convo.kind, "conversation");
+  assert.deepEqual(extractTargetPaths("Check src/App.tsx and local/server.mjs"), ["src/App.tsx", "local/server.mjs"]);
+  assert.ok(extractTargetSymbols("Inspect `validatePatch` and `search_workspace_memory`").includes("validatePatch"));
+});
+

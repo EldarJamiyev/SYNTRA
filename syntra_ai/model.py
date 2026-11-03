@@ -1,6 +1,10 @@
-"""A small decoder-only Transformer implemented for SYNTRA.
+"""A decoder-only Transformer implemented for SYNTRA.
 All parameters are initialized locally; no pretrained weights are fetched or loaded.
+Supports classic LayerNorm/GELU/Absolute-Position blocks as well as modern
+RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU, nucleus (top-p) sampling,
+repetition penalties, and dense hidden-state representation pooling.
 """
+import math
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -11,13 +15,69 @@ BOS_ID = 256
 EOS_ID = 257
 
 
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization."""
+
+    def __init__(self, dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        norm = x.float().pow(2).mean(-1, keepdim=True)
+        x_normed = x.float() * torch.rsqrt(norm + self.eps)
+        return (self.weight * x_normed).type_as(x)
+
+
+def _apply_rotary_emb(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    positions: torch.Tensor,
+    head_dim: int,
+    theta: float = 10000.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    half = head_dim // 2
+    freq_seq = torch.arange(0, half, dtype=torch.float32, device=q.device)
+    inv_freq = 1.0 / (theta ** (freq_seq / half))
+    angles = positions.float()[:, None] * inv_freq[None, :]
+    cos = torch.cos(angles)[None, None, :, :]
+    sin = torch.sin(angles)[None, None, :, :]
+
+    def rotate(tensor: torch.Tensor) -> torch.Tensor:
+        x1 = tensor[..., :half]
+        x2 = tensor[..., half : 2 * half]
+        rotated = torch.cat((-x2, x1), dim=-1)
+        return (tensor.float() * cos.repeat(1, 1, 1, 2) + rotated.float() * sin.repeat(1, 1, 1, 2)).type_as(tensor)
+
+    return rotate(q), rotate(k)
+
+
+class SwiGLUFeedForward(nn.Module):
+    """Gated Linear Unit with SiLU activation for stronger code representation."""
+
+    def __init__(self, config: ModelConfig) -> None:
+        super().__init__()
+        hidden = int((8 * config.n_embd) / 3)
+        hidden = ((hidden + 7) // 8) * 8
+        bias = getattr(config, "bias", True)
+        self.w_gate = nn.Linear(config.n_embd, hidden, bias=bias)
+        self.w_up = nn.Linear(config.n_embd, hidden, bias=bias)
+        self.w_down = nn.Linear(hidden, config.n_embd, bias=bias)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.dropout(self.w_down(F.silu(self.w_gate(x)) * self.w_up(x)))
+
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.n_head = config.n_head
         self.head_dim = config.n_embd // config.n_head
-        self.qkv = nn.Linear(config.n_embd, 3 * config.n_embd, bias=True)
-        self.proj = nn.Linear(config.n_embd, config.n_embd, bias=True)
+        self.use_rope = getattr(config, "use_rope", False)
+        bias = getattr(config, "bias", True)
+        self.qkv = nn.Linear(config.n_embd, 3 * config.n_embd, bias=bias)
+        self.proj = nn.Linear(config.n_embd, config.n_embd, bias=bias)
         self.attn_dropout = config.dropout
         self.resid_dropout = nn.Dropout(config.dropout)
 
@@ -39,6 +99,13 @@ class CausalSelfAttention(nn.Module):
             past_length = past_key.shape[-2]
             if past_value.shape != past_key.shape:
                 raise ValueError("Cached attention keys and values have inconsistent shapes.")
+
+        if self.use_rope:
+            query_positions = torch.arange(past_length, past_length + length, device=x.device)
+            q, k = _apply_rotary_emb(q, k, query_positions, self.head_dim)
+
+        if past_key_value is not None:
+            past_key, past_value = past_key_value
             k = torch.cat((past_key, k), dim=-2)
             v = torch.cat((past_value, v), dim=-2)
 
@@ -69,15 +136,20 @@ class CausalSelfAttention(nn.Module):
 class TransformerBlock(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd)
+        norm_cls = RMSNorm if getattr(config, "use_rmsnorm", False) else nn.LayerNorm
+        bias = getattr(config, "bias", True)
+        self.ln_1 = norm_cls(config.n_embd)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.mlp = nn.Sequential(
-            nn.Linear(config.n_embd, 4 * config.n_embd),
-            nn.GELU(),
-            nn.Linear(4 * config.n_embd, config.n_embd),
-            nn.Dropout(config.dropout),
-        )
+        self.ln_2 = norm_cls(config.n_embd)
+        if getattr(config, "use_swiglu", False):
+            self.mlp = SwiGLUFeedForward(config)
+        else:
+            self.mlp = nn.Sequential(
+                nn.Linear(config.n_embd, 4 * config.n_embd, bias=bias),
+                nn.GELU(),
+                nn.Linear(4 * config.n_embd, config.n_embd, bias=bias),
+                nn.Dropout(config.dropout),
+            )
 
     def forward(
         self,
@@ -100,14 +172,20 @@ class SyntraTransformer(nn.Module):
         super().__init__()
         config.validate()
         self.config = config
+        norm_cls = RMSNorm if getattr(config, "use_rmsnorm", False) else nn.LayerNorm
         self.token_embedding = nn.Embedding(config.vocab_size, config.n_embd)
         self.position_embedding = nn.Embedding(config.seq_len, config.n_embd)
         self.embedding_dropout = nn.Dropout(config.dropout)
         self.blocks = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layer)])
-        self.final_norm = nn.LayerNorm(config.n_embd)
+        self.final_norm = norm_cls(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         self.lm_head.weight = self.token_embedding.weight
         self.apply(self._initialize)
+
+        residual_std = 0.02 / math.sqrt(2 * config.n_layer)
+        for name, parameter in self.named_parameters():
+            if name.endswith("attn.proj.weight") or name.endswith("mlp.2.weight") or name.endswith("mlp.w_down.weight"):
+                nn.init.normal_(parameter, mean=0.0, std=residual_std)
 
     @staticmethod
     def _initialize(module: nn.Module) -> None:
@@ -118,10 +196,13 @@ class SyntraTransformer(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(
+    @property
+    def parameter_count(self) -> int:
+        return sum(parameter.numel() for parameter in self.parameters() if parameter.requires_grad)
+
+    def _forward_hidden(
         self,
         tokens: torch.Tensor,
-        targets: torch.Tensor | None = None,
         past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = None,
         use_cache: bool = False,
     ):
@@ -141,7 +222,10 @@ class SyntraTransformer(nn.Module):
             raise ValueError("Input plus cached tokens exceeds configured context length.")
 
         positions = torch.arange(past_length, past_length + tokens.shape[1], device=tokens.device)
-        x = self.token_embedding(tokens) + self.position_embedding(positions)[None, :, :]
+        if getattr(self.config, "use_rope", False):
+            x = self.token_embedding(tokens)
+        else:
+            x = self.token_embedding(tokens) + self.position_embedding(positions)[None, :, :]
         x = self.embedding_dropout(x)
         presents = []
         for index, block in enumerate(self.blocks):
@@ -151,13 +235,40 @@ class SyntraTransformer(nn.Module):
                 presents.append(present)
             else:
                 x = block(x, past_key_value=past, use_cache=False)
-        logits = self.lm_head(self.final_norm(x))
+        hidden = self.final_norm(x)
+        if use_cache:
+            return hidden, tuple(presents)
+        return hidden
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        targets: torch.Tensor | None = None,
+        past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = None,
+        use_cache: bool = False,
+    ):
+        if use_cache:
+            hidden, presents = self._forward_hidden(tokens, past_key_values=past_key_values, use_cache=True)
+        else:
+            hidden = self._forward_hidden(tokens, past_key_values=past_key_values, use_cache=False)
+        logits = self.lm_head(hidden)
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
         if use_cache:
-            return logits, loss, tuple(presents)
+            return logits, loss, presents
         return logits, loss
+
+    @torch.no_grad()
+    def embed_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Compute L2-normalized semantic embeddings from pooled final hidden states."""
+        self.eval()
+        clipped = tokens[:, -self.config.seq_len:]
+        hidden = self._forward_hidden(clipped, use_cache=False)
+        mean_pooled = hidden.mean(dim=1)
+        last_token = hidden[:, -1, :]
+        combined = 0.7 * mean_pooled + 0.3 * last_token
+        return F.normalize(combined.float(), p=2, dim=-1)
 
     @torch.no_grad()
     def generate(
@@ -166,25 +277,59 @@ class SyntraTransformer(nn.Module):
         max_new_tokens: int = 256,
         temperature: float = 0.8,
         top_k: int = 40,
+        top_p: float = 1.0,
+        repetition_penalty: float = 1.0,
     ) -> torch.Tensor:
-        if not 0.05 <= temperature <= 2.0:
-            raise ValueError("temperature must be between 0.05 and 2.0.")
+        if not 0.0 <= temperature <= 2.0:
+            raise ValueError("temperature must be between 0.0 and 2.0.")
         if max_new_tokens < 1 or max_new_tokens > 4096:
             raise ValueError("max_new_tokens must be between 1 and 4096.")
         if top_k < 1 or top_k > self.config.vocab_size:
-            raise ValueError("top_k must be between 1 and 258.")
+            raise ValueError(f"top_k must be between 1 and {self.config.vocab_size}.")
+        if not 0.0 < top_p <= 1.0:
+            raise ValueError("top_p must be between 0.0 (exclusive) and 1.0.")
+        if not 1.0 <= repetition_penalty <= 2.0:
+            raise ValueError("repetition_penalty must be between 1.0 and 2.0.")
         self.eval()
         output = tokens
+        prompt_len = tokens.shape[1]
         context = output[:, -self.config.seq_len:]
         logits, _, past_key_values = self(context, use_cache=True)
         for step in range(max_new_tokens):
-            next_logits = logits[:, -1, :] / temperature
+            next_logits = logits[:, -1, :].float().clone()
             next_logits[:, BOS_ID] = float("-inf")
-            if top_k < next_logits.shape[-1]:
-                threshold = torch.topk(next_logits, top_k, dim=-1).values[:, -1, None]
-                next_logits = next_logits.masked_fill(next_logits < threshold, float("-inf"))
-            probabilities = F.softmax(next_logits, dim=-1)
-            next_token = torch.multinomial(probabilities, num_samples=1)
+
+            if repetition_penalty > 1.0 and output.shape[1] > prompt_len:
+                generated_slice = output[:, prompt_len:]
+                for batch_idx in range(output.shape[0]):
+                    unique_ids = torch.unique(generated_slice[batch_idx])
+                    unique_ids = unique_ids[unique_ids != EOS_ID]
+                    if unique_ids.numel() > 0:
+                        selected = next_logits[batch_idx, unique_ids]
+                        next_logits[batch_idx, unique_ids] = torch.where(
+                            selected < 0,
+                            selected * repetition_penalty,
+                            selected / repetition_penalty,
+                        )
+
+            if temperature == 0.0:
+                next_token = torch.argmax(next_logits, dim=-1, keepdim=True)
+            else:
+                next_logits = next_logits / temperature
+                if top_k < next_logits.shape[-1]:
+                    threshold = torch.topk(next_logits, top_k, dim=-1).values[:, -1, None]
+                    next_logits = next_logits.masked_fill(next_logits < threshold, float("-inf"))
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(next_logits, descending=True, dim=-1)
+                    cumulative_probs = F.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+                    remove_mask = cumulative_probs > top_p
+                    remove_mask[:, 1:] = remove_mask[:, :-1].clone()
+                    remove_mask[:, 0] = False
+                    scatter_mask = torch.zeros_like(remove_mask).scatter(1, sorted_indices, remove_mask)
+                    next_logits = next_logits.masked_fill(scatter_mask, float("-inf"))
+                probabilities = F.softmax(next_logits, dim=-1)
+                next_token = torch.multinomial(probabilities, num_samples=1)
+
             output = torch.cat((output, next_token), dim=1)
             if int(next_token[0, 0].item()) == EOS_ID or step + 1 >= max_new_tokens:
                 break

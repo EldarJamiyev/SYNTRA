@@ -8,9 +8,9 @@ import os
 import time
 
 from .config import ModelConfig
-from .runtime import evaluate, generate, status, tokenize_text
+from .runtime import embed_texts, evaluate, generate, status, stream_generate, tokenize_text
 from .training import train
-from .instruction import finetune
+from .instruction import finetune, synthesize_repository_curriculum
 from .safe_paths import resolve_corpus_root, resolve_instruction_dataset
 
 HOST = "127.0.0.1"
@@ -198,6 +198,22 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/model/tokenize":
                 result = tokenize_text(body.get("text", ""))
                 self._send(200, result)
+            elif self.path == "/model/embed":
+                texts = body.get("input") if "input" in body else body.get("texts", [])
+                if isinstance(texts, str):
+                    texts = [texts]
+                result = embed_texts(
+                    texts=texts,
+                    device_name=str(body.get("device", "auto")),
+                )
+                self._send(200, result)
+            elif self.path == "/model/curriculum":
+                result = synthesize_repository_curriculum(
+                    root=body.get("root"),
+                    output_path=body.get("output") or body.get("dataset"),
+                    max_examples=int(body.get("max_examples", 240)),
+                )
+                self._send(200, result)
             elif self.path == "/model/evaluate":
                 result = evaluate(
                     root=body.get("root", ""),
@@ -207,14 +223,40 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send(200, result)
             elif self.path == "/model/generate":
-                result = generate(
-                    prompt=body.get("prompt", ""),
-                    max_new_tokens=int(body.get("max_new_tokens", 256)),
-                    temperature=float(body.get("temperature", 0.7)),
-                    top_k=int(body.get("top_k", 40)),
-                    device_name=str(body.get("device", "auto")),
-                )
-                self._send(200, result)
+                if body.get("stream") is True:
+                    stream = stream_generate(
+                        prompt=body.get("prompt", ""),
+                        max_new_tokens=int(body.get("max_new_tokens", 256)),
+                        temperature=float(body.get("temperature", 0.7)),
+                        top_k=int(body.get("top_k", 40)),
+                        top_p=float(body.get("top_p", 1.0)),
+                        repetition_penalty=float(body.get("repetition_penalty", 1.0)),
+                        device_name=str(body.get("device", "auto")),
+                    )
+                    first_event = next(stream, None)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    if first_event is not None:
+                        self.wfile.write((json.dumps(first_event, ensure_ascii=False) + "\n").encode("utf-8"))
+                        self.wfile.flush()
+                    for event in stream:
+                        self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
+                        self.wfile.flush()
+                else:
+                    result = generate(
+                        prompt=body.get("prompt", ""),
+                        max_new_tokens=int(body.get("max_new_tokens", 256)),
+                        temperature=float(body.get("temperature", 0.7)),
+                        top_k=int(body.get("top_k", 40)),
+                        top_p=float(body.get("top_p", 1.0)),
+                        repetition_penalty=float(body.get("repetition_penalty", 1.0)),
+                        device_name=str(body.get("device", "auto")),
+                    )
+                    self._send(200, result)
             else:
                 self._send(404, {"error": "Route not found."})
         except FileNotFoundError as exc:

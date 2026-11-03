@@ -6,7 +6,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None  # type: ignore[assignment]
 
 from .config import ModelConfig
 
@@ -15,6 +18,12 @@ CHECKPOINT_LOAD_FRACTION = 0.40
 INFERENCE_SAFETY_FRACTION = 0.70
 WORKSPACE_RESERVE_BYTES = 256 * 1024 * 1024
 INFERENCE_RESERVE_BYTES = 128 * 1024 * 1024
+
+
+def _device_label(device: Any) -> str:
+    if torch is not None:
+        return str(torch.device(device))
+    return str(device)
 
 
 def estimate_training_memory_bytes(config: ModelConfig, batch_size: int) -> int:
@@ -85,13 +94,14 @@ def _system_available_memory_bytes() -> int | None:
 
 
 def available_memory_bytes(device: Any) -> int | None:
-    selected = torch.device(device)
-    if selected.type == "cuda":
-        try:
-            free_bytes, _total_bytes = torch.cuda.mem_get_info(selected)
-            return int(free_bytes)
-        except (RuntimeError, ValueError, TypeError):
-            pass
+    if torch is not None:
+        selected = torch.device(device)
+        if selected.type == "cuda":
+            try:
+                free_bytes, _total_bytes = torch.cuda.mem_get_info(selected)
+                return int(free_bytes)
+            except (RuntimeError, ValueError, TypeError):
+                pass
     return _system_available_memory_bytes()
 
 
@@ -116,7 +126,7 @@ def validate_training_memory_budget(
         raise ValueError(
             f"Estimated training working set is about {estimate_gib:.1f} GiB, above "
             f"the 70% safety budget ({budget_gib:.1f} GiB of {available_gib:.1f} GiB "
-            f"currently available memory on {torch.device(device)}). Reduce --seq-len, "
+            f"currently available memory on {_device_label(device)}). Reduce --seq-len, "
             "--batch-size, --layers, or --embedding, or close other applications. "
             "This is a conservative estimate, not a guarantee against every out-of-memory error."
         )
@@ -197,7 +207,7 @@ def validate_inference_memory_budget(
         raise ValueError(
             f"Estimated inference working set is about {estimate_gib:.1f} GiB, above "
             f"the 70% safety budget ({budget_gib:.1f} GiB of {available_gib:.1f} GiB "
-            f"available memory on {torch.device(device)}). Reduce --seq-len, --layers, or "
+            f"available memory on {_device_label(device)}). Reduce --seq-len, --layers, or "
             "--embedding, or close other applications. This is conservative; actual memory "
             "use depends on the selected PyTorch attention backend."
         )

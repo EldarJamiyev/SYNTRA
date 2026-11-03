@@ -235,6 +235,8 @@ function termsOf(text) {
   return [...new Set((text.toLowerCase().match(/[\p{L}\p{N}_-]{3,}/gu) || []).filter(term => !STOP_WORDS.has(term)))].slice(0, 30);
 }
 
+const SCOPE_HEADER_PATTERN = /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|def|func|pub\s+fn|fn|interface|type|const\s+[A-Za-z_$][A-Za-z0-9_$]*\s*=)\b/;
+
 function makeExcerpt(content, query, maxChars = 5200) {
   if (content.length <= maxChars) return content;
   const lines = content.split(/\r?\n/);
@@ -244,7 +246,17 @@ function makeExcerpt(content, query, maxChars = 5200) {
   })).filter(line => line.score > 0).sort((a, b) => b.score - a.score).slice(0, 10);
   const keep = new Set();
   if (scored.length) {
-    for (const line of scored) for (let index = Math.max(0, line.index - 3); index <= Math.min(lines.length - 1, line.index + 4); index += 1) keep.add(index);
+    for (const line of scored) {
+      for (let cursor = line.index; cursor >= Math.max(0, line.index - 16); cursor -= 1) {
+        if (SCOPE_HEADER_PATTERN.test(lines[cursor])) {
+          keep.add(cursor);
+          break;
+        }
+      }
+      for (let index = Math.max(0, line.index - 4); index <= Math.min(lines.length - 1, line.index + 5); index += 1) {
+        keep.add(index);
+      }
+    }
   } else {
     for (let index = 0; index < Math.min(24, lines.length); index += 1) keep.add(index);
     for (let index = Math.max(0, lines.length - 24); index < lines.length; index += 1) keep.add(index);
@@ -260,9 +272,10 @@ function makeExcerpt(content, query, maxChars = 5200) {
   return output || content.slice(-maxChars);
 }
 
-function rankGraph(graph, goal, requestedPath = "") {
+function rankGraph(graph, goal, requestedPath = "", boostPaths = []) {
   const terms = termsOf(goal);
   const byPath = new Map(graph.nodes.map(node => [node.path, node]));
+  const boosted = new Set(Array.isArray(boostPaths) ? boostPaths : []);
   const scores = new Map();
   for (const node of graph.nodes) {
     const file = graph.contents.get(node.path);
@@ -274,6 +287,7 @@ function rankGraph(graph, goal, requestedPath = "") {
       score += Math.min(lowerContent.split(term).length - 1, 6) * 1.25;
     }
     if (requestedPath && node.path === requestedPath) score += 100;
+    if (boosted.has(node.path)) score += 45;
     if (/\b(App|main|index|server|routes?|router|service|store|db|database|api|page|layout)\b/i.test(node.path)) score += 1.5;
     scores.set(node.path, score);
   }
@@ -285,6 +299,67 @@ function rankGraph(graph, goal, requestedPath = "") {
   return [...scores.entries()].map(([filePath, score]) => ({
     ...byPath.get(filePath), score, content: graph.contents.get(filePath)?.content || ""
   })).filter(item => item.content).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+}
+
+export function analyzeCheckFailure(checks, availablePaths = []) {
+  const failed = Array.isArray(checks) ? checks.filter(item => item && item.passed !== true) : [];
+  if (!failed.length) {
+    return { category: "none", faultLocations: [], remediationHint: "", summary: "All checks passed." };
+  }
+  const combined = failed.map(item => [item.task, item.error || "", item.output || ""].join("\n")).join("\n\n");
+  let category = "runtime_failure";
+  let remediationHint = "Inspect the failing execution path, verify edge-case inputs and return types, and update the target implementation.";
+
+  if (failed.some(item => item.timedOut === true)) {
+    category = "timeout";
+    remediationHint = "A check timed out. Eliminate infinite loops, unbounded recursion, or unresolved Promises/timers.";
+  } else if (/\b(?:SyntaxError|IndentationError|TabError|ParseError)\b|unexpected token|expected [;})]/i.test(combined)) {
+    category = "syntax_error";
+    remediationHint = "Fix the syntax or indentation error at the reported line and verify balanced braces/parentheses.";
+  } else if (/\bTS\d{4}:|\bTypeError\b|cannot find name|mismatched types|cannot use .* as .* value in/i.test(combined)) {
+    category = "type_error";
+    remediationHint = "Align parameter types, return types, and property names with the declared contract or interface.";
+  } else if (/\b(?:MODULE_NOT_FOUND|ModuleNotFoundError|ImportError)\b|Cannot find module/i.test(combined)) {
+    category = "import_or_module_error";
+    remediationHint = "Verify relative import paths and exported symbol names across modified modules.";
+  } else if (/\b(?:AssertionError|ERR_ASSERTION)\b|FAIL:|--- FAIL:|thread '.*' panicked at/i.test(combined)) {
+    category = "assertion_failure";
+    remediationHint = "Compare the expected vs. actual values in the failing test assertion and adjust the core business logic.";
+  }
+
+  const normalizedPaths = Array.isArray(availablePaths) ? availablePaths : [];
+  const faultLocations = [];
+  const seenLocations = new Set();
+  const addLocation = (rawPath, lineNum) => {
+    const cleaned = String(rawPath || "").replace(/^file:\/\//, "").replace(/\\/g, "/").replace(/^\.\/+/, "");
+    const matched = normalizedPaths.find(candidate => cleaned === candidate || cleaned.endsWith("/" + candidate))
+      || (normalizedPaths.length === 0 ? cleaned : null);
+    if (!matched) return;
+    const line = Number.parseInt(String(lineNum), 10);
+    const key = matched + ":" + (Number.isFinite(line) ? line : 0);
+    if (seenLocations.has(key)) return;
+    seenLocations.add(key);
+    faultLocations.push({ path: matched, line: Number.isFinite(line) ? line : null });
+  };
+
+  for (const match of combined.matchAll(/([A-Za-z0-9_./\\-]+\.(?:m?js|cjs|tsx?|jsx?|py|go|rs)):(\d+)(?::(\d+))?/g)) {
+    addLocation(match[1], match[2]);
+    if (faultLocations.length >= 6) break;
+  }
+  for (const match of combined.matchAll(/File "([^"]+\.py)", line (\d+)/g)) {
+    addLocation(match[1], match[2]);
+    if (faultLocations.length >= 6) break;
+  }
+
+  const locationSummary = faultLocations.length
+    ? "Fault locations: " + faultLocations.map(item => item.path + (item.line ? ":" + item.line : "")).join(", ")
+    : "No specific workspace line number matched.";
+  return {
+    category,
+    faultLocations,
+    remediationHint,
+    summary: `[Root-cause category: ${category}] ${locationSummary}. Hint: ${remediationHint}`
+  };
 }
 
 function createPlan(goal, inventory, ranked, graph, repositoryState = {}) {
@@ -1606,6 +1681,7 @@ export async function runAgentTask({
           "Implement only this slice. Earlier completed slices are already present in the candidate workspace. Do not repeat their changes or add unrelated work."
         ].join("\n");
       let slicePassed = false;
+      const seenPatchFingerprints = new Set();
       slice.status = "running";
       if (sliceStep) sliceStep.status = "running";
       await emitProgress({
@@ -1691,6 +1767,28 @@ export async function runAgentTask({
           });
           continue;
         }
+
+        const patchFingerprint = candidate.changes
+          .map(change => change.path + ":" + sha256(change.content))
+          .sort()
+          .join("|");
+        if (!resumingSavedPatch && seenPatchFingerprints.has(patchFingerprint)) {
+          feedback = "CYCLE DETECTED: This patch produces the exact same candidate file state as a previous failed attempt in this slice. Pivot your strategy: inspect the failing test expectations or error location and modify a different condition or expression.";
+          observations.push({
+            kind: "repair-cycle-detected",
+            stage: slice.id + "-attempt-" + sliceAttempt,
+            status: "pivoting",
+            detail: "Rejected a duplicate candidate state to prevent an unproductive repair loop."
+          });
+          attempts.push({
+            iteration, sliceId: slice.id, status: "duplicate_patch_rejected",
+            summary: candidate.summary, changedFiles: candidate.changes.map(change => change.path),
+            promptTokens: tokenInfo.token_count, outputTokens: generated.generated_tokens,
+            modelStep: generated.trained_steps, feedback
+          });
+          continue;
+        }
+        seenPatchFingerprints.add(patchFingerprint);
 
         let patchReview = null;
         if (modelSelfReview) {
@@ -2141,13 +2239,24 @@ export async function runAgentTask({
           break;
         }
 
-        feedback = "Candidate verification failed for implementation slice '" + slice.goal + "'. Correct these results in the current candidate workspace; preserve earlier verified slices and do not claim success:\n" +
+        const diagnosis = analyzeCheckFailure(checks, graph.nodes.map(node => node.path));
+        finalVerification.diagnosis = diagnosis;
+        observations.push({
+          kind: "failure-root-cause-diagnosis",
+          stage: slice.id + "-attempt-" + sliceAttempt,
+          status: diagnosis.category,
+          detail: diagnosis.summary.slice(0, 400)
+        });
+
+        feedback = "Candidate verification failed for implementation slice '" + slice.goal + "'.\n" +
+          diagnosis.summary + "\n" +
+          "Correct these results in the current candidate workspace; preserve earlier verified slices and do not claim success:\n" +
           checks.map(check => "[" + check.task + "] passed=" + check.passed + ", timedOut=" + (check.timedOut || false) +
             ", exitCode=" + (check.exitCode ?? "unknown") + "\n" + (check.error || "") + "\n" + (check.output || "")).join("\n\n");
 
         await emitProgress({
           phase: "repair", iteration,
-          message: "A check failed. Re-inspecting the candidate before the bounded repair attempt."
+          message: "A check failed (" + diagnosis.category.replaceAll("_", " ") + "). Re-inspecting the candidate before the bounded repair attempt."
         });
         const refreshedInspection = await executeWorkspaceTool({
           root: snapshot.root, auditRoot: root, name: "workspace.inspect", input: {}, signal
@@ -2159,7 +2268,7 @@ export async function runAgentTask({
         }
         inventory = refreshedInspection.output;
         graph = await buildRepositoryGraph(snapshot.root);
-        ranked = rankGraph(graph, sliceGoal, requestedPath);
+        ranked = rankGraph(graph, sliceGoal, requestedPath, diagnosis.faultLocations.map(item => item.path));
         activePatchRoot = snapshot.root;
         modelSelectedContext = "";
         if (modelToolSelection) {
