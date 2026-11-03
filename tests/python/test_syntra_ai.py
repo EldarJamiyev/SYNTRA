@@ -514,7 +514,6 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(inference_saved["step"], tuned["step"])
             self.assertNotIn("optimizer_state", inference_saved)
             from syntra_ai.runtime import evaluate
-            import os
             previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
             try:
