@@ -200,11 +200,13 @@ function updateChat(jobId, value) {
 function cancelChatJob(jobId, reply = "Task cancelled. Any proposals already staged remain in the workspace; type /proposals to inspect them.") {
   const job = chatJobs.get(jobId);
   if (!job) return;
+  const partialReply = typeof job.reply === "string" ? job.reply : "";
   Object.assign(job, {
     status: "cancelled",
     phase: "cancelled",
     message: "Task cancelled.",
     reply,
+    partialReply,
     error: null,
     updatedAt: new Date().toISOString()
   });
@@ -924,7 +926,7 @@ async function streamChat(request, response) {
       writeSse(response, "phase", { phase: current.phase, message: current.message || "" });
     }
 
-    const output = current.status === "failed"
+    const output = current.status === "failed" || current.status === "cancelled"
       ? String(current.partialReply || "")
       : String(current.reply || "");
     if (output !== sentText) {
