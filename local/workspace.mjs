@@ -1825,19 +1825,69 @@ export async function discoverProjectChecks(inputRoot) {
   return { root, checks, unavailable };
 }
 
-function restrictedVerificationEnvironment(source = process.env) {
-  const allowed = [
-    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
-    "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "SYSTEMDRIVE"
-  ];
-  const result = {};
-  for (const key of allowed) {
-    const value = source[key];
-    if (typeof value === "string" && value.length <= 4096) result[key] = value;
+function restrictedVerificationEnvironment(platform = process.platform) {
+  // Never inherit PATH, COMSPEC, or other command-resolution settings from the
+  // caller. A workspace or request must not be able to redirect a child process.
+  const runtimeDirectory = path.dirname(process.execPath);
+  const result = { CI: "true", NODE_ENV: "test" };
+
+  if (platform === "win32") {
+    const windowsRoot = "C:\\Windows";
+    const windowsTemp = path.join(windowsRoot, "Temp");
+    result.SystemRoot = windowsRoot;
+    result.WINDIR = windowsRoot;
+    result.TEMP = windowsTemp;
+    result.TMP = windowsTemp;
+    result.NPM_CONFIG_CACHE = path.join(windowsTemp, "syntra-npm-cache");
+    result.PATH = [
+      runtimeDirectory,
+      path.join(windowsRoot, "System32"),
+      windowsRoot,
+      "C:\\Program Files\\Docker\\Docker\\resources\\bin"
+    ].join(";");
+  } else {
+    result.HOME = "/tmp";
+    result.TMPDIR = "/tmp";
+    result.NPM_CONFIG_CACHE = "/tmp/.npm";
+    result.PATH = [
+      runtimeDirectory,
+      "/usr/local/sbin",
+      "/usr/local/bin",
+      "/usr/sbin",
+      "/usr/bin",
+      "/sbin",
+      "/bin",
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin"
+    ].join(":");
   }
-  result.CI = "true";
-  result.NODE_ENV = "test";
+
   return result;
+}
+
+function resolveNpmCli() {
+  const runtimeDirectory = path.dirname(process.execPath);
+  const candidates = [
+    path.join(runtimeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+    path.resolve(runtimeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    path.resolve(runtimeDirectory, "..", "node_modules", "npm", "bin", "npm-cli.js"),
+    path.resolve(runtimeDirectory, "..", "share", "nodejs", "npm", "bin", "npm-cli.js")
+  ];
+
+  const npmCli = candidates.find(candidate => fsSync.existsSync(candidate));
+  if (!npmCli) {
+    throw new Error("The npm CLI could not be located beside the active Node.js runtime. Use isolated Docker verification or install npm with Node.js.");
+  }
+  return npmCli;
+}
+
+function validatedRunnerArguments(selected) {
+  if (!Array.isArray(selected.args) || selected.args.length > 64
+    || selected.args.some(argument => typeof argument !== "string"
+      || argument.length > 4096 || argument.includes("\\0"))) {
+    throw new Error("The project verification arguments are invalid.");
+  }
+  return [...selected.args];
 }
 
 function verificationContainerImage(selected) {
@@ -1845,10 +1895,8 @@ function verificationContainerImage(selected) {
   if (selected.kind === "npm-script" || selected.kind === "node-test") runtime = "NODE";
   else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") runtime = "PYTHON";
   else if (selected.kind === "command") {
-    const executable = path.basename(String(selected.executable || "")).toLowerCase().replace(/\.exe$/, "");
-    if (executable === "cargo") runtime = "RUST";
-    else if (executable === "go") runtime = "GO";
-    else if (executable === "dotnet") runtime = "DOTNET";
+    const runtimes = { cargo: "RUST", go: "GO", dotnet: "DOTNET" };
+    runtime = runtimes[selected.executable];
   }
   if (!runtime) throw new Error("No isolated container runtime is configured for verification runner " + String(selected.kind) + ".");
   const defaults = {
@@ -1863,53 +1911,78 @@ function verificationContainerImage(selected) {
 
 export function buildVerificationCommand(root, selected, {
   allowUntrustedHost = false,
-  platform = process.platform,
-  environment = process.env
+  platform = process.platform
 } = {}) {
   if (!selected || typeof selected !== "object") throw new Error("A supported verification runner is required.");
   if (selected.kind === "multi-runner") {
     if (!Array.isArray(selected.runners) || selected.runners.length < 1 || selected.runners.length > 8) {
       throw new Error("The multi-runner verification plan is invalid.");
     }
-    return selected.runners.map(runner => buildVerificationCommand(root, runner, { allowUntrustedHost, platform, environment }));
+    return selected.runners.map(runner => buildVerificationCommand(root, runner, { allowUntrustedHost, platform }));
   }
+
+  const allowedScripts = new Set(["build", "test", "lint", "typecheck", "check"]);
+  if (selected.kind === "npm-script"
+    && (typeof selected.script !== "string" || !allowedScripts.has(selected.script))) {
+    throw new Error("The requested npm verification script is not allowlisted.");
+  }
+
+  const argsForRunner = selected.kind === "npm-script"
+    ? []
+    : validatedRunnerArguments(selected);
+
   if (allowUntrustedHost) {
     let executable;
     let args;
-    if (selected.kind === "npm-script" && platform === "win32") {
-      executable = "cmd.exe";
-      args = ["/d", "/s", "/c", selected.command];
-    } else if (selected.kind === "npm-script") {
-      executable = "npm";
-      args = ["run", selected.script];
-    } else if (["python-pytest", "python-unittest", "node-test", "command"].includes(selected.kind)) {
+    if (selected.kind === "npm-script") {
+      executable = process.execPath;
+      args = [resolveNpmCli(), "run", selected.script];
+    } else if (selected.kind === "node-test") {
+      executable = process.execPath;
+      args = argsForRunner;
+    } else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") {
+      if (typeof selected.executable !== "string" || !selected.executable || selected.executable.includes("\\0")) {
+        throw new Error("The selected Python interpreter is invalid.");
+      }
       executable = selected.executable;
-      args = selected.args;
+      args = argsForRunner;
+    } else if (selected.kind === "command" && ["cargo", "go", "dotnet"].includes(selected.executable)) {
+      executable = selected.executable;
+      args = argsForRunner;
     } else {
-      throw new Error("Unsupported verification runner: " + String(selected.kind));
+      throw new Error("Unsupported or untrusted verification runner: " + String(selected.kind));
     }
     return {
-      executable, args, env: restrictedVerificationEnvironment(environment),
-      mode: "host_opt_in", command: selected.command || [executable, ...args].join(" ")
+      executable,
+      args,
+      env: restrictedVerificationEnvironment(platform),
+      mode: "host_opt_in",
+      command: selected.command || [executable, ...args].join(" ")
     };
   }
 
   const workspacePath = path.resolve(root);
-  // Docker --mount uses comma-delimited key/value options. A colon is valid in
-  // a Windows drive path, so reject only characters that can break this syntax.
-  if ([10, 13, 0].some(code => workspacePath.includes(String.fromCharCode(code))) || workspacePath.includes(",")) {
+  // Docker --mount uses comma-delimited key/value options. On POSIX, colons
+  // also delimit mount fields; reject them rather than emitting an ambiguous mount.
+  const unsafeMountCharacters = [10, 13, 0].some(code => workspacePath.includes(String.fromCharCode(code)))
+    || workspacePath.includes(",")
+    || (platform !== "win32" && workspacePath.includes(":"));
+  if (unsafeMountCharacters) {
     throw new Error("The workspace path contains characters that cannot be mounted safely into a Docker container.");
   }
-  const mountSourcePath = process.platform === "win32"
+  const mountSourcePath = platform === "win32"
     ? workspacePath.split(String.fromCharCode(92)).join("/")
     : workspacePath;
   const image = verificationContainerImage(selected);
   let command;
   if (selected.kind === "npm-script") command = ["npm", "run", selected.script];
-  else if (selected.kind === "node-test") command = ["node", ...selected.args];
-  else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") command = ["python", ...selected.args];
-  else if (selected.kind === "command") command = [selected.executable, ...selected.args];
-  else throw new Error("Unsupported verification runner: " + String(selected.kind));
+  else if (selected.kind === "node-test") command = ["node", ...argsForRunner];
+  else if (selected.kind === "python-pytest" || selected.kind === "python-unittest") command = ["python", ...argsForRunner];
+  else if (selected.kind === "command" && ["cargo", "go", "dotnet"].includes(selected.executable)) {
+    command = [selected.executable, ...argsForRunner];
+  } else {
+    throw new Error("Unsupported or untrusted verification runner: " + String(selected.kind));
+  }
 
   const args = [
     "run", "--rm", "--init", "--pull=missing",
@@ -1927,11 +2000,9 @@ export function buildVerificationCommand(root, selected, {
     image, ...command
   ];
   return {
-    // The host executable is fixed; user environment values may select only
-    // a validated container image, never the process that SYNTRA launches.
     executable: "docker",
     args,
-    env: restrictedVerificationEnvironment(environment),
+    env: restrictedVerificationEnvironment(platform),
     mode: "docker",
     image,
     command: "docker run [isolated verification]"
@@ -1960,7 +2031,8 @@ async function runVerificationExecution(root, task, selected, execution, options
         cwd: root,
         env: execution.env,
         windowsHide: true,
-        detached: process.platform !== "win32"
+        detached: process.platform !== "win32",
+        shell: false
       });
     } catch (error) {
       reject(error);
