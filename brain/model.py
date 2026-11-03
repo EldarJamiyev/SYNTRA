@@ -97,36 +97,72 @@ class CausalSelfAttention(nn.Module):
         self.projection = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.residual_dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | None = None,
+        use_cache: bool = False,
+    ):
         batch, sequence, channels = x.shape
         qkv = self.qkv(x).view(batch, sequence, 3, self.n_head, self.head_dim)
         query, key, value = qkv.permute(2, 0, 3, 1, 4).unbind(0)
+        past_length = 0
+
+        if past_key_value is not None:
+            past_key, past_value = past_key_value
+            expected_prefix = (batch, self.n_head)
+            if (
+                past_key.ndim != 4
+                or past_value.shape != past_key.shape
+                or past_key.shape[:2] != expected_prefix
+                or past_key.shape[-1] != self.head_dim
+                or past_key.device != key.device
+                or past_value.device != value.device
+            ):
+                raise ValueError("Cached attention keys/values do not match the current input.")
+            past_length = past_key.shape[-2]
+            key = torch.cat((past_key, key), dim=-2)
+            value = torch.cat((past_value, value), dim=-2)
 
         if hasattr(F, "scaled_dot_product_attention"):
-            attended = F.scaled_dot_product_attention(
-                query,
-                key,
-                value,
-                dropout_p=self.attn_dropout if self.training else 0.0,
-                is_causal=True,
-            )
+            if past_key_value is None:
+                attended = F.scaled_dot_product_attention(
+                    query,
+                    key,
+                    value,
+                    dropout_p=self.attn_dropout if self.training else 0.0,
+                    is_causal=True,
+                )
+            else:
+                key_positions = torch.arange(key.shape[-2], device=x.device)
+                query_positions = past_length + torch.arange(sequence, device=x.device)
+                causal_mask = key_positions[None, :] <= query_positions[:, None]
+                attended = F.scaled_dot_product_attention(
+                    query,
+                    key,
+                    value,
+                    attn_mask=causal_mask[None, None, :, :],
+                    dropout_p=self.attn_dropout if self.training else 0.0,
+                    is_causal=False,
+                )
         else:
-            # Compatibility path for older supported PyTorch builds.
             scores = (query @ key.transpose(-2, -1)) / math.sqrt(self.head_dim)
-            causal_mask = torch.ones(
-                sequence, sequence, device=x.device, dtype=torch.bool
-            ).tril()
-            scores = scores.masked_fill(~causal_mask, torch.finfo(scores.dtype).min)
-            weights = F.softmax(scores, dim=-1)
-            weights = F.dropout(
-                weights,
-                p=self.attn_dropout,
-                training=self.training,
+            key_positions = torch.arange(key.shape[-2], device=x.device)
+            query_positions = past_length + torch.arange(sequence, device=x.device)
+            causal_mask = key_positions[None, :] <= query_positions[:, None]
+            scores = scores.masked_fill(
+                ~causal_mask[None, None, :, :],
+                torch.finfo(scores.dtype).min,
             )
+            weights = F.softmax(scores, dim=-1)
+            weights = F.dropout(weights, p=self.attn_dropout, training=self.training)
             attended = weights @ value
 
         attended = attended.transpose(1, 2).contiguous().view(batch, sequence, channels)
-        return self.residual_dropout(self.projection(attended))
+        output = self.residual_dropout(self.projection(attended))
+        if use_cache:
+            return output, (key, value)
+        return output
 
 
 class FeedForward(nn.Module):
@@ -155,10 +191,24 @@ class TransformerBlock(nn.Module):
         self.norm_feed_forward = nn.LayerNorm(config.n_embd)
         self.feed_forward = FeedForward(config)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attention(self.norm_attention(x))
-        x = x + self.feed_forward(self.norm_feed_forward(x))
-        return x
+    def forward(
+        self,
+        x: torch.Tensor,
+        past_key_value: tuple[torch.Tensor, torch.Tensor] | None = None,
+        use_cache: bool = False,
+    ):
+        attention_result = self.attention(
+            self.norm_attention(x),
+            past_key_value=past_key_value,
+            use_cache=use_cache,
+        )
+        if use_cache:
+            attention_output, present_key_value = attention_result
+            x = x + attention_output
+            x = x + self.feed_forward(self.norm_feed_forward(x))
+            return x, present_key_value
+        x = x + attention_result
+        return x + self.feed_forward(self.norm_feed_forward(x))
 
 
 class LocalTransformer(nn.Module):
@@ -213,17 +263,15 @@ class LocalTransformer(nn.Module):
         self,
         input_ids: torch.Tensor,
         targets: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = None,
+        use_cache: bool = False,
+    ):
         if not isinstance(input_ids, torch.Tensor):
             raise TypeError("input_ids must be a torch.Tensor.")
         if input_ids.ndim != 2 or input_ids.shape[0] < 1 or input_ids.shape[1] < 1:
             raise ValueError("input_ids must have shape [batch, sequence] with non-empty dimensions.")
         if input_ids.dtype != torch.long:
             raise ValueError("input_ids must use torch.long token IDs.")
-        if input_ids.shape[1] > self.config.block_size:
-            raise ValueError(
-                f"Input sequence length {input_ids.shape[1]} exceeds block_size {self.config.block_size}."
-            )
         if torch.any(input_ids < 0) or torch.any(input_ids >= self.config.vocab_size):
             raise ValueError("input_ids contains a token outside the configured vocabulary.")
         if targets is not None:
@@ -233,12 +281,45 @@ class LocalTransformer(nn.Module):
                 raise ValueError("targets must use torch.long token IDs.")
             if targets.device != input_ids.device:
                 raise ValueError("targets and input_ids must be on the same device.")
+            if torch.any(targets < 0) or torch.any(targets >= self.config.vocab_size):
+                raise ValueError("targets contains a token outside the configured vocabulary.")
 
-        positions = torch.arange(input_ids.shape[1], device=input_ids.device)
+        if past_key_values is not None and len(past_key_values) != len(self.blocks):
+            raise ValueError("The cache must contain one key/value pair per Transformer block.")
+
+        past_length = 0
+        if past_key_values:
+            past_length = past_key_values[0][0].shape[-2]
+            for key, value in past_key_values:
+                if key.ndim != 4 or value.shape != key.shape:
+                    raise ValueError("Cached attention tensors have invalid dimensions.")
+                if key.shape[0] != input_ids.shape[0] or key.shape[1] != self.config.n_head:
+                    raise ValueError("Cached attention tensors do not match the current batch/head dimensions.")
+                if key.device != input_ids.device or value.device != input_ids.device:
+                    raise ValueError("Cached attention tensors must be on the same device as input_ids.")
+                if key.shape[-2] != past_length:
+                    raise ValueError("Cached attention layers have inconsistent sequence lengths.")
+
+        if past_length + input_ids.shape[1] > self.config.block_size:
+            raise ValueError(
+                f"Input plus cached tokens exceeds block_size {self.config.block_size}."
+            )
+
+        positions = torch.arange(
+            past_length,
+            past_length + input_ids.shape[1],
+            device=input_ids.device,
+        )
         x = self.token_embedding(input_ids) + self.position_embedding(positions)[None, :, :]
         x = self.embedding_dropout(x)
-        for block in self.blocks:
-            x = block(x)
+        presents = []
+        for index, block in enumerate(self.blocks):
+            past = past_key_values[index] if past_key_values is not None else None
+            if use_cache:
+                x, present = block(x, past_key_value=past, use_cache=True)
+                presents.append(present)
+            else:
+                x = block(x, past_key_value=past, use_cache=False)
         logits = self.language_model_head(self.final_norm(x))
 
         loss = None
@@ -247,7 +328,10 @@ class LocalTransformer(nn.Module):
                 logits.reshape(-1, logits.shape[-1]),
                 targets.reshape(-1),
             )
+        if use_cache:
+            return logits, loss, tuple(presents)
         return logits, loss
+
 
 
 __all__ = [
