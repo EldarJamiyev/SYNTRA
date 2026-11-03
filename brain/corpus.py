@@ -217,6 +217,8 @@ def build_instruction_corpus(
                     if not resolved.is_file() or stat.st_size < 1 or stat.st_size > max_file_bytes:
                         skipped += 1
                         continue
+                    if len(files) >= max_files:
+                        raise ValueError(f"Approved corpus exceeds the {max_files:,}-file limit.")
                     raw = resolved.read_bytes()
                     source_text = raw.decode("utf-8")
                 except (OSError, UnicodeDecodeError, ValueError):
