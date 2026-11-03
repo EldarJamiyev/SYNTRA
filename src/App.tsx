@@ -84,6 +84,17 @@ type BrainMetrics = {
   device?: string;
 };
 
+type BrainTrainingBenchmark = {
+  status: string;
+  task_count?: number;
+  completed_task_count?: number;
+  task_completion_rate?: number;
+  patch_validity_rate?: number;
+  verification_pass_rate?: number;
+  report_path?: string | null;
+  error?: string | null;
+};
+
 type BrainStatus = {
   checkpoint_exists: boolean;
   checkpoint: string;
@@ -94,7 +105,7 @@ type BrainStatus = {
   context_tokens: number;
   tokenizer_vocab_size: number;
   instruction_mode?: boolean;
-  last_benchmark?: BrainStatus['training']['benchmark'];
+  last_benchmark?: BrainTrainingBenchmark | null;
   training: {
     status: string;
     epoch?: number;
@@ -105,16 +116,7 @@ type BrainStatus = {
     device?: string;
     message?: string;
     instruction_mode?: boolean;
-    benchmark?: {
-      status: string;
-      task_count?: number;
-      completed_task_count?: number;
-      task_completion_rate?: number;
-      patch_validity_rate?: number;
-      verification_pass_rate?: number;
-      report_path?: string | null;
-      error?: string | null;
-    } | null;
+    benchmark?: BrainTrainingBenchmark | null;
   };
 };
 
