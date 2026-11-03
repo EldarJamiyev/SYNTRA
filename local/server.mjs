@@ -529,7 +529,7 @@ async function runChatTurn(jobId, message, history, signal) {
         "- /status checks whether the local model backend is reachable.",
         "- /clear clears this conversation and its saved browser history.",
         "",
-        "Normal chat and code edits need a compatible local Ollama model or a trained SYNTRA checkpoint. No hosted AI API is used."
+        "Normal chat and coding assistance run only on the locally trained SYNTRA PyTorch brain. Train a checkpoint with the local training command before using model-backed chat."
       ].join("\n"));
       return;
     }
@@ -538,9 +538,7 @@ async function runChatTurn(jobId, message, history, signal) {
       updateChat(jobId, { phase: "status", message: "Checking the local model backend" });
       try {
         const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000);
-        const provider = modelStatus.provider === "ollama-local"
-          ? "Ollama local model"
-          : modelStatus.provider || "Native local backend";
+        const provider = modelStatus.provider || "SYNTRA local PyTorch brain";
         const lines = [
           "**SYNTRA status**",
           "",
@@ -559,7 +557,7 @@ async function runChatTurn(jobId, message, history, signal) {
         if (modelStatus.pretrained_weights === true) lines.push("Weights: pretrained, installed locally");
         else if (modelStatus.checkpoint_exists) lines.push("Weights: local SYNTRA checkpoint");
         lines.push("", "Network diagnostics: available without a model.");
-        if (!modelStatus.checkpoint_exists) lines.push("Install a compatible local Ollama model or train the native model to enable ordinary chat and code edits.");
+        if (!modelStatus.checkpoint_exists) lines.push("Train SYNTRA locally with: python -m brain.train --dataset \"" + activeWorkspace + "\" --epochs 1");
         finishChat(jobId, lines.join("\n"), { modelStatus: "reachable" });
       } catch (error) {
         finishChat(jobId, [
@@ -569,7 +567,7 @@ async function runChatTurn(jobId, message, history, signal) {
           "Model backend: unavailable",
           "Network diagnostics: available without a model.",
           "",
-          "Check the service windows opened by Start-SYNTRA.bat. Ordinary chat and code edits need a reachable local model backend.",
+          "The local PyTorch checkpoint is not available. Train it from the active workspace, then retry.",
           error instanceof Error ? error.message : String(error)
         ].join("\n"), { modelStatus: "unavailable" });
       }
@@ -595,11 +593,9 @@ async function runChatTurn(jobId, message, history, signal) {
     const modelStatus = await aiRequest("GET", "/model/status", undefined, 15000, { signal });
     if (!modelStatus.checkpoint_exists) {
       finishChat(jobId,
-        "The local AI backend is running, but there is no trained checkpoint yet. Train once from the repository folder, then return here:\n\n"
-        + "npm run ai:install\n"
-        + "npm run ai:cli -- train --root \"" + activeWorkspace + "\" --seq-len 1024 --steps 1000\n"
-        + "npm run ai:server\n\n"
-        + "This is a from-scratch model: training is required and does not guarantee strong instruction-following.");
+        "SYNTRA is running without a trained brain checkpoint. Train the local model from your selected workspace:\n\n"
+        + "python -m brain.train --dataset \"" + activeWorkspace + "\" --epochs 1 --device auto\n\n"
+        + "Then return here and retry. The model starts from random weights; this training step does not guarantee professional coding-assistant capability.");
       return;
     }
 
@@ -670,10 +666,6 @@ async function runChatTurn(jobId, message, history, signal) {
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
-        reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim()
-          ? (method, route, body, timeoutMs, options = {}) =>
-              aiRequest(method, route, { ...(body || {}), model: process.env.SYNTRA_REVIEW_MODEL.trim() }, timeoutMs, { ...options, signal })
-          : null,
         onProgress: async update => {
           const phase = update.phase || "working";
           const messageText = update.message || "Working on the requested change";
@@ -748,49 +740,72 @@ async function runChatTurn(jobId, message, history, signal) {
 
     const recentHistory = Array.isArray(history)
       ? history.filter(item => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
-          .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-2500) }))
+          .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-1800) }))
       : [];
-    let userMessage = message.slice(-10000);
+    let userMessage = message.slice(-6000);
+    const contextTokens = Number(modelStatus.context_tokens || modelStatus.config?.block_size || 256);
+    const promptByteBudget = Math.max(512, Math.min(200_000, contextTokens * 3));
     let prompt = "";
-    let tokenInfo = null;
-    const contextTokens = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 1024);
-    const contextLimit = Math.max(64, contextTokens - 64);
     while (true) {
       prompt = [
         "SYNTRA ASSISTANT",
-        "Answer the user's latest message directly and clearly. Do not claim facts or tools you do not have.",
+        "You are a locally trained experimental language model. Respond to the latest user message. Do not claim to have executed tools or verified facts that are not present in the conversation.",
         ...recentHistory.map(item => (item.role === "user" ? "USER: " : "ASSISTANT: ") + item.content),
         "USER: " + userMessage,
         "ASSISTANT:"
       ].join("\n\n");
-      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000);
-      if (tokenInfo.token_count <= contextLimit) break;
+      if (Buffer.byteLength(prompt, "utf8") <= promptByteBudget) break;
       if (recentHistory.length) recentHistory.shift();
-      else if (userMessage.length > 1000) userMessage = userMessage.slice(-Math.max(1000, Math.floor(userMessage.length * 0.65)));
+      else if (userMessage.length > 256) userMessage = userMessage.slice(-Math.max(256, Math.floor(userMessage.length * 0.7)));
       else break;
     }
-    if (tokenInfo.token_count >= contextTokens) {
-      finishChat(jobId, "Your message exceeds the trained model's context window. Please split it into a shorter message.");
-      return;
-    }
-    updateChat(jobId, { phase: "generating", message: "Generating a local response" });
+    updateChat(jobId, {
+      phase: "generating",
+      message: "Generating with the local PyTorch brain",
+      metrics: {
+        epoch: Number(modelStatus.epoch || 0),
+        step: Number(modelStatus.trained_steps || 0),
+        train_loss: modelStatus.train_loss,
+        validation_loss: modelStatus.validation_loss,
+        tokens_per_second: 0,
+        device: "starting"
+      }
+    });
     const generation = await aiRequest("POST", "/model/generate", {
       prompt,
-      max_new_tokens: Math.min(512, Math.max(16, contextTokens - tokenInfo.token_count - 1)),
+      max_new_tokens: Math.min(512, Math.max(16, Math.floor(contextTokens * 0.75))),
       temperature: 0.7,
-      top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
+      top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 512)),
+      top_p: 0.95,
+      repetition_penalty: 1.08,
       device: "auto"
     }, 300000, {
-      onToken: (_delta, fullText) => updateChat(jobId, {
+      signal,
+      onToken: (_delta, fullText, metrics) => updateChat(jobId, {
         phase: "streaming",
-        message: "Responding",
-        reply: fullText
+        message: "Responding with the local brain",
+        reply: fullText,
+        metrics: { ...(job.metrics || {}), ...(metrics || {}) }
+      }),
+      onMetrics: metrics => updateChat(jobId, {
+        metrics: { ...(job.metrics || {}), ...(metrics || {}) }
       })
     });
     const reply = String(generation.text || "").trim();
-    finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more training is needed.", {
-      contextTokensUsed: tokenInfo.token_count, trainedSteps: generation.trained_steps
+    finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more local training or instruction examples may be needed.", {
+      trainedSteps: generation.trained_steps,
+      metrics: {
+        ...(job.metrics || {}),
+        tokens_generated: generation.tokens_generated,
+        tokens_per_second: generation.tokens_per_second,
+        epoch: generation.epoch,
+        step: generation.step,
+        train_loss: generation.train_loss,
+        validation_loss: generation.validation_loss,
+        device: generation.device
+      }
     });
+
   } catch (error) {
     const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
     if (agentRunId) {
