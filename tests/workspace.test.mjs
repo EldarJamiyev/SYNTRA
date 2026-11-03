@@ -159,6 +159,15 @@ test("verification defaults to an offline Docker container and filters host envi
     }, { allowUntrustedHost: true }),
     /verification arguments are invalid/
   );
+  const windowsHost = buildVerificationCommand(root, selected, {
+    allowUntrustedHost: true,
+    platform: "win32",
+    environment: hostileEnvironment
+  });
+  assert.equal(windowsHost.env.ComSpec, "C:\\Windows\\System32\\cmd.exe");
+  assert.equal(windowsHost.env.PATHEXT, ".COM;.EXE;.BAT;.CMD");
+  assert.notEqual(windowsHost.env.ComSpec, hostileEnvironment.COMSPEC);
+  assert.notEqual(windowsHost.env.PATH, hostileEnvironment.PATH);
 });
 
 test("check discovery reports only runners that are actually configured", async () => {
