@@ -375,7 +375,7 @@ def _pack_instruction_records(
             prompt_ids = prompt_ids[:head] + (prompt_ids[-tail:] if tail else [])
         sequence = [BOS_ID, *prompt_ids, *completion_ids, EOS_ID]
         sequence = sequence[:block_size + 1]
-        prompt_end_position = 1 + len(prompt_ids)
+        prompt_end_position = len(prompt_ids)
         row_input = sequence[:-1]
         row_target = [
             token if position + 1 > prompt_end_position else -100
