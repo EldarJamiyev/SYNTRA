@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 try:
@@ -190,6 +191,24 @@ class TransformerTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "max_file_bytes must be between"):
                 load_corpus([root], max_file_bytes=MAX_CORPUS_FILE_BYTES + 1)
 
+    def test_corpus_loader_rejects_unapproved_and_home_shorthand_roots(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-unapproved-corpus-") as temp:
+            root = Path(temp)
+            (root / "safe.py").write_text("def safe(): return 1\\n", encoding="utf-8")
+
+            with patch.dict(os.environ):
+                os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
+                with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
+                    load_corpus([root], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "must be absolute"):
+                    load_corpus([Path("~") / "unapproved"], max_tokens=1024)
+
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus([root], max_tokens=1024)
+                self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
+
     def test_corpus_loader_skips_generated_checkpoint_and_run_directories(self):
         from syntra_ai.data import load_corpus
 
@@ -202,7 +221,8 @@ class TransformerTests(unittest.TestCase):
             (root / "data" / "checkpoints" / "syntra.pt.json").write_text('{"checkpoint":"metadata"}', encoding="utf-8")
             (root / "wandb" / "run-1" / "config.yaml").write_text("api_key: should-not-train", encoding="utf-8")
 
-            corpus = load_corpus([root], max_tokens=1024)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus([root], max_tokens=1024)
             joined_paths = "\\n".join(corpus.files).lower()
             self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
             self.assertNotIn("checkpoints", joined_paths)
@@ -431,7 +451,8 @@ class TransformerTests(unittest.TestCase):
             (root / "credentials" / "credentials.json").write_text('{"password":"do-not-train"}', encoding="utf-8")
             (root / ".env").write_text("API_KEY=do-not-train", encoding="utf-8")
 
-            corpus = load_corpus([root], max_tokens=1024)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus([root], max_tokens=1024)
             joined_paths = "\\n".join(corpus.files).lower()
             self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
             self.assertNotIn("secrets", joined_paths)
@@ -455,8 +476,9 @@ class TransformerTests(unittest.TestCase):
             )
             checkpoint = root / "checkpoints" / "model.pt"
             config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
-            result = train([str(root)], checkpoint, steps=1, batch_size=1, config=config,
-                           max_tokens=10000, device_name="cpu")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = train([str(root)], checkpoint, steps=1, batch_size=1, config=config,
+                               max_tokens=10000, device_name="cpu")
             self.assertEqual(result["status"], "completed")
             self.assertTrue(checkpoint.is_file())
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
