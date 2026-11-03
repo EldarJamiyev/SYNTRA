@@ -822,7 +822,7 @@ export default function App() {
 
     try {
       const token = await getLocalApiToken();
-      const response = await fetch('/local-api/chat/stream', {
+      const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
