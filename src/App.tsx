@@ -291,6 +291,7 @@ export default function App() {
   const mountedRef = useRef(true);
   const activeJobIdRef = useRef<string | null>(null);
   const activeStreamControllerRef = useRef<AbortController | null>(null);
+  const lastBrainSampleRef = useRef('');
 
   useEffect(() => {
     mountedRef.current = true;
@@ -620,6 +621,53 @@ export default function App() {
     if (mountedRef.current) setAgentRuns(result.runs || []);
   };
 
+  const refreshBrainStatus = async () => {
+    const result = await getJson<BrainStatus>('/local-api/brain/status');
+    if (!mountedRef.current) return;
+    setBrainStatus(result);
+    const training = result.training || {};
+    const nextMetrics: BrainMetrics = {
+      epoch: Number(training.epoch ?? result.epoch ?? 0),
+      step: Number(training.step ?? result.trained_steps ?? 0),
+      train_loss: training.train_loss ?? result.train_loss,
+      validation_loss: training.validation_loss ?? result.validation_loss,
+      tokens_per_second: Number(training.tokens_per_second || 0),
+      device: typeof training.device === 'string' ? training.device : undefined
+    };
+    setBrainMetrics(current => ({ ...current, ...nextMetrics }));
+    const sampleKey = String(nextMetrics.step || 0) + ':' + String(nextMetrics.train_loss ?? '');
+    if (nextMetrics.train_loss !== null && nextMetrics.train_loss !== undefined
+      && Number.isFinite(nextMetrics.train_loss) && sampleKey !== lastBrainSampleRef.current) {
+      lastBrainSampleRef.current = sampleKey;
+      setBrainLossHistory(current => [...current, Number(nextMetrics.train_loss)].slice(-48));
+    }
+  };
+
+  const startBrainTrainingFromWorkspace = async () => {
+    const root = workspaceStatus?.root || workspacePath;
+    if (!root || brainTrainingStarting || brainStatus?.training?.status === 'running') return;
+    setBrainTrainingStarting(true);
+    setWorkspaceError('');
+    try {
+      await postJson('/local-api/brain/train', {
+        root,
+        epochs: 1,
+        batchSize: 4,
+        blockSize: 256,
+        layers: 4,
+        heads: 4,
+        width: 128,
+        vocabSize: 512,
+        device: 'auto'
+      });
+      await refreshBrainStatus();
+    } catch (cause) {
+      setWorkspaceError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBrainTrainingStarting(false);
+    }
+  };
+
   const cancelActiveChat = async () => {
     const jobId = activeJobIdRef.current;
     if (!jobId) return;
@@ -638,6 +686,41 @@ export default function App() {
     const distanceFromBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight;
     shouldFollowRef.current = distanceFromBottom < 120;
   };
+
+  useEffect(() => {
+    let stopped = false;
+    const refresh = async () => {
+      try {
+        const result = await getJson<BrainStatus>('/local-api/brain/status');
+        if (stopped || !mountedRef.current) return;
+        setBrainStatus(result);
+        const training = result.training || {};
+        const nextMetrics: BrainMetrics = {
+          epoch: Number(training.epoch ?? result.epoch ?? 0),
+          step: Number(training.step ?? result.trained_steps ?? 0),
+          train_loss: training.train_loss ?? result.train_loss,
+          validation_loss: training.validation_loss ?? result.validation_loss,
+          tokens_per_second: Number(training.tokens_per_second || brainMetrics.tokens_per_second || 0),
+          device: brainMetrics.device
+        };
+        setBrainMetrics(current => ({ ...current, ...nextMetrics }));
+        const sampleKey = String(nextMetrics.step || 0) + ':' + String(nextMetrics.train_loss ?? '');
+        if (nextMetrics.train_loss !== null && nextMetrics.train_loss !== undefined
+          && Number.isFinite(nextMetrics.train_loss) && sampleKey !== lastBrainSampleRef.current) {
+          lastBrainSampleRef.current = sampleKey;
+          setBrainLossHistory(current => [...current, Number(nextMetrics.train_loss)].slice(-48));
+        }
+      } catch {
+        // The chat surface remains available for diagnostics when the model is not trained.
+      }
+    };
+    void refresh();
+    const interval = window.setInterval(() => { void refresh(); }, 2500);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     if (!shouldFollowRef.current) return;
