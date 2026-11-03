@@ -100,6 +100,7 @@ type BrainStatus = {
     train_loss?: number | null;
     validation_loss?: number | null;
     tokens_per_second?: number;
+    device?: string;
     message?: string;
   };
 };
@@ -886,13 +887,19 @@ export default function App() {
       }
       buffer += decoder.decode();
       if (buffer.trim()) handleSseFrame(buffer);
-      if (!terminal) throw new Error('The local brain stream ended before it sent a completion event.');
+      const completedEvent = terminal as {
+        status?: string;
+        reply?: string;
+        error?: string;
+        partialReply?: string;
+      } | null;
+      if (!completedEvent) throw new Error('The local brain stream ended before it sent a completion event.');
       if (!mountedRef.current) return;
 
-      if (terminal.status === 'cancelled') {
+      if (completedEvent.status === 'cancelled') {
         setStreamingReply('');
-        const partial = terminal.partialReply || partialReply;
-        const cancellation = terminal.reply || 'Generation cancelled. The last checkpoint remains unchanged.';
+        const partial = completedEvent.partialReply || partialReply;
+        const cancellation = completedEvent.reply || 'Generation cancelled. The last checkpoint remains unchanged.';
         setMessages(current => [...current, {
           role: 'assistant' as const,
           content: partial ? partial + '\n\n---\n\n' + cancellation : cancellation
@@ -901,9 +908,9 @@ export default function App() {
         try { await refreshWorkspaceStatus(); } catch {}
         return;
       }
-      if (terminal.status === 'failed') {
+      if (completedEvent.status === 'failed') {
         setStreamingReply('');
-        const interrupted = terminal.partialReply || partialReply;
+        const interrupted = completedEvent.partialReply || partialReply;
         setMessages(current => {
           const last = current[current.length - 1];
           const restored = last?.role === 'user' && last.content === content ? current.slice(0, -1) : current;
@@ -914,11 +921,11 @@ export default function App() {
           }].slice(-MAX_VISIBLE_MESSAGES);
         });
         setInput(content);
-        setError(terminal.error || 'The local request failed.');
+        setError(completedEvent.error || 'The local request failed.');
         return;
       }
 
-      const answer = terminal.reply || partialReply || 'No response was returned.';
+      const answer = completedEvent.reply || partialReply || 'No response was returned.';
       setStreamingReply('');
       setMessages(current => [...current, { role: 'assistant' as const, content: answer }].slice(-MAX_VISIBLE_MESSAGES));
       try {
