@@ -1148,11 +1148,11 @@ test("model context budgets use the exact standalone brain tokenizer", () => {
   assert.equal(local.outputBudgetTokens, 184);
   assert.ok(local.contextBudgetTokens + local.outputBudgetTokens + local.safetyMarginTokens <= 1024);
 
-  const tiny = deriveModelContextBudget({
-    context_tokens: 512,
-    capabilities: { tokenCountIsEstimate: true }
+  const small = deriveModelContextBudget({
+    context_tokens: 256,
+    is_estimate: false,
+    capabilities: { tokenCountIsEstimate: false, maxOutputTokens: 128 }
   });
-  assert.equal(tiny.contextWindowTokens, 1024);
-  assert.ok(tiny.contextBudgetTokens >= 128);
-  assert.ok(tiny.outputBudgetTokens >= 128);
+  assert.equal(small.contextWindowTokens, 256);
+  assert.ok(small.contextBudgetTokens + small.outputBudgetTokens + small.safetyMarginTokens <= 256);
 });
