@@ -1834,14 +1834,17 @@ function restrictedVerificationEnvironment(platform = process.platform) {
   if (platform === "win32") {
     const windowsRoot = "C:\\Windows";
     const windowsTemp = path.join(windowsRoot, "Temp");
+    const system32 = path.join(windowsRoot, "System32");
     result.SystemRoot = windowsRoot;
     result.WINDIR = windowsRoot;
+    result.ComSpec = path.join(system32, "cmd.exe");
+    result.PATHEXT = ".COM;.EXE;.BAT;.CMD";
     result.TEMP = windowsTemp;
     result.TMP = windowsTemp;
     result.NPM_CONFIG_CACHE = path.join(windowsTemp, "syntra-npm-cache");
     result.PATH = [
       runtimeDirectory,
-      path.join(windowsRoot, "System32"),
+      system32,
       windowsRoot,
       "C:\\Program Files\\Docker\\Docker\\resources\\bin"
     ].join(";");
@@ -1966,11 +1969,11 @@ export function buildVerificationCommand(root, selected, {
   // also delimit mount fields; reject them rather than emitting an ambiguous mount.
   const unsafeMountCharacters = [10, 13, 0].some(code => workspacePath.includes(String.fromCharCode(code)))
     || workspacePath.includes(",")
-    || (platform !== "win32" && workspacePath.includes(":"));
+    || (process.platform !== "win32" && workspacePath.includes(":"));
   if (unsafeMountCharacters) {
     throw new Error("The workspace path contains characters that cannot be mounted safely into a Docker container.");
   }
-  const mountSourcePath = platform === "win32"
+  const mountSourcePath = process.platform === "win32"
     ? workspacePath.split(String.fromCharCode(92)).join("/")
     : workspacePath;
   const image = verificationContainerImage(selected);
