@@ -1107,18 +1107,18 @@ export default function App() {
                   {Number(epochBenchmark.completed_task_count || 0)}/
                   {Number(epochBenchmark.task_count || 0)} tasks passed ·
                   {typeof epochBenchmark.task_completion_rate === 'number'
-                    ? ' ' + (brainStatus.training.benchmark.task_completion_rate * 100).toFixed(0) + '% completion'
+                    ? ' ' + (epochBenchmark.task_completion_rate * 100).toFixed(0) + '% completion'
                     : ' pending'}
                 </span>
                 <span>
                   Patch validity {typeof epochBenchmark.patch_validity_rate === 'number'
-                    ? (brainStatus.training.benchmark.patch_validity_rate * 100).toFixed(0) + '%'
+                    ? (epochBenchmark.patch_validity_rate * 100).toFixed(0) + '%'
                     : '—'} · Verification {typeof epochBenchmark.verification_pass_rate === 'number'
-                    ? (brainStatus.training.benchmark.verification_pass_rate * 100).toFixed(0) + '%'
+                    ? (epochBenchmark.verification_pass_rate * 100).toFixed(0) + '%'
                     : '—'}
                 </span>
                 {epochBenchmark.error && (
-                  <span className="brain-training-benchmark-error">{brainStatus.training.benchmark.error}</span>
+                  <span className="brain-training-benchmark-error">{epochBenchmark.error}</span>
                 )}
               </div>
             )}
