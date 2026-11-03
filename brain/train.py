@@ -265,9 +265,8 @@ def _read_instruction_records(
     files: list[str] = []
     total_bytes = 0
     digest = sha256()
-    seen_sources: set[str] = set()
 
-    for raw_path in paths:
+    for dataset_index, raw_path in enumerate(paths, start=1):
         candidate = Path(raw_path).expanduser()
         try:
             resolved = candidate.resolve(strict=True)
@@ -281,8 +280,15 @@ def _read_instruction_records(
                 [resolve_corpus_root(resolved)],
                 max_total_bytes=remaining,
             )
-            records.extend(corpus.records)
-            files.extend(corpus.files)
+            if len(records) + len(corpus.records) > 50_000:
+                raise ValueError("Combined approved roots exceed the 50,000-record instruction corpus limit.")
+            if len(files) + len(corpus.files) > 10_000:
+                raise ValueError("Combined approved roots exceed the 10,000-file instruction corpus limit.")
+            records.extend({
+                **item,
+                "source": f"dataset-{dataset_index}:{item.get('source', 'local-source')}",
+            } for item in corpus.records)
+            files.extend(f"dataset-{dataset_index}:{name}" for name in corpus.files)
             total_bytes += corpus.source_bytes
             digest.update(corpus.sha256.encode("ascii"))
             continue
@@ -319,8 +325,12 @@ def _read_instruction_records(
                 raise ValueError(f"Instruction record at {dataset.name}:{line_number} is empty or exceeds the 32,000-character limit.")
             source = item.get("source")
             if not isinstance(source, str) or not source.strip():
-                source = f"{dataset.name}#record-{line_number}"
-            records.append({"prompt": prompt, "completion": completion, "source": source[:512]})
+                source = f"record-{line_number}"
+            records.append({
+                "prompt": prompt,
+                "completion": completion,
+                "source": f"dataset-{dataset_index}:{source[:480]}",
+            })
         files.append(str(dataset))
 
     if len(records) < 2:
