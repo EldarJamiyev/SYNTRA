@@ -53,6 +53,17 @@ async function createSliceProject() {
   return root;
 }
 
+async function removeTemporaryProject(root) {
+  // Windows may briefly retain handles after child processes exit. Retry the
+  // recursive removal for transient EBUSY/EPERM/ENOTEMPTY filesystem locks.
+  await fs.rm(root, {
+    recursive: true,
+    force: true,
+    maxRetries: 12,
+    retryDelay: 200
+  });
+}
+
 test("implementation slice plan validation is bounded, unique, and requires measurable acceptance", () => {
   const slices = validateImplementationSlicePlan({
     slices: [
@@ -176,7 +187,7 @@ test("agent implements and verifies multiple slices against one cumulative candi
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\n");
     assert.equal(await fs.readFile(path.join(root, "src", "description.js"), "utf8"), "module.exports = { description: 'SYNTRA' };\n");
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -243,7 +254,7 @@ test("an incomplete later slice cannot inherit an earlier passing verification s
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     await assert.rejects(() => fs.readFile(path.join(root, "src", "description.js"), "utf8"), { code: "ENOENT" });
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -362,7 +373,7 @@ test("agent resumes from the last verified slice after a process interruption", 
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\n");
     assert.equal(await fs.readFile(path.join(root, "src", "description.js"), "utf8"), "module.exports = { description: 'SYNTRA' };\n");
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -464,7 +475,7 @@ test("agent rejects a stale saved candidate checkpoint and restarts from current
     assert.equal(result.changedFiles[0].baseHash, hash(changedOriginal));
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), changedOriginal);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -612,7 +623,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
       "model-selected retrieval and patch staging must not write the original project file");
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -671,7 +682,7 @@ test("iterative retrieval enforces the eight-call global limit and stops without
     assert.match(investigation.detail, /3 evidence-driven planning round\(s\), 12 unique read-only retrieval call/);
     assert.equal(result.proposals.length, 1);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -834,7 +845,7 @@ test("independent patch review rejects an incomplete patch and feeds findings in
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n");
     assert.match(await fs.readFile(path.join(root, "tests", "value.test.js"), "utf8"), /value is two/);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -870,7 +881,7 @@ test("patch validation enforces a unique exact anchor and blocks secret paths", 
       /secret|credential|Environment secret/i
     );
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -927,7 +938,7 @@ test("agent blocks verification when a patch rewrites package scripts or depende
     assert.equal(await fs.readFile(path.join(root, "package.json"), "utf8"), originalManifest,
       "the original manifest must remain untouched before explicit review/apply");
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -975,7 +986,7 @@ test("agent blocks automatic verification for dependency changes even when test 
     assert.equal(result.proposals[0].path, "requirements.txt");
     assert.equal(await fs.readFile(path.join(root, "requirements.txt"), "utf8"), original);
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -1027,7 +1038,7 @@ test("agent rejects candidate verification when a successful check mutates a pro
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 1 };\n",
       "project source must remain unchanged outside the temporary candidate");
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
@@ -1108,7 +1119,7 @@ test("repository graph links local imports and agent repairs a failed test in a 
     assert.equal(applied.applied, true);
     assert.equal(await fs.readFile(path.join(root, "src", "value.js"), "utf8"), "module.exports = { value: 2 };\n");
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    await removeTemporaryProject(root);
   }
 });
 
