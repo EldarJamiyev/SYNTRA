@@ -11,8 +11,6 @@
     "server": "node local/server.mjs",
     "cli": "node bin/syntra.mjs",
     "test": "node scripts/run-node-tests.mjs",
-    "ai:install": "python scripts/setup_syntra_env.py",
-    "ai:cli": "python scripts/run_syntra_module.py cli",
     "benchmark": "node scripts/benchmark-agent.mjs",
     "benchmark:reports": "node scripts/benchmark-report.mjs",
     "test:e2e": "playwright test",
