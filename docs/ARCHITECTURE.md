@@ -80,7 +80,7 @@ The coding agent routes project inspection, candidate checks, proposal staging, 
 
 The standalone brain checkpoint stores the Transformer configuration, tokenizer merge table, model weights, and training metadata. Token counts in normal chat and coding tasks are computed locally from the exact saved BPE merges. The generator uses temperature/top-k/top-p sampling and a KV cache within the configured context window. It begins with random weights; local pretraining and instruction tuning do not confer the knowledge or reliability of a frontier coding model. The selected workspace, model checkpoint, and training corpus remain local.
 
-The native Transformer has its own tokenizer, context configuration, training loop, checkpointing, and inference implementation. Its weights start randomly initialized. Training it from scratch on a small project is useful for runtime research, but does not confer reliable general knowledge or frontier-model coding ability.
+The model weights begin randomly initialized. Training on a small project can teach local token patterns but does not establish reliable general knowledge or professional coding ability. Measure capability with held-out instruction datasets and real repository tasks, not training loss alone.
 
 ## Reliability and security boundaries
 
