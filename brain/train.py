@@ -145,6 +145,10 @@ def _read_local_datasets(
                         f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
                     )
                 raw = resolved.read_bytes()
+                if total_bytes + len(raw) > max_dataset_bytes:
+                    raise ValueError(
+                        f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
+                    )
                 try:
                     source_text = raw.decode("utf-8")
                 except UnicodeDecodeError:
@@ -533,7 +537,7 @@ def _parser() -> argparse.ArgumentParser:
         prog="python -m brain.train",
         description="Train SYNTRA's local Transformer from randomly initialized weights.",
     )
-    parser.add_argument("--dataset", action="append", default=None, help="Local UTF-8 text/code file; repeat to add files. Defaults to dataset.txt.")
+    parser.add_argument("--dataset", action="append", default=None, help="Local UTF-8 text/code file or project directory; repeat to add sources. Defaults to dataset.txt.")
     parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT), help="Local checkpoint output path.")
     parser.add_argument("--epochs", type=int, default=1, help="Additional full passes through shuffled training blocks.")
     parser.add_argument("--batch-size", type=int, default=4)
