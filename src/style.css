@@ -583,7 +583,8 @@ button:disabled { cursor: not-allowed; }
 }
 .brain-training-cancel:hover { background: #3a2929; }
 
-.brain-training-benchmark {
+ .brain-training-benchmark {
+  flex: 1 1 100%;
   display: grid;
   gap: 3px;
   margin-top: 8px;
