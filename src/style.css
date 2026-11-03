@@ -597,3 +597,9 @@ button:disabled { cursor: not-allowed; }
 }
 .brain-training-benchmark strong { color: #d7e0d8; font-size: 9px; font-weight: 650; }
 .brain-training-benchmark-error { color: #d4a3a3; overflow-wrap: anywhere; }
+
+.brain-loss-legend { display: inline-flex; align-items: center; gap: 7px; color: #969696; font-size: 8px; }
+.brain-loss-legend > span { display: inline-flex; align-items: center; gap: 3px; }
+.brain-loss-legend i { display: inline-block; width: 9px; height: 2px; border-radius: 2px; }
+.brain-loss-legend-train { background: #79caa6; }
+.brain-loss-legend-validation { background: #d6ae72; }
