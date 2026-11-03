@@ -153,6 +153,12 @@ test("verification defaults to an offline Docker container and filters host envi
     }, { allowUntrustedHost: true }),
     /Unsupported or untrusted verification runner/
   );
+  assert.throws(
+    () => buildVerificationCommand(root, {
+      kind: "node-test", executable: "node", args: ["--test\\0--require=/tmp/attacker.js"]
+    }, { allowUntrustedHost: true }),
+    /verification arguments are invalid/
+  );
 });
 
 test("check discovery reports only runners that are actually configured", async () => {
