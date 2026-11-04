@@ -22,14 +22,17 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
-test("Windows startup defaults to pretrained Ollama and only selects the native research model explicitly", async () => {
+test("Windows startup prefers Ollama but falls back to the native runtime when no model is ready", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.match(launcher, /else\s*\{\s*"ollama"\s*\}/);
+  assert.match(launcher, /else\s*\{\s*"auto"\s*\}/);
+  assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = \$providerMode/);
   assert.match(launcher, /@\("auto", "native", "ollama", "gemini"\) -notcontains \$providerMode/);
   assert.match(launcher, /SYNTRA_GEMINI_API_KEY/);
   assert.match(launcher, /SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini/);
-  assert.match(launcher, /\$providerMode -ne "native" -and \$providerMode -ne "gemini"/);
-  assert.doesNotMatch(launcher, /else\s*\{\s*"auto"\s*\}/);
+  assert.match(launcher, /\$providerMode -eq "ollama"/);
+  assert.match(launcher, /Continuing with SYNTRA's native local runtime/);
+  assert.match(launcher, /55% physical-RAM selection limit/);
+  assert.match(launcher, /no eligible local model is installed/);
 });
 
 test("Vite startup keeps console output visible in its own service window", async () => {
