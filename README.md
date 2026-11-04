@@ -94,13 +94,14 @@ These are intentionally bounded local checks. Ping is limited to four packets, a
 
 For an explicit software-change request, SYNTRA can:
 
-- Map the selected project and build a local source/import context.
-- Search files, read bounded source ranges, and retrieve symbol, documentation, memory, or optional semantic-search results.
+- Route messages through a multi-signal cognitive intent classifier (`coding_task`, `workspace_query`, `conversation`) that extracts target paths and symbols before selecting the execution path.
+- Map the selected project and build a local source/import context with declaration-aware excerpts (`makeExcerpt`) and symbol-boundary semantic chunks.
+- Search files, read bounded source ranges, and retrieve symbol, documentation, memory, or local semantic-search results.
 - Plan larger requests as ordered implementation slices with acceptance criteria.
-- Generate structured, exact-anchor patches rather than blindly replacing whole files.
+- Generate structured, exact-anchor patches rather than blindly replacing whole files, while tracking candidate state fingerprints to prevent repetitive repair cycles.
 - Run a read-only review pass against the request, candidate changes, and retrieved evidence.
-- Verify candidate changes using project checks that SYNTRA can actually discover.
-- Stage reviewable proposals with source hashes, previews, backups, and local audit records.
+- Verify candidate changes using project checks that SYNTRA can actually discover, with structured root-cause failure diagnosis (`analyzeCheckFailure`) that pinpoints fault categories and file/line locations for targeted repair iterations.
+- Stage reviewable proposals with source hashes, inline diff previews, backups, and local audit records.
 
 The model-selected investigation loop is read-only. It cannot use that retrieval stage to run commands, write files, apply proposals, or access the network. Changes to tests, verification configuration, and dependency/build manifests receive additional review rather than being treated as ordinary source edits.
 
@@ -116,7 +117,7 @@ The workflow is evidence-driven. SYNTRA inspects the project before patching, ch
 
 ## ⌘ Architecture
 
-SYNTRA uses a small local stack. The React/Vite interface talks to a loopback Node service, which coordinates the selected local model and the repository agent. The optional native Python runtime is a separate research path.
+SYNTRA uses a small local stack. The React/Vite interface talks to a loopback Node service, which coordinates the selected local model and the repository agent. The native Python/PyTorch runtime unifies standalone `brain/` checkpoints and `syntra_ai/` instruction, streaming, and embedding services under a resident local model cache.
 
 <p align="center">
   <img src="docs/assets/syntra-architecture.svg" alt="SYNTRA local architecture connecting the React interface, loopback service, local model, repository intelligence, verification, and proposal workflow." width="100%" />
@@ -124,21 +125,22 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 
 | Component | Responsibility |
 | --- | --- |
-| React + Vite | Conversation UI, local sessions, workspace selection |
-| Node.js service | Local API, chat routing, diagnostics, agent orchestration |
+| React + Vite | Conversation UI, local sessions, workspace & native AI controls |
+| Node.js service | Local API, cognitive intent routing, diagnostics, agent orchestration |
 | Ollama | Default local model inference |
-| Workspace engine | Project discovery, retrieval, symbol index, proposals, audit |
-| Python + PyTorch | Optional from-scratch model research runtime |
+| Workspace engine | Project discovery, retrieval, symbol & semantic index, proposals, audit |
+| Python + PyTorch (`brain/` & `syntra_ai/`) | Unified native Transformer runtime (RMSNorm, RoPE, SwiGLU, KV-cached streaming, dense embeddings, and repository curriculum synthesis) |
 
 ### Model reality
 
 - **Ollama is the default inference path.** SYNTRA selects from installed local models and excludes cloud-tagged model entries.
-- **The native PyTorch model is experimental.** It starts with randomly initialized weights. Training it on a small local corpus is useful for researching tokenization, training, checkpoints, and inference; it does not make it comparable to a pretrained coding model.
+- **The unified native PyTorch brain (`brain/` + `syntra_ai/`) is 100% local and self-contained.** It uses RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU feed-forward networks, L2-normalized pooled dense embeddings (`embed_tokens`), and a resident in-memory checkpoint cache that loads both `syntra_ai` and `brain/syntra-brain.pt` checkpoints seamlessly.
+- **Automated repository curriculum synthesis (`synthesize_repository_curriculum`).** SYNTRA can scan an approved local codebase to synthesize audited `.jsonl` instruction datasets covering module comprehension, symbol implementation, and `SYNTRA_AGENT_PATCH_V1` anchor-patch repair tasks for local fine-tuning.
 - **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
 
-### Standalone `/brain` training and inference (Phase 2)
+### Standalone `/brain` training and inference (Phase 2 & Unified Runtime)
 
-The standalone `brain/` package can now train its own randomly initialized PyTorch Transformer from local UTF-8 text/code files. It does not download model weights or contact Ollama, Hugging Face, or a hosted AI API.
+The `brain/` and `syntra_ai/` packages share a unified Transformer architecture and mutually compatible checkpoint format (`checkpoints/syntra-brain.pt` and `artifacts/syntra_model.pt`). It does not download model weights or contact Ollama, Hugging Face, or a hosted AI API.
 
 Train from the default `dataset.txt`:
 
@@ -172,7 +174,7 @@ python -m brain.generate --checkpoint checkpoints/syntra-brain.pt --prompt "def 
 
 The generator emits decoded text incrementally and uses a KV cache between tokens. Training reports epoch progress, loss, validation loss, and throughput. The dataset reader enforces a configurable size limit and rejects invalid UTF-8. Keep private keys, credentials, customer data, and other secrets out of training corpora.
 
-**Phase 2 scope:** this provides a callable training and inference engine. It does not yet replace the provider routing in the current React chat or expose an SSE endpoint; that is Phase 3. A from-scratch small model is an experiment, not a substitute for a pretrained professional coding model, and low validation loss alone does not establish coding ability.
+**Unified runtime scope:** checkpoints trained via `python -m brain.train` or `syntra_ai` are automatically discovered by the local runtime (`syntra_ai/runtime.py`), kept resident in memory by checkpoint mtime, and exposed for NDJSON token streaming (`/model/generate`), dense semantic embeddings (`/model/embed`), and repository curriculum synthesis (`/model/curriculum`). A from-scratch small model remains a local research and domain-adaptation engine rather than a substitute for a large pretrained coding model.
 
 #### Approving local training data directories
 
@@ -260,11 +262,12 @@ The suite is a development baseline, not a broad industry benchmark and not evid
 ```text
 SYNTRA/
 ├── src/                 # React interface and local chat experience
-├── local/               # Node service, agent, tools, workspace engine
-├── syntra_ai/           # Native Python/PyTorch research runtime
+├── local/               # Node service, cognitive intent router, agent, tools, workspace engine
+├── brain/               # Unified native PyTorch Transformer, BPE tokenizer, training & CLI
+├── syntra_ai/           # Native Python runtime, resident cache, embeddings & curriculum synthesis
 ├── scripts/             # Setup, launch, tests, benchmark utilities
 ├── benchmarks/          # Versioned coding-agent fixtures
-├── tests/               # Unit and integration coverage
+├── tests/               # Node and Python unit and integration coverage
 ├── e2e/                 # Browser-level tests
 └── docs/
     ├── assets/          # README diagrams and visual assets

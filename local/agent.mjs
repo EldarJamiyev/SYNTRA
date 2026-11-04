@@ -304,9 +304,11 @@ function rankGraph(graph, goal, requestedPath = "", boostPaths = []) {
 export function analyzeCheckFailure(checks, availablePaths = []) {
   const failed = Array.isArray(checks) ? checks.filter(item => item && item.passed !== true) : [];
   if (!failed.length) {
-    return { category: "none", faultLocations: [], remediationHint: "", summary: "All checks passed." };
+    return { category: "none", faultLocations: [], locations: [], faultPaths: [], remediationHint: "", summary: "All checks passed." };
   }
-  const combined = failed.map(item => [item.task, item.error || "", item.output || ""].join("\n")).join("\n\n");
+  const combined = failed.map(item => [
+    item.task, item.error || "", item.output || "", item.stdout || "", item.stderr || ""
+  ].join("\n")).join("\n\n");
   let category = "runtime_failure";
   let remediationHint = "Inspect the failing execution path, verify edge-case inputs and return types, and update the target implementation.";
 
@@ -351,12 +353,15 @@ export function analyzeCheckFailure(checks, availablePaths = []) {
     if (faultLocations.length >= 6) break;
   }
 
+  const faultPaths = [...new Set(faultLocations.map(item => item.path))];
   const locationSummary = faultLocations.length
     ? "Fault locations: " + faultLocations.map(item => item.path + (item.line ? ":" + item.line : "")).join(", ")
     : "No specific workspace line number matched.";
   return {
     category,
     faultLocations,
+    locations: faultLocations,
+    faultPaths,
     remediationHint,
     summary: `[Root-cause category: ${category}] ${locationSummary}. Hint: ${remediationHint}`
   };

@@ -35,7 +35,7 @@ function cosineSimilarity(a, b) {
   }
   return normA > 0 && normB > 0 ? dot / Math.sqrt(normA * normB) : -1;
 }
-const DECLARATION_BOUNDARY = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function|class|interface|type|enum|const|let|def|fn|pub\s+fn|func|struct|impl)\b/;
+const DECLARATION_BOUNDARY = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function|class|interface|type|enum|def|fn|pub\s+fn|func|struct|impl)\b/;
 
 export function splitIntoChunks(relativePath, content) {
   const lines = String(content || "").split(/\r?\n/), chunks = [];

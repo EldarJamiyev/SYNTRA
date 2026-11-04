@@ -512,3 +512,76 @@ button:disabled { cursor: not-allowed; }
 }
 .workspace-exclusions-actions button:hover:not(:disabled) { background: #ffffff; }
 .workspace-exclusions-actions button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Native AI runtime and proposal diff preview */
+.workspace-native-ai-panel {
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid #383838;
+}
+.workspace-native-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+.workspace-native-ai-actions button {
+  min-height: 29px;
+  padding: 0 9px;
+  color: #e8e8e8;
+  border: 1px solid #444444;
+  border-radius: 7px;
+  background: #2b2b2b;
+  font-size: 10px;
+  font-weight: 550;
+}
+.workspace-native-ai-actions button:hover:not(:disabled) {
+  border-color: #636363;
+  background: #353535;
+}
+.workspace-native-ai-actions button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.agent-run-diagnosis {
+  padding: 1px 5px;
+  color: #e6b89c;
+  border: 1px solid #594136;
+  border-radius: 4px;
+  background: #2e221d;
+  font-size: 8px;
+}
+.workspace-proposal-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.workspace-proposal-toggle {
+  min-width: 0;
+  padding: 0;
+  color: #cfcfcf;
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-proposal-toggle:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+.workspace-proposal-preview {
+  max-height: 150px;
+  margin: 2px 0 4px;
+  padding: 7px 9px;
+  overflow: auto;
+  color: #d6d6d6;
+  border: 1px solid #383838;
+  border-radius: 6px;
+  background: #161616;
+  font: 9px/1.45 Consolas, "Cascadia Code", monospace;
+  white-space: pre;
+}
+
