@@ -176,11 +176,11 @@ try {
                 $selection = Get-SyntraOllamaSelection -Models @($ollamaCatalog.models) -RequestedModel $requestedLocalModel -RamBytes $ramBytes
                 $ollamaSelectionStatus = [string]$selection.Status
                 $UsableOllamaModels = @($selection.Models)
-                if ($selection.Status -eq "not_installed") {
+                if ($requestedLocalModel -and $selection.Status -eq "not_installed") {
                     throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is not installed as a local Ollama model. Run 'ollama pull $requestedLocalModel' or correct the model name."
                 }
-                if ($selection.Status -eq "memory_limit") {
-                    throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is installed, but its reported weight size exceeds the launcher's 70% physical-RAM selection limit. Choose a smaller local model or clear SYNTRA_LOCAL_MODEL to allow automatic selection."
+                if ($requestedLocalModel -and $selection.Status -eq "memory_limit") {
+                    throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is installed, but its reported weight size exceeds SYNTRA's shared 55% physical-RAM selection limit. Choose a smaller local model or clear SYNTRA_LOCAL_MODEL to allow automatic selection."
                 }
                 if ($selection.Status -eq "available" -and $UsableOllamaModels.Count -gt 0) { $UseOllama = $true }
             } catch {
