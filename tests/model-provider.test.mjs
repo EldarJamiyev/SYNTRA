@@ -957,7 +957,7 @@ test("Gemini 3.8 Flash clamps direct REST output to its documented non-streaming
 });
 
 
-test("the default model provider prefers Ollama and falls back to the native runtime when Ollama is offline", async () => {
+test("the default model provider is native and never probes Ollama", async () => {
   const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
   delete process.env.SYNTRA_MODEL_PROVIDER;
   let calls = 0;
@@ -969,7 +969,7 @@ test("the default model provider prefers Ollama and falls back to the native run
       }
     });
     assert.equal(provider, null);
-    assert.equal(calls, 1);
+    assert.equal(calls, 0);
   } finally {
     if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
     else process.env.SYNTRA_MODEL_PROVIDER = previousMode;

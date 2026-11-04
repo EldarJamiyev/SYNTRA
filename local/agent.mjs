@@ -1013,9 +1013,7 @@ async function reviewCandidatePatch({
   contextBudget, modelRequest, signal
 }) {
   const prompt = makePatchReviewPrompt({ goal, sliceGoal, candidate, supplementalContext, relatedSources });
-  const reviewerModel = String(process.env.SYNTRA_REVIEW_MODEL || "").trim();
-  const reviewerOptions = reviewerModel ? { model: reviewerModel } : {};
-  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt, ...reviewerOptions }, 30000, signal);
+  const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
   const reviewerBudget = tokenInfo.context_window_tokens
     ? deriveModelContextBudget({
       context_tokens: tokenInfo.context_window_tokens,
@@ -1030,7 +1028,7 @@ async function reviewCandidatePatch({
     };
   }
   const generated = await modelJson(modelRequest, "/model/generate", {
-    prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto", ...reviewerOptions
+    prompt, max_new_tokens: 420, temperature: 0.05, top_k: 20, device: "auto"
   }, 120000, signal);
   const review = validatePatchReview(
     extractJsonObject(generated.text),
@@ -1325,7 +1323,7 @@ export async function runAgentTask({
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
-  if (!modelStatus.checkpoint_exists) throw new Error("No usable local model is available. Start a local Ollama model or train SYNTRA's native model before requesting an agent patch.");
+  if (!modelStatus.checkpoint_exists) throw new Error("No trained native SYNTRA checkpoint is available. Complete native model training before requesting an agent patch.");
   const contextPlan = deriveModelContextBudget(modelStatus);
   const contextWindow = contextPlan.contextWindowTokens;
   const contextBudget = contextPlan.contextBudgetTokens;

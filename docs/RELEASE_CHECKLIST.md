@@ -20,14 +20,14 @@ npm test
 npm run build
 ```
 
-All commands must exit successfully. The committed npm lockfile pins the resolved JavaScript dependency graph, and `npm ci` fails when the manifest and lockfile disagree. The Windows launcher uses the same lockfile-based install when dependencies are missing or stale. Python uses `requirements.txt` as its human-maintained input constraints and `requirements.lock.txt` as a universal, pip-compatible lock with SHA-256 hashes and platform/Python markers. The lock pins CPU-only PyTorch wheels for Windows/Linux and is installed with `--require-hashes`; CI recompiles it with pinned uv 0.13.6 and fails when the committed lock is stale. The native installer uses the same lock and runs `pip check`. The test suite includes local API/origin-policy, workspace, agent checkpoint/recovery, security boundary, model-provider, semantic-index and Windows launcher regression coverage. `npm test` runs the cross-platform Node.js regression suite; it does not install or prove that the user's preferred Ollama model, Docker runtime, or Gemini API credentials work.
+All commands must exit successfully. The committed npm lockfile pins the resolved JavaScript dependency graph, and `npm ci` fails when the manifest and lockfile disagree. The Windows launcher uses the same lockfile-based install when dependencies are missing or stale. Python uses `requirements.txt` as its human-maintained input constraints and `requirements.lock.txt` as a universal, pip-compatible lock with SHA-256 hashes and platform/Python markers. The lock pins CPU-only PyTorch wheels for Windows/Linux and is installed with `--require-hashes`; CI recompiles it with pinned uv 0.13.6 and fails when the committed lock is stale. The native installer uses the same lock and runs `pip check`. The test suite includes local API/origin-policy, workspace, agent checkpoint/recovery, security boundary, model-provider, semantic-index and Windows launcher regression coverage. `npm test` runs the cross-platform Node.js regression suite; it does not train or prove the behavior of the user's native checkpoint, Docker runtime, or any separately configured optional hosted provider.
 
 On GitHub, require both the `SYNTRA checks` workflow and CodeQL to pass on the exact release-candidate commit. Review failed or skipped jobs rather than relying only on a green top-level badge.
 
 ## 3. Verify the local runtime
 
-1. Confirm Node.js 20 or newer and Git are installed. Python 3.12 or newer is needed only for the native PyTorch fallback.
-2. Start Ollama and confirm the selected model is installed. SYNTRA prefers a suitable local coding model when one is available; local model weight size is only a conservative first-pass RAM filter.
+1. Confirm Node.js 20 or newer and Git are installed. Python 3.12 or newer is required for the native PyTorch runtime.
+2. No Ollama installation or model download is required. Confirm the native Python environment is prepared and a SYNTRA checkpoint is present after first-run training.
 3. Start SYNTRA by double-clicking `Start-SYNTRA.bat`, or run the documented launcher from the repository root. Open `http://127.0.0.1:3000` and confirm the local API responds.
 4. Open a disposable test project and exercise one small coding task. Review the proposed diff, project-check results and source hashes before applying anything.
 5. Restart the local service while a multi-slice task has a durable checkpoint. Confirm the run is marked interrupted, then use its resume control/command. Confirm restored candidate checks are re-run and stale source hashes are rejected.
@@ -39,11 +39,7 @@ Keep project verification disabled until an isolation mode is intentionally sele
 
 Semantic search is optional; lexical and symbol retrieval remain available without it.
 
-```powershell
-ollama pull embeddinggemma
-```
-
-In the selected workspace, invoke `workspace.semantic.status`, then `workspace.semantic.refresh`, and verify that `workspace.semantic.search` returns excerpts from an unchanged source file. Modify the source file and search again: stale chunks must not return excerpts until the index is refreshed. Confirm the configured embedding endpoint remains loopback-only. Do not configure a remote embedding proxy.
+Ollama is optional for this feature only. When intentionally testing semantic embeddings, configure the optional local embedding model; normal setup, chat, and coding do not require it. In the selected workspace, invoke `workspace.semantic.status`, then `workspace.semantic.refresh`, and verify that `workspace.semantic.search` returns excerpts from an unchanged source file. Without the optional embedding service, confirm the documented lexical fallback. Modify the source file and search again: stale chunks must not return excerpts until the index is refreshed. Confirm the configured embedding endpoint remains loopback-only. Do not configure a remote embedding proxy.
 
 ## 5. Optional Gemini API validation
 
@@ -73,7 +69,7 @@ npm run benchmark -- --output benchmark-results/pre-release-YYYYMMDD.json
 
 Replace the date placeholder with a unique date/time suffix. The output file is created exclusively; an existing path is not overwritten. A single task can be run with `--task <task-id>`; multiple task flags can be supplied.
 
-Review the result summary and individual task records. Missing Python, Go or Rust executables are explicit skips, not successes. A run with skipped tasks is not a complete cross-language measurement. The benchmark CLI exercises the local Ollama/native provider path; it does not measure Gemini hosted inference.
+Review the result summary and individual task records. Missing Python, Go or Rust executables are explicit skips, not successes. A run with skipped tasks is not a complete cross-language measurement. The benchmark CLI exercises the native local model path; it does not measure Gemini hosted inference.
 
 List saved reports:
 
@@ -87,7 +83,7 @@ Compare two reports only when suite version and exact task selection match:
 npm run benchmark:reports -- compare --baseline benchmark-results/baseline.json --candidate benchmark-results/pre-release.json
 ```
 
-Retain both reports. Interpret latency/RSS changes only when the recorded environments are comparable. Peak RSS covers the benchmark Node.js process, not the Ollama daemon or GPU memory. The current eleven-task corpus is a small deterministic regression suite, not broad framework coverage or proof of frontier-agent parity.
+Retain both reports. Interpret latency/RSS changes only when the recorded environments are comparable. Peak RSS covers the benchmark Node.js process, not the native AI service process or GPU memory. The current eleven-task corpus is a small deterministic regression suite, not broad framework coverage or proof of frontier-agent parity.
 
 ## 7. Release decision
 

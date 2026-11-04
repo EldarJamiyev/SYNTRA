@@ -4,7 +4,7 @@ SYNTRA includes a versioned local-model benchmark suite. It evaluates the coding
 
 ## Run the suite
 
-Start a local Ollama model that SYNTRA can select, or start SYNTRA's native AI service. Run these commands from the repository root:
+Complete native setup once with `Start-SYNTRA.bat` so the Python environment and trained checkpoint are ready, then run these commands from the repository root:
 
 - List available tasks: npm run benchmark -- --list
 - Run all tasks: npm run benchmark
@@ -35,11 +35,11 @@ The aggregate section includes completion, patch-validity and verification-pass 
 
 ## Measurement boundaries
 
-This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate Ollama daemon, model runtime, GPU memory, or total system memory. Some provider responses may not include prompt-token counts; unavailable values are recorded as zero rather than presented as exact counts.
+This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate native AI service process, GPU memory, or total system memory. Some provider responses may not include prompt-token counts; unavailable values are recorded as zero rather than presented as exact counts.
 
-The benchmark enables the same model-selected read-only retrieval and second-pass patch review as the normal coding workflow. Review uses a separately selected local Ollama model only when `SYNTRA_REVIEW_MODEL` names an installed model distinct from the generator; otherwise it is a same-model second pass, not independent-model verification.
+The benchmark enables the same model-selected read-only retrieval and second-pass patch review as the normal coding workflow. Review uses the same native checkpoint as generation; it is a second reasoning pass, not independent-model verification.
 
-The benchmark does not call a hosted model API. It uses the locally configured Ollama provider when available, otherwise the local SYNTRA AI service. Each fixture is copied to a temporary directory and removed after its run. Agent changes are staged only inside that temporary copy; the active workspace and checked-in fixtures remain unchanged.
+The benchmark does not call a hosted model API. It uses SYNTRA's native local AI service and trained checkpoint. Each fixture is copied to a temporary directory and removed after its run. Agent changes are staged only inside that temporary copy; the active workspace and checked-in fixtures remain unchanged.
 
 Reports are written under benchmark-results by default and are ignored by Git. Run history and report comparison are available locally:
 

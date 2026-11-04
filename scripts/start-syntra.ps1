@@ -133,107 +133,35 @@ try {
         throw "SYNTRA needs Node.js 20 or newer. Installed version: $nodeVersionText"
     }
 
-    $UseOllama = $false
-    $UsableOllamaModels = @()
-    $ollamaSelectionStatus = "not_checked"
-    $ollamaDiagnostic = ""
-    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "auto" }
-    $requestedLocalModel = if ($env:SYNTRA_LOCAL_MODEL) { $env:SYNTRA_LOCAL_MODEL.Trim() } else { "" }
-    if ($providerMode -eq "gemini" -and -not $env:SYNTRA_GEMINI_API_KEY) { throw "SYNTRA_MODEL_PROVIDER=gemini requires SYNTRA_GEMINI_API_KEY." }
-    if (@("auto", "native", "ollama", "gemini") -notcontains $providerMode) {
-        throw "SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini."
-    }
-    # Keep the launcher and every child Node process on the same resolved provider mode.
-    $env:SYNTRA_MODEL_PROVIDER = $providerMode
-
-    if ($providerMode -ne "native" -and $providerMode -ne "gemini") {
-        $ollamaExe = Get-Command ollama -ErrorAction SilentlyContinue
-        $ollamaTagsUrl = "http://127.0.0.1:11434/api/tags"
-        $ollamaReady = Test-Endpoint $ollamaTagsUrl
-        if (-not $ollamaReady -and $ollamaExe) {
-            Write-Host "Starting the installed local Ollama service..."
-            try { Start-Process -FilePath $ollamaExe.Source -ArgumentList @("serve") -WindowStyle Hidden | Out-Null } catch {}
-            $ollamaDeadline = (Get-Date).AddSeconds(12)
-            do {
-                Start-Sleep -Seconds 1
-                $ollamaReady = Test-Endpoint $ollamaTagsUrl
-            } while (-not $ollamaReady -and (Get-Date) -lt $ollamaDeadline)
-        }
-
-        if ($requestedLocalModel -and -not $ollamaReady) {
-            throw "SYNTRA_LOCAL_MODEL is set to '$requestedLocalModel', but Ollama is not reachable at 127.0.0.1:11434. Start Ollama or clear SYNTRA_LOCAL_MODEL; SYNTRA will not silently switch to the native from-scratch runtime."
-        }
-
-        if ($ollamaReady) {
-            try {
-                $ollamaCatalog = Invoke-RestMethod -Uri $ollamaTagsUrl -TimeoutSec 3
-                $ramBytes = 0.0
-                try {
-                    $ramBytes = [double](Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory
-                } catch {
-                    Write-Warning "Could not read physical memory; the launcher's conservative Ollama model-size filter will be skipped."
-                }
-                $selection = Get-SyntraOllamaSelection -Models @($ollamaCatalog.models) -RequestedModel $requestedLocalModel -RamBytes $ramBytes
-                $ollamaSelectionStatus = [string]$selection.Status
-                $UsableOllamaModels = @($selection.Models)
-                if ($requestedLocalModel -and $selection.Status -eq "not_installed") {
-                    throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is not installed as a local Ollama model. Run 'ollama pull $requestedLocalModel' or correct the model name."
-                }
-                if ($requestedLocalModel -and $selection.Status -eq "memory_limit") {
-                    throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is installed, but its reported weight size exceeds SYNTRA's shared 55% physical-RAM selection limit. Choose a smaller local model or clear SYNTRA_LOCAL_MODEL to allow automatic selection."
-                }
-                if ($selection.Status -eq "available" -and $UsableOllamaModels.Count -gt 0) { $UseOllama = $true }
-            } catch {
-                $ollamaDiagnostic = $_.Exception.Message
-                if ($requestedLocalModel) {
-                    throw "SYNTRA could not validate the explicitly selected local model '$requestedLocalModel': $ollamaDiagnostic"
-                }
-                Write-Warning "Ollama answered, but its local model list could not be read: $ollamaDiagnostic"
-            }
-        }
-        if (-not $UseOllama) {
-            if ($providerMode -eq "ollama") {
-                if (-not $ollamaReady) {
-                    throw "SYNTRA is configured for Ollama, but no response was received from http://127.0.0.1:11434/api/tags. Start Ollama Desktop or run 'ollama serve', then retry."
-                }
-                if ($ollamaDiagnostic) {
-                    throw "Ollama responded, but SYNTRA could not read its local model catalog: $ollamaDiagnostic"
-                }
-                if ($ollamaSelectionStatus -eq "memory_limit") {
-                    throw "Ollama is responding, but every installed local model exceeds SYNTRA's safe 55% physical-RAM selection limit. Install a smaller quantized model, or set SYNTRA_MODEL_PROVIDER=auto to use the native local runtime."
-                }
-                if ($ollamaSelectionStatus -eq "no_local_models") {
-                    throw "Ollama is responding, but no eligible local model is installed (cloud models are not eligible). Run 'ollama list' and install a local model, or set SYNTRA_MODEL_PROVIDER=auto to use the native local runtime."
-                }
-                throw "Ollama is responding, but SYNTRA could not select a usable local model. Check the Ollama model catalog and configured model name."
-            }
-            if ($providerMode -eq "auto") {
-                Write-Warning "No compatible local Ollama model is available. Continuing with SYNTRA's native local runtime."
-            }
-        }
-    }
+    # SYNTRA's one-click setup uses its built-in native PyTorch runtime.
+    # Override inherited Windows settings so stale provider variables cannot require Ollama.
+    $UsePretrainedModel = $false
+    $UsablePretrainedModels = @()
+    $env:SYNTRA_MODEL_PROVIDER = "native"
+    Remove-Item Env:SYNTRA_LOCAL_MODEL -ErrorAction SilentlyContinue
+    Write-Host "AI provider: SYNTRA native PyTorch runtime (no Ollama installation or service required)." -ForegroundColor Green
 
     $pythonVersionText = $null
-    if (-not $UseOllama) {
+    if (-not $UsePretrainedModel) {
         if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-            throw "Python is missing. Install Python 3.11 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
+            throw "Python is missing. Install Python 3.12 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
         }
         $pythonVersionText = (& python --version 2>&1 | Out-String).Trim()
         $pythonMatch = [regex]::Match($pythonVersionText, 'Python\s+(\d+)\.(\d+)')
         if ($LASTEXITCODE -ne 0 -or -not $pythonMatch.Success) {
-            throw "Could not read the Python version. Install Python 3.11 or newer."
+            throw "Could not read the Python version. Install Python 3.12 or newer."
         }
         $pythonMajor = [int]$pythonMatch.Groups[1].Value
         $pythonMinor = [int]$pythonMatch.Groups[2].Value
-        if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 11)) {
-            throw "SYNTRA needs Python 3.11 or newer. Installed version: $pythonVersionText"
+        if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 12)) {
+            throw "SYNTRA needs Python 3.12 or newer. Installed version: $pythonVersionText"
         }
     }
 
     Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
-    if ($UseOllama) {
-        Write-Host "A local Ollama model is ready. SYNTRA will use local pretrained weights and skip random-from-scratch training." -ForegroundColor Green
-        Write-Host ("Installed local model(s): " + (($UsableOllamaModels | ForEach-Object { $_.name }) -join ", "))
+    if ($UsePretrainedModel) {
+        Write-Host "A compatible local pretrained model is ready." -ForegroundColor Green
+        Write-Host ("Installed local model(s): " + (($UsablePretrainedModels | ForEach-Object { $_.name }) -join ", "))
     } else {
         Write-Host "$pythonVersionText" -ForegroundColor Green
     }
@@ -269,7 +197,7 @@ try {
         Write-Host "JavaScript dependencies match the committed npm lockfile." -ForegroundColor Green
     }
 
-    if (-not $UseOllama) {
+    if (-not $UsePretrainedModel) {
     Write-Step "Preparing the isolated native AI environment"
     $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
     Write-Host "Checking the installed Python environment against requirements.lock.txt..."
@@ -357,11 +285,11 @@ try {
 
     } else {
         Write-Step "Using the selected local pretrained model"
-        Write-Host "No Python model training is required in local Ollama mode." -ForegroundColor Green
+        Write-Host "No native training is required when a separate pretrained model is selected." -ForegroundColor Green
     }
 
     Write-Step "Starting the local services"
-    if (-not $UseOllama) {
+    if (-not $UsePretrainedModel) {
         Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
     }
     Ensure-Service 3001 "http://127.0.0.1:3001/local-api/health" "server"

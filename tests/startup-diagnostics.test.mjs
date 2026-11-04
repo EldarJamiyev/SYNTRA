@@ -22,17 +22,14 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
-test("Windows startup prefers Ollama but falls back to the native runtime when no model is ready", async () => {
+test("Windows startup always selects the native runtime without probing Ollama", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.match(launcher, /else\s*\{\s*"auto"\s*\}/);
-  assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = \$providerMode/);
-  assert.match(launcher, /@\("auto", "native", "ollama", "gemini"\) -notcontains \$providerMode/);
-  assert.match(launcher, /SYNTRA_GEMINI_API_KEY/);
-  assert.match(launcher, /SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini/);
-  assert.match(launcher, /\$providerMode -eq "ollama"/);
-  assert.match(launcher, /Continuing with SYNTRA's native local runtime/);
-  assert.match(launcher, /55% physical-RAM selection limit/);
-  assert.match(launcher, /no eligible local model is installed/);
+  assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = "native"/);
+  assert.match(launcher, /\$UsePretrainedModel = \$false/);
+  assert.match(launcher, /Preparing the isolated native AI environment/);
+  assert.match(launcher, /Ensure-Service 3002 "http:\/\/127\.0\.0\.1:3002\/health" "ai:server"/);
+  assert.match(launcher, /Python 3\.12 or newer/);
+  assert.doesNotMatch(launcher, /Get-Command ollama|127\.0\.0\.1:11434|ollama serve|SYNTRA_REVIEW_MODEL/);
 });
 
 test("Vite startup keeps console output visible in its own service window", async () => {

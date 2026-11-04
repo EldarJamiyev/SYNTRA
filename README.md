@@ -6,7 +6,7 @@
   <p>
     <a href="https://github.com/EldarJamiyev/SYNTRA"><img src="https://img.shields.io/badge/PROJECT-SYNTRA-7BE4CF?style=for-the-badge&labelColor=101827" alt="SYNTRA project" /></a>
     <img src="https://img.shields.io/badge/INTERFACE-React%20%2B%20TypeScript-8AB8FF?style=for-the-badge&labelColor=101827" alt="React and TypeScript" />
-    <img src="https://img.shields.io/badge/INFERENCE-Local%20Ollama-B69BFF?style=for-the-badge&labelColor=101827" alt="Local Ollama inference" />
+    <img src="https://img.shields.io/badge/INFERENCE-Native%20PyTorch-B69BFF?style=for-the-badge&labelColor=101827" alt="Native PyTorch inference" />
     <a href="LICENSE"><img src="https://img.shields.io/badge/LICENSE-MIT-7BE4CF?style=for-the-badge&labelColor=101827" alt="MIT license" /></a>
   </p>
 
@@ -35,7 +35,7 @@ It is an evolving engineering project—not a claim of frontier-model intelligen
   <tr>
     <td width="50%" valign="top">
       <h3>⌂ Local by design</h3>
-      Run inference through a locally installed Ollama model. Your workspace agent and application services are designed around loopback access rather than a hosted coding endpoint.
+      Run inference through SYNTRA's built-in local Python/PyTorch model runtime. No Ollama installation, external model server, or hosted AI endpoint is required.
     </td>
     <td width="50%" valign="top">
       <h3>⌘ Understands the repository</h3>
@@ -72,7 +72,7 @@ SYNTRA keeps the conversation at the center instead of surrounding it with a lar
 
 - Multiple named conversations with search, rename, resume, and delete.
 - Local session persistence and migration from the earlier single-thread history.
-- Streaming responses from the local Ollama backend.
+- Streaming responses from SYNTRA's native local model backend.
 - Markdown, code blocks, tables, and safe external links.
 - A selected project folder that stays associated with the local workspace.
 
@@ -127,20 +127,20 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 | --- | --- |
 | React + Vite | Conversation UI, local sessions, workspace & native AI controls |
 | Node.js service | Local API, cognitive intent routing, diagnostics, agent orchestration |
-| Ollama | Preferred local model inference; automatically used when a suitable installed model is available |
+| Optional Ollama integration | Available only when explicitly configured for an optional local model or embedding workflow |
 | Workspace engine | Project discovery, retrieval, symbol & semantic index, proposals, audit |
 | Python + PyTorch (`brain/` & `syntra_ai/`) | Unified native Transformer runtime (RMSNorm, RoPE, SwiGLU, KV-cached streaming, dense embeddings, and repository curriculum synthesis) |
 
 ### Model reality
 
-- **Ollama is the preferred inference path.** The default `auto` mode selects a suitable installed local model and excludes cloud-tagged entries. When Ollama is offline or has no model that fits the shared memory budget, the one-click launcher continues with SYNTRA's existing native local runtime. Set `SYNTRA_MODEL_PROVIDER=ollama` to require Ollama and stop with a specific diagnostic instead of falling back.
+- **The native PyTorch runtime is the default and only provider selected by the one-click launcher.** Startup explicitly sets `SYNTRA_MODEL_PROVIDER=native` and ignores stale Windows provider settings, so no Ollama service or pretrained model is needed. The first setup prepares the locked CPU-only Python environment and trains SYNTRA's own checkpoint from approved local repository data. Ollama remains optional for separately configured integrations such as semantic embeddings.
 - **The unified native PyTorch brain (`brain/` + `syntra_ai/`) is 100% local and self-contained.** It uses RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU feed-forward networks, L2-normalized pooled dense embeddings (`embed_tokens`), and a resident in-memory checkpoint cache that loads both `syntra_ai` and `brain/syntra-brain.pt` checkpoints seamlessly.
 - **Automated repository curriculum synthesis (`synthesize_repository_curriculum`).** SYNTRA can scan an approved local codebase to synthesize audited `.jsonl` instruction datasets covering module comprehension, symbol implementation, and `SYNTRA_AGENT_PATCH_V1` anchor-patch repair tasks for local fine-tuning.
 - **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
 
 ### Standalone `/brain` training and inference (Phase 2 & Unified Runtime)
 
-The `brain/` and `syntra_ai/` packages share a unified Transformer architecture and mutually compatible checkpoint format (`checkpoints/syntra-brain.pt` and `artifacts/syntra_model.pt`). It does not download model weights or contact Ollama, Hugging Face, or a hosted AI API.
+The `brain/` and `syntra_ai/` packages share a unified Transformer architecture and mutually compatible checkpoint format (`checkpoints/syntra-brain.pt` and `artifacts/syntra_model.pt`). The native runtime does not download pretrained weights or contact an external model service.
 
 Train from the default `dataset.txt`:
 
@@ -193,7 +193,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
 
 ### Windows
 
-**Requirements:** Node.js 20 or later and Git. Ollama is preferred. Python 3.11 or newer is needed when no compatible Ollama model is available and the launcher uses SYNTRA's native local runtime.
+**Requirements:** Node.js 20 or later, Git, and Python 3.12 or later. Ollama is not required.
 
 1. Clone the repository:
 
@@ -202,12 +202,10 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
    cd SYNTRA
    ```
 
-2. Start Ollama and make sure at least one suitable local model is available. When no compatible model is found, the default `auto` mode uses SYNTRA's native local runtime instead.
+2. Install Python 3.12 or later and ensure `python` is available on `PATH`. Ollama is not required.
 3. Double-click **`Start-SYNTRA.bat`**.
 4. Open **http://127.0.0.1:3000** in your browser.
 5. Keep the service windows open while using SYNTRA.
-
-To require Ollama rather than allow the native fallback, set `$env:SYNTRA_MODEL_PROVIDER = "ollama"` in PowerShell before launching.
 
 The launcher prepares the frontend dependencies when needed, checks the local services, and starts the application. On later launches, use the same `Start-SYNTRA.bat` file.
 
@@ -257,7 +255,7 @@ npm run benchmark -- --task utility-clamp
 npm run benchmark:reports -- history
 ```
 
-The suite is a development baseline, not a broad industry benchmark and not evidence of general coding ability. Reports preserve task-level outcomes and runtime metadata; memory measurements do not include the separate Ollama daemon or total system/GPU memory.
+The suite is a development baseline, not a broad industry benchmark and not evidence of general coding ability. Reports preserve task-level outcomes and runtime metadata; memory measurements do not include other service processes, total system memory, or GPU memory.
 
 ## ◫ Project structure
 

@@ -70,17 +70,9 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
   const modelRoute = (method === "GET" && route === "/model/status")
     || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
   if (modelRoute) {
-    let provider = await detectLocalModel();
-    let modelBody = body || {};
-    if (typeof modelBody.model === "string" && modelBody.model.trim()) {
-      const requested = await detectLocalModel({ mode: "ollama", requestedModel: modelBody.model.trim() });
-      if (!requested) throw new Error("The configured SYNTRA_REVIEW_MODEL is not installed locally or exceeds the safe memory-selection limit.");
-      provider = requested;
-      modelBody = { ...modelBody };
-      delete modelBody.model;
-    }
+    const provider = await detectLocalModel();
     if (provider) {
-      const localResult = await handleLocalModelRequest(provider, method, route, modelBody, { timeoutMs, onToken, signal });
+      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken, signal });
       if (localResult) return localResult;
     }
   }
@@ -98,7 +90,7 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
     });
   } catch (error) {
     if (signal?.aborted || error?.name === "AbortError") throw error;
-    throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server', or install and run a local Ollama model for stronger local inference.");
+    throw new Error("SYNTRA's native AI service is offline. Start it with 'npm run ai:server' and inspect the native AI service window.");
   }
   const contentType = String(response.headers?.get?.("content-type") || "");
   if (response.ok && useNativeStream && contentType.includes("application/x-ndjson") && response.body) {
@@ -547,7 +539,7 @@ async function runChatTurn(jobId, message, history, signal) {
         "- /status checks whether the local model backend is reachable.",
         "- /clear clears this conversation and its saved browser history.",
         "",
-        "Normal chat and code edits need a compatible local Ollama model or a trained SYNTRA checkpoint. No hosted AI API is used."
+        "Normal chat and code edits use SYNTRA's trained native checkpoint. No Ollama service or hosted AI API is required."
       ].join("\n"));
       return;
     }
@@ -556,9 +548,7 @@ async function runChatTurn(jobId, message, history, signal) {
       updateChat(jobId, { phase: "status", message: "Checking the local model backend" });
       try {
         const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000);
-        const provider = modelStatus.provider === "ollama-local"
-          ? "Ollama local model"
-          : modelStatus.provider || "Native local backend";
+        const provider = modelStatus.provider || "Native local backend";
         const lines = [
           "**SYNTRA status**",
           "",
@@ -577,7 +567,7 @@ async function runChatTurn(jobId, message, history, signal) {
         if (modelStatus.pretrained_weights === true) lines.push("Weights: pretrained, installed locally");
         else if (modelStatus.checkpoint_exists) lines.push("Weights: local SYNTRA checkpoint");
         lines.push("", "Network diagnostics: available without a model.");
-        if (!modelStatus.checkpoint_exists) lines.push("Install a compatible local Ollama model or train the native model to enable ordinary chat and code edits.");
+        if (!modelStatus.checkpoint_exists) lines.push("Train the native SYNTRA model to enable ordinary chat and code edits.");
         finishChat(jobId, lines.join("\n"), { modelStatus: "reachable" });
       } catch (error) {
         finishChat(jobId, [
@@ -691,10 +681,6 @@ async function runChatTurn(jobId, message, history, signal) {
         onCandidateCheckpoint: checkpoint => saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, checkpoint),
         modelRequest: (method, route, body, timeoutMs, options = {}) =>
           aiRequest(method, route, body, timeoutMs, { ...options, signal }),
-        reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim()
-          ? (method, route, body, timeoutMs, options = {}) =>
-              aiRequest(method, route, { ...(body || {}), model: process.env.SYNTRA_REVIEW_MODEL.trim() }, timeoutMs, { ...options, signal })
-          : null,
         onProgress: async update => {
           const phase = update.phase || "working";
           const messageText = update.message || "Working on the requested change";
