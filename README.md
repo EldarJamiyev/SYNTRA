@@ -133,7 +133,7 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 
 ### Model reality
 
-- **Ollama is the default inference path.** SYNTRA selects from installed local models and excludes cloud-tagged model entries.
+- **Automatic local inference is the default.** SYNTRA prefers a suitable installed local Ollama model and excludes cloud-tagged entries. When Ollama is unavailable or no compatible local model is installed, the Windows launcher starts the native local research runtime instead. Set `SYNTRA_MODEL_PROVIDER=ollama` to require Ollama and fail fast when it is not ready.
 - **The unified native PyTorch brain (`brain/` + `syntra_ai/`) is 100% local and self-contained.** It uses RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU feed-forward networks, L2-normalized pooled dense embeddings (`embed_tokens`), and a resident in-memory checkpoint cache that loads both `syntra_ai` and `brain/syntra-brain.pt` checkpoints seamlessly.
 - **Automated repository curriculum synthesis (`synthesize_repository_curriculum`).** SYNTRA can scan an approved local codebase to synthesize audited `.jsonl` instruction datasets covering module comprehension, symbol implementation, and `SYNTRA_AGENT_PATCH_V1` anchor-patch repair tasks for local fine-tuning.
 - **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
@@ -193,7 +193,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
 
 ### Windows
 
-**Requirements:** Node.js 20 or later and Git. Install Ollama and pull a local model that fits your hardware. Python 3.12+ is needed only for the optional native model runtime.
+**Requirements:** Node.js 20 or later and Git. Install Ollama and pull a local model that fits your hardware for pretrained local inference. Python 3.12+ is required when automatic mode falls back to the native research runtime, or when `SYNTRA_MODEL_PROVIDER=native` is selected.
 
 1. Clone the repository:
 
@@ -202,7 +202,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
    cd SYNTRA
    ```
 
-2. Start Ollama and make sure your chosen model is available locally.
+2. For pretrained inference, start Ollama and make sure a compatible model is available locally. The default `auto` mode uses Ollama when ready and otherwise starts the native local runtime.
 3. Double-click **`Start-SYNTRA.bat`**.
 4. Open **http://127.0.0.1:3000** in your browser.
 5. Keep the service windows open while using SYNTRA.
