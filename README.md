@@ -127,13 +127,13 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 | --- | --- |
 | React + Vite | Conversation UI, local sessions, workspace & native AI controls |
 | Node.js service | Local API, cognitive intent routing, diagnostics, agent orchestration |
-| Ollama | Default local model inference |
+| Ollama | Preferred pretrained local inference when an eligible local model is installed |
 | Workspace engine | Project discovery, retrieval, symbol & semantic index, proposals, audit |
 | Python + PyTorch (`brain/` & `syntra_ai/`) | Unified native Transformer runtime (RMSNorm, RoPE, SwiGLU, KV-cached streaming, dense embeddings, and repository curriculum synthesis) |
 
 ### Model reality
 
-- **Ollama is the default inference path.** SYNTRA selects from installed local models and excludes cloud-tagged model entries.
+- **Automatic local inference is the default.** SYNTRA prefers an eligible locally installed Ollama model and excludes cloud-tagged entries; when no suitable model is available, it falls back to the native PyTorch runtime. Set `SYNTRA_MODEL_PROVIDER=native` or `SYNTRA_MODEL_PROVIDER=ollama` to force a specific local path.
 - **The unified native PyTorch brain (`brain/` + `syntra_ai/`) is 100% local and self-contained.** It uses RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU feed-forward networks, L2-normalized pooled dense embeddings (`embed_tokens`), and a resident in-memory checkpoint cache that loads both `syntra_ai` and `brain/syntra-brain.pt` checkpoints seamlessly.
 - **Automated repository curriculum synthesis (`synthesize_repository_curriculum`).** SYNTRA can scan an approved local codebase to synthesize audited `.jsonl` instruction datasets covering module comprehension, symbol implementation, and `SYNTRA_AGENT_PATCH_V1` anchor-patch repair tasks for local fine-tuning.
 - **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
@@ -193,7 +193,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
 
 ### Windows
 
-**Requirements:** Node.js 20 or later and Git. Install Ollama and pull a local model that fits your hardware. Python 3.12+ is needed only for the optional native model runtime.
+**Requirements:** Node.js 20 or later and Git. Python 3.11 or later is required when the native fallback is used. Ollama is optional; install it and pull a suitable local model to use pretrained local inference.
 
 1. Clone the repository:
 
@@ -202,12 +202,12 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
    cd SYNTRA
    ```
 
-2. Start Ollama and make sure your chosen model is available locally.
+2. Optionally install/start Ollama and pull a local model. Without a suitable Ollama model, the launcher uses SYNTRA's native PyTorch runtime.
 3. Double-click **`Start-SYNTRA.bat`**.
 4. Open **http://127.0.0.1:3000** in your browser.
 5. Keep the service windows open while using SYNTRA.
 
-The launcher prepares the frontend dependencies when needed, checks the local services, and starts the application. On later launches, use the same `Start-SYNTRA.bat` file.
+The launcher prefers an eligible local Ollama model and automatically falls back to the native runtime when none is ready. The native path prepares the hash-locked Python environment and trains a local checkpoint on first use when one is not already available. On later launches, use the same `Start-SYNTRA.bat` file.
 
 ### Development
 
