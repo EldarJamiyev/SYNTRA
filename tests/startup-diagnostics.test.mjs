@@ -22,12 +22,14 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
-test("Windows startup defaults to pretrained Ollama and only selects the native research model explicitly", async () => {
+test("Windows startup defaults to automatic local inference and propagates the selected provider", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
   assert.match(launcher, /else\s*\{\s*"ollama"\s*\}/);
   assert.match(launcher, /@\("auto", "native", "ollama", "gemini"\) -notcontains \$providerMode/);
   assert.match(launcher, /SYNTRA_GEMINI_API_KEY/);
   assert.match(launcher, /SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini/);
+  assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = \$providerMode/);
+  assert.match(launcher, /\$providerMode -eq "ollama" -and -not \$UseOllama/);
   assert.match(launcher, /\$providerMode -ne "native" -and \$providerMode -ne "gemini"/);
   assert.doesNotMatch(launcher, /else\s*\{\s*"auto"\s*\}/);
 });
