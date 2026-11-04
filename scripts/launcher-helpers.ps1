@@ -27,13 +27,13 @@ function Get-SyntraOllamaSelection {
                 return $true
             }
             try {
-                return ([double]$size -le ($RamBytes * 0.70))
+                return ([double]$size -le ($RamBytes * 0.55))
             } catch {
                 # Unknown size metadata is not treated as proof that a model is too large.
                 return $true
             }
         })
-        if ($requested -and $withinMemory.Count -eq 0) {
+        if ($selected.Count -gt 0 -and $withinMemory.Count -eq 0) {
             return [pscustomobject]@{ Status = "memory_limit"; Models = @() }
         }
         $selected = $withinMemory
