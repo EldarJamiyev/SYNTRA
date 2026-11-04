@@ -91,6 +91,16 @@ test("the default provider mode automatically falls back when Ollama is unavaila
       fetchImpl: async () => { throw new Error("connection refused"); }
     });
     assert.equal(result, null);
+
+    const emptyCatalog = async () => new Response(JSON.stringify({ models: [] }), {
+      status: 200, headers: { "Content-Type": "application/json" }
+    });
+    assert.equal(await detectLocalModel({ fetchImpl: emptyCatalog }), null,
+      "auto mode must use the native runtime when Ollama has no installed local models");
+    await assert.rejects(
+      () => detectLocalModel({ mode: "ollama", fetchImpl: emptyCatalog }),
+      /No suitable local model is installed/
+    );
   } finally {
     if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
     else process.env.SYNTRA_MODEL_PROVIDER = previousMode;
