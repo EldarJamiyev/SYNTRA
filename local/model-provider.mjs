@@ -94,7 +94,7 @@ function waitBeforeRetry(milliseconds, signal) {
   });
 }
 
-function normalizeMode(value = process.env.SYNTRA_MODEL_PROVIDER || "ollama") {
+function normalizeMode(value = process.env.SYNTRA_MODEL_PROVIDER || "auto") {
   const mode = String(value).trim().toLowerCase();
   if (!["auto", "native", "ollama"].includes(mode)) {
     throw new Error("SYNTRA_MODEL_PROVIDER must be auto, native, or ollama.");
