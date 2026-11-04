@@ -99,6 +99,25 @@ test("native mode never probes Ollama; auto mode safely falls back if it is offl
   );
 });
 
+test("the default provider mode safely falls back when Ollama is unavailable", async () => {
+  const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
+  delete process.env.SYNTRA_MODEL_PROVIDER;
+  let calls = 0;
+  try {
+    const provider = await detectLocalModel({
+      fetchImpl: async () => {
+        calls += 1;
+        throw new Error("connection refused");
+      }
+    });
+    assert.equal(provider, null);
+    assert.equal(calls, 1);
+  } finally {
+    if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
+    else process.env.SYNTRA_MODEL_PROVIDER = previousMode;
+  }
+});
+
 test("auto mode selects an installed local model and reports local-only status", async () => {
   const fetchImpl = async url => {
     assert.equal(url, "http://127.0.0.1:11434/api/tags");
