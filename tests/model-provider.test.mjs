@@ -83,6 +83,20 @@ test("resource profile stays honest when Ollama metadata is incomplete", () => {
   assert.equal(profile.confidence, "partial");
 });
 
+test("the default provider mode automatically falls back when Ollama is unavailable", async () => {
+  const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
+  delete process.env.SYNTRA_MODEL_PROVIDER;
+  try {
+    const result = await detectLocalModel({
+      fetchImpl: async () => { throw new Error("connection refused"); }
+    });
+    assert.equal(result, null);
+  } finally {
+    if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
+    else process.env.SYNTRA_MODEL_PROVIDER = previousMode;
+  }
+});
+
 test("native mode never probes Ollama; auto mode safely falls back if it is offline", async () => {
   let calls = 0;
   const failingFetch = async () => {
