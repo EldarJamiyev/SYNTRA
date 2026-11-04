@@ -24,7 +24,7 @@ if ($missing.Status -ne "not_installed") {
 
 $tooLarge = Get-SyntraOllamaSelection -Models $catalog -RequestedModel "qwen-coder:14b" -RamBytes 500
 if ($tooLarge.Status -ne "memory_limit") {
-    throw "An explicitly selected model above the 70% RAM threshold must report a memory-limit status."
+    throw "An explicitly selected model above the shared 55% RAM threshold must report a memory-limit status."
 }
 
 $automaticTooLarge = Get-SyntraOllamaSelection -Models @([pscustomobject]@{ name = "large-local:latest"; size = 600 }) -RamBytes 1000
