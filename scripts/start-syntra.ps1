@@ -135,7 +135,9 @@ try {
 
     $UseOllama = $false
     $UsableOllamaModels = @()
-    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "ollama" }
+    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "auto" }
+    # Keep the selected provider consistent in the Node service and its child processes.
+    $env:SYNTRA_MODEL_PROVIDER = $providerMode
     $requestedLocalModel = if ($env:SYNTRA_LOCAL_MODEL) { $env:SYNTRA_LOCAL_MODEL.Trim() } else { "" }
     if ($providerMode -eq "gemini" -and -not $env:SYNTRA_GEMINI_API_KEY) { throw "SYNTRA_MODEL_PROVIDER=gemini requires SYNTRA_GEMINI_API_KEY." }
     if (@("auto", "native", "ollama", "gemini") -notcontains $providerMode) {
