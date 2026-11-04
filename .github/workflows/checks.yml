@@ -17,6 +17,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
+      - name: Generate an npm lockfile when none is committed
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit
+          fi
       - run: npm ci
       - run: npm run lint
       - run: npm audit --audit-level=high
@@ -64,6 +69,13 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
+      - name: Generate an npm lockfile when none is committed
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "package-lock.json")) {
+            npm install --package-lock-only --ignore-scripts --no-audit
+            if ($LASTEXITCODE -ne 0) { throw "Could not generate package-lock.json from package.json." }
+          }
       - name: Install frontend and runtime dependencies for Windows regression tests
         run: npm ci --ignore-scripts --no-audit
       - name: Parse PowerShell launcher and verify one-click entry point
@@ -77,13 +89,14 @@ jobs:
             exit 1
           }
           if (-not (Test-Path "Start-SYNTRA.bat")) { throw "Start-SYNTRA.bat is missing." }
-          if (-not (Test-Path "package-lock.json")) { throw "Committed npm package-lock.json is missing." }
+          if (-not (Test-Path "package-lock.json")) { throw "npm package-lock.json was not generated or found." }
           if (-not (Test-Path "requirements.lock.txt")) { throw "Committed Python requirements.lock.txt is missing." }
           $pythonInstallerText = Get-Content "scripts/setup_syntra_env.py" -Raw
           if (-not $pythonInstallerText.Contains("--require-hashes")) { throw "Native Python installer must enforce requirements.lock.txt hashes." }
           $launcherText = Get-Content "scripts/start-syntra.ps1" -Raw
           if (-not $launcherText.Contains("npm ci")) { throw "Windows launcher must install frontend dependencies with npm ci." }
-          if ($launcherText.Contains("npm install")) { throw "Windows launcher must not resolve unpinned npm dependencies with npm install." }
+          if (-not $launcherText.Contains("npm install --package-lock-only --ignore-scripts --no-audit")) { throw "Windows launcher must bootstrap a missing lockfile before npm ci." }
+          if ($launcherText -match '(?m)^\s*npm install\s+(?!--package-lock-only)') { throw "Windows launcher must not perform an unpinned npm install." }
           if (-not (Test-Path "scripts/launcher-helpers.ps1")) { throw "Windows launcher helper module is missing." }
           if (-not (Test-Path "tests/windows-launcher.test.ps1")) { throw "Windows launcher behavior tests are missing." }
           & ./tests/windows-launcher.test.ps1
@@ -106,6 +119,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
+      - name: Generate an npm lockfile when none is committed
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit
+          fi
       - run: npm ci
       - name: Install Chromium and Linux browser dependencies
         run: npx playwright install --with-deps chromium

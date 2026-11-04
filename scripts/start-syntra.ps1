@@ -170,7 +170,11 @@ try {
     $ProjectLock = Join-Path $Root "package-lock.json"
     $InstalledLock = Join-Path $Root "node_modules\.package-lock.json"
     if (-not (Test-Path -LiteralPath $ProjectLock -PathType Leaf)) {
-        throw "package-lock.json is missing. Run git pull in the SYNTRA repository folder before starting the application."
+        Write-Warning "package-lock.json is missing. Generating a local npm lockfile from package.json for this installation."
+        npm install --package-lock-only --ignore-scripts --no-audit
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ProjectLock -PathType Leaf)) {
+            throw "Could not generate package-lock.json from package.json. Check the npm/network error above and retry."
+        }
     }
 
     $requiredDependenciesMissing = (

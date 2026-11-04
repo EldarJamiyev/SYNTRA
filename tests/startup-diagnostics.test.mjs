@@ -27,6 +27,8 @@ test("Windows startup always selects the native runtime without probing Ollama",
   assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = "native"/);
   assert.match(launcher, /\$UsePretrainedModel = \$false/);
   assert.match(launcher, /Preparing the isolated native AI environment/);
+  assert.match(launcher, /npm install --package-lock-only --ignore-scripts --no-audit/);
+  assert.match(launcher, /npm ci/);
   assert.match(launcher, /Ensure-Service 3002 "http:\/\/127\.0\.0\.1:3002\/health" "ai:server"/);
   assert.match(launcher, /Python 3\.12 or newer/);
   assert.doesNotMatch(launcher, /Get-Command ollama|127\.0\.0\.1:11434|ollama serve|SYNTRA_REVIEW_MODEL/);
