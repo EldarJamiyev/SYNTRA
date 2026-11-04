@@ -27,6 +27,11 @@ if ($tooLarge.Status -ne "memory_limit") {
     throw "An explicitly selected model above the 70% RAM threshold must report a memory-limit status."
 }
 
+$automaticTooLarge = Get-SyntraOllamaSelection -Models @([pscustomobject]@{ name = "large-local:latest"; size = 600 }) -RamBytes 1000
+if ($automaticTooLarge.Status -ne "memory_limit") {
+    throw "Automatic selection must distinguish installed local models that exceed the shared 55% RAM budget."
+}
+
 $cloudOnly = Get-SyntraOllamaSelection -Models @([pscustomobject]@{ name = "provider-cloud:latest"; size = 100 }) -RamBytes 1000
 if ($cloudOnly.Status -ne "no_local_models") {
     throw "Cloud-only catalog entries must not be selected as local Ollama models."
