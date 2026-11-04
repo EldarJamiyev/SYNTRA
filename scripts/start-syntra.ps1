@@ -135,12 +135,16 @@ try {
 
     $UseOllama = $false
     $UsableOllamaModels = @()
-    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "ollama" }
+    $ollamaSelectionStatus = "not_checked"
+    $ollamaDiagnostic = ""
+    $providerMode = if ($env:SYNTRA_MODEL_PROVIDER) { $env:SYNTRA_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "auto" }
     $requestedLocalModel = if ($env:SYNTRA_LOCAL_MODEL) { $env:SYNTRA_LOCAL_MODEL.Trim() } else { "" }
     if ($providerMode -eq "gemini" -and -not $env:SYNTRA_GEMINI_API_KEY) { throw "SYNTRA_MODEL_PROVIDER=gemini requires SYNTRA_GEMINI_API_KEY." }
     if (@("auto", "native", "ollama", "gemini") -notcontains $providerMode) {
         throw "SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini."
     }
+    # Keep the launcher and every child Node process on the same resolved provider mode.
+    $env:SYNTRA_MODEL_PROVIDER = $providerMode
 
     if ($providerMode -ne "native" -and $providerMode -ne "gemini") {
         $ollamaExe = Get-Command ollama -ErrorAction SilentlyContinue
@@ -170,6 +174,7 @@ try {
                     Write-Warning "Could not read physical memory; the launcher's conservative Ollama model-size filter will be skipped."
                 }
                 $selection = Get-SyntraOllamaSelection -Models @($ollamaCatalog.models) -RequestedModel $requestedLocalModel -RamBytes $ramBytes
+                $ollamaSelectionStatus = [string]$selection.Status
                 $UsableOllamaModels = @($selection.Models)
                 if ($selection.Status -eq "not_installed") {
                     throw "SYNTRA_LOCAL_MODEL '$requestedLocalModel' is not installed as a local Ollama model. Run 'ollama pull $requestedLocalModel' or correct the model name."
@@ -179,14 +184,32 @@ try {
                 }
                 if ($selection.Status -eq "available" -and $UsableOllamaModels.Count -gt 0) { $UseOllama = $true }
             } catch {
+                $ollamaDiagnostic = $_.Exception.Message
                 if ($requestedLocalModel) {
-                    throw "SYNTRA could not validate the explicitly selected local model '$requestedLocalModel': $($_.Exception.Message)"
+                    throw "SYNTRA could not validate the explicitly selected local model '$requestedLocalModel': $ollamaDiagnostic"
                 }
-                Write-Warning "Ollama answered, but its local model list could not be read: $($_.Exception.Message)"
+                Write-Warning "Ollama answered, but its local model list could not be read: $ollamaDiagnostic"
             }
         }
-        if ($providerMode -eq "ollama" -and -not $UseOllama) {
-            throw "SYNTRA is set to use Ollama, but no suitable local model is ready. Start Ollama and install a local model, or set SYNTRA_MODEL_PROVIDER=auto."
+        if (-not $UseOllama) {
+            if ($providerMode -eq "ollama") {
+                if (-not $ollamaReady) {
+                    throw "SYNTRA is configured for Ollama, but no response was received from http://127.0.0.1:11434/api/tags. Start Ollama Desktop or run 'ollama serve', then retry."
+                }
+                if ($ollamaDiagnostic) {
+                    throw "Ollama responded, but SYNTRA could not read its local model catalog: $ollamaDiagnostic"
+                }
+                if ($ollamaSelectionStatus -eq "memory_limit") {
+                    throw "Ollama is responding, but every installed local model exceeds SYNTRA's safe 55% physical-RAM selection limit. Install a smaller quantized model, or set SYNTRA_MODEL_PROVIDER=auto to use the native local runtime."
+                }
+                if ($ollamaSelectionStatus -eq "no_local_models") {
+                    throw "Ollama is responding, but no eligible local model is installed (cloud models are not eligible). Run 'ollama list' and install a local model, or set SYNTRA_MODEL_PROVIDER=auto to use the native local runtime."
+                }
+                throw "Ollama is responding, but SYNTRA could not select a usable local model. Check the Ollama model catalog and configured model name."
+            }
+            if ($providerMode -eq "auto") {
+                Write-Warning "No compatible local Ollama model is available. Continuing with SYNTRA's native local runtime."
+            }
         }
     }
 
