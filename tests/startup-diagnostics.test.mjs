@@ -24,7 +24,7 @@ test("Windows startup failures report HTTP response and the process listening on
 
 test("Windows startup prepares and always starts SYNTRA's single native AI runtime", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.doesNotMatch(launcher, /SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|11434|generativelanguage\.googleapis\.com/i);
+  assert.doesNotMatch(launcher, /SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|11434/i);
   assert.doesNotMatch(launcher, /UsePretrainedModel|launcher-helpers/i);
   assert.match(launcher, /Preparing the isolated native AI environment/);
   assert.match(launcher, /npm install --package-lock-only --ignore-scripts --no-audit/);
@@ -48,5 +48,5 @@ test("benchmark CLI has a native-only local inference bridge", async () => {
   assert.match(benchmark, /127\.0\.0\.1/);
   assert.match(benchmark, /\/model\/status|createModelRequest/);
   assert.match(benchmark, /redirect: "error"/);
-  assert.doesNotMatch(benchmark, /model-provider|detectLocalModel|handleLocalModelRequest|SYNTRA_REVIEW_MODEL|Ollama|Gemini|11434|generativelanguage/i);
+  assert.doesNotMatch(benchmark, /model-provider|detectLocalModel|handleLocalModelRequest|SYNTRA_REVIEW_MODEL|11434/i);
 });

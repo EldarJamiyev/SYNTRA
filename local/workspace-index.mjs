@@ -1150,16 +1150,6 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
     throw new Error("SYNTRA semantic source search uses only the native checkpoint embedding model.");
   }
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  if (!model) {
-    const lexical = await searchWorkspace(root, normalized, limit);
-    return {
-      available: true, root, query: normalized, retrievalMode: "lexical_fallback",
-      embeddingModel: null, semanticCoverage: 0, semanticChunkCoverage: 0,
-      results: lexical.results.map(item => ({
-        ...item, role: path.posix.extname(item.path).toLowerCase() === ".test" ? "test" : "source"
-      }))
-    };
-  }
   const index = await readIndex(root);
   if (!index) {
     const lexical = await searchWorkspace(root, normalized, limit);

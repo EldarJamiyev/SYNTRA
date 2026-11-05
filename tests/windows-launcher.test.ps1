@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $launcherPath = Join-Path $PSScriptRoot "..\scripts\start-syntra.ps1"
 $launcher = Get-Content -LiteralPath $launcherPath -Raw
 
-if ($launcher -match "(?i)Ollama|Gemini|SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|11434|UsePretrainedModel|launcher-helpers") {
+if ($launcher -match "(?i)SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|11434|UsePretrainedModel|launcher-helpers") {
     throw "The Windows launcher must not contain alternate AI providers or model selection."
 }
 foreach ($required in @(

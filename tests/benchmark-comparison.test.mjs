@@ -11,7 +11,7 @@ function report({ runId, model, completion, patch, verification, latency, tokens
     peakProcessRssBytes: rss
   };
   return {
-    schemaVersion: 1, suiteVersion: "1.0.0", runId, model: { provider: "ollama", name: model },
+    schemaVersion: 1, suiteVersion: "1.0.0", runId, model: { engine: "syntra-native", name: model },
     startedAt: "2026-10-31T10:00:00.000Z",
     runtime: { node: "v24.16.0", platform, architecture: "x64" },
     hardware: { cpuModel: cpu, logicalCores: 8, totalMemoryBytes: memory },
@@ -61,14 +61,14 @@ test("1.4 benchmark reports require explicit baseline validation evidence", () =
   assert.equal(validateBenchmarkReport(validated), validated);
 });
 
-test("comparison identifies model improvements and task-level changes", () => {
+test("comparison identifies native checkpoint improvements and task-level changes", () => {
   const baseline = report({
-    runId: "baseline-1", model: "qwen2.5-coder:14b",
+    runId: "baseline-1", model: "syntra-native-checkpoint-v1",
     completion: 0, patch: false, verification: false, latency: 1000,
     tokens: 1000, rss: 300000, taskComplete: false
   });
   const candidate = report({
-    runId: "candidate-1", model: "qwen2.5-coder:32b",
+    runId: "candidate-1", model: "syntra-native-checkpoint-v2",
     completion: 1, patch: true, verification: true, latency: 800,
     tokens: 750, rss: 280000, taskComplete: true
   });
