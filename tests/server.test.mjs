@@ -67,7 +67,6 @@ test("local API health, origin protections, and chat validation work over HTTP",
       ...process.env,
       SYNTRA_LOCAL_PORT: String(port),
       SYNTRA_AI_PORT: String(aiPort),
-      SYNTRA_MODEL_PROVIDER: "native",
       SYNTRA_API_TOKEN: "syntra-test-token"
     },
     stdio: ["ignore", "pipe", "pipe"],

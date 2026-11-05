@@ -1,7 +1,6 @@
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 $Root = Split-Path -Parent $PSScriptRoot
-. (Join-Path $PSScriptRoot "launcher-helpers.ps1")
 Set-Location -LiteralPath $Root
 
 function Write-Step([string]$Message) {
@@ -133,16 +132,8 @@ try {
         throw "SYNTRA needs Node.js 20 or newer. Installed version: $nodeVersionText"
     }
 
-    # SYNTRA's one-click setup uses its built-in native PyTorch runtime.
-    # Override inherited Windows settings so stale provider variables cannot require Ollama.
-    $UsePretrainedModel = $false
-    $UsablePretrainedModels = @()
-    $env:SYNTRA_MODEL_PROVIDER = "native"
-    Remove-Item Env:SYNTRA_LOCAL_MODEL -ErrorAction SilentlyContinue
-    Write-Host "AI provider: SYNTRA native PyTorch runtime (no Ollama installation or service required)." -ForegroundColor Green
-
+    # SYNTRA has one inference engine: its own local Python/PyTorch checkpoint.
     $pythonVersionText = $null
-    if (-not $UsePretrainedModel) {
         if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
             throw "Python is missing. Install Python 3.12 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
         }
@@ -156,15 +147,9 @@ try {
         if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 12)) {
             throw "SYNTRA needs Python 3.12 or newer. Installed version: $pythonVersionText"
         }
-    }
 
     Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
-    if ($UsePretrainedModel) {
-        Write-Host "A compatible local pretrained model is ready." -ForegroundColor Green
-        Write-Host ("Installed local model(s): " + (($UsablePretrainedModels | ForEach-Object { $_.name }) -join ", "))
-    } else {
-        Write-Host "$pythonVersionText" -ForegroundColor Green
-    }
+    Write-Host "$pythonVersionText" -ForegroundColor Green
 
     Write-Step "Preparing the web application"
     $ProjectLock = Join-Path $Root "package-lock.json"
@@ -201,7 +186,6 @@ try {
         Write-Host "JavaScript dependencies match the committed npm lockfile." -ForegroundColor Green
     }
 
-    if (-not $UsePretrainedModel) {
     Write-Step "Preparing the isolated native AI environment"
     $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
     Write-Host "Checking the installed Python environment against requirements.lock.txt..."
@@ -287,15 +271,9 @@ try {
         throw "SYNTRA could not validate the model checkpoint after setup."
     }
 
-    } else {
-        Write-Step "Using the selected local pretrained model"
-        Write-Host "No native training is required when a separate pretrained model is selected." -ForegroundColor Green
-    }
 
     Write-Step "Starting the local services"
-    if (-not $UsePretrainedModel) {
-        Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
-    }
+    Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
     Ensure-Service 3001 "http://127.0.0.1:3001/local-api/health" "server"
     Ensure-Service 3000 "http://127.0.0.1:3000/" "dev" "SYNTRA Chat"
 

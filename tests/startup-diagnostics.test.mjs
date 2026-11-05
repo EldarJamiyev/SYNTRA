@@ -22,16 +22,18 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
-test("Windows startup always selects the native runtime without probing Ollama", async () => {
+test("Windows startup prepares and always starts SYNTRA's single native AI runtime", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = "native"/);
-  assert.match(launcher, /\$UsePretrainedModel = \$false/);
+  assert.doesNotMatch(launcher, /SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|Ollama|Gemini/i);
+  assert.doesNotMatch(launcher, /UsePretrainedModel|launcher-helpers/i);
   assert.match(launcher, /Preparing the isolated native AI environment/);
   assert.match(launcher, /npm install --package-lock-only --ignore-scripts --no-audit/);
   assert.match(launcher, /npm ci/);
   assert.match(launcher, /Ensure-Service 3002 "http:\/\/127\.0\.0\.1:3002\/health" "ai:server"/);
   assert.match(launcher, /Python 3\.12 or newer/);
-  assert.doesNotMatch(launcher, /Get-Command ollama|127\.0\.0\.1:11434|ollama serve|SYNTRA_REVIEW_MODEL/);
+  const server = await fs.readFile(new URL("../local/server.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(server, /model-provider|detectLocalModel|handleLocalModelRequest|SYNTRA_MODEL_PROVIDER/i);
+  await assert.rejects(() => fs.access(new URL("../local/model-provider.mjs", import.meta.url)));
 });
 
 test("Vite startup keeps console output visible in its own service window", async () => {

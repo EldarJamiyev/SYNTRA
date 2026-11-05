@@ -103,7 +103,9 @@ jobs:
           if (-not (Test-Path "tests/frontend.test.mjs")) { throw "Minimal chat frontend regression test is missing." }
           node scripts/run-node-tests.mjs
           if ($LASTEXITCODE -ne 0) { throw "Node.js regression suite failed on Windows." }
-          if (-not (Test-Path "local/model-provider.mjs")) { throw "Local model routing module is missing." }
+          if (-not (Test-Path "syntra_ai/server.py")) { throw "SYNTRA's native model service is missing." }
+          if (Test-Path "local/model-provider.mjs") { throw "Alternate AI provider routing must not be present." }
+          if ((Get-Content "local/server.mjs" -Raw) -match "model-provider|detectLocalModel|handleLocalModelRequest") { throw "Workspace chat must route directly to SYNTRA's native model service." }
           $package = Get-Content "package.json" -Raw | ConvertFrom-Json
           if ($package.scripts.'ai:cli' -ne "python scripts/run_syntra_module.py cli") { throw "The AI CLI launcher mapping is incorrect." }
           if ($package.scripts.'ai:server' -ne "python scripts/run_syntra_module.py server") { throw "The AI server launcher mapping is incorrect." }
