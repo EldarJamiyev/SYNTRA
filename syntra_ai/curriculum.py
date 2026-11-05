@@ -428,6 +428,7 @@ def synthesize_repository_curriculum(
             if len(records) >= max_examples:
                 break
             patch_payload = {
+                "format": "SYNTRA_AGENT_PATCH_V1",
                 "summary": "Use identity comparison when checking the None sentinel.",
                 "edits": [{
                     "path": relative_path,
@@ -463,6 +464,7 @@ def synthesize_repository_curriculum(
     audit = audit_instruction_dataset(target)
     return {
         "dataset_path": str(target),
+        "workspace_root": str(output_root),
         "workspace_roots": [str(item) for item in corpus_roots],
         "source_files": len(corpus.files),
         "module_count": module_count,
