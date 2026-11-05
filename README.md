@@ -137,6 +137,30 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 - **Automated repository curriculum synthesis (`synthesize_repository_curriculum`).** SYNTRA can scan an approved local codebase to synthesize audited `.jsonl` instruction datasets covering module comprehension, symbol implementation, and `SYNTRA_AGENT_PATCH_V1` anchor-patch repair tasks for local fine-tuning.
 - **Semantic retrieval uses SYNTRA's own checkpoint too.** Source chunks and explicitly user-authored project-memory notes are embedded locally; lexical retrieval remains available when the checkpoint service is unavailable. Embedding quality depends on the training corpus and is not equivalent to a pretrained semantic model.
 
+### Phase 4 repository curriculum generation
+
+Generate a local instruction dataset from the project and every approved directory in `SYNTRA_ALLOWED_CORPUS_ROOTS`:
+
+```powershell
+npm run ai:curriculum
+```
+
+To select one approved repository root, choose an explicit output file, and bound the generated dataset:
+
+```powershell
+python scripts/run_syntra_module.py cli curriculum --root "D:\\Datasets\\MySource" --output "D:\\Datasets\\MySource\\syntra-curriculum.jsonl" --max-examples 240
+```
+
+The generated JSONL contains source-grounded module-comprehension, symbol-implementation, symbol-comprehension, and supported anchor-patch examples. Python files are parsed with the standard-library AST; other supported source files use bounded declaration-aware chunks. A repair example is emitted only when the generator can identify an exact source anchor and a deterministic transformation. It does not invent failures or patch tasks for arbitrary code.
+
+Train the standalone brain directly on the generated file:
+
+```powershell
+npm run brain:train -- --dataset "D:\\Datasets\\MySource\\syntra-curriculum.jsonl" --epochs 3 --device auto
+```
+
+The brain trainer accepts `Instruction`/`Response` and `prompt`/`completion` JSONL records. Prompt tokens are masked from the supervised loss; response tokens and EOS remain supervised. Ordinary UTF-8 text/code sources keep the existing causal raw-token training path, including mixed raw-text and instruction datasets.
+
 ### Standalone `/brain` training and inference (Phase 2 & Unified Runtime)
 
 The `brain/` and `syntra_ai/` packages share a unified Transformer architecture and mutually compatible checkpoint format (`checkpoints/syntra-brain.pt` and `artifacts/syntra_model.pt`). The native runtime does not download pretrained weights or contact an external model service.
