@@ -142,7 +142,7 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Enforce note-count, file-size, title, body, and tag limits; reject known credential patterns and refuse symlink or invalid stores.
 - [x] Add workspace-specific relative glob exclusions for discovery, full-text search, symbol indexing, direct reads, and proposal access; store settings locally with optimistic-concurrency protection and reject invalid or symlinked configuration.
 - [x] Add an on-demand, audited workspace secret scanner for common private-key and credential patterns. It respects path exclusions and scan limits, and returns only finding metadata; matched values and source lines are never returned or written to audit logs.
-- [ ] Expand provider-specific coverage and add optional allowlists with safe, explicit review. Pattern scanning remains best-effort and is not a substitute for a secret manager.
+- [ ] Expand secret-pattern coverage and add optional allowlists with safe, explicit review. Pattern scanning remains best-effort and is not a substitute for a secret manager.
 
 **Acceptance:** Context selection is explainable, reproducible, workspace-scoped, and covered by tests for stale-index invalidation, explicit memory approval, audit redaction, workspace isolation, and best-effort secret detection.
 
@@ -155,7 +155,7 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Add a versioned local coding benchmark suite with eleven deterministic fixtures spanning JavaScript utilities, async/API behavior, multi-file changes, Python unittest, Go test and Rust Cargo test; non-JavaScript tasks are skipped when their required runtime is unavailable.
 - [x] Run the real coding agent against disposable fixture copies using the selected local model; do not apply proposals to the active workspace.
 - [x] Require the exact expected changed-file set and passing candidate verification for task completion; extra test/configuration edits invalidate the patch score.
-- [x] Record provider/model identity, task latency, prompt/output tokens, patch validity, verification outcomes, task completion, and benchmark-process peak RSS in JSON reports.
+- [x] Record native engine/checkpoint identity, task latency, prompt/output tokens, patch validity, verification outcomes, task completion, and benchmark-process peak RSS in JSON reports.
 - [x] Add regression coverage for suite validation, scoring, aggregation, fixture isolation, baseline checks, and report output.
 
 **Delivered reporting slice:**
@@ -170,7 +170,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 
 - [x] Create a versioned coding benchmark from representative local tasks and regression fixtures.
 - [x] Record patch validity, candidate-test verification, task completion, end-to-end latency, prompt/output tokens, and benchmark-process RSS with each model run.
-- [x] Add provider selection and capability metadata that distinguishes locally measured/heuristic attributes from unmeasured engineering task performance. Local model selection scores remain heuristics; no model is labeled frontier-equivalent.
+- [x] Add native checkpoint and capability metadata that distinguishes locally measured attributes from unmeasured engineering task performance. No model is labeled frontier-equivalent.
 - [x] Add bounded native-generation cancellation and streaming safeguards; classify context-window and model-memory exhaustion; reject incomplete streams and never replay partial streamed output.
 - Review local-service origin checks, filesystem boundaries, command permissions, dependency handling, and Windows launch behavior.
 - [x] Commit `package-lock.json`, enforce clean `npm ci` installs in CI and the Windows launcher, and configure weekly Dependabot npm/pip update pull requests.

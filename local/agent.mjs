@@ -1249,7 +1249,7 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 export function deriveModelContextBudget(modelStatus = {}) {
   // SYNTRA's checkpoint stores its own byte-BPE tokenizer. Token counts are
   // exact only when that tokenizer is the active runtime tokenizer; never infer
-  // a larger context window from another model or a provider-specific response.
+  // a context window larger than SYNTRA's own supported native architecture.
   const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
   const contextWindowTokens = Number.isFinite(rawContext)
     ? Math.max(1024, Math.min(16_384, Math.floor(rawContext)))

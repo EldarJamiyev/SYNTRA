@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { detectLocalModel, handleLocalModelRequest } from "../local/model-provider.mjs";
 import { DEFAULT_BENCHMARK_SUITE, loadBenchmarkSuite, runBenchmarkSuite } from "../local/benchmark.mjs";
+
 function parseArgs(argv) {
   const result = { tasks: [] };
   for (let index = 0; index < argv.length; index += 1) {
@@ -20,49 +20,57 @@ function parseArgs(argv) {
   }
   return result;
 }
+
 function help() {
   console.log([
-    "SYNTRA local coding benchmark", "",
+    "SYNTRA native coding benchmark", "",
     "Usage:",
     "  npm run benchmark -- --list",
     "  npm run benchmark",
     "  npm run benchmark -- --task utility-clamp",
     "  npm run benchmark -- --task utility-clamp --task string-slugify --output reports/run.json",
     "",
-    "Uses the configured local Ollama model or SYNTRA's local native model service.",
-    "Runs disposable fixture copies; does not apply proposals to the active workspace.",
+    "Runs the actual SYNTRA native checkpoint against disposable fixture copies.",
+    "Does not apply proposals to the active workspace or use an external model service.",
     "Reports measurements and scores, not source contents, prompts, or model output."
   ].join("\n"));
 }
-function createModelRequest(requestedModel = null) {
-  let providerPromise = null;
-  const aiBase = process.env.SYNTRA_BENCHMARK_AI_BASE || "http://127.0.0.1:" + Number(process.env.SYNTRA_AI_PORT || 3002);
+
+function createModelRequest() {
+  const configuredPort = Number(process.env.SYNTRA_AI_PORT || 3002);
+  if (!Number.isInteger(configuredPort) || configuredPort < 1024 || configuredPort > 65535) {
+    throw new Error("SYNTRA_AI_PORT must be an integer between 1024 and 65535.");
+  }
+  const aiBase = "http://127.0.0.1:" + configuredPort;
   return async (method, route, body, timeoutMs, options = {}) => {
-    if (!providerPromise) providerPromise = detectLocalModel(requestedModel ? { mode: "ollama", requestedModel } : undefined);
-    const provider = await providerPromise;
-    if (requestedModel && !provider) throw new Error("SYNTRA_REVIEW_MODEL must name an installed local Ollama model.");
-    if (provider) return handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, signal: options.signal });
     const timeout = timeoutMs || (route === "/model/generate" ? 300000 : 30000);
-    const signal = options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
+    const timeoutSignal = AbortSignal.timeout(timeout);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
     let response;
     try {
       response = await fetch(aiBase + route, {
-        method, headers: method === "GET" ? {} : { "Content-Type": "application/json" },
-        body: method === "GET" ? undefined : JSON.stringify(body || {}), signal
+        method,
+        headers: method === "GET" ? {} : { "Content-Type": "application/json" },
+        body: method === "GET" ? undefined : JSON.stringify(body || {}),
+        redirect: "error",
+        signal
       });
     } catch (error) {
       if (options.signal?.aborted || error?.name === "AbortError") throw error;
-      throw new Error("The local SYNTRA AI service is not responding at " + aiBase + ". Start it with npm run ai:server, or install and start a local Ollama model.");
+      throw new Error("SYNTRA's native AI service is not responding at " + aiBase + ". Start it with npm run ai:server and confirm that a trained SYNTRA checkpoint is available.");
     }
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "Local AI request failed with HTTP " + response.status + ".");
+    if (!response.ok) throw new Error(payload.error || "SYNTRA native AI request failed with HTTP " + response.status + ".");
     return payload;
   };
 }
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
-    console.log("SYNTRA benchmark: npm run benchmark -- --list | npm run benchmark [--task <id>] [--output <file>]");
+    help();
     return;
   }
   const { suite, suiteDir } = await loadBenchmarkSuite(DEFAULT_BENCHMARK_SUITE);
@@ -76,7 +84,6 @@ async function main() {
   const { report, outputPath: savedPath } = await runBenchmarkSuite({
     suite, suiteDir, taskIds: args.tasks.length ? args.tasks : null,
     modelRequest: createModelRequest(),
-    reviewModelRequest: process.env.SYNTRA_REVIEW_MODEL?.trim() ? createModelRequest(process.env.SYNTRA_REVIEW_MODEL.trim()) : null,
     outputPath,
     onProgress: update => {
       if (update.phase === "started" || update.phase === "finished") console.log("[" + update.taskId + "] " + update.message);
@@ -84,7 +91,8 @@ async function main() {
     }
   });
   console.log("");
-  console.log("Model: " + report.model.provider + " / " + report.model.name);
+  console.log("Engine: " + report.model.engine);
+  console.log("Model: " + report.model.name);
   console.log("Tasks complete: " + report.summary.completedTaskCount + "/" + report.summary.taskCount);
   console.log("Patch validity: " + Math.round(report.summary.patchValidityRate * 100) + "%");
   console.log("Verification pass rate: " + Math.round(report.summary.verificationPassRate * 100) + "%");
@@ -94,6 +102,7 @@ async function main() {
   console.log("Report: " + savedPath);
   if (report.summary.completedTaskCount !== report.summary.taskCount) process.exitCode = 1;
 }
+
 main().catch(error => {
   console.error("SYNTRA benchmark: " + (error instanceof Error ? error.message : String(error)));
   process.exitCode = 1;

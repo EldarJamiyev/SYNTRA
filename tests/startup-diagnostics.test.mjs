@@ -41,3 +41,12 @@ test("Vite startup keeps console output visible in its own service window", asyn
   assert.match(launcher, /npm run dev -- --clearScreen false/);
   assert.match(launcher, /The Vite service window will show the frontend startup log/);
 });
+
+
+test("benchmark CLI has a native-only local inference bridge", async () => {
+  const benchmark = await fs.readFile(new URL("../scripts/benchmark-agent.mjs", import.meta.url), "utf8");
+  assert.match(benchmark, /127\.0\.0\.1/);
+  assert.match(benchmark, /\/model\/status|createModelRequest/);
+  assert.match(benchmark, /redirect: "error"/);
+  assert.doesNotMatch(benchmark, /model-provider|detectLocalModel|handleLocalModelRequest|SYNTRA_REVIEW_MODEL|Ollama|Gemini|11434|generativelanguage/i);
+});
