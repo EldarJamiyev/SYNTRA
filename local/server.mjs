@@ -528,7 +528,7 @@ async function runChatTurn(jobId, message, history, signal) {
         "- /status checks whether the local model backend is reachable.",
         "- /clear clears this conversation and its saved browser history.",
         "",
-        "Normal chat and code edits use SYNTRA's trained native checkpoint. No Ollama service or hosted AI API is required."
+        "Normal chat and code edits use only SYNTRA's own trained native checkpoint."
       ].join("\n"));
       return;
     }
@@ -537,12 +537,12 @@ async function runChatTurn(jobId, message, history, signal) {
       updateChat(jobId, { phase: "status", message: "Checking the local model backend" });
       try {
         const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000);
-        const provider = modelStatus.provider || "Native local backend";
+        const backend = modelStatus.backend || "native";
         const lines = [
           "**SYNTRA status**",
           "",
           "Workspace service: running",
-          "Model backend: reachable (" + provider + ")",
+          "Model backend: reachable (SYNTRA " + backend + ")",
           modelStatus.checkpoint_exists
             ? "Model/checkpoint: available"
             : "Model/checkpoint: not trained or not installed"

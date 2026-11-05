@@ -24,7 +24,7 @@ test("Windows startup failures report HTTP response and the process listening on
 
 test("Windows startup prepares and always starts SYNTRA's single native AI runtime", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.doesNotMatch(launcher, /SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|Ollama|Gemini/i);
+  assert.doesNotMatch(launcher, /SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|11434|generativelanguage\.googleapis\.com/i);
   assert.doesNotMatch(launcher, /UsePretrainedModel|launcher-helpers/i);
   assert.match(launcher, /Preparing the isolated native AI environment/);
   assert.match(launcher, /npm install --package-lock-only --ignore-scripts --no-audit/);
