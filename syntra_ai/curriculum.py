@@ -247,13 +247,13 @@ def _safe_none_patch_examples(relative_path: str, source: str) -> list[dict[str,
             if not match:
                 continue
             keyword = "is" if isinstance(operator, ast.Eq) else "is not"
-            after = match.group("left").rstrip() + " " + keyword + match.group("space_right") + "None"
+            after = match.group("left").rstrip() + " " + keyword + (match.group("space_right") or " ") + "None"
         else:
             match = _NONE_COMPARE_RIGHT.fullmatch(before.strip())
             if not match:
                 continue
             keyword = "is" if isinstance(operator, ast.Eq) else "is not"
-            after = "None " + keyword + match.group("space_right") + match.group("right").lstrip()
+            after = "None " + keyword + (match.group("space_right") or " ") + match.group("right").lstrip()
         if before == after or (before, after) in seen:
             continue
         seen.add((before, after))
