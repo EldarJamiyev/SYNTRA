@@ -35,7 +35,7 @@ It is an evolving engineering project—not a claim of frontier-model intelligen
   <tr>
     <td width="50%" valign="top">
       <h3>⌂ Local by design</h3>
-      Run inference through SYNTRA's built-in local Python/PyTorch model runtime. No Ollama installation, external model server, or hosted AI endpoint is required.
+      All generation, review, tokenization and learned embeddings run through SYNTRA's own local Python/PyTorch checkpoint. The project has one AI engine and no alternate provider integration.
     </td>
     <td width="50%" valign="top">
       <h3>⌘ Understands the repository</h3>
@@ -127,16 +127,15 @@ SYNTRA uses a small local stack. The React/Vite interface talks to a loopback No
 | --- | --- |
 | React + Vite | Conversation UI, local sessions, workspace & native AI controls |
 | Node.js service | Local API, cognitive intent routing, diagnostics, agent orchestration |
-| Optional Ollama integration | Available only when explicitly configured for an optional local model or embedding workflow |
 | Workspace engine | Project discovery, retrieval, symbol & semantic index, proposals, audit |
 | Python + PyTorch (`brain/` & `syntra_ai/`) | Unified native Transformer runtime (RMSNorm, RoPE, SwiGLU, KV-cached streaming, dense embeddings, and repository curriculum synthesis) |
 
 ### Model reality
 
-- **The native PyTorch runtime is the default and only provider selected by the one-click launcher.** Startup explicitly sets `SYNTRA_MODEL_PROVIDER=native` and ignores stale Windows provider settings, so no Ollama service or pretrained model is needed. The first setup prepares the locked CPU-only Python environment and trains SYNTRA's own checkpoint from approved local repository data. Ollama remains optional for separately configured integrations such as semantic embeddings.
-- **The unified native PyTorch brain (`brain/` + `syntra_ai/`) is 100% local and self-contained.** It uses RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU feed-forward networks, L2-normalized pooled dense embeddings (`embed_tokens`), and a resident in-memory checkpoint cache that loads both `syntra_ai` and `brain/syntra-brain.pt` checkpoints seamlessly.
+- **The native PyTorch runtime is SYNTRA's only AI engine.** There is no provider selector, alternate model daemon, hosted model API, or external embedding service. First setup prepares the locked local Python environment and trains SYNTRA's own checkpoint from approved local repository data.
+- **The unified native PyTorch brain (`brain/` + `syntra_ai/`) is local and self-contained.** It uses RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU feed-forward networks, checkpoint-backed dense embeddings, and a resident in-memory checkpoint cache that loads both `syntra_ai` and `brain/syntra-brain.pt` checkpoints.
 - **Automated repository curriculum synthesis (`synthesize_repository_curriculum`).** SYNTRA can scan an approved local codebase to synthesize audited `.jsonl` instruction datasets covering module comprehension, symbol implementation, and `SYNTRA_AGENT_PATCH_V1` anchor-patch repair tasks for local fine-tuning.
-- **No hosted AI API is required for the standard local workflow.** Model quality and speed depend on the local model and available hardware.
+- **Semantic retrieval uses SYNTRA's own checkpoint too.** Source chunks and explicitly user-authored project-memory notes are embedded locally; lexical retrieval remains available when the checkpoint service is unavailable. Embedding quality depends on the training corpus and is not equivalent to a pretrained semantic model.
 
 ### Standalone `/brain` training and inference (Phase 2 & Unified Runtime)
 
@@ -193,7 +192,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
 
 ### Windows
 
-**Requirements:** Node.js 20 or later, Git, and Python 3.12 or later. Ollama is not required.
+**Requirements:** Node.js 20 or later, Git, and Python 3.12 or later.
 
 1. Clone the repository:
 
@@ -202,7 +201,7 @@ The selected corpus root is resolved before traversal. Relative paths, home-dire
    cd SYNTRA
    ```
 
-2. Install Python 3.12 or later and ensure `python` is available on `PATH`. Ollama is not required.
+2. Install Python 3.12 or later and ensure `python` is available on `PATH`.
 3. Double-click **`Start-SYNTRA.bat`**.
 4. Open **http://127.0.0.1:3000** in your browser.
 5. Keep the service windows open while using SYNTRA.

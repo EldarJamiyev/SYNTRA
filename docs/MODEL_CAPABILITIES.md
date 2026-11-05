@@ -2,13 +2,13 @@
 
 ## Local inference
 
-The supported one-click startup and default application backend use SYNTRA's native Python/PyTorch Transformer. The Windows launcher explicitly sets `SYNTRA_MODEL_PROVIDER=native`, overriding stale inherited provider settings. Ollama is not required, started, or queried by the launcher. The native runtime requires Python 3.12 or newer and a trained local checkpoint; it does not download pretrained weights or call a hosted AI API.
+The supported one-click startup and application backend use only SYNTRA's native Python/PyTorch Transformer. There is no provider selector or alternate inference integration. The native runtime requires Python 3.12 or newer and a trained local checkpoint; it does not download pretrained weights or call a hosted AI API.
 
 The native model is a small, randomly initialized decoder-only research model trained from local source text. It is useful for experimentation with tokenization, training, inference, and checkpoint mechanics. It is not a pretrained coding model and should not be represented as comparable to a modern 7B/14B coding model or Claude Code.
 
 Before fine-tuning, run `python -m syntra_ai.cli audit-instructions --dataset <file.jsonl>`. This read-only preflight checks JSONL structure, duplicate prompts, prompt diversity, and whether a deterministic prompt-group train/validation split is possible. It does not judge semantic correctness, create a curated dataset, or prove that examples teach useful programming behavior. The audit uses a checkpoint tokenizer only when one is provided; otherwise it reports that the byte-level fallback was used for inspection.
 
-SYNTRA's native model is a small, randomly initialized research model trained from the approved local corpus; it is not a pretrained coding model and its training does not guarantee strong instruction following. Project memory uses keyword retrieval by default. Optional Ollama embeddings can provide hybrid semantic retrieval for saved user-authored memory notes and bounded source chunks; without that optional service, SYNTRA retains lexical retrieval. Memory retrieval never embeds chat history.
+SYNTRA's native model is a small, randomly initialized research model trained from the approved local corpus; it is not a pretrained coding model and its training does not guarantee strong instruction following. Semantic source retrieval and project-memory embeddings use this same native checkpoint. Project memory falls back to BM25 keyword ranking when native embeddings are unavailable or invalid. Source and memory embedding quality depends on the locally trained checkpoint and corpus; it is not pretrained semantic knowledge. Memory retrieval never embeds chat history.
 
 Native prompt token counts use SYNTRA's local tokenizer. Any byte-ratio estimate exposed by compatibility or diagnostic paths must remain clearly marked as an estimate and must not be presented as exact model tokenization.
 

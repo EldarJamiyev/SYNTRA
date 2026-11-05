@@ -29,13 +29,13 @@ Each fixture must fail its language-appropriate baseline check (Node.js assertio
 
 ## Measurements
 
-Each JSON report records provider/model identity and context-window size, per-task patch validity and verification status, task completion, end-to-end latency, prompt/output token totals, and peak RSS for the SYNTRA benchmark Node.js process.
+Each JSON report records native checkpoint identity and context-window size, per-task patch validity and verification status, task completion, end-to-end latency, prompt/output token totals, and peak RSS for the SYNTRA benchmark Node.js process.
 
 The aggregate section includes completion, patch-validity and verification-pass rates, mean/median/min/max latency, token totals, and maximum observed process RSS across tasks.
 
 ## Measurement boundaries
 
-This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate native AI service process, GPU memory, or total system memory. Some provider responses may not include prompt-token counts; unavailable values are recorded as zero rather than presented as exact counts.
+This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate native AI service process, GPU memory, or total system memory. Prompt-token counts are taken from SYNTRA's own tokenizer; unavailable measurements are recorded as unavailable rather than presented as exact counts.
 
 The benchmark enables the same model-selected read-only retrieval and second-pass patch review as the normal coding workflow. Review uses the same native checkpoint as generation; it is a second reasoning pass, not independent-model verification.
 
