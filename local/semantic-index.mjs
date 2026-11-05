@@ -77,6 +77,9 @@ async function writeIndex(root, index) {
 }
 async function embedViaNativeRuntime(texts, fetchImpl, signal) {
   const aiPort = Number(process.env.SYNTRA_AI_PORT || 3002);
+  if (!Number.isInteger(aiPort) || aiPort < 1024 || aiPort > 65535) {
+    throw new Error("SYNTRA_AI_PORT must be an integer between 1024 and 65535.");
+  }
   const timeout = AbortSignal.timeout(120000);
   const response = await fetchImpl(`http://127.0.0.1:${aiPort}/model/embed`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -86,6 +89,9 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(String(payload.error || "Native embeddings request failed with HTTP " + response.status));
+  if (!/^[a-f0-9]{64}$/i.test(payload.checkpoint_identity || "")) {
+    throw new Error("Native runtime did not identify the checkpoint that generated these embeddings.");
+  }
   if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length) {
     throw new Error("Native runtime returned an invalid embedding batch.");
   }
@@ -94,7 +100,10 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
     || payload.embeddings.some(v => !Array.isArray(v) || v.length !== dims || v.some(n => !Number.isFinite(n)))) {
     throw new Error("Native runtime returned inconsistent or invalid embedding dimensions.");
   }
-  return payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5))));
+  return {
+    checkpointIdentity: payload.checkpoint_identity,
+    embeddings: payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5))))
+  };
 }
 
 async function embed(texts, model, fetchImpl, signal) {
@@ -116,9 +125,13 @@ export async function refreshWorkspaceSemanticIndex(inputRoot, {
 } = {}) {
   const root = await resolveWorkspace(inputRoot);
   if (model !== DEFAULT_EMBEDDING_MODEL) throw new Error("SYNTRA semantic retrieval uses only its native checkpoint embeddings.");
+  const identityProbe = await embed(["SYNTRA native semantic index checkpoint identity probe"], model, fetchImpl, signal);
+  const checkpointIdentity = identityProbe.checkpointIdentity;
   const previous = await readIndex(root), oldByPath = new Map();
-  if (previous?.embeddingModel === model) for (const item of previous.chunks) {
-    const list = oldByPath.get(item.path) || []; list.push(item); oldByPath.set(item.path, list);
+  if (previous?.embeddingModel === model && previous.checkpointIdentity === checkpointIdentity) {
+    for (const item of previous.chunks) {
+      const list = oldByPath.get(item.path) || []; list.push(item); oldByPath.set(item.path, list);
+    }
   }
   const candidates = await listWorkspaceIndexCandidates(root);
   const pending = [], chunks = [];
@@ -140,31 +153,42 @@ export async function refreshWorkspaceSemanticIndex(inputRoot, {
   }
   for (let offset = 0; offset < pending.length; offset += 24) {
     const batch = pending.slice(offset, offset + 24);
-    const vectors = await embed(batch.map(item => item.text), model, fetchImpl, signal);
+    const generated = await embed(batch.map(item => item.text), model, fetchImpl, signal);
+    if (generated.checkpointIdentity !== checkpointIdentity) {
+      throw new Error("The native checkpoint changed during semantic-index refresh; retry the operation.");
+    }
     for (let i = 0; i < batch.length; i += 1) {
       const { text: _sourceTextNotPersisted, ...metadata } = batch[i];
-      chunks.push({ ...metadata, vector: vectors[i] });
+      chunks.push({ ...metadata, vector: generated.embeddings[i] });
     }
   }
-  const dimensions = chunks[0]?.vector?.length || 0;
+  const dimensions = chunks[0]?.vector?.length || identityProbe.embeddings[0]?.length || 0;
   if (chunks.some(item => item.vector.length !== dimensions)) throw new Error("Semantic index contains inconsistent vector dimensions.");
-  const index = { schemaVersion: 1, root, embeddingModel: model, dimensions, indexedAt: new Date().toISOString(),
+  const index = { schemaVersion: 1, root, embeddingModel: model, checkpointIdentity, dimensions, indexedAt: new Date().toISOString(),
     scannedFiles, scannedBytes, truncated: candidates.truncated || candidates.files.length > MAX_FILES || chunks.length >= MAX_CHUNKS, chunks };
   await writeIndex(root, index);
-  return { available: true, root, embeddingModel: model, indexedAt: index.indexedAt, chunkCount: chunks.length,
+  return { available: true, root, embeddingModel: model, checkpointIdentity, indexedAt: index.indexedAt, chunkCount: chunks.length,
     dimensions, scannedFiles, scannedBytes, reusedChunks, skippedFiles, truncated: index.truncated };
 }
 export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
-  fetchImpl = globalThis.fetch, model = process.env.SYNTRA_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL, signal
+  fetchImpl = globalThis.fetch, model = DEFAULT_EMBEDDING_MODEL, signal
 } = {}) {
   const root = await resolveWorkspace(inputRoot);
   if (model !== DEFAULT_EMBEDDING_MODEL) throw new Error("SYNTRA semantic retrieval uses only its native checkpoint embeddings.");
   if (typeof query !== "string" || query.trim().length < 2 || query.length > 300) throw new Error("Semantic query must contain 2-300 characters.");
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("Semantic result limit must be an integer from 1 to 20.");
   const index = await readIndex(root);
-  if (!index || index.embeddingModel !== model) return { available: false, root, query, results: [], reason: "semantic_index_missing_or_embedding_model_changed" };
-  const [queryVector] = await embed([query.trim()], model, fetchImpl, signal);
-  if (queryVector.length !== index.dimensions) throw new Error("Query embedding dimensions do not match the saved index. Refresh it with the current embedding model.");
+  if (!index || index.embeddingModel !== model) return { available: false, root, query, results: [], reason: "semantic_index_missing_or_invalid" };
+  const queryResult = await embed([query.trim()], model, fetchImpl, signal);
+  if (queryResult.checkpointIdentity !== index.checkpointIdentity) {
+    return {
+      available: false, root, query, results: [],
+      reason: "native_checkpoint_changed_refresh_required",
+      checkpointIdentity: queryResult.checkpointIdentity
+    };
+  }
+  const [queryVector] = queryResult.embeddings;
+  if (queryVector.length !== index.dimensions) throw new Error("Query embedding dimensions do not match the saved native checkpoint. Refresh the semantic index.");
   const ranked = index.chunks.map(item => ({ ...item, score: cosineSimilarity(queryVector, item.vector) }))
     .filter(item => item.score >= 0).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path) || a.startLine - b.startLine);
   const results = [], checked = new Map();
@@ -183,5 +207,6 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
     const excerpt = source.content.split(/\r?\n/).slice(item.startLine - 1, item.endLine).join("\n").slice(0, MAX_CHUNK_CHARS);
     results.push({ path: item.path, startLine: item.startLine, endLine: item.endLine, score: Number(item.score.toFixed(5)), sha256: item.sha256, excerpt });
   }
-  return { available: true, root, query: query.trim(), embeddingModel: model, results, staleResults: ranked.length - results.length };
+  return { available: true, root, query: query.trim(), embeddingModel: model,
+    checkpointIdentity: index.checkpointIdentity, results, staleResults: ranked.length - results.length };
 }

@@ -37,6 +37,7 @@ function fakeEmbeddings(url, options) {
   assert.equal(body.max_length, 256);
   const input = body.texts;
   return Promise.resolve(new Response(JSON.stringify({
+    checkpoint_identity: fakeEmbeddings.checkpointIdentity || "d".repeat(64),
     embeddings: input.map(text => {
       const value = String(text).toLowerCase();
       return [value.includes("gateway") || value.includes("network") ? 1 : 0,
@@ -44,23 +45,35 @@ function fakeEmbeddings(url, options) {
     })
   }), { status: 200 }));
 }
-test("semantic index stores vectors and revalidates source hashes before returning excerpts", async () => {
+test("semantic index invalidates vectors when the native checkpoint changes", async () => {
   const root = await makeWorkspace();
   try {
+    fakeEmbeddings.checkpointIdentity = "d".repeat(64);
     const options = { fetchImpl: fakeEmbeddings, model: "syntra-native" };
     const built = await refreshWorkspaceSemanticIndex(root, options);
     assert.equal(built.available, true);
+    assert.equal(built.checkpointIdentity, fakeEmbeddings.checkpointIdentity);
     assert.ok(built.chunkCount > 0);
-    assert.equal((await getSemanticIndexStatus(root)).available, true);
+    assert.equal((await getSemanticIndexStatus(root)).checkpointIdentity, fakeEmbeddings.checkpointIdentity);
     const result = await searchWorkspaceSemantic(root, "find gateway configuration", 5, options);
     assert.equal(result.available, true);
     assert.equal(result.results[0].path, "src/network.mjs");
     assert.match(result.results[0].excerpt, /resolveGateway/);
+
+    fakeEmbeddings.checkpointIdentity = "e".repeat(64);
+    const changedCheckpoint = await searchWorkspaceSemantic(root, "find gateway configuration", 5, options);
+    assert.equal(changedCheckpoint.available, false);
+    assert.equal(changedCheckpoint.reason, "native_checkpoint_changed_refresh_required");
+    const refreshed = await refreshWorkspaceSemanticIndex(root, options);
+    assert.equal(refreshed.checkpointIdentity, fakeEmbeddings.checkpointIdentity);
+    assert.equal(refreshed.reusedChunks, 0, "a new checkpoint must not reuse old native vectors");
+
     await fs.writeFile(path.join(root, "src", "network.mjs"), "export const changed = true;\n", "utf8");
     const stale = await searchWorkspaceSemantic(root, "find gateway configuration", 5, options);
     assert.equal(stale.results.length, 0);
     assert.ok(stale.staleResults > 0);
   } finally {
+    delete fakeEmbeddings.checkpointIdentity;
     await fs.rm(root, { recursive: true, force: true });
   }
 });
