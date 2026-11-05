@@ -711,6 +711,51 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(result["audit"]["split_available"])
             self.assertEqual(result["audit"]["prompt_leakage_groups"], 0)
 
+    def test_ast_curriculum_emits_grounded_module_symbol_and_patch_records(self):
+        from syntra_ai.curriculum import synthesize_repository_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-ast-curriculum-") as temp:
+            root = Path(temp)
+            source = root / "sentinels.py"
+            source.write_text(
+                '"""Utilities for sentinel checks and bounded arithmetic."""\\n'
+                "from typing import Optional\\n"
+                "__all__ = ['is_missing', 'clamp_value']\\n\\n"
+                "def is_missing(value):\\n"
+                "    return value == None\\n\\n"
+                "def clamp_value(value, lower, upper):\\n"
+                "    return min(max(value, lower), upper)\\n",
+                encoding="utf-8",
+            )
+            output = root / "curriculum.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_repository_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=40,
+                )
+
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            kinds = {record["kind"] for record in records}
+            self.assertIn("module_comprehension", kinds)
+            self.assertIn("symbol_implementation", kinds)
+            self.assertIn("anchor_patch_repair", kinds)
+            module_record = next(item for item in records if item["kind"] == "module_comprehension")
+            self.assertIn("Utilities for sentinel checks", module_record["completion"])
+            self.assertIn("from typing import Optional", module_record["completion"])
+            implementation = next(
+                item for item in records
+                if item["kind"] == "symbol_implementation" and "is_missing" in item["prompt"]
+            )
+            self.assertIn("return value == None", implementation["completion"])
+            patch_record = next(item for item in records if item["kind"] == "anchor_patch_repair")
+            patch_payload = json.loads(patch_record["completion"])
+            self.assertEqual(patch_payload["edits"][0]["path"], "sentinels.py")
+            self.assertEqual(patch_payload["edits"][0]["find"], "value == None")
+            self.assertEqual(patch_payload["edits"][0]["replace"], "value is None")
+            self.assertTrue(result["audit"]["valid"])
+            self.assertGreaterEqual(result["example_count"], 4)
+
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_real_training_checkpoint_and_supervised_prompt_masking(self):
         from syntra_ai.instruction import finetune, load_instruction_examples
