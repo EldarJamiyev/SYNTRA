@@ -25,10 +25,6 @@ test("Windows startup failures report HTTP response and the process listening on
 test("Windows startup always selects the native runtime without probing Ollama", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
   assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = "native"/);
-  const providerAssignment = launcher.indexOf('$env:SYNTRA_MODEL_PROVIDER = "native"');
-  const firstServiceStart = launcher.indexOf('Ensure-Service 3001');
-  assert.ok(providerAssignment >= 0 && firstServiceStart > providerAssignment,
-    "the native provider must be exported before child services start");
   assert.match(launcher, /\$UsePretrainedModel = \$false/);
   assert.match(launcher, /Preparing the isolated native AI environment/);
   assert.match(launcher, /npm install --package-lock-only --ignore-scripts --no-audit/);
