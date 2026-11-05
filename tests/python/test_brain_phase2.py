@@ -89,6 +89,91 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         path.write_text(source, encoding="utf-8")
         return source
 
+    def test_instruction_context_blocks_mask_prompt_and_supervise_response(self):
+        from brain.tokenizer import BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        records = [{
+            "prompt": "Write a function that returns the larger integer.",
+            "completion": "def larger(a, b): return a if a >= b else b",
+        }]
+        tokenizer = BytePairTokenizer.empty()
+        inputs, targets = _instruction_context_blocks(records, tokenizer, block_size=128)
+
+        self.assertEqual(len(inputs), 1)
+        self.assertEqual(len(targets), 1)
+        prompt_prefix = "Instruction:\\n" + records[0]["prompt"] + "\\nResponse:\\n"
+        prompt_token_count = len(tokenizer.encode(prompt_prefix))
+        self.assertTrue(all(token == -100 for token in targets[0][:prompt_token_count]))
+        self.assertNotEqual(targets[0][prompt_token_count], -100)
+        self.assertIn(257, targets[0], "EOS must remain supervised after the response.")
+
+    def test_structured_jsonl_reader_and_plain_text_fallback(self):
+        from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-jsonl-loader-") as temp:
+            root = Path(temp)
+            structured = root / "instructions.jsonl"
+            structured.write_text(
+                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values."}) + "\\n" +
+                json.dumps({"prompt": "Explain multiplication.", "completion": "Multiply the two values."}),
+                encoding="utf-8",
+            )
+            plain = root / "legacy.jsonl"
+            plain.write_text("legacy source text\\nwith a second line\\n" * 100, encoding="utf-8")
+
+            records, files, byte_count, fingerprint = _read_instruction_jsonl_datasets([root], 1024 * 1024)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(records[0]["prompt"], "Explain addition.")
+            self.assertEqual(records[1]["completion"], "Multiply the two values.")
+            self.assertEqual(len(files), 1)
+            self.assertGreater(byte_count, 0)
+            self.assertEqual(len(fingerprint), 64)
+
+            train_text, validation_text, raw_files, _, _ = _read_local_datasets(
+                [root], 1024 * 1024, exclude_paths=set(files)
+            )
+            self.assertIn("legacy source text", train_text + validation_text)
+            self.assertEqual(len(raw_files), 1)
+
+    def test_structured_jsonl_training_saves_masked_training_format(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-jsonl-train-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            records = [
+                {"Instruction": "Write a function that adds two integers.", "Response": "def add(a, b): return a + b"},
+                {"Instruction": "Write a function that multiplies two integers.", "Response": "def multiply(a, b): return a * b"},
+                {"Instruction": "Write a function that clamps an integer.", "Response": "def clamp(x, low, high): return min(max(x, low), high)"},
+                {"Instruction": "Write a function that returns the larger integer.", "Response": "def larger(a, b): return max(a, b)"},
+            ]
+            dataset.write_text("\\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            checkpoint = root / "checkpoints" / "instruction-model.pt"
+
+            result = train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=2,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertEqual(result["instruction_examples"], 4)
+            self.assertGreater(result["training_tokens"], 0)
+            self.assertGreater(result["validation_tokens"], 0)
+
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(saved["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertEqual(saved["instruction_example_count"], 4)
+            self.assertGreater(saved["training_context_blocks"], 0)
+
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata
         from brain.train import train
