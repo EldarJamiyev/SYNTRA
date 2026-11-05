@@ -102,7 +102,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
 
         self.assertEqual(len(inputs), 1)
         self.assertEqual(len(targets), 1)
-        prompt_prefix = "Instruction:\\n" + records[0]["prompt"] + "\\nResponse:\\n"
+        prompt_prefix = "Instruction:\n" + records[0]["prompt"] + "\nResponse:\n"
         prompt_token_count = len(tokenizer.encode(prompt_prefix))
         self.assertTrue(all(token == -100 for token in targets[0][:prompt_token_count]))
         self.assertNotEqual(targets[0][prompt_token_count], -100)
@@ -115,12 +115,12 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             root = Path(temp)
             structured = root / "instructions.jsonl"
             structured.write_text(
-                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values."}) + "\\n" +
+                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values."}) + "\n" +
                 json.dumps({"prompt": "Explain multiplication.", "completion": "Multiply the two values."}),
                 encoding="utf-8",
             )
             plain = root / "legacy.jsonl"
-            plain.write_text("legacy source text\\nwith a second line\\n" * 100, encoding="utf-8")
+            plain.write_text("legacy source text\nwith a second line\n" * 100, encoding="utf-8")
 
             records, files, byte_count, fingerprint = _read_instruction_jsonl_datasets([root], 1024 * 1024)
             self.assertEqual(len(records), 2)
@@ -149,7 +149,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 {"Instruction": "Write a function that clamps an integer.", "Response": "def clamp(x, low, high): return min(max(x, low), high)"},
                 {"Instruction": "Write a function that returns the larger integer.", "Response": "def larger(a, b): return max(a, b)"},
             ]
-            dataset.write_text("\\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
             checkpoint = root / "checkpoints" / "instruction-model.pt"
 
             result = train(
