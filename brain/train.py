@@ -724,6 +724,9 @@ def train(
             "train_loss": last_train_loss,
             "validation_loss": last_validation_loss,
             "dataset_sha256": dataset_hash,
+            "training_data_format": training_data_format,
+            "instruction_example_count": len(instruction_records),
+            "training_context_blocks": chunk_count,
             "dataset_files": dataset_files,
             "dataset_bytes": dataset_bytes,
             "training_settings": {
@@ -756,8 +759,12 @@ def train(
             "parameter_count": parameter_count,
             "dataset_files": len(dataset_files),
             "dataset_bytes": dataset_bytes,
-            "training_tokens": int(train_ids.numel()),
-            "validation_tokens": int(validation_ids.numel()),
+            "training_tokens": int((train_targets != -100).sum().item()),
+            "validation_tokens": int((validation_targets != -100).sum().item()),
+            "training_context_blocks": int(train_inputs.shape[0]),
+            "validation_context_blocks": int(validation_inputs.shape[0]),
+            "instruction_examples": len(instruction_records),
+            "training_data_format": training_data_format,
             "vocab_size": tokenizer.vocab_size,
             "message": message,
         }
@@ -781,7 +788,7 @@ def train(
             indices = epoch_order[begin : begin + batch_size]
             if indices.numel() == 0:
                 continue
-            x, y = _batch(train_ids, indices, block_size, device)
+            x, y = _batch(train_inputs, indices, block_size, device, train_targets)
 
             current_step_in_run += 1
             optimizer.zero_grad(set_to_none=True)
@@ -809,10 +816,11 @@ def train(
             if should_evaluate:
                 last_validation_loss = _estimate_validation_loss(
                     model,
-                    validation_ids,
+                    validation_inputs,
                     block_size,
                     device,
                     evaluation_batches,
+                    validation_targets,
                 )
                 if best_validation_loss is None or last_validation_loss < best_validation_loss:
                     best_validation_loss = last_validation_loss
