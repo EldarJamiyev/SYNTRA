@@ -325,7 +325,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
           ? [1, 0, 0, 0, 0, 0, 0, 0]
           : [0, 1, 0, 0, 0, 0, 0, 0]
       );
-      return new Response(JSON.stringify({ embeddings }), {
+      return new Response(JSON.stringify({ embeddings, checkpoint_identity: "a".repeat(64) }), {
         status: 200, headers: { "Content-Type": "application/json" }
       });
     };
@@ -349,7 +349,8 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
     const stored = await fs.readFile(cachePath, "utf8");
     const cache = JSON.parse(stored);
     assert.equal(cache.schemaVersion, 2);
-    assert.equal(cache.model, "syntra-native");
+    assert.equal(cache.model, "syntra-native:" + "a".repeat(64));
+    assert.equal(first.checkpointIdentity, "a".repeat(64));
     assert.ok(cache.entries.length > first.semanticCoverage);
     assert.ok(cache.entries.every(entry =>
       typeof entry.path === "string"

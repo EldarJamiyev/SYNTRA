@@ -1086,6 +1086,9 @@ async function requestSourceEmbeddings(fetchImpl, model, inputs) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(String(payload.error || "SYNTRA native embedding service returned HTTP " + response.status + "."));
+  if (!/^[a-f0-9]{64}$/i.test(payload.checkpoint_identity || "")) {
+    throw new Error("SYNTRA native runtime did not identify the checkpoint that generated these embeddings.");
+  }
   if (!payload || !Array.isArray(payload.embeddings) || payload.embeddings.length !== inputs.length) {
     throw new Error("SYNTRA native runtime returned an invalid semantic embedding response.");
   }
@@ -1094,7 +1097,7 @@ async function requestSourceEmbeddings(fetchImpl, model, inputs) {
     || !payload.embeddings.every(vector => validSemanticVector(vector, dimension))) {
     throw new Error("SYNTRA native runtime returned invalid or inconsistent semantic vectors.");
   }
-  return { dimension, embeddings: payload.embeddings };
+  return { dimension, embeddings: payload.embeddings, checkpointIdentity: payload.checkpoint_identity };
 }
 
 function semanticCosineSimilarity(left, right) {
@@ -1229,7 +1232,14 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
       };
     }
 
-    const cache = await readSemanticCache(root, model);
+    // Embed the query first so it identifies the exact native checkpoint
+    // before any cached source vectors are considered for reuse.
+    const queryBatch = await requestSourceEmbeddings(fetchImpl, model, [normalized]);
+    const cacheModel = model + ":" + queryBatch.checkpointIdentity;
+    const cache = await readSemanticCache(root, cacheModel);
+    if (cache.dimension !== null && cache.dimension !== queryBatch.dimension) {
+      throw new Error("The native checkpoint embedding dimension changed without a matching checkpoint identity.");
+    }
     const cacheByKey = new Map(cache.entries.map(entry => [
       entry.path + "\\0" + entry.chunkIndex, entry
     ]));
@@ -1246,34 +1256,35 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
       }
     }
 
-    const inputs = [...missing.map(item => item.embeddingText), normalized];
     const generated = [];
-    let dimension = cache.dimension;
-    for (let offset = 0; offset < inputs.length; offset += MAX_EMBEDDING_BATCH) {
+    let dimension = queryBatch.dimension;
+    for (let offset = 0; offset < missing.length; offset += MAX_EMBEDDING_BATCH) {
       const batch = await requestSourceEmbeddings(
-        fetchImpl, model, inputs.slice(offset, offset + MAX_EMBEDDING_BATCH)
+        fetchImpl, model, missing.slice(offset, offset + MAX_EMBEDDING_BATCH).map(item => item.embeddingText)
       );
-      if (dimension !== null && dimension !== batch.dimension) {
-        throw new Error("The local semantic model returned a different vector dimension than the cached workspace index.");
+      if (batch.checkpointIdentity !== queryBatch.checkpointIdentity) {
+        throw new Error("The native checkpoint changed during semantic indexing; retry the search.");
       }
-      dimension = batch.dimension;
+      if (dimension !== batch.dimension) {
+        throw new Error("The native semantic model returned a different vector dimension within one search.");
+      }
       generated.push(...batch.embeddings);
     }
-    if (generated.length !== inputs.length) {
-      throw new Error("Local semantic embedding generation returned an incomplete vector set.");
+    if (generated.length !== missing.length) {
+      throw new Error("SYNTRA native semantic embedding generation returned an incomplete vector set.");
     }
 
     missing.forEach((item, index) => {
       vectorsByKey.set(item.path + "\\0" + item.chunkIndex, generated[index]);
     });
-    const queryEmbedding = generated[generated.length - 1];
+    const queryEmbedding = queryBatch.embeddings[0];
     const serializedEntries = selectedChunks.filter(item =>
       vectorsByKey.has(item.path + "\\0" + item.chunkIndex)
     ).map(item => ({
       path: item.path, chunkIndex: item.chunkIndex,
       textHash: item.textHash, embedding: vectorsByKey.get(item.path + "\\0" + item.chunkIndex)
     }));
-    await writeSemanticCache(root, model, dimension, serializedEntries);
+    await writeSemanticCache(root, cacheModel, dimension, serializedEntries);
 
     const bestByPath = new Map();
     for (const item of selectedChunks) {
@@ -1300,6 +1311,7 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
     return {
       available: true, root, query: normalized, retrievalMode: "semantic",
       embeddingModel: model,
+      checkpointIdentity: queryBatch.checkpointIdentity,
       semanticCoverage: semanticFileCoverage,
       semanticChunkCoverage: serializedEntries.length,
       indexedCandidates: sourceFiles.length,

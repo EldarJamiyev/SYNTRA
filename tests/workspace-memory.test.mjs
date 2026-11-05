@@ -81,7 +81,7 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
           ? [1, 0, 0, 0, 0, 0, 0, 0]
           : [0, 1, 0, 0, 0, 0, 0, 0];
       });
-      return new Response(JSON.stringify({ embeddings }), {
+      return new Response(JSON.stringify({ embeddings, checkpoint_identity: "b".repeat(64) }), {
         status: 200, headers: { "Content-Type": "application/json" }
       });
     };
@@ -105,7 +105,8 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
       path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"
     ));
     assert.equal(cache.schemaVersion, 1);
-    assert.equal(cache.model, "syntra-native");
+    assert.equal(cache.model, "syntra-native:" + "b".repeat(64));
+    assert.equal(first.checkpointIdentity, "b".repeat(64));
     assert.equal(cache.root, await fs.realpath(root));
     assert.equal(cache.entries.length, 2);
     assert.ok(cache.entries.every(entry => !("content" in entry)));

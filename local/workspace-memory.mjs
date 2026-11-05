@@ -274,8 +274,11 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     body: JSON.stringify({ texts: input, max_length: 256, device: "auto" }),
     signal: AbortSignal.timeout(4000)
   });
-  if (!response.ok) throw new Error("SYNTRA native embedding service returned HTTP " + response.status + ".");
   const payload = await response.json();
+  if (!response.ok) throw new Error(String(payload.error || "SYNTRA native embedding service returned HTTP " + response.status + "."));
+  if (!/^[a-f0-9]{64}$/i.test(payload.checkpoint_identity || "")) {
+    throw new Error("SYNTRA native runtime did not identify the checkpoint that generated these embeddings.");
+  }
   if (!payload || !Array.isArray(payload.embeddings) || payload.embeddings.length !== input.length) {
     throw new Error("SYNTRA native runtime returned an invalid embedding response.");
   }
@@ -284,7 +287,7 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))) {
     throw new Error("SYNTRA native runtime returned an invalid or inconsistent embedding dimension.");
   }
-  return { dimension, embeddings: payload.embeddings };
+  return { dimension, embeddings: payload.embeddings, checkpointIdentity: payload.checkpoint_identity };
 }
 
 function cosineSimilarity(left, right) {
@@ -304,7 +307,13 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
   if (model !== NATIVE_EMBEDDING_MODEL) throw new Error("SYNTRA project memory accepts only native checkpoint embeddings.");
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (typeof fetchImpl !== "function") throw new Error("SYNTRA native embeddings are unavailable in this runtime.");
-  const cache = await readMemoryEmbeddingCache(root, model);
+  // Identify the active checkpoint before reusing any saved note vectors.
+  const queryBatch = await requestLocalEmbeddings(fetchImpl, [query]);
+  const cacheModel = model + ":" + queryBatch.checkpointIdentity;
+  const cache = await readMemoryEmbeddingCache(root, cacheModel);
+  if (cache.dimension !== null && cache.dimension !== queryBatch.dimension) {
+    throw new Error("The native checkpoint embedding dimension changed without a matching checkpoint identity.");
+  }
   const noteById = new Map(store.notes.map(note => [note.id, note]));
   const validEntries = cache.entries.filter(entry => {
     const note = noteById.get(entry.noteId);
@@ -317,20 +326,21 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
   const selected = [...new Map([...lexicalCandidates, ...recent].map(note => [note.id, note])).values()]
     .slice(0, MAX_SEMANTIC_INDEX_NOTES);
   const missing = selected.filter(note => !vectorById.has(note.id));
-  let dimension = cache.dimension;
-  const inputs = [...missing.map(note => memoryEmbeddingText(note)), query];
+  let dimension = queryBatch.dimension;
   const vectors = [];
-  for (let offset = 0; offset < inputs.length; offset += EMBEDDING_BATCH_SIZE) {
+  for (let offset = 0; offset < missing.length; offset += EMBEDDING_BATCH_SIZE) {
     const batch = await requestLocalEmbeddings(
-      fetchImpl, inputs.slice(offset, offset + EMBEDDING_BATCH_SIZE)
+      fetchImpl, missing.slice(offset, offset + EMBEDDING_BATCH_SIZE).map(note => memoryEmbeddingText(note))
     );
-    if (dimension !== null && dimension !== batch.dimension) {
-      throw new Error("The local embedding model returned a different vector size than the cached memory index.");
+    if (batch.checkpointIdentity !== queryBatch.checkpointIdentity) {
+      throw new Error("The native checkpoint changed during project-memory embedding; retry the search.");
     }
-    dimension = batch.dimension;
+    if (dimension !== batch.dimension) {
+      throw new Error("The native embedding model returned a different vector size within one search.");
+    }
     vectors.push(...batch.embeddings);
   }
-  if (vectors.length !== inputs.length) throw new Error("Local embedding generation returned an incomplete vector set.");
+  if (vectors.length !== missing.length) throw new Error("SYNTRA native embedding generation returned an incomplete vector set.");
   const newEntries = missing.map((note, index) => ({
     noteId: note.id,
     textHash: memoryTextHash(memoryEmbeddingText(note)),
@@ -344,8 +354,8 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
       textHash: memoryTextHash(memoryEmbeddingText(note)),
       embedding: vectorById.get(note.id)
     }));
-  await writeMemoryEmbeddingCache(root, model, dimension, currentEntries);
-  const queryEmbedding = vectors[vectors.length - 1];
+  await writeMemoryEmbeddingCache(root, cacheModel, dimension, currentEntries);
+  const queryEmbedding = queryBatch.embeddings[0];
   const lexicalById = new Map(ranked.map(item => [item.note.id, item.score]));
   const maxLexical = Math.max(1, ...ranked.map(item => item.score));
   const semanticRanked = [];
@@ -368,6 +378,7 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
   return {
     retrievalMode: "hybrid_semantic",
     embeddingModel: model,
+    checkpointIdentity: queryBatch.checkpointIdentity,
     semanticCoverage: currentEntries.length,
     results: semanticRanked
   };
@@ -419,6 +430,7 @@ export async function searchWorkspaceMemory(inputRoot, query, limit = 6, options
       root, query, total: store.notes.length,
       retrievalMode: semantic.retrievalMode,
       embeddingModel: semantic.embeddingModel,
+      checkpointIdentity: semantic.checkpointIdentity,
       semanticCoverage: semantic.semanticCoverage,
       results: semantic.results.slice(0, limit).map(({ note, score, semanticScore, lexicalScore }) => ({
         id: note.id, title: note.title, content: note.content.slice(0, 1800),

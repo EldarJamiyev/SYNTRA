@@ -4,6 +4,7 @@ from codecs import getincrementaldecoder
 from pathlib import Path
 from threading import RLock
 from typing import Any, Iterator
+import hashlib
 import json
 import math
 import os
@@ -180,6 +181,22 @@ def clear_resident_cache() -> None:
         _RESIDENT_CACHE.clear()
 
 
+def _checkpoint_identity(path: str | Path | None = None) -> str | None:
+    """Identify the current full checkpoint and its selected inference companion."""
+    source = Path(path or checkpoint_path()).expanduser().resolve()
+    try:
+        selected = select_inference_checkpoint(source)
+        parts = []
+        for candidate in dict.fromkeys((source, selected)):
+            info = candidate.stat()
+            parts.append(
+                f"{candidate}\0{info.st_dev}\0{info.st_ino}\0{info.st_size}\0{info.st_mtime_ns}"
+            )
+    except OSError:
+        return None
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
 def status() -> dict:
     path = checkpoint_path()
     metadata_path = path.with_suffix(path.suffix + ".json")
@@ -197,6 +214,7 @@ def status() -> dict:
         "service": "SYNTRA native local Transformer",
         "backend": "PyTorch",
         "checkpoint": str(path),
+        "checkpoint_identity": _checkpoint_identity(path) if checkpoint_exists else None,
         "checkpoint_exists": checkpoint_exists,
         "trained_steps": int(metadata.get("step", 0)),
         "parameter_count": int(metadata.get("parameter_count", 0)),
@@ -275,6 +293,7 @@ def embed_texts(
         "dimensions": config.n_embd,
         "model": "syntra-native-transformer",
         "checkpoint": str(target),
+        "checkpoint_identity": _checkpoint_identity(),
         "trained_steps": int(saved.get("step", 0)),
         "local_only": True,
     }

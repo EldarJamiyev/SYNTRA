@@ -215,6 +215,29 @@ class TransformerTests(unittest.TestCase):
             self.assertIn("optimizer_state", recovered,
                           "a corrupted inference companion must fall back to the full checkpoint")
 
+    def test_checkpoint_identity_changes_when_native_checkpoint_revision_changes(self):
+        from syntra_ai.runtime import _checkpoint_identity
+        from syntra_ai.training import inference_checkpoint_path
+
+        with tempfile.TemporaryDirectory(prefix="syntra-checkpoint-identity-") as temp:
+            checkpoint = Path(temp) / "model.pt"
+            checkpoint.write_bytes(b"checkpoint-one")
+            first = _checkpoint_identity(checkpoint)
+            self.assertRegex(first, r"^[a-f0-9]{64}$")
+
+            companion = inference_checkpoint_path(checkpoint)
+            companion.write_bytes(b"inference-one")
+            future = checkpoint.stat().st_mtime_ns + 2_000_000_000
+            os.utime(companion, ns=(future, future))
+            second = _checkpoint_identity(checkpoint)
+            self.assertNotEqual(first, second)
+
+            companion.write_bytes(b"inference-two-with-different-weights")
+            newer = future + 2_000_000_000
+            os.utime(companion, ns=(newer, newer))
+            third = _checkpoint_identity(checkpoint)
+            self.assertNotEqual(second, third)
+
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):
         from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
 
