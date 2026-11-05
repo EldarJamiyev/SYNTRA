@@ -16,6 +16,7 @@ from pathlib import Path
 import sys
 from time import perf_counter
 from typing import Callable, Iterable
+import unicodedata
 
 import torch
 
@@ -31,6 +32,8 @@ from .tokenizer import BOS_ID, EOS_ID, BytePairTokenizer
 DEFAULT_DATASET = Path("dataset.txt")
 DEFAULT_CHECKPOINT = Path("checkpoints") / "syntra-brain.pt"
 MAX_DATASET_BYTES = 256 * 1024 * 1024
+MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
+MAX_PACKED_CONTEXT_TOKENS = 10_000_000
 ProgressCallback = Callable[[dict], None]
 
 
@@ -122,6 +125,7 @@ def _iter_local_source_files(source: Path):
 def _read_local_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
+    exclude_paths: set[str] | None = None,
 ) -> tuple[str, str, list[str], int, str]:
     """Read bounded local text/code files and produce a stable corpus fingerprint."""
     documents: list[str] = []
@@ -136,6 +140,8 @@ def _read_local_datasets(
         try:
             source = path.resolve(strict=True)
             for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
+                if exclude_paths and str(resolved) in exclude_paths:
+                    continue
                 if resolved in seen:
                     continue
                 seen.add(resolved)
@@ -191,6 +197,234 @@ def _read_local_datasets(
         raise ValueError("The local corpus is too small to create separate training and validation splits.")
     return train_text, validation_text, names, total_bytes, digest.hexdigest()
 
+
+
+def _read_instruction_jsonl_datasets(
+    paths: Iterable[str | os.PathLike[str]],
+    max_dataset_bytes: int,
+) -> tuple[list[dict[str, str]], list[str], int, str]:
+    """Read structured prompt/response JSONL files; leave ordinary text for the legacy reader."""
+    records: list[dict[str, str]] = []
+    names: list[str] = []
+    digest = sha256()
+    total_bytes = 0
+    seen: set[Path] = set()
+
+    for raw_path in paths:
+        path = Path(raw_path).expanduser()
+        try:
+            source = path.resolve(strict=True)
+            for resolved, relative_name, _explicitly_selected in _iter_local_source_files(source):
+                if resolved.suffix.casefold() != ".jsonl" or resolved in seen:
+                    continue
+                seen.add(resolved)
+                raw = resolved.read_bytes()
+                if not raw:
+                    continue
+                if total_bytes + len(raw) > max_dataset_bytes:
+                    raise ValueError(
+                        f"Structured instruction datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
+                    )
+                try:
+                    text = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    # The general reader will raise for an explicitly selected invalid UTF-8 file.
+                    continue
+
+                file_records: list[dict[str, str]] = []
+                structured = True
+                nonempty_lines = 0
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    if not line.strip():
+                        continue
+                    nonempty_lines += 1
+                    if len(line.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES:
+                        raise ValueError(
+                            f"Instruction JSONL record in {relative_name}:{line_number} exceeds "
+                            f"{MAX_INSTRUCTION_RECORD_BYTES:,} bytes."
+                        )
+                    try:
+                        item = json.loads(line)
+                    except json.JSONDecodeError:
+                        structured = False
+                        break
+                    if not isinstance(item, dict):
+                        structured = False
+                        break
+                    fields = {str(key).casefold(): value for key, value in item.items()}
+                    instruction = fields.get("instruction", fields.get("prompt"))
+                    response = fields.get("response", fields.get("completion", fields.get("output")))
+                    if (
+                        not isinstance(instruction, str)
+                        or not isinstance(response, str)
+                        or not instruction.strip()
+                        or not response.strip()
+                    ):
+                        structured = False
+                        break
+                    if (
+                        len(instruction.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES
+                        or len(response.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES
+                    ):
+                        raise ValueError(
+                            f"Instruction/response field in {relative_name}:{line_number} exceeds "
+                            f"{MAX_INSTRUCTION_RECORD_BYTES:,} bytes."
+                        )
+                    file_records.append({
+                        "prompt": instruction.strip(),
+                        "completion": response.strip(),
+                        "source_path": relative_name,
+                        "source_line": str(line_number),
+                    })
+
+                # A JSONL file is treated as structured only when every non-blank
+                # record has a supported prompt/response shape. Otherwise it is
+                # retained as ordinary text by the backwards-compatible reader.
+                if not structured or not nonempty_lines or not file_records:
+                    continue
+
+                total_bytes += len(raw)
+                names.append(str(resolved))
+                relative_bytes = relative_name.encode("utf-8")
+                digest.update(len(relative_bytes).to_bytes(8, "big"))
+                digest.update(relative_bytes)
+                digest.update(len(raw).to_bytes(8, "big"))
+                digest.update(raw)
+                records.extend(file_records)
+        except ValueError:
+            raise
+        except OSError as exc:
+            raise ValueError(f"Cannot read local instruction dataset {path}: {exc}") from None
+
+    return records, names, total_bytes, digest.hexdigest()
+
+
+def _split_instruction_records(
+    records: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Split by normalized instruction groups to prevent repeated-prompt leakage."""
+    if not records:
+        return [], []
+    groups: dict[str, list[dict[str, str]]] = {}
+    for record in records:
+        normalized = " ".join(unicodedata.normalize("NFKC", record["prompt"]).casefold().split())
+        group_id = sha256(normalized.encode("utf-8")).hexdigest()
+        groups.setdefault(group_id, []).append(record)
+    if len(groups) < 2:
+        raise ValueError(
+            "Structured instruction training needs at least two distinct prompts "
+            "so validation can remain separate from training."
+        )
+    validation_count = max(1, int(len(groups) * 0.1))
+    validation_count = min(validation_count, len(groups) - 1)
+    ranked = sorted(
+        groups,
+        key=lambda key: sha256(("syntra-brain-instruction-split-v1:" + key).encode("utf-8")).hexdigest(),
+    )
+    validation_groups = set(ranked[:validation_count])
+    training = [
+        item for item in records
+        if sha256(
+            " ".join(unicodedata.normalize("NFKC", item["prompt"]).casefold().split()).encode("utf-8")
+        ).hexdigest() not in validation_groups
+    ]
+    validation = [
+        item for item in records
+        if sha256(
+            " ".join(unicodedata.normalize("NFKC", item["prompt"]).casefold().split()).encode("utf-8")
+        ).hexdigest() in validation_groups
+    ]
+    if not training or not validation:
+        raise ValueError("The instruction dataset did not produce non-empty train and validation sets.")
+    return training, validation
+
+
+def _append_context_block(
+    input_ids: list[int],
+    target_ids: list[int],
+    block_size: int,
+    input_blocks: list[list[int]],
+    target_blocks: list[list[int]],
+) -> None:
+    if not input_ids or len(input_ids) != len(target_ids):
+        return
+    if len(input_ids) > block_size:
+        raise ValueError("Internal context block exceeds the configured block size.")
+    padding = block_size - len(input_ids)
+    input_blocks.append(input_ids + [EOS_ID] * padding)
+    target_blocks.append(target_ids + [-100] * padding)
+
+
+def _raw_context_blocks(
+    text: str,
+    tokenizer: BytePairTokenizer,
+    block_size: int,
+) -> tuple[list[list[int]], list[list[int]]]:
+    """Pack legacy raw text into fixed, shuffled causal context blocks."""
+    if not text.strip():
+        return [], []
+    token_ids = [BOS_ID, *tokenizer.encode(text), EOS_ID]
+    inputs: list[list[int]] = []
+    targets: list[list[int]] = []
+    for start in range(0, max(0, len(token_ids) - 1), block_size):
+        window = token_ids[start:start + block_size + 1]
+        if len(window) < 2:
+            continue
+        x, y = window[:-1], window[1:]
+        if y:
+            _append_context_block(x, y, block_size, inputs, targets)
+        if (len(inputs) * block_size) > MAX_PACKED_CONTEXT_TOKENS:
+            raise ValueError("Packed raw context exceeds the SYNTRA training token safety limit.")
+    return inputs, targets
+
+
+def _instruction_context_blocks(
+    records: list[dict[str, str]],
+    tokenizer: BytePairTokenizer,
+    block_size: int,
+) -> tuple[list[list[int]], list[list[int]]]:
+    """Pack prompt/response examples; mask prompt targets and supervise response plus EOS only."""
+    inputs: list[list[int]] = []
+    targets: list[list[int]] = []
+    for record in records:
+        prompt = "Instruction:\\n" + record["prompt"].strip() + "\\nResponse:\\n"
+        prompt_ids = tokenizer.encode(prompt)
+        response_ids = tokenizer.encode(record["completion"])
+        if not response_ids:
+            continue
+        sequence = [BOS_ID, *prompt_ids, *response_ids, EOS_ID]
+        first_response_target = 1 + len(prompt_ids)
+        # Start at the final context window before the response when instructions
+        # are longer than the model window. Subsequent blocks overlap by one token.
+        start = max(0, first_response_target - block_size)
+        while start < len(sequence) - 1:
+            window = sequence[start:start + block_size + 1]
+            if len(window) < 2:
+                break
+            x, y = window[:-1], window[1:]
+            for index in range(len(y)):
+                target_position = start + index + 1
+                if target_position < first_response_target:
+                    y[index] = -100
+            if any(token != -100 for token in y):
+                _append_context_block(x, y, block_size, inputs, targets)
+            if (len(inputs) * block_size) > MAX_PACKED_CONTEXT_TOKENS:
+                raise ValueError("Packed instruction contexts exceed the SYNTRA training token safety limit.")
+            start += block_size
+    return inputs, targets
+
+
+def _stack_context_blocks(
+    inputs: list[list[int]],
+    targets: list[list[int]],
+    label: str,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if not inputs or len(inputs) != len(targets):
+        raise ValueError(f"The {label} data did not produce any supervised context blocks.")
+    return (
+        torch.tensor(inputs, dtype=torch.long),
+        torch.tensor(targets, dtype=torch.long),
+    )
 
 def _batch(
     data: torch.Tensor,
