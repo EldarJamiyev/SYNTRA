@@ -1,15 +1,15 @@
 ---
 name: syntra-native-pytorch
-description: Use when changing brain/, syntra_ai/, model-provider selection, startup, training, checkpoints, tokenization, inference, or training-corpus handling in SYNTRA.
+description: Use when changing brain/, syntra_ai/, the native runtime, startup, training, checkpoints, tokenization, inference, or training-corpus handling in SYNTRA.
 ---
 
 # SYNTRA Native PyTorch Runtime
 
 ## Non-negotiable product direction
 
-SYNTRA's owned local PyTorch brain is the target model architecture. Do not introduce, require, or silently fall back to Ollama, Hugging Face model downloads, OpenAI or other hosted inference APIs, third-party model registries, remote pretrained weights, or external inference services. Do not restore an external provider as a startup prerequisite.
+SYNTRA's owned local PyTorch brain is the only supported model architecture. Do not introduce, require, or silently fall back to any other model runtime, downloaded weights, third-party model registry, hosted inference API, remote embedding service, or external AI dependency. Do not restore an alternate model selection or inference path as a startup prerequisite.
 
-The intended model path is trained and run locally from approved local data with SYNTRA-owned code and checkpoints. Verify actual current code before changing provider logic. The checked-in README may describe legacy or optional integration paths; do not treat those as authorization to make an external runtime part of normal startup. Do not delete an existing path without checking its callers, tests, and current user requirements.
+The model is trained and run locally from approved local data with SYNTRA-owned code, tokenizer, embedding path, and checkpoints. Verify actual current code before changing runtime or startup behavior. Keep generation, review, tokenization, source retrieval, and project-memory embeddings on the same native checkpoint. Do not delete an existing project capability without checking its callers, tests, and current user requirements.
 
 ## Model and data integrity
 
@@ -22,9 +22,9 @@ The intended model path is trained and run locally from approved local data with
 - Exclude secrets and sensitive data from corpus synthesis. Never expand data collection beyond the explicitly approved roots.
 - Treat a from-scratch small model honestly: a successful train or load proves that the operation ran, not that the model is capable of a particular level of coding or reasoning.
 
-## Startup and provider behavior
+## Startup and native-engine behavior
 
-The normal one-click startup must not depend on an Ollama process or a downloaded third-party model. Verify the launcher's actual environment handling and the Python setup path. Remove stale provider assumptions only when the evidence identifies them as a defect, and preserve the native provider as the actual default.
+The normal one-click startup prepares the isolated Python environment, validates or trains SYNTRA's own checkpoint, and starts the native inference service. It must not select, probe, start, or install any alternate AI runtime. Verify the launcher's actual environment handling and the Python setup path. The native engine is the only supported runtime, not a fallback option.
 
 A missing checkpoint, failed training step, invalid dataset, or failed Python dependency installation must produce an explicit, actionable failure. Do not report the model as ready until the real runtime has loaded a valid native checkpoint and can perform the requested operation.
 
