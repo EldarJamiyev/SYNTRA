@@ -1063,7 +1063,7 @@ async function updateAgentRunUnlocked(inputRoot, runId, patch = {}) {
   }
   if (patch.model && typeof patch.model === "object" && !Array.isArray(patch.model)) {
     next.model = {
-      provider: String(patch.model.provider || "unknown").slice(0, 80),
+      engine: String(patch.model.engine || "syntra-native").slice(0, 80),
       name: String(patch.model.name || "unknown").slice(0, 120),
       contextWindowTokens: Number.isFinite(patch.model.contextWindowTokens)
         ? Math.max(0, Math.min(1_000_000, Math.floor(patch.model.contextWindowTokens))) : 0,

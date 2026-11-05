@@ -316,11 +316,11 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
     let requests = 0;
     const fetchImpl = async (url, options) => {
       requests += 1;
-      assert.equal(url, "http://127.0.0.1:11434/api/embed");
+      assert.equal(url, "http://127.0.0.1:3002/model/embed");
+      assert.equal(options.redirect, "error");
       const body = JSON.parse(options.body);
-      assert.equal(body.model, "fixture-embedding-model");
-      assert.equal(body.truncate, false);
-      const embeddings = body.input.map(input =>
+      assert.equal(body.device, "auto");
+      const embeddings = body.texts.map(input =>
         /canonical event envelope/i.test(input)
           ? [1, 0, 0, 0, 0, 0, 0, 0]
           : [0, 1, 0, 0, 0, 0, 0, 0]
@@ -334,7 +334,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
       root,
       "Where are incoming webhook payloads normalized into a canonical event envelope before dispatch?",
       8,
-      { embedModel: "fixture-embedding-model", fetchImpl }
+      { embedModel: "syntra-native", fetchImpl }
     );
     assert.equal(first.retrievalMode, "semantic");
     assert.ok(first.semanticChunkCoverage > first.semanticCoverage,
@@ -349,7 +349,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
     const stored = await fs.readFile(cachePath, "utf8");
     const cache = JSON.parse(stored);
     assert.equal(cache.schemaVersion, 2);
-    assert.equal(cache.model, "fixture-embedding-model");
+    assert.equal(cache.model, "syntra-native");
     assert.ok(cache.entries.length > first.semanticCoverage);
     assert.ok(cache.entries.every(entry =>
       typeof entry.path === "string"
@@ -365,7 +365,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
       root,
       "Find the code that prepares webhook events for dispatch.",
       8,
-      { embedModel: "fixture-embedding-model", fetchImpl }
+      { embedModel: "syntra-native", fetchImpl }
     );
     assert.equal(second.retrievalMode, "semantic");
     assert.equal(requests, callsBeforeCachedSearch + 1,
@@ -376,7 +376,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
       root,
       "Where is the canonical webhook event normalized?",
       8,
-      { embedModel: "fixture-embedding-model", fetchImpl }
+      { embedModel: "syntra-native", fetchImpl }
     );
     assert.ok(stale.staleFiles >= 1);
     assert.equal(stale.results.some(item => item.path === "src/router.ts"), false,
@@ -386,12 +386,12 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
   }
 });
 
-test("semantic source search falls back cleanly when local Ollama embeddings are unavailable", async () => {
+test("semantic source search falls back cleanly when native checkpoint embeddings are unavailable", async () => {
   const root = await createProject();
   try {
     await refreshWorkspaceIndex(root);
     const result = await searchWorkspaceSemantic(root, "Gateway client routing", 6, {
-      embedModel: "missing-local-embedding-model",
+      embedModel: "syntra-native",
       fetchImpl: async () => { throw new Error("connection refused"); }
     });
     assert.equal(result.retrievalMode, "lexical_fallback");

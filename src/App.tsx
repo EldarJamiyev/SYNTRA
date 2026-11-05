@@ -90,7 +90,7 @@ type AgentRunSummary = {
 };
 
 type NativeAiStatus = {
-  provider?: string;
+  backend?: string;
   model_name?: string;
   checkpoint_exists?: boolean;
   parameters?: number;
@@ -912,7 +912,7 @@ export default function App() {
                 <div className="workspace-agent-runs-heading">Native AI runtime</div>
                 <div className="workspace-memory-subtitle">
                   {nativeAiStatus
-                    ? `${nativeAiStatus.provider || 'local'} · ${nativeAiStatus.checkpoint_exists ? 'Weights ready' : 'Untrained weights'}${nativeAiStatus.context_tokens ? ` · ${nativeAiStatus.context_tokens} ctx` : ''}`
+                    ? `${nativeAiStatus.backend || 'PyTorch'} · ${nativeAiStatus.checkpoint_exists ? 'Weights ready' : 'Untrained weights'}${nativeAiStatus.context_tokens ? ` · ${nativeAiStatus.context_tokens} ctx` : ''}`
                     : 'Local runtime status'}
                 </div>
               </div>

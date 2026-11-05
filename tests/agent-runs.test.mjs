@@ -64,11 +64,11 @@ test("agent run records persist the task plan, context, checkpoint, and event hi
     assert.equal(restored.events.at(-1).message, "Patch checkpoint saved.");
     await updateAgentRun(root, created.id, {
       model: {
-        provider: "ollama-local", name: "qwen-local",
+        engine: "syntra-native", name: "SYNTRA native Transformer",
         contextWindowTokens: 8192, contextBudgetTokens: 5570, outputBudgetTokens: 1024
       }
     });
-    assert.equal((await getAgentRun(root, created.id)).model.name, "qwen-local");
+    assert.equal((await getAgentRun(root, created.id)).model.name, "SYNTRA native Transformer");
     await updateAgentRun(root, created.id, {
       observations: [
         { kind: "git.status", stage: "baseline", status: "observed", detail: "## main" },

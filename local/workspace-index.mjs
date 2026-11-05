@@ -1067,25 +1067,32 @@ async function writeSemanticCache(root, model, dimension, entries) {
   }
 }
 
+const NATIVE_SEMANTIC_EMBEDDING_MODEL = "syntra-native";
+
 async function requestSourceEmbeddings(fetchImpl, model, inputs) {
-  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > MAX_EMBEDDING_BATCH) {
-    throw new Error("Local semantic embedding batches must contain 1-32 texts.");
+  if (model !== NATIVE_SEMANTIC_EMBEDDING_MODEL) {
+    throw new Error("SYNTRA source indexing accepts only embeddings from its own trained checkpoint.");
   }
-  const response = await fetchImpl("http://127.0.0.1:11434/api/embed", {
+  if (!Array.isArray(inputs) || inputs.length < 1 || inputs.length > MAX_EMBEDDING_BATCH) {
+    throw new Error("Native semantic embedding batches must contain 1-32 texts.");
+  }
+  const aiPort = Number(process.env.SYNTRA_AI_PORT || 3002);
+  const response = await fetchImpl(`http://127.0.0.1:${aiPort}/model/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, input: inputs, truncate: false }),
-    signal: AbortSignal.timeout(30000)
+    redirect: "error",
+    body: JSON.stringify({ texts: inputs, device: "auto" }),
+    signal: AbortSignal.timeout(120000)
   });
-  if (!response.ok) throw new Error("Local Ollama semantic embedding request failed with HTTP " + response.status + ".");
-  const payload = await response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(String(payload.error || "SYNTRA native embedding service returned HTTP " + response.status + "."));
   if (!payload || !Array.isArray(payload.embeddings) || payload.embeddings.length !== inputs.length) {
-    throw new Error("Local Ollama returned an invalid semantic embedding response.");
+    throw new Error("SYNTRA native runtime returned an invalid semantic embedding response.");
   }
   const dimension = payload.embeddings[0]?.length;
   if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
     || !payload.embeddings.every(vector => validSemanticVector(vector, dimension))) {
-    throw new Error("Local Ollama returned invalid or inconsistent semantic vectors.");
+    throw new Error("SYNTRA native runtime returned invalid or inconsistent semantic vectors.");
   }
   return { dimension, embeddings: payload.embeddings };
 }
@@ -1138,7 +1145,10 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, optio
     throw new Error("Semantic source search limit must be an integer from 1 to 20.");
   }
   const normalized = query.trim();
-  const model = String(options.embedModel ?? process.env.SYNTRA_EMBED_MODEL ?? "").trim();
+  const model = String(options.embedModel ?? NATIVE_SEMANTIC_EMBEDDING_MODEL).trim();
+  if (model !== NATIVE_SEMANTIC_EMBEDDING_MODEL) {
+    throw new Error("SYNTRA semantic source search uses only the native checkpoint embedding model.");
+  }
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   if (!model) {
     const lexical = await searchWorkspace(root, normalized, limit);

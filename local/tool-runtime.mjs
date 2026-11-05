@@ -78,14 +78,14 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workspace.semantic.status",
-    description: "Read status for the optional local Ollama semantic embedding index.",
+    description: "Read status for the semantic index built from SYNTRA's own trained checkpoint embeddings.",
     permission: "read_only",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
   },
   {
     name: "workspace.semantic.refresh",
-    description: "Build or refresh a local vector index with Ollama embeddings. Stores vectors and source hashes, never source text; requires an installed local embedding model.",
+    description: "Build or refresh a local vector index with SYNTRA's native checkpoint embeddings. Stores vectors and source hashes, never source text; requires a trained local checkpoint.",
     permission: "local_state_write",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
