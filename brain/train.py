@@ -392,7 +392,7 @@ def _instruction_context_blocks(
     inputs: list[list[int]] = []
     targets: list[list[int]] = []
     for record in records:
-        prompt = "Instruction:\\n" + record["prompt"].strip() + "\\nResponse:\\n"
+        prompt = "Instruction:\n" + record["prompt"].strip() + "\nResponse:\n"
         prompt_ids = tokenizer.encode(prompt)
         response_ids = tokenizer.encode(record["completion"])
         if not response_ids:
@@ -604,10 +604,10 @@ def train(
         torch.cuda.manual_seed_all(seed)
 
     training_instruction_text = [
-        "Instruction:\\n" + item["prompt"] + "\\nResponse:\\n" + item["completion"]
+        "Instruction:\n" + item["prompt"] + "\nResponse:\n" + item["completion"]
         for item in training_records
     ]
-    tokenizer_training_text = "\\n\\n".join(
+    tokenizer_training_text = "\n\n".join(
         item for item in [train_text, *training_instruction_text] if item.strip()
     )
 
