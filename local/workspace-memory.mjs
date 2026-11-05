@@ -261,32 +261,28 @@ async function writeMemoryEmbeddingCache(root, model, dimension, entries) {
   }
 }
 
-async function requestLocalEmbeddings(fetchImpl, model, input) {
+const NATIVE_EMBEDDING_MODEL = "syntra-native";
+
+async function requestLocalEmbeddings(fetchImpl, input) {
   if (!Array.isArray(input) || input.length < 1 || input.length > EMBEDDING_BATCH_SIZE) {
-    throw new Error("Local embedding batches must contain 1-32 texts.");
+    throw new Error("Native embedding batches must contain 1-32 texts.");
   }
-  const isNative = model === "syntra-native" || String(model || "").startsWith("syntra-");
-  const endpoint = isNative
-    ? `http://127.0.0.1:${Number(process.env.SYNTRA_AI_PORT || 3002)}/model/embed`
-    : "http://127.0.0.1:11434/api/embed";
-  const body = isNative
-    ? { texts: input, max_length: 256, device: "auto" }
-    : { model, input, truncate: false };
+  const endpoint = `http://127.0.0.1:${Number(process.env.SYNTRA_AI_PORT || 3002)}/model/embed`;
   const response = await fetchImpl(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(25000)
+    body: JSON.stringify({ texts: input, max_length: 256, device: "auto" }),
+    signal: AbortSignal.timeout(4000)
   });
-  if (!response.ok) throw new Error("Local Ollama embedding request failed with HTTP " + response.status + ".");
+  if (!response.ok) throw new Error("SYNTRA native embedding service returned HTTP " + response.status + ".");
   const payload = await response.json();
   if (!payload || !Array.isArray(payload.embeddings) || payload.embeddings.length !== input.length) {
-    throw new Error("Local Ollama returned an invalid embedding response.");
+    throw new Error("SYNTRA native runtime returned an invalid embedding response.");
   }
   const dimension = payload.embeddings[0]?.length;
   if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
     || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))) {
-    throw new Error("Local Ollama returned an invalid or inconsistent embedding dimension.");
+    throw new Error("SYNTRA native runtime returned an invalid or inconsistent embedding dimension.");
   }
   return { dimension, embeddings: payload.embeddings };
 }
@@ -304,10 +300,10 @@ function cosineSimilarity(left, right) {
 }
 
 async function searchMemorySemantically(root, store, query, ranked, options = {}) {
-  const model = String(options.embedModel ?? process.env.SYNTRA_EMBED_MODEL ?? "").trim();
-  if (!model) return null;
+  const model = String(options.embedModel ?? NATIVE_EMBEDDING_MODEL).trim();
+  if (model !== NATIVE_EMBEDDING_MODEL) throw new Error("SYNTRA project memory accepts only native checkpoint embeddings.");
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
-  if (typeof fetchImpl !== "function") throw new Error("Local Ollama embeddings are unavailable in this runtime.");
+  if (typeof fetchImpl !== "function") throw new Error("SYNTRA native embeddings are unavailable in this runtime.");
   const cache = await readMemoryEmbeddingCache(root, model);
   const noteById = new Map(store.notes.map(note => [note.id, note]));
   const validEntries = cache.entries.filter(entry => {
@@ -326,7 +322,7 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
   const vectors = [];
   for (let offset = 0; offset < inputs.length; offset += EMBEDDING_BATCH_SIZE) {
     const batch = await requestLocalEmbeddings(
-      fetchImpl, model, inputs.slice(offset, offset + EMBEDDING_BATCH_SIZE)
+      fetchImpl, inputs.slice(offset, offset + EMBEDDING_BATCH_SIZE)
     );
     if (dimension !== null && dimension !== batch.dimension) {
       throw new Error("The local embedding model returned a different vector size than the cached memory index.");
@@ -413,12 +409,9 @@ export async function searchWorkspaceMemory(inputRoot, query, limit = 6, options
     id: note.id, title: note.title, content: note.content.slice(0, 1800),
     category: note.category, tags: note.tags, updatedAt: note.updatedAt, owner: "user", score
   }));
-  const embeddingModel = String(options.embedModel ?? process.env.SYNTRA_EMBED_MODEL ?? "").trim();
-  if (!embeddingModel) {
-    return {
-      root, query, total: store.notes.length, retrievalMode: "bm25",
-      results: keywordResults
-    };
+  const embeddingModel = String(options.embedModel ?? NATIVE_EMBEDDING_MODEL).trim();
+  if (embeddingModel !== NATIVE_EMBEDDING_MODEL) {
+    throw new Error("SYNTRA project memory uses only embeddings produced by its own trained checkpoint.");
   }
   try {
     const semantic = await searchMemorySemantically(root, store, normalized, ranked, options);

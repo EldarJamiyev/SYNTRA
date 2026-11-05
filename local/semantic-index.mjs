@@ -10,22 +10,7 @@ const INDEX_NAME = "semantic-index-v1.json";
 const MAX_INDEX_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 500, MAX_CHUNKS = 600, MAX_CHUNK_CHARS = 2400;
 const CHUNK_LINES = 36, CHUNK_OVERLAP = 6;
-const DEFAULT_EMBEDDING_MODEL = "embeddinggemma";
-const DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434";
-
-export function resolveLocalOllamaBaseUrl(value = process.env.SYNTRA_OLLAMA_BASE_URL || DEFAULT_OLLAMA_BASE) {
-  let parsed;
-  try { parsed = new URL(value); }
-  catch { throw new Error("SYNTRA_OLLAMA_BASE_URL must be a valid loopback HTTP URL."); }
-  const host = parsed.hostname.toLowerCase();
-  if (parsed.protocol !== "http:"
-    || !["127.0.0.1", "localhost", "[::1]"].includes(host)
-    || parsed.username || parsed.password
-    || parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    throw new Error("Semantic embeddings are local-only: SYNTRA_OLLAMA_BASE_URL must target localhost, 127.0.0.1, or ::1 over HTTP without credentials or a URL path.");
-  }
-  return parsed.origin;
-}
+const DEFAULT_EMBEDDING_MODEL = "syntra-native";
 
 function cosineSimilarity(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return -1;
@@ -114,47 +99,23 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
 
 async function embed(texts, model, fetchImpl, signal) {
   if (!texts.length) return [];
-  if (model === "syntra-native" || String(model || "").startsWith("syntra-")) {
-    return embedViaNativeRuntime(texts, fetchImpl, signal);
+  if (model !== DEFAULT_EMBEDDING_MODEL) {
+    throw new Error("SYNTRA semantic retrieval accepts only embeddings produced by its own trained checkpoint.");
   }
-  const timeout = AbortSignal.timeout(120000);
-  let response;
-  try {
-    response = await fetchImpl(resolveLocalOllamaBaseUrl() + "/api/embed", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      redirect: "error",
-      body: JSON.stringify({ model, input: texts, truncate: true }),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout
-    });
-  } catch (ollamaError) {
-    if (fetchImpl === globalThis.fetch) {
-      try { return await embedViaNativeRuntime(texts, fetchImpl, signal); }
-      catch { /* preserve original Ollama error when native runtime is also offline */ }
-    }
-    throw ollamaError;
-  }
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(String(payload.error || "Ollama embeddings request failed with HTTP " + response.status));
-  if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length) throw new Error("Ollama returned an invalid embedding batch.");
-  const dims = payload.embeddings[0]?.length;
-  if (!Number.isInteger(dims) || dims < 8 || dims > 4096
-    || payload.embeddings.some(v => !Array.isArray(v) || v.length !== dims || v.some(n => !Number.isFinite(n)))) {
-    throw new Error("Ollama returned inconsistent or invalid embedding dimensions.");
-  }
-  return payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5))));
+  return embedViaNativeRuntime(texts, fetchImpl, signal);
 }
 
 export async function getSemanticIndexStatus(inputRoot) {
   const root = await resolveWorkspace(inputRoot), index = await readIndex(root);
   return index
     ? { available: true, root, embeddingModel: index.embeddingModel, indexedAt: index.indexedAt, chunkCount: index.chunks.length, dimensions: index.dimensions }
-    : { available: false, root, embeddingModel: process.env.SYNTRA_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL, chunkCount: 0, reason: "not_built_or_invalid" };
+    : { available: false, root, embeddingModel: DEFAULT_EMBEDDING_MODEL, chunkCount: 0, reason: "not_built_or_invalid" };
 }
 export async function refreshWorkspaceSemanticIndex(inputRoot, {
-  fetchImpl = globalThis.fetch, model = process.env.SYNTRA_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL, signal
+  fetchImpl = globalThis.fetch, model = DEFAULT_EMBEDDING_MODEL, signal
 } = {}) {
   const root = await resolveWorkspace(inputRoot);
-  if (typeof model !== "string" || !/^[a-zA-Z0-9._:-]{2,100}$/.test(model)) throw new Error("Invalid SYNTRA embedding model name.");
+  if (model !== DEFAULT_EMBEDDING_MODEL) throw new Error("SYNTRA semantic retrieval uses only its native checkpoint embeddings.");
   const previous = await readIndex(root), oldByPath = new Map();
   if (previous?.embeddingModel === model) for (const item of previous.chunks) {
     const list = oldByPath.get(item.path) || []; list.push(item); oldByPath.set(item.path, list);
@@ -197,6 +158,7 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
   fetchImpl = globalThis.fetch, model = process.env.SYNTRA_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL, signal
 } = {}) {
   const root = await resolveWorkspace(inputRoot);
+  if (model !== DEFAULT_EMBEDDING_MODEL) throw new Error("SYNTRA semantic retrieval uses only its native checkpoint embeddings.");
   if (typeof query !== "string" || query.trim().length < 2 || query.length > 300) throw new Error("Semantic query must contain 2-300 characters.");
   if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error("Semantic result limit must be an integer from 1 to 20.");
   const index = await readIndex(root);

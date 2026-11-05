@@ -71,11 +71,11 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     let requests = 0;
     const fetchImpl = async (url, options) => {
       requests += 1;
-      assert.equal(url, "http://127.0.0.1:11434/api/embed");
+      assert.equal(url, "http://127.0.0.1:3002/model/embed");
       const body = JSON.parse(options.body);
-      assert.equal(body.model, "test-embedding-model");
-      assert.equal(body.truncate, false);
-      const embeddings = body.input.map(input => {
+      assert.equal(body.max_length, 256);
+      assert.equal(body.device, "auto");
+      const embeddings = body.texts.map(input => {
         const text = input.toLowerCase();
         return /dns|network access|service name|name resolution|lookup timeout/.test(text)
           ? [1, 0, 0, 0, 0, 0, 0, 0]
@@ -86,10 +86,10 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
       });
     };
     const first = await searchWorkspaceMemory(root, "name resolution policy", 6, {
-      embedModel: "test-embedding-model", fetchImpl
+      embedModel: "syntra-native", fetchImpl
     });
     assert.equal(first.retrievalMode, "hybrid_semantic");
-    assert.equal(first.embeddingModel, "test-embedding-model");
+    assert.equal(first.embeddingModel, "syntra-native");
     assert.equal(first.results[0].id, network.note.id);
     assert.equal(first.semanticCoverage, 2);
     assert.equal(requests, 1);
@@ -105,7 +105,7 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
       path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"
     ));
     assert.equal(cache.schemaVersion, 1);
-    assert.equal(cache.model, "test-embedding-model");
+    assert.equal(cache.model, "syntra-native");
     assert.equal(cache.root, await fs.realpath(root));
     assert.equal(cache.entries.length, 2);
     assert.ok(cache.entries.every(entry => !("content" in entry)));
@@ -123,7 +123,7 @@ test("semantic project-memory search falls back to BM25 when the local embedding
       category: "convention"
     });
     const results = await searchWorkspaceMemory(root, "request identifiers", 6, {
-      embedModel: "missing-local-embedding-model",
+      embedModel: "syntra-native",
       fetchImpl: async () => { throw new Error("connection refused"); }
     });
     assert.equal(results.retrievalMode, "bm25_fallback");

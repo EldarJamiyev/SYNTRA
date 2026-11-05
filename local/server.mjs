@@ -6,7 +6,6 @@ import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
 import { classifyChatIntent, isCodingTask } from "./chat-intent.mjs";
-import { detectLocalModel, handleLocalModelRequest } from "./model-provider.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
@@ -67,16 +66,6 @@ async function parseBody(request) {
 async function aiRequest(method, route, body, timeoutMs = undefined, options = {}) {
   const onToken = typeof options?.onToken === "function" ? options.onToken : undefined;
   const signal = options?.signal;
-  const modelRoute = (method === "GET" && route === "/model/status")
-    || (method === "POST" && (route === "/model/tokenize" || route === "/model/generate"));
-  if (modelRoute) {
-    const provider = await detectLocalModel();
-    if (provider) {
-      const localResult = await handleLocalModelRequest(provider, method, route, body || {}, { timeoutMs, onToken, signal });
-      if (localResult) return localResult;
-    }
-  }
-
   const useNativeStream = Boolean(onToken && method === "POST" && route === "/model/generate");
   const requestBody = method === "GET" ? undefined : JSON.stringify(useNativeStream ? { ...(body || {}), stream: true } : (body || {}));
   const requestTimeout = timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000);

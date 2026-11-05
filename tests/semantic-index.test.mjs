@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { refreshWorkspaceSemanticIndex, searchWorkspaceSemantic, getSemanticIndexStatus, resolveLocalOllamaBaseUrl, splitIntoChunks } from "../local/semantic-index.mjs";
+import { refreshWorkspaceSemanticIndex, searchWorkspaceSemantic, getSemanticIndexStatus, splitIntoChunks } from "../local/semantic-index.mjs";
 
 async function makeWorkspace() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-semantic-test-"));
@@ -17,24 +17,25 @@ async function makeWorkspace() {
   ].join("\n"), "utf8");
   return root;
 }
-test("semantic embedding endpoint accepts loopback only and rejects remote data destinations", () => {
-  assert.equal(resolveLocalOllamaBaseUrl(), "http://127.0.0.1:11434");
-  assert.equal(resolveLocalOllamaBaseUrl("http://localhost:11434/"), "http://localhost:11434");
-  assert.equal(resolveLocalOllamaBaseUrl("http://[::1]:11435"), "http://[::1]:11435");
-  for (const value of [
-    "https://127.0.0.1:11434",
-    "http://192.168.1.20:11434",
-    "http://example.com:11434",
-    "http://user:pass@127.0.0.1:11434",
-    "http://127.0.0.1:11434/proxy",
-    "http://127.0.0.1:11434/?forward=1"
-  ]) assert.throws(() => resolveLocalOllamaBaseUrl(value), /local-only/);
+test("semantic retrieval accepts only the native SYNTRA checkpoint as its embedding model", async () => {
+  const root = await makeWorkspace();
+  try {
+    await assert.rejects(
+      () => refreshWorkspaceSemanticIndex(root, { model: "external-model" }),
+      /only its native checkpoint embeddings/
+    );
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 function fakeEmbeddings(url, options) {
-  assert.equal(url, "http://127.0.0.1:11434/api/embed");
-  assert.equal(options.redirect, "error", "embedding requests must not follow redirects to remote hosts");
-  const input = JSON.parse(options.body).input;
+  assert.equal(url, "http://127.0.0.1:3002/model/embed");
+  assert.equal(options.redirect, "error", "native embedding requests must not follow redirects");
+  const body = JSON.parse(options.body);
+  assert.equal(body.device, "auto");
+  assert.equal(body.max_length, 256);
+  const input = body.texts;
   return Promise.resolve(new Response(JSON.stringify({
     embeddings: input.map(text => {
       const value = String(text).toLowerCase();
@@ -46,7 +47,7 @@ function fakeEmbeddings(url, options) {
 test("semantic index stores vectors and revalidates source hashes before returning excerpts", async () => {
   const root = await makeWorkspace();
   try {
-    const options = { fetchImpl: fakeEmbeddings, model: "test-embedding" };
+    const options = { fetchImpl: fakeEmbeddings, model: "syntra-native" };
     const built = await refreshWorkspaceSemanticIndex(root, options);
     assert.equal(built.available, true);
     assert.ok(built.chunkCount > 0);
