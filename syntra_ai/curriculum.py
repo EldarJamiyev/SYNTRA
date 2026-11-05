@@ -298,9 +298,30 @@ def synthesize_repository_curriculum(
     if type(max_examples) is not int or not 4 <= max_examples <= MAX_INSTRUCTION_EXAMPLES:
         raise ValueError(f"max_examples must be between 4 and {MAX_INSTRUCTION_EXAMPLES:,}.")
 
-    corpus_root = resolve_corpus_root(root or PROJECT_ROOT)
-    target = resolve_curriculum_output_path(output_path, corpus_root)
-    corpus = load_corpus([corpus_root])
+    if root is None:
+        configured_roots = [
+            item.strip()
+            for item in os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS", "").split(os.pathsep)
+            if item.strip()
+        ]
+        root_candidates: list[str | Path] = [PROJECT_ROOT, *configured_roots]
+    else:
+        root_candidates = [root]
+
+    corpus_roots: list[Path] = []
+    seen_roots: set[str] = set()
+    for candidate in root_candidates:
+        approved = resolve_corpus_root(candidate)
+        key = os.path.normcase(os.fspath(approved))
+        if key not in seen_roots:
+            corpus_roots.append(approved)
+            seen_roots.add(key)
+    if not corpus_roots:
+        raise ValueError("No approved local repository roots were configured.")
+
+    output_root = corpus_roots[0]
+    target = resolve_curriculum_output_path(output_path, output_root)
+    corpus = load_corpus(corpus_roots)
     if len(corpus.files) != len(corpus.documents):
         raise RuntimeError("The bounded source reader returned inconsistent file/document counts.")
 
@@ -312,6 +333,7 @@ def synthesize_repository_curriculum(
         "symbol_comprehension": 0,
         "anchor_patch_repair": 0,
     }
+    module_count = 0
     symbol_count = 0
     patch_candidate_count = 0
 
@@ -338,13 +360,19 @@ def synthesize_repository_curriculum(
         if len(records) >= max_examples:
             break
         resolved = Path(source_path).resolve()
-        try:
-            relative_path = resolved.relative_to(corpus_root).as_posix()
-        except ValueError:
-            raise ValueError("A source file escaped the approved curriculum root.") from None
+        relative_path = None
+        for approved_root in corpus_roots:
+            try:
+                relative_path = resolved.relative_to(approved_root).as_posix()
+                break
+            except ValueError:
+                continue
+        if relative_path is None:
+            raise ValueError("A source file escaped all approved curriculum roots.")
         if not source_text.strip():
             continue
 
+        module_count += 1
         metadata = _module_metadata(relative_path, source_text)
         structure = metadata["structure"]
         add_pair(
@@ -435,8 +463,9 @@ def synthesize_repository_curriculum(
     audit = audit_instruction_dataset(target)
     return {
         "dataset_path": str(target),
-        "workspace_root": str(corpus_root),
+        "workspace_roots": [str(item) for item in corpus_roots],
         "source_files": len(corpus.files),
+        "module_count": module_count,
         "symbol_count": symbol_count,
         "patch_candidate_count": patch_candidate_count,
         "example_count": len(records),
