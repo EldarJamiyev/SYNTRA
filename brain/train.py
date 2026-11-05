@@ -431,7 +431,18 @@ def _batch(
     chunk_indices: torch.Tensor,
     block_size: int,
     device: torch.device,
+    target_blocks: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if data.ndim == 2:
+        if target_blocks is None or target_blocks.shape != data.shape:
+            raise ValueError("Prepacked context blocks require a matching target-block tensor.")
+        indices = chunk_indices.to(dtype=torch.long, device="cpu")
+        return (
+            data.index_select(0, indices).to(device),
+            target_blocks.index_select(0, indices).to(device),
+        )
+    if data.ndim != 1 or target_blocks is not None:
+        raise ValueError("Legacy token streams must be one-dimensional and cannot include target blocks.")
     starts = (chunk_indices * block_size).tolist()
     x = torch.stack([data[start : start + block_size] for start in starts])
     y = torch.stack([data[start + 1 : start + block_size + 1] for start in starts])
@@ -445,19 +456,26 @@ def _estimate_validation_loss(
     block_size: int,
     device: torch.device,
     batches: int,
+    validation_targets: torch.Tensor | None = None,
 ) -> float:
+    was_training = model.training
     model.eval()
     values: list[float] = []
-    available_chunks = max(1, (validation_data.numel() - 1) // block_size)
+    if validation_data.ndim == 2:
+        if validation_targets is None or validation_targets.shape != validation_data.shape:
+            raise ValueError("Prepacked validation contexts require matching target blocks.")
+        available_chunks = validation_data.shape[0]
+    else:
+        available_chunks = max(1, (validation_data.numel() - 1) // block_size)
     for _ in range(batches):
         count = min(8, available_chunks)
         starts = torch.randint(0, available_chunks, (count,), device="cpu")
-        x, y = _batch(validation_data, starts, block_size, device)
+        x, y = _batch(validation_data, starts, block_size, device, validation_targets)
         _, loss = model(x, y)
         if loss is None or not torch.isfinite(loss).item():
             raise RuntimeError("Validation produced a non-finite loss.")
         values.append(float(loss.item()))
-    model.train()
+    model.train(was_training)
     return sum(values) / len(values)
 
 
