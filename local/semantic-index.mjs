@@ -54,7 +54,8 @@ async function readIndex(root) {
   if (stat.size > MAX_INDEX_BYTES) return null;
   try {
     const data = JSON.parse(await fs.readFile(target, "utf8"));
-    if (data?.schemaVersion !== 1 || data.root !== root || typeof data.embeddingModel !== "string"
+    if (data?.schemaVersion !== 1 || data.root !== root || data.embeddingModel !== DEFAULT_EMBEDDING_MODEL
+      || !/^[a-f0-9]{64}$/i.test(data.checkpointIdentity || "")
       || !Number.isInteger(data.dimensions) || data.dimensions < 8 || data.dimensions > 4096
       || !Array.isArray(data.chunks) || data.chunks.length > MAX_CHUNKS) return null;
     const valid = data.chunks.filter(item => item && typeof item.path === "string"
@@ -117,8 +118,8 @@ async function embed(texts, model, fetchImpl, signal) {
 export async function getSemanticIndexStatus(inputRoot) {
   const root = await resolveWorkspace(inputRoot), index = await readIndex(root);
   return index
-    ? { available: true, root, embeddingModel: index.embeddingModel, indexedAt: index.indexedAt, chunkCount: index.chunks.length, dimensions: index.dimensions }
-    : { available: false, root, embeddingModel: DEFAULT_EMBEDDING_MODEL, chunkCount: 0, reason: "not_built_or_invalid" };
+    ? { available: true, root, embeddingModel: index.embeddingModel, checkpointIdentity: index.checkpointIdentity, indexedAt: index.indexedAt, chunkCount: index.chunks.length, dimensions: index.dimensions }
+    : { available: false, root, embeddingModel: DEFAULT_EMBEDDING_MODEL, checkpointIdentity: null, chunkCount: 0, reason: "not_built_or_invalid" };
 }
 export async function refreshWorkspaceSemanticIndex(inputRoot, {
   fetchImpl = globalThis.fetch, model = DEFAULT_EMBEDDING_MODEL, signal
