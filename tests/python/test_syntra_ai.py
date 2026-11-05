@@ -795,10 +795,10 @@ class TransformerTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch.object(curriculum, "PROJECT_ROOT", project), \\
-                 patch.object(safe_paths, "PROJECT_ROOT", project), \\
-                 patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(external)}):
-                result = curriculum.synthesize_repository_curriculum(max_examples=20)
+            with patch.object(curriculum, "PROJECT_ROOT", project):
+                with patch.object(safe_paths, "PROJECT_ROOT", project):
+                    with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(external)}):
+                        result = curriculum.synthesize_repository_curriculum(max_examples=20)
 
             self.assertEqual(result["workspace_roots"], [str(project), str(external)])
             self.assertGreaterEqual(result["source_files"], 2)
