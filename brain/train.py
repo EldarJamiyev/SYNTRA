@@ -126,6 +126,8 @@ def _read_local_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
     exclude_paths: set[str] | None = None,
+    allow_empty: bool = False,
+    require_holdout: bool = True,
 ) -> tuple[str, str, list[str], int, str]:
     """Read bounded local text/code files and produce a stable corpus fingerprint."""
     documents: list[str] = []
@@ -181,6 +183,8 @@ def _read_local_datasets(
             raise ValueError(f"Cannot read local dataset {path}: {exc}") from None
 
     if not documents or not any(document.strip() for document in documents):
+        if allow_empty:
+            return "", "", names, total_bytes, digest.hexdigest()
         raise ValueError(
             "No readable UTF-8 source files were found. Select a text/code file or a project folder."
         )
@@ -194,9 +198,10 @@ def _read_local_datasets(
     train_text = combined[:split_at]
     validation_text = combined[split_at:]
     if not train_text.strip() or not validation_text.strip():
-        raise ValueError("The local corpus is too small to create separate training and validation splits.")
+        if require_holdout:
+            raise ValueError("The local corpus is too small to create separate training and validation splits.")
+        return combined, "", names, total_bytes, digest.hexdigest()
     return train_text, validation_text, names, total_bytes, digest.hexdigest()
-
 
 
 def _read_instruction_jsonl_datasets(
