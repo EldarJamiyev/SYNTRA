@@ -197,6 +197,32 @@ def _checkpoint_identity(path: str | Path | None = None) -> str | None:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+def _resident_cache_matches_checkpoint(path: str | Path) -> bool:
+    """Report a resident model only while its cached files match the current checkpoint."""
+    target = Path(path).expanduser().resolve()
+    try:
+        selected = select_inference_checkpoint(target)
+        source_stat = target.stat()
+        selected_stat = selected.stat()
+    except OSError:
+        return False
+
+    with _CACHE_LOCK:
+        cached = _RESIDENT_CACHE.get(str(target))
+    if cached is None:
+        return False
+
+    signature = cached[0]
+    current_files = (
+        source_stat.st_mtime_ns,
+        source_stat.st_size,
+        str(selected),
+        selected_stat.st_mtime_ns,
+        selected_stat.st_size,
+    )
+    return isinstance(signature, tuple) and signature[:5] == current_files
+
+
 def status() -> dict:
     path = checkpoint_path()
     metadata_path = path.with_suffix(path.suffix + ".json")
@@ -230,7 +256,7 @@ def status() -> dict:
         "training_mode": metadata.get("training_mode", "causal-source-pretraining"),
         "pretrained_weights": False,
         "external_ai_api": False,
-        "resident_in_memory": str(path) in _RESIDENT_CACHE,
+        "resident_in_memory": _resident_cache_matches_checkpoint(path),
         "capabilities": {
             "unifiedBrainCheckpoint": True,
             "residentCache": True,
