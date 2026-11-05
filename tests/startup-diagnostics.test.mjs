@@ -22,14 +22,20 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
-test("Windows startup defaults to automatic local inference and propagates the selection to services", async () => {
+test("Windows startup always selects the native runtime without probing Ollama", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.match(launcher, /else\s*\{\s*"auto"\s*\}/);
-  assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER\s*=\s*\$providerMode/);
-  assert.match(launcher, /@\("auto", "native", "ollama", "gemini"\) -notcontains \$providerMode/);
-  assert.match(launcher, /SYNTRA_MODEL_PROVIDER must be auto, native, ollama, or gemini/);
-  assert.match(launcher, /\$providerMode -ne "native" -and \$providerMode -ne "gemini"/);
-  assert.doesNotMatch(launcher, /else\s*\{\s*"ollama"\s*\}/);
+  assert.match(launcher, /\$env:SYNTRA_MODEL_PROVIDER = "native"/);
+  const providerAssignment = launcher.indexOf('$env:SYNTRA_MODEL_PROVIDER = "native"');
+  const firstServiceStart = launcher.indexOf('Ensure-Service 3001');
+  assert.ok(providerAssignment >= 0 && firstServiceStart > providerAssignment,
+    "the native provider must be exported before child services start");
+  assert.match(launcher, /\$UsePretrainedModel = \$false/);
+  assert.match(launcher, /Preparing the isolated native AI environment/);
+  assert.match(launcher, /npm install --package-lock-only --ignore-scripts --no-audit/);
+  assert.match(launcher, /npm ci/);
+  assert.match(launcher, /Ensure-Service 3002 "http:\/\/127\.0\.0\.1:3002\/health" "ai:server"/);
+  assert.match(launcher, /Python 3\.12 or newer/);
+  assert.doesNotMatch(launcher, /Get-Command ollama|127\.0\.0\.1:11434|ollama serve|SYNTRA_REVIEW_MODEL/);
 });
 
 test("Vite startup keeps console output visible in its own service window", async () => {
