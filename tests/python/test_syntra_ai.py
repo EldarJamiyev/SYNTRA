@@ -760,13 +760,13 @@ class TransformerTests(unittest.TestCase):
         from syntra_ai.curriculum import _module_metadata
 
         source = (
-            '"""Module documentation."""\\n'
-            "DEFAULT_LIMIT = 128\\n\\n"
-            "class Calculator:\\n"
-            "    def add(self, left, right):\\n"
-            "        return left + right\\n\\n"
-            "def normalize(value):\\n"
-            "    return value.strip()\\n"
+            '"""Module documentation."""\n'
+            "DEFAULT_LIMIT = 128\n\n"
+            "class Calculator:\n"
+            "    def add(self, left, right):\n"
+            "        return left + right\n\n"
+            "def normalize(value):\n"
+            "    return value.strip()\n"
         )
         metadata = _module_metadata("calculator.py", source)
         self.assertIn("Calculator", metadata["exports"])
@@ -785,13 +785,13 @@ class TransformerTests(unittest.TestCase):
             project.mkdir()
             external.mkdir()
             (project / "inside.py").write_text(
-                '"""Project-root module."""\\n'
-                "def inside(value):\\n    return value + 1\\n",
+                '"""Project-root module."""\n'
+                "def inside(value):\n    return value + 1\n",
                 encoding="utf-8",
             )
             (external / "outside.py").write_text(
-                '"""Approved external module."""\\n'
-                "def outside(value):\\n    return value * 2\\n",
+                '"""Approved external module."""\n'
+                "def outside(value):\n    return value * 2\n",
                 encoding="utf-8",
             )
 
