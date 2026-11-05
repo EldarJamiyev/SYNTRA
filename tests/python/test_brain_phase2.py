@@ -188,9 +188,9 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 {"Instruction": "Explain subtraction.", "Response": "Subtraction finds a difference."},
                 {"Instruction": "Explain division.", "Response": "Division splits a value into parts."},
             ]
-            instructions.write_text("\\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            instructions.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
             raw = root / "legacy.txt"
-            raw.write_text(("Legacy raw corpus remains part of causal language-model training.\\n" * 120), encoding="utf-8")
+            raw.write_text(("Legacy raw corpus remains part of causal language-model training.\n" * 120), encoding="utf-8")
             checkpoint = root / "checkpoints" / "mixed-model.pt"
 
             result = train(
