@@ -148,7 +148,7 @@ npm run ai:curriculum
 To select one approved repository root, choose an explicit output file, and bound the generated dataset:
 
 ```powershell
-python scripts/run_syntra_module.py cli curriculum --root "D:\\Datasets\\MySource" --output "D:\\Datasets\\MySource\\syntra-curriculum.jsonl" --max-examples 240
+python scripts/run_syntra_module.py cli curriculum --root "D:\Datasets\MySource" --output "D:\Datasets\MySource\syntra-curriculum.jsonl" --max-examples 240
 ```
 
 The generated JSONL contains source-grounded module-comprehension, symbol-implementation, symbol-comprehension, and supported anchor-patch examples. Python files are parsed with the standard-library AST; other supported source files use bounded declaration-aware chunks. A repair example is emitted only when the generator can identify an exact source anchor and a deterministic transformation. It does not invent failures or patch tasks for arbitrary code.
@@ -156,7 +156,7 @@ The generated JSONL contains source-grounded module-comprehension, symbol-implem
 Train the standalone brain directly on the generated file:
 
 ```powershell
-npm run brain:train -- --dataset "D:\\Datasets\\MySource\\syntra-curriculum.jsonl" --epochs 3 --device auto
+npm run brain:train -- --dataset "D:\Datasets\MySource\syntra-curriculum.jsonl" --epochs 3 --device auto
 ```
 
 The brain trainer accepts `Instruction`/`Response` and `prompt`/`completion` JSONL records. Prompt tokens are masked from the supervised loss; response tokens and EOS remain supervised. Ordinary UTF-8 text/code sources keep the existing causal raw-token training path, including mixed raw-text and instruction datasets.
