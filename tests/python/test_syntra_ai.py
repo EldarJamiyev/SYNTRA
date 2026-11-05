@@ -238,6 +238,42 @@ class TransformerTests(unittest.TestCase):
             third = _checkpoint_identity(checkpoint)
             self.assertNotEqual(second, third)
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_embed_texts_uses_the_explicit_checkpoint_identity(self):
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import _checkpoint_identity, embed_texts
+
+        with tempfile.TemporaryDirectory(prefix="syntra-explicit-embedding-checkpoint-") as temp:
+            root = Path(temp)
+            checkpoint = root / "selected-model.pt"
+            unavailable_default = root / "default-model-does-not-exist.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            tokenizer = ByteBPETokenizer.empty()
+            model = SyntraTransformer(config)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
+                "model_state": model.state_dict(),
+                "step": 7,
+                "training_mode": "causal-source-pretraining",
+            }, checkpoint)
+
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(unavailable_default)}):
+                result = embed_texts(
+                    ["explicit checkpoint identity regression"],
+                    path=checkpoint,
+                    device_name="cpu",
+                )
+
+            self.assertEqual(result["checkpoint"], str(checkpoint.resolve()))
+            self.assertEqual(result["checkpoint_identity"], _checkpoint_identity(checkpoint))
+            self.assertEqual(result["trained_steps"], 7)
+            self.assertEqual(len(result["embeddings"]), 1)
+            self.assertEqual(len(result["embeddings"][0]), config.n_embd)
+
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):
         from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
 
