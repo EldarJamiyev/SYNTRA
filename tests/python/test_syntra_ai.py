@@ -756,6 +756,61 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(result["audit"]["valid"])
             self.assertGreaterEqual(result["example_count"], 4)
 
+    def test_module_exports_exclude_class_methods_and_include_module_values(self):
+        from syntra_ai.curriculum import _module_metadata
+
+        source = (
+            '"""Module documentation."""\\n'
+            "DEFAULT_LIMIT = 128\\n\\n"
+            "class Calculator:\\n"
+            "    def add(self, left, right):\\n"
+            "        return left + right\\n\\n"
+            "def normalize(value):\\n"
+            "    return value.strip()\\n"
+        )
+        metadata = _module_metadata("calculator.py", source)
+        self.assertIn("Calculator", metadata["exports"])
+        self.assertIn("normalize", metadata["exports"])
+        self.assertIn("DEFAULT_LIMIT", metadata["exports"])
+        self.assertNotIn("Calculator.add", metadata["exports"])
+        self.assertIn("Calculator.add", metadata["declarations"])
+
+    def test_curriculum_scans_all_configured_approved_roots(self):
+        from syntra_ai import curriculum, safe_paths
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-roots-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            external = root / "external"
+            project.mkdir()
+            external.mkdir()
+            (project / "inside.py").write_text(
+                '"""Project-root module."""\\n'
+                "def inside(value):\\n    return value + 1\\n",
+                encoding="utf-8",
+            )
+            (external / "outside.py").write_text(
+                '"""Approved external module."""\\n'
+                "def outside(value):\\n    return value * 2\\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(curriculum, "PROJECT_ROOT", project), \\
+                 patch.object(safe_paths, "PROJECT_ROOT", project), \\
+                 patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(external)}):
+                result = curriculum.synthesize_repository_curriculum(max_examples=20)
+
+            self.assertEqual(result["workspace_roots"], [str(project), str(external)])
+            self.assertGreaterEqual(result["source_files"], 2)
+            self.assertTrue(Path(result["dataset_path"]).is_file())
+            records = [
+                json.loads(line)
+                for line in Path(result["dataset_path"]).read_text(encoding="utf-8").splitlines()
+            ]
+            sources = {item["source_path"] for item in records}
+            self.assertIn("inside.py", sources)
+            self.assertIn("outside.py", sources)
+
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_real_training_checkpoint_and_supervised_prompt_masking(self):
         from syntra_ai.instruction import finetune, load_instruction_examples
