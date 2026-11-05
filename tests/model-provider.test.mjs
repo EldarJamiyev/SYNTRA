@@ -974,3 +974,23 @@ test("Gemini 3.8 Flash clamps direct REST output to its documented non-streaming
     }
   }
 });
+
+
+test("the default model provider is native and never probes Ollama", async () => {
+  const previousMode = process.env.SYNTRA_MODEL_PROVIDER;
+  delete process.env.SYNTRA_MODEL_PROVIDER;
+  let calls = 0;
+  try {
+    const provider = await detectLocalModel({
+      fetchImpl: async () => {
+        calls += 1;
+        throw new Error("connection refused");
+      }
+    });
+    assert.equal(provider, null);
+    assert.equal(calls, 0);
+  } finally {
+    if (previousMode === undefined) delete process.env.SYNTRA_MODEL_PROVIDER;
+    else process.env.SYNTRA_MODEL_PROVIDER = previousMode;
+  }
+});
