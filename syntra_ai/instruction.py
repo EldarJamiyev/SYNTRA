@@ -5,7 +5,9 @@ from time import monotonic
 from typing import Any, Callable
 import hashlib
 import json
+import os
 import re
+import stat
 import unicodedata
 
 try:
@@ -19,7 +21,7 @@ from .config import ModelConfig
 from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
 from .runtime import _normalize_checkpoint_payload, checkpoint_path, clear_resident_cache
-from .safe_paths import PROJECT_ROOT, resolve_corpus_root
+from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_instruction_dataset, resolve_curriculum_output_path
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
     _atomic_checkpoint, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
@@ -46,11 +48,9 @@ def load_instruction_examples(
     max_examples: int = MAX_INSTRUCTION_EXAMPLES,
     max_tokens: int = MAX_INSTRUCTION_TOKENS,
 ) -> list[dict]:
-    path = Path(dataset_path).expanduser().resolve()
-    if not path.is_file():
-        raise ValueError("Instruction dataset must be an existing local JSONL file.")
-    if path.stat().st_size > MAX_INSTRUCTION_FILE_BYTES:
-        raise ValueError(f"Instruction JSONL is limited to {MAX_INSTRUCTION_FILE_BYTES // (1024 * 1024)} MiB.")
+    # Direct library callers receive the same approved-root protection as HTTP
+    # and CLI entry points; a caller cannot bypass the dataset path boundary.
+    path = os.fspath(resolve_instruction_dataset(dataset_path))
     if not isinstance(seq_len, int) or seq_len < 16 or seq_len > 16384:
         raise ValueError("Instruction context must be between 16 and 16,384 tokens.")
     if not isinstance(max_examples, int) or max_examples < 2 or max_examples > MAX_INSTRUCTION_EXAMPLES:
@@ -60,7 +60,14 @@ def load_instruction_examples(
     tokenizer = tokenizer or ByteBPETokenizer.empty()
     examples = []
     total_tokens = 0
-    with path.open("r", encoding="utf-8") as handle:
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        file_info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(file_info.st_mode):
+            raise ValueError("Instruction dataset must be an existing regular file.")
+        if file_info.st_size > MAX_INSTRUCTION_FILE_BYTES:
+            raise ValueError(f"Instruction JSONL is limited to {MAX_INSTRUCTION_FILE_BYTES // (1024 * 1024)} MiB.")
         for line_number, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
@@ -461,18 +468,7 @@ def synthesize_repository_curriculum(
     if not isinstance(max_examples, int) or max_examples < 4 or max_examples > MAX_INSTRUCTION_EXAMPLES:
         raise ValueError(f"max_examples must be between 4 and {MAX_INSTRUCTION_EXAMPLES:,}.")
     corpus_root = resolve_corpus_root(root or PROJECT_ROOT)
-    if output_path:
-        raw_out = Path(output_path).expanduser()
-        if not raw_out.is_absolute():
-            raw_out = (PROJECT_ROOT / raw_out).resolve()
-        else:
-            raw_out = raw_out.resolve()
-    else:
-        raw_out = (PROJECT_ROOT / "data" / "curricula" / "workspace-instructions.jsonl").resolve()
-    if raw_out.suffix.lower() != ".jsonl":
-        raise ValueError("Synthesized curriculum output path must end with .jsonl.")
-    if not (raw_out == corpus_root or raw_out.is_relative_to(corpus_root) or raw_out.is_relative_to(PROJECT_ROOT)):
-        raise ValueError("Curriculum output path must reside inside the active workspace or SYNTRA project directory.")
+    raw_out = resolve_curriculum_output_path(output_path, corpus_root)
 
     corpus = load_corpus([corpus_root])
     documents, files = corpus.documents, corpus.files
@@ -561,8 +557,9 @@ def synthesize_repository_curriculum(
     if len(records) < 2:
         raise ValueError("Could not extract at least two distinct instruction examples from the selected corpus.")
 
-    raw_out.parent.mkdir(parents=True, exist_ok=True)
-    with raw_out.open("w", encoding="utf-8") as handle:
+    output_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    output_descriptor = os.open(os.fspath(raw_out), output_flags, 0o600)
+    with os.fdopen(output_descriptor, "w", encoding="utf-8") as handle:
         for item in records:
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
 

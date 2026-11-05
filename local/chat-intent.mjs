@@ -6,7 +6,11 @@ const EXPLICIT_REPO_CONTEXT = /\b(?:this|the|current|my)\s+(?:codebase|repositor
 const CONVERSATIONAL_OUTPUT = /^(?:hey[, ]*)?(?:please\s+)?(?:(?:can|could|would) you(?:\s+please)?\s+)?(?:please\s+)?(?:write|create|draft|compose|prepare|generate)\s+(?:(?:me|us)\s+)?(?:an?\s+)?(?:email|letter|poem|story|song|essay|article|blog post|social post|text message|message|proposal|job application|cover letter|resume|résumé|cv|joke|speech|recipe)\b/i;
 const SOURCE_PATH_PATTERN = /\b(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:m?js|cjs|tsx?|jsx?|py|go|rs|json|css|html|md|ya?ml|toml|sql|sh)\b|\b[A-Za-z0-9_-]+\.(?:mjs|cjs|tsx|jsx|py|go|rs)\b/g;
 const WORKSPACE_QUERY_SIGNAL = /\b(?:where\s+is|how\s+does|what\s+(?:does|files?|modules?|functions?|classes?)|explain\s+(?:how|the)|trace|find\s+(?:where|all)|in\s+(?:this|the)\s+(?:repo|repository|workspace|codebase|project)|architecture\s+of)\b/i;
-const IDENTIFIER_PATTERN = /`([A-Za-z_$][A-Za-z0-9_$]{2,63})`|\b([A-Za-z_$][a-z0-9]+(?:[A-Z][A-Za-z0-9]+)+|[a-z]+_[a-z0-9_]{2,50})\b/g;
+// Keep identifier grammars deterministic: repeated segments start with a
+// delimiter that cannot be consumed by the preceding segment.
+const BACKTICK_IDENTIFIER_PATTERN = /`([A-Za-z_$][A-Za-z0-9_$]{2,63})`/g;
+const CAMEL_IDENTIFIER_PATTERN = /\b[A-Za-z_$][a-z0-9]*(?:[A-Z][a-z0-9]*)+\b/g;
+const SNAKE_IDENTIFIER_PATTERN = /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g;
 
 export function extractTargetPaths(message) {
   if (typeof message !== "string" || !message.trim()) return [];
@@ -16,13 +20,25 @@ export function extractTargetPaths(message) {
 
 export function extractTargetSymbols(message) {
   if (typeof message !== "string" || !message.trim()) return [];
-  const symbols = [];
   const slice = message.slice(0, 4000);
-  let match;
-  IDENTIFIER_PATTERN.lastIndex = 0;
-  while ((match = IDENTIFIER_PATTERN.exec(slice)) !== null) {
-    const candidate = (match[1] || match[2] || "").trim();
-    if (candidate && !candidate.includes("/") && !candidate.includes(".") && !symbols.includes(candidate)) {
+  const matches = [];
+  for (const pattern of [
+    BACKTICK_IDENTIFIER_PATTERN,
+    CAMEL_IDENTIFIER_PATTERN,
+    SNAKE_IDENTIFIER_PATTERN
+  ]) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(slice)) !== null) {
+      const candidate = (match[1] || match[0]).trim();
+      if (candidate.length <= 64) matches.push({ index: match.index, candidate });
+    }
+  }
+
+  matches.sort((left, right) => left.index - right.index);
+  const symbols = [];
+  for (const { candidate } of matches) {
+    if (!candidate.includes("/") && !candidate.includes(".") && !symbols.includes(candidate)) {
       symbols.push(candidate);
       if (symbols.length >= 6) break;
     }

@@ -70,5 +70,12 @@ test("classifyChatIntent distinguishes coding tasks, workspace queries, and gene
   assert.equal(convo.kind, "conversation");
   assert.deepEqual(extractTargetPaths("Check src/App.tsx and local/server.mjs"), ["src/App.tsx", "local/server.mjs"]);
   assert.ok(extractTargetSymbols("Inspect `validatePatch` and `search_workspace_memory`").includes("validatePatch"));
+  assert.deepEqual(
+    extractTargetSymbols("Inspect `BOS_ID`, `ByteBPETokenizer`, validatePatch, search_workspace_memory"),
+    ["BOS_ID", "ByteBPETokenizer", "validatePatch", "search_workspace_memory"]
+  );
+  const longIdentifierText = "a" + "A".repeat(1800) + "a".repeat(1800) + "!";
+  assert.deepEqual(extractTargetSymbols(longIdentifierText), [],
+    "overlong user text must not become an unbounded symbol candidate");
 });
 

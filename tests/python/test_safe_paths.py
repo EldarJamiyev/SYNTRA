@@ -3,7 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from syntra_ai.safe_paths import resolve_corpus_root, resolve_instruction_dataset
+from syntra_ai.safe_paths import (
+    resolve_corpus_root, resolve_instruction_dataset, resolve_curriculum_output_path,
+)
 
 
 class ApprovedCorpusPathTests(unittest.TestCase):
@@ -96,6 +98,42 @@ class ApprovedCorpusPathTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "existing regular file"):
                 resolve_instruction_dataset(str(approved))
 
+
+
+    def test_curriculum_output_must_stay_inside_workspace_or_project(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-output-path-") as temp:
+            root = Path(temp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outside = root / "outside"
+            outside.mkdir()
+            os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(workspace)
+
+            valid = workspace / "curriculum.jsonl"
+            self.assertEqual(
+                resolve_curriculum_output_path(valid, workspace),
+                valid,
+            )
+            with self.assertRaisesRegex(ValueError, "inside the active workspace"):
+                resolve_curriculum_output_path(outside / "escape.jsonl", workspace)
+            with self.assertRaisesRegex(ValueError, "simple .jsonl filename"):
+                resolve_curriculum_output_path(workspace / ".." / "outside" / "bad name.jsonl", workspace)
+
+            link = workspace / "linked.jsonl"
+            try:
+                link.symlink_to(outside / "target.jsonl")
+            except (OSError, NotImplementedError):
+                self.skipTest("File symlinks are unavailable on this runner.")
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                resolve_curriculum_output_path(link, workspace)
+
+    def test_instruction_dataset_loader_boundary_rejects_unapproved_paths(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-direct-dataset-") as temp:
+            root = Path(temp)
+            dataset = root / "outside.jsonl"
+            dataset.write_text('{"prompt":"hello","completion":"world"}\\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "outside the SYNTRA project"):
+                resolve_instruction_dataset(dataset)
 
 if __name__ == "__main__":
     unittest.main()

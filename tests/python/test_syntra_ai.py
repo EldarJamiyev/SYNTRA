@@ -307,26 +307,26 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "what is max?", "completion": "def max2(a, b): return max(a, b)"},
             ]
             dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "max_examples must be between"):
-                load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_examples=MAX_INSTRUCTION_EXAMPLES + 1)
-            with self.assertRaisesRegex(ValueError, "max_tokens must be between"):
-                load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_tokens=MAX_INSTRUCTION_TOKENS + 1)
             overflow_dataset = root / "token-overflow.jsonl"
             long_rows = [
                 {"prompt": "p" * 6000, "completion": "c" * 6000},
                 {"prompt": "p" * 6000, "completion": "c" * 6000},
             ]
             overflow_dataset.write_text("\n".join(json.dumps(row) for row in long_rows), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "safety cap"):
-                load_instruction_examples(overflow_dataset, seq_len=16384, tokenizer=tokenizer, max_tokens=1024)
-
             huge_field = root / "huge-field.jsonl"
             huge_field.write_text(json.dumps({
                 "prompt": "x" * (512 * 1024 + 1),
                 "completion": "ok"
             }), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "512 KiB field limit"):
-                load_instruction_examples(huge_field, seq_len=32, tokenizer=tokenizer)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "max_examples must be between"):
+                    load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_examples=MAX_INSTRUCTION_EXAMPLES + 1)
+                with self.assertRaisesRegex(ValueError, "max_tokens must be between"):
+                    load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer, max_tokens=MAX_INSTRUCTION_TOKENS + 1)
+                with self.assertRaisesRegex(ValueError, "safety cap"):
+                    load_instruction_examples(overflow_dataset, seq_len=16384, tokenizer=tokenizer, max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "512 KiB field limit"):
+                    load_instruction_examples(huge_field, seq_len=32, tokenizer=tokenizer)
 
     def test_instruction_split_is_deterministic_and_keeps_repeated_prompts_together(self):
         from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
@@ -340,7 +340,8 @@ class TransformerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="syntra-instruction-split-") as temp:
             dataset = Path(temp) / "instructions.jsonl"
             dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
-            examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(Path(temp))}):
+                examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
             training, validation, quality = split_instruction_examples(examples)
             training_groups = {item["prompt_group_id"] for item in training}
             validation_groups = {item["prompt_group_id"] for item in validation}
@@ -373,7 +374,8 @@ class TransformerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="syntra-instruction-one-prompt-") as temp:
             dataset = Path(temp) / "instructions.jsonl"
             dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
-            examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(Path(temp))}):
+                examples = load_instruction_examples(dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty())
             with self.assertRaisesRegex(ValueError, "two distinct normalized prompts"):
                 split_instruction_examples(examples)
 
@@ -390,7 +392,8 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "Explain minimum", "completion": "Return the smaller value."},
             ]
             valid_dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
-            report = audit_instruction_dataset(valid_dataset, seq_len=64)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                report = audit_instruction_dataset(valid_dataset, seq_len=64)
             self.assertTrue(report["valid"])
             self.assertTrue(report["split_available"])
             self.assertEqual(report["example_count"], 4)
@@ -405,7 +408,8 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "  EXPLAIN   ADDITION ", "completion": "Sum values."},
             ]
             one_prompt_dataset.write_text("\n".join(json.dumps(row) for row in one_prompt_rows), encoding="utf-8")
-            one_prompt_report = audit_instruction_dataset(one_prompt_dataset, seq_len=64)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                one_prompt_report = audit_instruction_dataset(one_prompt_dataset, seq_len=64)
             self.assertTrue(one_prompt_report["valid"])
             self.assertFalse(one_prompt_report["split_available"])
             self.assertEqual(one_prompt_report["unique_prompt_count"], 1)
@@ -413,7 +417,8 @@ class TransformerTests(unittest.TestCase):
 
             invalid_dataset = root / "invalid.jsonl"
             invalid_dataset.write_text("{not json}\n", encoding="utf-8")
-            invalid_report = audit_instruction_dataset(invalid_dataset, seq_len=64)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                invalid_report = audit_instruction_dataset(invalid_dataset, seq_len=64)
             self.assertFalse(invalid_report["valid"])
             self.assertIn("Invalid JSON", invalid_report["error"])
 
@@ -429,10 +434,11 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "Explain maximum", "completion": "Return larger value."},
             ]
             dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                exit_code = main(["audit-instructions", "--dataset", str(dataset), "--seq-len", "64"])
-            report = json.loads(output.getvalue())
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(Path(temp))}):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    exit_code = main(["audit-instructions", "--dataset", str(dataset), "--seq-len", "64"])
+                report = json.loads(output.getvalue())
             self.assertEqual(exit_code, 0)
             self.assertTrue(report["split_available"])
 
@@ -442,10 +448,11 @@ class TransformerTests(unittest.TestCase):
                 json.dumps({"prompt": " SAME   PROMPT ", "completion": "second"}),
                 encoding="utf-8",
             )
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                exit_code = main(["audit-instructions", "--dataset", str(one_prompt), "--seq-len", "64"])
-            report = json.loads(output.getvalue())
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(Path(temp))}):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    exit_code = main(["audit-instructions", "--dataset", str(one_prompt), "--seq-len", "64"])
+                report = json.loads(output.getvalue())
             self.assertEqual(exit_code, 2)
             self.assertFalse(report["split_available"])
 
@@ -642,14 +649,16 @@ class TransformerTests(unittest.TestCase):
             dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
             checkpoint_state = torch.load(checkpoint, map_location="cpu", weights_only=True)
             tokenizer = ByteBPETokenizer.from_dict(checkpoint_state["tokenizer"])
-            examples = load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer)
             first = examples[0]
             prompt_tokens = first["prompt_tokens"]
             self.assertTrue(all(token == -100 for token in first["labels"][:prompt_tokens]))
             self.assertTrue(any(token != -100 for token in first["labels"][prompt_tokens:]))
 
-            tuned = finetune(dataset, steps=1, batch_size=1, learning_rate=1e-4,
-                             device_name="cpu", checkpoint=checkpoint)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                tuned = finetune(dataset, steps=1, batch_size=1, learning_rate=1e-4,
+                                 device_name="cpu", checkpoint=checkpoint)
             self.assertEqual(tuned["status"], "completed")
             inference_saved = torch.load(inference_checkpoint, map_location="cpu", weights_only=True)
             self.assertEqual(inference_saved["step"], tuned["step"])
