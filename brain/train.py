@@ -299,7 +299,7 @@ def _read_instruction_jsonl_datasets(
         except ValueError:
             raise
         except OSError as exc:
-            raise ValueError(f"Cannot read local instruction dataset {path}: {exc}") from None
+            raise ValueError(f"Cannot read local dataset {path}: {exc}") from None
 
     return records, names, total_bytes, digest.hexdigest()
 
