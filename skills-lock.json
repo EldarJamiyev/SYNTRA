@@ -1,0 +1,205 @@
+{
+  "version": 3,
+  "skills": {
+    "test-driven-development": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/test-driven-development",
+      "skillFolderHash": "847144cf0824095922c0d4875648b9fa74877e1a",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "systematic-debugging": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/systematic-debugging",
+      "skillFolderHash": "774f23e27e35cb0a89ede39156e7b079fbb84190",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "verification-before-completion": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/verification-before-completion",
+      "skillFolderHash": "a4cb0b69aaefeab540947a7f1642bdaad810e37a",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "using-git-worktrees": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/using-git-worktrees",
+      "skillFolderHash": "d2b8357b922667a091bfe967840abf5ae84ce99c",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "writing-plans": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/writing-plans",
+      "skillFolderHash": "cc97fa00eb2ccd4f283e34eb2ba06a48e1e679f7",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "executing-plans": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/executing-plans",
+      "skillFolderHash": "3a8438d91d9340747ffd985fdbcfe7238d6e1e57",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "requesting-code-review": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/requesting-code-review",
+      "skillFolderHash": "f4a6749898702895ea4fd57c7f186cf43205b99a",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "receiving-code-review": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/receiving-code-review",
+      "skillFolderHash": "b5e154fc3ec7a6a0b1e710eebacc2168620cc428",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "subagent-driven-development": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/subagent-driven-development",
+      "skillFolderHash": "c04a61186680d4cfc6784136d0421cd4abcfb40c",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "dispatching-parallel-agents": {
+      "source": "obra/superpowers",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/obra/superpowers",
+      "ref": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "skillPath": "skills/dispatching-parallel-agents",
+      "skillFolderHash": "15697cb0726c26a66bff737494e8b5266667ba0c",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "api-and-interface-design": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/api-and-interface-design",
+      "skillFolderHash": "f5d5abdf47ee8817f71a481eaaff9484bccdeda7",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "code-review-and-quality": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/code-review-and-quality",
+      "skillFolderHash": "3d1a2191446790b81f8e97875806dbbddd5135c8",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "code-simplification": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/code-simplification",
+      "skillFolderHash": "957272f55c03d2aacd8292ee6ee8e74ea33692bb",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "incremental-implementation": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/incremental-implementation",
+      "skillFolderHash": "a3e2fab3e3b97e078e2404a505c4b2fa5e123c9b",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "observability-and-instrumentation": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/observability-and-instrumentation",
+      "skillFolderHash": "1e8f1c0144e2b8f7859f5870329a31f8abc58193",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "performance-optimization": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/performance-optimization",
+      "skillFolderHash": "dcbfd29d22392c1e2476f7da337537025e30bc51",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "security-and-hardening": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/security-and-hardening",
+      "skillFolderHash": "9fb34870625f80d5cac82625f388c0d81d3b525a",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "source-driven-development": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/addyosmani/agent-skills",
+      "ref": "301b02b12bff98e4688e6984af6556802322bbde",
+      "skillPath": "skills/source-driven-development",
+      "skillFolderHash": "80f7db00d09fde82ceb383a5b11bb00781a4d4dc",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/anthropics/skills",
+      "ref": "ca45fc496a3436251f191354091d557da31c15b5",
+      "skillPath": "skills/frontend-design",
+      "skillFolderHash": "d79e2a5bb4df4a386c2adcdd9ab8709bba28c3f6",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "codebase-design": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "ref": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "skillPath": "skills/engineering/codebase-design",
+      "skillFolderHash": "4cbe1c131e1ea54109cb1e4e5f3c505810db6606",
+      "installedAt": "2026-11-05T07:18:06.418Z",
+      "updatedAt": "2026-11-05T07:18:06.418Z"
+    }
+  }
+}
