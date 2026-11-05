@@ -197,6 +197,32 @@ def _checkpoint_identity(path: str | Path | None = None) -> str | None:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+def _resident_cache_matches_checkpoint(path: str | Path) -> bool:
+    """Report a resident model only while its cached files match the current checkpoint."""
+    target = Path(path).expanduser().resolve()
+    try:
+        selected = select_inference_checkpoint(target)
+        source_stat = target.stat()
+        selected_stat = selected.stat()
+    except OSError:
+        return False
+
+    with _CACHE_LOCK:
+        cached = _RESIDENT_CACHE.get(str(target))
+    if cached is None:
+        return False
+
+    signature = cached[0]
+    current_files = (
+        source_stat.st_mtime_ns,
+        source_stat.st_size,
+        str(selected),
+        selected_stat.st_mtime_ns,
+        selected_stat.st_size,
+    )
+    return isinstance(signature, tuple) and signature[:5] == current_files
+
+
 def status() -> dict:
     path = checkpoint_path()
     metadata_path = path.with_suffix(path.suffix + ".json")
@@ -230,7 +256,7 @@ def status() -> dict:
         "training_mode": metadata.get("training_mode", "causal-source-pretraining"),
         "pretrained_weights": False,
         "external_ai_api": False,
-        "resident_in_memory": str(path) in _RESIDENT_CACHE,
+        "resident_in_memory": _resident_cache_matches_checkpoint(path),
         "capabilities": {
             "unifiedBrainCheckpoint": True,
             "residentCache": True,
@@ -279,7 +305,7 @@ def embed_texts(
     for item in texts:
         if not isinstance(item, str) or len(item.encode("utf-8")) > 100_000:
             raise ValueError("Each text item must be a string of at most 100 KB.")
-    identity_before = _checkpoint_identity()
+    identity_before = _checkpoint_identity(path)
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
     vectors: list[list[float]] = []
     limit = config.seq_len - 1
@@ -289,7 +315,7 @@ def embed_texts(
         tensor = torch.tensor([token_ids], dtype=torch.long, device=device)
         vec = model.embed_tokens(tensor)[0].detach().cpu().tolist()
         vectors.append([round(float(v), 5) for v in vec])
-    identity_after = _checkpoint_identity()
+    identity_after = _checkpoint_identity(path)
     if identity_before is None or identity_after != identity_before:
         raise RuntimeError("The native checkpoint changed during embedding generation; retry the request.")
     return {

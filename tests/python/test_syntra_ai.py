@@ -238,6 +238,87 @@ class TransformerTests(unittest.TestCase):
             third = _checkpoint_identity(checkpoint)
             self.assertNotEqual(second, third)
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_embed_texts_uses_the_explicit_checkpoint_identity(self):
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import _checkpoint_identity, embed_texts
+
+        with tempfile.TemporaryDirectory(prefix="syntra-explicit-embedding-checkpoint-") as temp:
+            root = Path(temp)
+            checkpoint = root / "selected-model.pt"
+            unavailable_default = root / "default-model-does-not-exist.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            tokenizer = ByteBPETokenizer.empty()
+            model = SyntraTransformer(config)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
+                "model_state": model.state_dict(),
+                "step": 7,
+                "training_mode": "causal-source-pretraining",
+            }, checkpoint)
+
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(unavailable_default)}):
+                result = embed_texts(
+                    ["explicit checkpoint identity regression"],
+                    path=checkpoint,
+                    device_name="cpu",
+                )
+
+            self.assertEqual(result["checkpoint"], str(checkpoint.resolve()))
+            self.assertEqual(result["checkpoint_identity"], _checkpoint_identity(checkpoint))
+            self.assertEqual(result["trained_steps"], 7)
+            self.assertEqual(len(result["embeddings"]), 1)
+            self.assertEqual(len(result["embeddings"][0]), config.n_embd)
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_status_does_not_report_a_stale_resident_checkpoint(self):
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import _get_resident_bundle, clear_resident_cache, status
+
+        with tempfile.TemporaryDirectory(prefix="syntra-resident-checkpoint-status-") as temp:
+            checkpoint = Path(temp) / "selected-model.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            tokenizer = ByteBPETokenizer.empty()
+            initial_model = SyntraTransformer(config)
+            payload = {
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
+                "model_state": initial_model.state_dict(),
+                "step": 1,
+                "training_mode": "causal-source-pretraining",
+            }
+            torch.save(payload, checkpoint)
+
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(checkpoint)}):
+                clear_resident_cache()
+                _get_resident_bundle(path=checkpoint, device_name="cpu")
+                self.assertTrue(status()["resident_in_memory"])
+
+                replacement_model = SyntraTransformer(config)
+                with torch.no_grad():
+                    replacement_model.token_embedding.weight[0, 0].add_(0.5)
+                payload["model_state"] = replacement_model.state_dict()
+                payload["step"] = 2
+                previous_mtime = checkpoint.stat().st_mtime_ns
+                torch.save(payload, checkpoint)
+                newer_mtime = max(checkpoint.stat().st_mtime_ns, previous_mtime + 2_000_000_000)
+                os.utime(checkpoint, ns=(newer_mtime, newer_mtime))
+
+                self.assertFalse(
+                    status()["resident_in_memory"],
+                    "status must not report a cached model as resident after its checkpoint changes",
+                )
+                _get_resident_bundle(path=checkpoint, device_name="cpu")
+                self.assertTrue(status()["resident_in_memory"])
+                clear_resident_cache()
+
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):
         from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
 
