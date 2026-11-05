@@ -548,9 +548,42 @@ def train(
     paths = tuple(dataset_paths)
     if not paths:
         raise ValueError("At least one local dataset file is required.")
-    train_text, validation_text, dataset_files, dataset_bytes, dataset_hash = _read_local_datasets(
-        paths, max_dataset_bytes
+
+    instruction_records, instruction_files, instruction_bytes, instruction_hash = (
+        _read_instruction_jsonl_datasets(paths, max_dataset_bytes)
     )
+    structured_paths = set(instruction_files)
+    remaining_bytes = max_dataset_bytes - instruction_bytes
+    train_text, validation_text, raw_files, raw_bytes, raw_hash = _read_local_datasets(
+        paths,
+        remaining_bytes,
+        exclude_paths=structured_paths,
+        allow_empty=bool(instruction_records),
+        require_holdout=not bool(instruction_records),
+    )
+
+    if instruction_records:
+        training_records, validation_records = _split_instruction_records(instruction_records)
+        if train_text.strip():
+            training_data_format = "mixed-raw-and-instruction-jsonl-v1"
+        else:
+            training_data_format = "instruction-jsonl-masked-v1"
+        dataset_hash = sha256(
+            ("syntra-brain-corpus-v2:" + raw_hash + ":" + instruction_hash).encode("ascii")
+        ).hexdigest()
+    else:
+        training_records, validation_records = [], []
+        training_data_format = "raw-token-stream-v1"
+        # Preserve historical dataset fingerprints for unchanged raw-text training runs.
+        dataset_hash = raw_hash
+
+    dataset_files = list(dict.fromkeys([*raw_files, *instruction_files]))
+    dataset_bytes = raw_bytes + instruction_bytes
+    if not train_text.strip() and not training_records:
+        raise ValueError("The selected local sources produced no usable training content.")
+    if not validation_text.strip() and not validation_records:
+        raise ValueError("The selected local sources produced no independent validation content.")
+
     target = Path(checkpoint_path).expanduser().resolve()
     device = select_device(device_name)
     requested_config = config or TransformerConfig(
@@ -570,6 +603,14 @@ def train(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(seed)
 
+    training_instruction_text = [
+        "Instruction:\\n" + item["prompt"] + "\\nResponse:\\n" + item["completion"]
+        for item in training_records
+    ]
+    tokenizer_training_text = "\\n\\n".join(
+        item for item in [train_text, *training_instruction_text] if item.strip()
+    )
+
     saved: dict | None = None
     if resume:
         saved = load_checkpoint(target)
@@ -577,6 +618,12 @@ def train(
             raise ValueError(
                 "The selected dataset differs from the checkpoint's training corpus. "
                 "Start a new checkpoint or use the original dataset to resume."
+            )
+        saved_data_format = saved.get("training_data_format", "raw-token-stream-v1")
+        if saved_data_format != training_data_format:
+            raise ValueError(
+                "The selected dataset format differs from the checkpoint's training data format. "
+                "Start a new checkpoint rather than resuming across raw-text and supervised JSONL modes."
             )
         stored_config = TransformerConfig.from_dict(saved["config"])
         if config is not None:
@@ -587,7 +634,7 @@ def train(
         tokenizer = BytePairTokenizer.from_dict(saved["tokenizer"])
     else:
         tokenizer = BytePairTokenizer.train_from_text(
-            train_text,
+            tokenizer_training_text,
             vocab_size=desired_vocab,
             max_training_bytes=tokenizer_bytes,
         )
@@ -596,24 +643,31 @@ def train(
     if requested_config.vocab_size != tokenizer.vocab_size:
         raise ValueError("Model vocabulary and local tokenizer vocabulary do not match.")
 
-    train_ids = torch.tensor(
-        [BOS_ID, *tokenizer.encode(train_text), EOS_ID],
-        dtype=torch.long,
-    )
-    validation_ids = torch.tensor(
-        [BOS_ID, *tokenizer.encode(validation_text), EOS_ID],
-        dtype=torch.long,
-    )
     block_size = requested_config.block_size
-    if train_ids.numel() <= block_size + 1 or validation_ids.numel() <= block_size + 1:
-        raise ValueError(
-            f"Training and validation splits must each contain more than {block_size + 1} tokens. "
-            f"Received {train_ids.numel()} training and {validation_ids.numel()} validation tokens."
-        )
+    train_input_rows, train_target_rows = _raw_context_blocks(train_text, tokenizer, block_size)
+    validation_input_rows, validation_target_rows = _raw_context_blocks(
+        validation_text, tokenizer, block_size
+    )
+    instruction_train_inputs, instruction_train_targets = _instruction_context_blocks(
+        training_records, tokenizer, block_size
+    )
+    instruction_validation_inputs, instruction_validation_targets = _instruction_context_blocks(
+        validation_records, tokenizer, block_size
+    )
+    train_input_rows.extend(instruction_train_inputs)
+    train_target_rows.extend(instruction_train_targets)
+    validation_input_rows.extend(instruction_validation_inputs)
+    validation_target_rows.extend(instruction_validation_targets)
 
-    chunk_count = (train_ids.numel() - 1) // block_size
+    train_inputs, train_targets = _stack_context_blocks(
+        train_input_rows, train_target_rows, "training"
+    )
+    validation_inputs, validation_targets = _stack_context_blocks(
+        validation_input_rows, validation_target_rows, "validation"
+    )
+    chunk_count = train_inputs.shape[0]
     if chunk_count < 1:
-        raise ValueError("The training split does not contain a complete context block.")
+        raise ValueError("The training corpus does not contain a supervised context block.")
     steps_per_epoch = math.ceil(chunk_count / batch_size)
     model = LocalTransformer(requested_config).to(device)
     optimizer = torch.optim.AdamW(
