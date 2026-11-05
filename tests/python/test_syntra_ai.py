@@ -110,6 +110,62 @@ class TransformerTests(unittest.TestCase):
             ModelConfig(n_embd=190, n_head=6).validate()
         with self.assertRaises(ValueError):
             ModelConfig(seq_len=16385).validate()
+        for flag in ("bias", "use_rope", "use_rmsnorm", "use_swiglu"):
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(ValueError, flag + " must be a boolean"):
+                    ModelConfig(**{flag: "false"}).validate()
+
+    def test_resume_architecture_comparison_covers_every_model_field(self):
+        from dataclasses import replace
+        from syntra_ai.training import _same_architecture
+
+        base = ModelConfig(vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        self.assertTrue(_same_architecture(base, base))
+        changes = (
+            ("vocab_size", 259),
+            ("bias", False),
+            ("use_rope", True),
+            ("use_rmsnorm", True),
+            ("use_swiglu", True),
+        )
+        for field, value in changes:
+            with self.subTest(field=field):
+                changed = replace(base, **{field: value})
+                self.assertFalse(_same_architecture(changed, base))
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_validation_loss_helpers_restore_the_callers_model_mode(self):
+        from syntra_ai.instruction import _instruction_loss
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+        from syntra_ai.training import _estimate_loss
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.2)
+        model = SyntraTransformer(config)
+        data = torch.randint(0, config.vocab_size, (96,), dtype=torch.long)
+
+        model.train()
+        train_loss = _estimate_loss(model, data, batch_size=1, seq_len=config.seq_len, device=torch.device("cpu"), batches=1)
+        self.assertTrue(torch.isfinite(torch.tensor(train_loss)).item())
+        self.assertTrue(model.training, "training-time validation must restore training mode")
+
+        model.eval()
+        eval_loss = _estimate_loss(model, data, batch_size=1, seq_len=config.seq_len, device=torch.device("cpu"), batches=1)
+        self.assertTrue(torch.isfinite(torch.tensor(eval_loss)).item())
+        self.assertFalse(model.training, "standalone evaluation must not enable dropout on the resident model")
+
+        examples = [{
+            "input_ids": [BOS_ID, 65, 66, 67],
+            "labels": [-100, 65, 66, 67],
+        }]
+        model.train()
+        instruction_train_loss = _instruction_loss(model, examples, torch.device("cpu"), batch_size=1, batches=1)
+        self.assertTrue(torch.isfinite(torch.tensor(instruction_train_loss)).item())
+        self.assertTrue(model.training, "instruction validation must restore training mode")
+
+        model.eval()
+        instruction_eval_loss = _instruction_loss(model, examples, torch.device("cpu"), batch_size=1, batches=1)
+        self.assertTrue(torch.isfinite(torch.tensor(instruction_eval_loss)).item())
+        self.assertFalse(model.training, "instruction evaluation must preserve inference mode")
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_inference_loader_falls_back_when_companion_is_stale(self):
@@ -611,6 +667,7 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(fresh_evaluation["evaluation_performed"])
             self.assertTrue(torch.isfinite(torch.tensor(fresh_evaluation["validation_loss"])).item())
             model, saved, device = load_model(checkpoint, "cpu")
+            self.assertFalse(model.training, "fresh evaluation must leave the resident inference model in eval mode")
             self.assertEqual(saved["training_mode"], "supervised-instruction-finetuning")
             self.assertEqual(saved["step"], 2)
             self.assertNotIn("optimizer_state", saved)

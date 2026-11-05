@@ -49,17 +49,22 @@ def _batch(data, batch_size: int, seq_len: int, device):
 
 
 def _estimate_loss(model, data, batch_size, seq_len, device, batches=8) -> float:
-    with torch.no_grad():
-        model.eval()
-        values = []
-        for _ in range(batches):
-            x, y = _batch(data, batch_size, seq_len, device)
-            _, loss = model(x, y)
-            if loss is None or not torch.isfinite(loss):
-                raise RuntimeError("Validation produced a non-finite loss.")
-            values.append(float(loss.item()))
-        model.train()
-        return sum(values) / len(values)
+    was_training = model.training
+    model.eval()
+    values = []
+    try:
+        with torch.no_grad():
+            for _ in range(batches):
+                x, y = _batch(data, batch_size, seq_len, device)
+                _, loss = model(x, y)
+                if loss is None or not torch.isfinite(loss):
+                    raise RuntimeError("Validation produced a non-finite loss.")
+                values.append(float(loss.item()))
+    finally:
+        # Evaluation may share a resident model with live inference. Restore the
+        # caller's mode instead of unconditionally enabling dropout afterward.
+        model.train(was_training)
+    return sum(values) / len(values)
 
 
 def _atomic_checkpoint(path: Path, payload: dict) -> None:
@@ -125,13 +130,9 @@ def _encode_documents(documents: list[str], tokenizer: ByteBPETokenizer, max_tok
 
 
 def _same_architecture(requested: ModelConfig, stored: ModelConfig) -> bool:
-    return (
-        requested.seq_len == stored.seq_len
-        and requested.n_layer == stored.n_layer
-        and requested.n_head == stored.n_head
-        and requested.n_embd == stored.n_embd
-        and requested.dropout == stored.dropout
-    )
+    # Compare the complete canonical configuration. Omitting vocabulary or
+    # architectural flags can silently ignore a requested resume configuration.
+    return requested.to_dict() == stored.to_dict()
 
 
 def train(

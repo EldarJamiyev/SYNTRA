@@ -35,6 +35,9 @@ class ModelConfig:
             raise ValueError("n_embd must be divisible by n_head.")
         if isinstance(self.dropout, bool) or not isinstance(self.dropout, (int, float)) or not math.isfinite(float(self.dropout)) or not 0.0 <= float(self.dropout) < 0.5:
             raise ValueError("dropout must be between 0 and 0.5.")
+        for flag in ("bias", "use_rope", "use_rmsnorm", "use_swiglu"):
+            if type(getattr(self, flag)) is not bool:
+                raise ValueError(f"{flag} must be a boolean.")
         if self.use_rope and (self.n_embd // self.n_head) % 2 != 0:
             raise ValueError("head_dim (n_embd // n_head) must be even when use_rope is enabled.")
 

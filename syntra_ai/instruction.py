@@ -275,18 +275,23 @@ def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
 
 
 def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int, batches: int = 4) -> float:
-    with torch.no_grad():
-        model.eval()
-        values = []
-        for _ in range(batches):
-            x, y = _instruction_batch(examples, batch_size, device)
-            _, loss = model(x, y)
-            if loss is not None and torch.isfinite(loss):
-                values.append(float(loss.item()))
-        model.train()
-        if not values:
-            raise ValueError("Validation batch contained no supervised completion tokens.")
-        return sum(values) / len(values)
+    was_training = model.training
+    model.eval()
+    values = []
+    try:
+        with torch.no_grad():
+            for _ in range(batches):
+                x, y = _instruction_batch(examples, batch_size, device)
+                _, loss = model(x, y)
+                if loss is not None and torch.isfinite(loss):
+                    values.append(float(loss.item()))
+    finally:
+        # Keep this helper safe for both training-time validation and standalone
+        # evaluation of a model that may be resident in the inference process.
+        model.train(was_training)
+    if not values:
+        raise ValueError("Validation batch contained no supervised completion tokens.")
+    return sum(values) / len(values)
 
 
 def finetune(
