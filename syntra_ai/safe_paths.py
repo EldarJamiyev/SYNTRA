@@ -17,15 +17,21 @@ def _is_filesystem_root(value: str) -> bool:
     return os.path.dirname(value) == value
 
 
+def _matches_path_boundary(candidate: str, root: str) -> bool:
+    candidate_norm = os.path.normcase(os.path.normpath(candidate))
+    root_norm = os.path.normcase(os.path.normpath(root))
+    root_prefix = root_norm.rstrip("/\\") + os.sep
+    return candidate_norm == root_norm or candidate_norm.startswith(root_prefix)
+
+
 def is_path_within(candidate: str | Path, root: str | Path) -> bool:
     """Compare canonical paths using a component boundary, not a string prefix."""
     try:
-        candidate_real = os.path.normcase(os.path.realpath(os.fspath(candidate), strict=True))
-        root_real = os.path.normcase(os.path.realpath(os.fspath(root), strict=True))
+        candidate_real = os.path.realpath(os.fspath(candidate), strict=True)
+        root_real = os.path.realpath(os.fspath(root), strict=True)
     except (OSError, RuntimeError, TypeError, ValueError):
         return False
-    root_prefix = root_real.rstrip("/\\") + os.sep
-    return candidate_real == root_real or candidate_real.startswith(root_prefix)
+    return _matches_path_boundary(candidate_real, root_real)
 
 
 def _approved_roots() -> tuple[str, ...]:
@@ -113,16 +119,24 @@ def resolve_curriculum_output_path(
         filename = os.path.basename(requested)
         parent_input = os.path.dirname(requested) or os.curdir
         try:
-            parent = os.path.realpath(parent_input, strict=True)
+            # Resolve existing symlinks and traversal while allowing safe new
+            # subdirectories beneath an approved project/workspace root.
+            parent = os.path.realpath(parent_input, strict=False)
         except (OSError, RuntimeError):
-            raise ValueError("Curriculum output directory must already exist and be resolvable.") from None
+            raise ValueError("Curriculum output directory cannot be resolved.") from None
         allowed_roots = (os.fspath(PROJECT_ROOT), os.fspath(workspace_root))
 
     if not _OUTPUT_NAME.fullmatch(filename):
         raise ValueError("Curriculum output filename must be a simple .jsonl filename.")
-    if not os.path.isdir(parent):
-        raise ValueError("Curriculum output directory must be an existing directory.")
-    if not any(is_path_within(parent, root) for root in allowed_roots):
+    trusted_roots = tuple(os.path.realpath(root, strict=True) for root in allowed_roots)
+    if not any(_matches_path_boundary(parent, root) for root in trusted_roots):
+        raise ValueError("Curriculum output directory must be inside the active workspace or SYNTRA project directory.")
+    try:
+        os.makedirs(parent, exist_ok=True)
+        parent = os.path.realpath(parent, strict=True)
+    except (OSError, RuntimeError):
+        raise ValueError("Curriculum output directory could not be created safely.") from None
+    if not os.path.isdir(parent) or not any(is_path_within(parent, root) for root in trusted_roots):
         raise ValueError("Curriculum output directory must be inside the active workspace or SYNTRA project directory.")
 
     target = os.path.join(parent, filename)

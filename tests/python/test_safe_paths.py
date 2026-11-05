@@ -109,11 +109,13 @@ class ApprovedCorpusPathTests(unittest.TestCase):
             outside.mkdir()
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(workspace)
 
-            valid = workspace / "curriculum.jsonl"
+            nested = workspace / "generated" / "nested"
+            nested_output = nested / "curriculum.jsonl"
             self.assertEqual(
-                resolve_curriculum_output_path(valid, workspace),
-                valid,
+                resolve_curriculum_output_path(nested_output, workspace),
+                nested_output,
             )
+            self.assertTrue(nested.is_dir())
             with self.assertRaisesRegex(ValueError, "inside the active workspace"):
                 resolve_curriculum_output_path(outside / "escape.jsonl", workspace)
             with self.assertRaisesRegex(ValueError, "simple .jsonl filename"):
