@@ -175,6 +175,44 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(saved["instruction_example_count"], 4)
             self.assertGreater(saved["training_context_blocks"], 0)
 
+    def test_mixed_raw_text_and_instruction_jsonl_training(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-mixed-training-") as temp:
+            root = Path(temp)
+            instructions = root / "instructions.jsonl"
+            records = [
+                {"Instruction": "Explain addition.", "Response": "Addition combines two values."},
+                {"Instruction": "Explain multiplication.", "Response": "Multiplication scales a value."},
+                {"Instruction": "Explain subtraction.", "Response": "Subtraction finds a difference."},
+                {"Instruction": "Explain division.", "Response": "Division splits a value into parts."},
+            ]
+            instructions.write_text("\\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            raw = root / "legacy.txt"
+            raw.write_text(("Legacy raw corpus remains part of causal language-model training.\\n" * 120), encoding="utf-8")
+            checkpoint = root / "checkpoints" / "mixed-model.pt"
+
+            result = train(
+                [root],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=64,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["training_data_format"], "mixed-raw-and-instruction-jsonl-v1")
+            self.assertEqual(result["instruction_examples"], 4)
+            saved = load_checkpoint(checkpoint)
+            self.assertIn(str(raw.resolve()), saved["dataset_files"])
+            self.assertIn(str(instructions.resolve()), saved["dataset_files"])
+            self.assertGreater(result["training_context_blocks"], 0)
+            self.assertGreater(result["validation_context_blocks"], 0)
+
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata
         from brain.train import train
