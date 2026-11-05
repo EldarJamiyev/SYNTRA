@@ -84,6 +84,7 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
     lines = source.splitlines()
     imports: list[str] = []
     symbols: list[dict[str, Any]] = []
+    module_values: list[str] = []
     explicit_exports: list[str] | None = None
 
     for node in tree.body:
@@ -96,9 +97,16 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
             if isinstance(node, ast.ClassDef):
                 for child in node.body:
                     if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        symbols.append(_python_symbol(child, lines, source, prefix=node.name))
+                        member = _python_symbol(child, lines, source, prefix=node.name)
+                        member["is_member"] = True
+                        symbols.append(member)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names = [
+                target.id for target in targets
+                if isinstance(target, ast.Name) and target.id != "__all__"
+            ]
+            module_values.extend(name for name in names if not name.startswith("_"))
             if any(isinstance(target, ast.Name) and target.id == "__all__" for target in targets):
                 try:
                     parsed = ast.literal_eval(node.value) if node.value is not None else None
@@ -111,7 +119,11 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
         exports = explicit_exports[:MAX_DECLARATIONS]
     else:
         exports = [
-            item["name"] for item in symbols if not item["short_name"].startswith("_")
+            *[
+                item["name"] for item in symbols
+                if not item.get("is_member") and not item["short_name"].startswith("_")
+            ],
+            *module_values,
         ][:MAX_DECLARATIONS]
 
     return {
