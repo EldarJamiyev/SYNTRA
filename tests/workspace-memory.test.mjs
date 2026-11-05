@@ -69,6 +69,7 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
       tags: ["frontend", "design"]
     });
     let requests = 0;
+    let activeCheckpointIdentity = "b".repeat(64);
     const fetchImpl = async (url, options) => {
       requests += 1;
       assert.equal(url, "http://127.0.0.1:3002/model/embed");
@@ -81,7 +82,7 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
           ? [1, 0, 0, 0, 0, 0, 0, 0]
           : [0, 1, 0, 0, 0, 0, 0, 0];
       });
-      return new Response(JSON.stringify({ embeddings, checkpoint_identity: "b".repeat(64) }), {
+      return new Response(JSON.stringify({ embeddings, checkpoint_identity: activeCheckpointIdentity }), {
         status: 200, headers: { "Content-Type": "application/json" }
       });
     };
@@ -92,14 +93,14 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     assert.equal(first.embeddingModel, "syntra-native");
     assert.equal(first.results[0].id, network.note.id);
     assert.equal(first.semanticCoverage, 2);
-    assert.equal(requests, 1);
+    assert.equal(requests, 2, "the initial search embeds the query and the selected notes against the same checkpoint");
 
     const second = await searchWorkspaceMemory(root, "dns resolver convention", 6, {
       embedModel: "syntra-native", fetchImpl
     });
     assert.equal(second.retrievalMode, "hybrid_semantic");
     assert.equal(second.results[0].id, network.note.id);
-    assert.equal(requests, 2, "the second search should reuse cached note vectors and embed only the query");
+    assert.equal(requests, 3, "the second search should reuse cached note vectors and embed only the query");
 
     const cache = JSON.parse(await fs.readFile(
       path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"
@@ -107,6 +108,17 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     assert.equal(cache.schemaVersion, 1);
     assert.equal(cache.model, "syntra-native:" + "b".repeat(64));
     assert.equal(first.checkpointIdentity, "b".repeat(64));
+
+    activeCheckpointIdentity = "c".repeat(64);
+    const afterRetraining = await searchWorkspaceMemory(root, "dns resolver convention", 6, {
+      embedModel: "syntra-native", fetchImpl
+    });
+    assert.equal(afterRetraining.checkpointIdentity, activeCheckpointIdentity);
+    assert.equal(requests, 5, "a new checkpoint must recompute note vectors rather than reusing old weights");
+    const refreshedCache = JSON.parse(await fs.readFile(
+      path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"
+    ));
+    assert.equal(refreshedCache.model, "syntra-native:" + activeCheckpointIdentity);
     assert.equal(cache.root, await fs.realpath(root));
     assert.equal(cache.entries.length, 2);
     assert.ok(cache.entries.every(entry => !("content" in entry)));

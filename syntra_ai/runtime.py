@@ -279,6 +279,7 @@ def embed_texts(
     for item in texts:
         if not isinstance(item, str) or len(item.encode("utf-8")) > 100_000:
             raise ValueError("Each text item must be a string of at most 100 KB.")
+    identity_before = _checkpoint_identity()
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
     vectors: list[list[float]] = []
     limit = config.seq_len - 1
@@ -288,12 +289,15 @@ def embed_texts(
         tensor = torch.tensor([token_ids], dtype=torch.long, device=device)
         vec = model.embed_tokens(tensor)[0].detach().cpu().tolist()
         vectors.append([round(float(v), 5) for v in vec])
+    identity_after = _checkpoint_identity()
+    if identity_before is None or identity_after != identity_before:
+        raise RuntimeError("The native checkpoint changed during embedding generation; retry the request.")
     return {
         "embeddings": vectors,
         "dimensions": config.n_embd,
         "model": "syntra-native-transformer",
         "checkpoint": str(target),
-        "checkpoint_identity": _checkpoint_identity(),
+        "checkpoint_identity": identity_before,
         "trained_steps": int(saved.get("step", 0)),
         "local_only": True,
     }

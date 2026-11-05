@@ -314,6 +314,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
     await refreshWorkspaceIndex(root);
 
     let requests = 0;
+    let activeCheckpointIdentity = "a".repeat(64);
     const fetchImpl = async (url, options) => {
       requests += 1;
       assert.equal(url, "http://127.0.0.1:3002/model/embed");
@@ -325,7 +326,7 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
           ? [1, 0, 0, 0, 0, 0, 0, 0]
           : [0, 1, 0, 0, 0, 0, 0, 0]
       );
-      return new Response(JSON.stringify({ embeddings, checkpoint_identity: "a".repeat(64) }), {
+      return new Response(JSON.stringify({ embeddings, checkpoint_identity: activeCheckpointIdentity }), {
         status: 200, headers: { "Content-Type": "application/json" }
       });
     };
@@ -371,6 +372,20 @@ test("semantic source search retrieves deep code chunks, reuses local vectors, a
     assert.equal(second.retrievalMode, "semantic");
     assert.equal(requests, callsBeforeCachedSearch + 1,
       "unchanged source chunks should be reused; only the new query needs embedding");
+
+    activeCheckpointIdentity = "c".repeat(64);
+    const callsBeforeCheckpointChange = requests;
+    const refreshedCheckpoint = await searchWorkspaceSemantic(
+      root,
+      "Where are webhook payloads normalized?",
+      8,
+      { embedModel: "syntra-native", fetchImpl }
+    );
+    assert.equal(refreshedCheckpoint.checkpointIdentity, activeCheckpointIdentity);
+    assert.ok(requests >= callsBeforeCheckpointChange + 2,
+      "a different native checkpoint must regenerate cached source vectors as well as the query vector");
+    const refreshedCache = JSON.parse(await fs.readFile(cachePath, "utf8"));
+    assert.equal(refreshedCache.model, "syntra-native:" + activeCheckpointIdentity);
 
     await fs.appendFile(path.join(root, "src", "router.ts"), "\n// changed after indexing\n", "utf8");
     const stale = await searchWorkspaceSemantic(

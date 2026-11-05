@@ -272,7 +272,8 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ texts: input, max_length: 256, device: "auto" }),
-    signal: AbortSignal.timeout(4000)
+    redirect: "error",
+    signal: AbortSignal.timeout(30000)
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(String(payload.error || "SYNTRA native embedding service returned HTTP " + response.status + "."));
