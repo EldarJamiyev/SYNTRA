@@ -83,12 +83,12 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
       suite, suiteDir, outputPath,
       modelRequest: async (method, route) => {
         assert.equal(method, "GET"); assert.equal(route, "/model/status");
-        return { checkpoint_exists: true, provider: "ollama", model_name: "test-local-model", context_tokens: 4096 };
+        return { checkpoint_exists: true, backend: "PyTorch", tokenizer: "byte-BPE", model_name: "SYNTRA native Transformer", context_tokens: 4096 };
       },
       agentRunner: async options => {
         assert.notEqual(options.root, fixtureDir);
         assert.equal(await fs.readFile(path.join(options.root, "src", "target.mjs"), "utf8"), original);
-        await options.onProgress({ phase: "plan-created", model: { provider: "ollama", name: "test-local-model", contextWindowTokens: 4096 } });
+        await options.onProgress({ phase: "plan-created", model: { engine: "syntra-native", name: "SYNTRA native Transformer", contextWindowTokens: 4096 } });
         return {
           status: "verified_proposals_ready", changedFiles: [{ path: "src/target.mjs" }],
           verification: { passed: true, status: "passed" }, attempts: [{ promptTokens: 33, outputTokens: 14 }]

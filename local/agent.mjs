@@ -1247,14 +1247,15 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 }
 
 export function deriveModelContextBudget(modelStatus = {}) {
+  // SYNTRA's checkpoint stores its own byte-BPE tokenizer. Token counts are
+  // exact only when that tokenizer is the active runtime tokenizer; never infer
+  // a larger context window from another model or a provider-specific response.
   const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
   const contextWindowTokens = Number.isFinite(rawContext)
-    ? Math.max(1024, Math.min(1_048_576, Math.floor(rawContext)))
+    ? Math.max(1024, Math.min(16_384, Math.floor(rawContext)))
     : 4096;
-  const capabilities = modelStatus.capabilities && typeof modelStatus.capabilities === "object"
-    ? modelStatus.capabilities : {};
-  const exactTokenCount = capabilities.tokenCountIsEstimate === false || modelStatus.is_estimate === false;
-  const outputCap = Number(capabilities.maxOutputTokens || modelStatus.max_output_tokens || 1024);
+  const exactTokenCount = modelStatus.tokenizer === "byte-BPE";
+  const outputCap = Number(modelStatus.max_output_tokens || 1024);
   const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(128, Math.min(8192, Math.floor(outputCap))) : 1024;
   const promptFraction = exactTokenCount ? 0.76 : 0.64;
   const outputFraction = exactTokenCount ? 0.18 : 0.20;
@@ -1271,7 +1272,7 @@ export function deriveModelContextBudget(modelStatus = {}) {
     outputBudgetTokens,
     safetyMarginTokens,
     exactTokenCount,
-    budgetProfile: exactTokenCount ? "provider-tokenizer" : "conservative-estimate"
+    budgetProfile: exactTokenCount ? "native-tokenizer" : "conservative-estimate"
   };
 }
 
@@ -1329,8 +1330,9 @@ export async function runAgentTask({
   const contextBudget = contextPlan.contextBudgetTokens;
   const outputBudget = contextPlan.outputBudgetTokens;
   const modelMetadata = {
-    provider: String(modelStatus.provider || "native-local").slice(0, 80),
-    name: String(modelStatus.model_name || modelStatus.model || "unknown").slice(0, 120),
+    engine: "syntra-native",
+    name: "SYNTRA native Transformer",
+    checkpoint: String(modelStatus.checkpoint || "").slice(0, 512),
     contextWindowTokens: contextWindow,
     contextBudgetTokens: contextBudget,
     outputBudgetTokens: outputBudget,

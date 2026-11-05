@@ -254,7 +254,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
     throw new Error("Unknown benchmark task ID(s): " + missing.join(", "));
   }
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000);
-  if (!modelStatus?.checkpoint_exists) throw new Error("No usable local model is available. Start Ollama with a local model or start SYNTRA's native AI service before running benchmarks.");
+  if (!modelStatus?.checkpoint_exists) throw new Error("No trained SYNTRA checkpoint is available. Complete native model training before running benchmarks.");
   const startedAt = new Date().toISOString(), results = [];
   let selectedModel = null;
   for (const task of selected) {
@@ -320,14 +320,14 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       totalMemoryBytes: os.totalmem()
     },
     model: {
-      provider: String(selectedModel?.provider || modelStatus.provider || "local"),
-      name: String(selectedModel?.name || modelStatus.model_name || modelStatus.model || "unknown"),
+      engine: "syntra-native",
+      name: String(selectedModel?.name || "SYNTRA native Transformer"),
       contextWindowTokens: Number(selectedModel?.contextWindowTokens || modelStatus.context_tokens || 0) || null
     },
     summary: summarizeBenchmarkResults(results), tasks: results,
     measurementNotes: [
-      "Token counts come from the local provider response; prompt counts may be unavailable.",
-      "Peak RSS measures the SYNTRA benchmark Node.js process only, not the Ollama daemon, model runtime, GPU, or total system memory.",
+      "Token counts come from SYNTRA's saved byte-BPE tokenizer and checkpoint runtime.",
+      "Peak RSS measures the SYNTRA benchmark Node.js process only, not the separate native AI service, GPU, or total system memory.",
       "Task completion requires the exact expected changed-file set and passing candidate verification.",
       "Python, Go, or Rust fixtures are explicitly skipped when their required runtime is unavailable and excluded from completion-rate denominators.",
       "Each task uses a disposable fixture copy. The original fixture and active workspace are not modified."

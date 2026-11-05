@@ -1136,29 +1136,36 @@ test("agent execution budget expands with task complexity but respects hard ceil
   assert.ok(complex.maxTotalAttempts <= 24);
 });
 
-test("model context budgets adapt to exact provider tokenizers and conservative local estimates", () => {
-  const local = deriveModelContextBudget({
-    provider: "ollama-local", context_tokens: 8192,
-    capabilities: { tokenCountIsEstimate: true, maxOutputTokens: 8192 }
+test("model context budgets use only SYNTRA's saved byte-BPE tokenizer and native context limit", () => {
+  const native = deriveModelContextBudget({
+    backend: "PyTorch",
+    tokenizer: "byte-BPE",
+    context_tokens: 8192,
+    config: { seq_len: 8192, vocab_size: 1024 }
   });
-  assert.equal(local.contextWindowTokens, 8192);
-  assert.equal(local.exactTokenCount, false);
-  assert.equal(local.budgetProfile, "conservative-estimate");
-  assert.ok(local.contextBudgetTokens < 8192);
-  assert.ok(local.outputBudgetTokens <= 8192);
-  assert.ok(local.contextBudgetTokens + local.outputBudgetTokens + local.safetyMarginTokens <= 8192);
+  assert.equal(native.contextWindowTokens, 8192);
+  assert.equal(native.exactTokenCount, true);
+  assert.equal(native.budgetProfile, "native-tokenizer");
+  assert.ok(native.contextBudgetTokens < 8192);
+  assert.ok(native.outputBudgetTokens <= 8192);
+  assert.ok(native.contextBudgetTokens + native.outputBudgetTokens + native.safetyMarginTokens <= 8192);
 
-  const gemini = deriveModelContextBudget({
-    provider: "gemini-api", context_tokens: 1_048_576,
-    capabilities: { tokenCountIsEstimate: false, maxOutputTokens: 8192 }
+  const unknownTokenizer = deriveModelContextBudget({
+    backend: "PyTorch",
+    tokenizer: "unknown-tokenizer",
+    context_tokens: 8192
   });
-  assert.equal(gemini.exactTokenCount, true);
-  assert.equal(gemini.budgetProfile, "provider-tokenizer");
-  assert.equal(gemini.outputBudgetTokens, 8192);
-  assert.ok(gemini.contextBudgetTokens > local.contextBudgetTokens);
-  assert.ok(gemini.contextBudgetTokens + gemini.outputBudgetTokens + gemini.safetyMarginTokens <= gemini.contextWindowTokens);
+  assert.equal(unknownTokenizer.exactTokenCount, false);
+  assert.equal(unknownTokenizer.budgetProfile, "conservative-estimate");
 
-  const tiny = deriveModelContextBudget({ context_tokens: 512, capabilities: { tokenCountIsEstimate: true } });
+  const oversized = deriveModelContextBudget({
+    tokenizer: "byte-BPE",
+    context_tokens: 1_048_576
+  });
+  assert.equal(oversized.contextWindowTokens, 16_384,
+    "native context sizing must never accept a foreign model's larger window");
+
+  const tiny = deriveModelContextBudget({ context_tokens: 512 });
   assert.equal(tiny.contextWindowTokens, 1024);
   assert.ok(tiny.contextBudgetTokens >= 128);
   assert.ok(tiny.outputBudgetTokens >= 128);
