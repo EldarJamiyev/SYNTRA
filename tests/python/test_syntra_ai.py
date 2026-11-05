@@ -718,13 +718,13 @@ class TransformerTests(unittest.TestCase):
             root = Path(temp)
             source = root / "sentinels.py"
             source.write_text(
-                '"""Utilities for sentinel checks and bounded arithmetic."""\\n'
-                "from typing import Optional\\n"
-                "__all__ = ['is_missing', 'clamp_value']\\n\\n"
-                "def is_missing(value):\\n"
-                "    return value == None\\n\\n"
-                "def clamp_value(value, lower, upper):\\n"
-                "    return min(max(value, lower), upper)\\n",
+                '"""Utilities for sentinel checks and bounded arithmetic."""\n'
+                "from typing import Optional\n"
+                "__all__ = ['is_missing', 'clamp_value']\n\n"
+                "def is_missing(value):\n"
+                "    return value == None\n\n"
+                "def clamp_value(value, lower, upper):\n"
+                "    return min(max(value, lower), upper)\n",
                 encoding="utf-8",
             )
             output = root / "curriculum.jsonl"
