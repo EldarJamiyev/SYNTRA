@@ -96,7 +96,7 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
       }
     });
     assert.equal(savedPath, outputPath);
-    assert.equal(report.model.name, "test-local-model");
+    assert.equal(report.model.name, "SYNTRA native Transformer");
     assert.equal(report.summary.completedTaskCount, 1, JSON.stringify(report.tasks));
     assert.equal(report.tasks[0].taskComplete, true);
     assert.deepEqual(JSON.parse(await fs.readFile(outputPath, "utf8")), report);

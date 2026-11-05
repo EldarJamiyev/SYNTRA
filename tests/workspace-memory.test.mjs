@@ -95,7 +95,7 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     assert.equal(requests, 1);
 
     const second = await searchWorkspaceMemory(root, "dns resolver convention", 6, {
-      embedModel: "test-embedding-model", fetchImpl
+      embedModel: "syntra-native", fetchImpl
     });
     assert.equal(second.retrievalMode, "hybrid_semantic");
     assert.equal(second.results[0].id, network.note.id);

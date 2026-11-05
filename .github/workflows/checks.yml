@@ -97,7 +97,7 @@ jobs:
           if (-not $launcherText.Contains("npm ci")) { throw "Windows launcher must install frontend dependencies with npm ci." }
           if (-not $launcherText.Contains("npm install --package-lock-only --ignore-scripts --no-audit")) { throw "Windows launcher must bootstrap a missing lockfile before npm ci." }
           if ($launcherText -match '(?m)^\s*npm install\s+(?!--package-lock-only)') { throw "Windows launcher must not perform an unpinned npm install." }
-          if (-not (Test-Path "scripts/launcher-helpers.ps1")) { throw "Windows launcher helper module is missing." }
+          if (Test-Path "scripts/launcher-helpers.ps1") { throw "Legacy alternate-model launcher helper must not be present." }
           if (-not (Test-Path "tests/windows-launcher.test.ps1")) { throw "Windows launcher behavior tests are missing." }
           & ./tests/windows-launcher.test.ps1
           if (-not (Test-Path "tests/frontend.test.mjs")) { throw "Minimal chat frontend regression test is missing." }
