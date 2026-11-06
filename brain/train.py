@@ -311,7 +311,7 @@ def _read_instruction_jsonl_datasets(
                 structured = True
                 nonempty_lines = 0
                 for line_number, raw_line in enumerate(BytesIO(raw), start=1):
-                    record_bytes = raw_line.rstrip(b"\\r\\n")
+                    record_bytes = raw_line.rstrip(b"\r\n")
                     if not record_bytes.strip():
                         continue
                     nonempty_lines += 1
