@@ -783,11 +783,11 @@ class TransformerTests(unittest.TestCase):
             source = root / "large.py"
             long_literal = "x" * 12_500
             source.write_text(
-                "def enormous_payload():\\n"
-                f"    payload = {long_literal!r}\\n"
-                "    return len(payload)\\n\\n"
-                "def useful_symbol(value):\\n"
-                "    return value + 1\\n",
+                "def enormous_payload():\n"
+                f"    payload = {long_literal!r}\n"
+                "    return len(payload)\n\n"
+                "def useful_symbol(value):\n"
+                "    return value + 1\n",
                 encoding="utf-8",
             )
             metadata = _module_metadata("large.py", source.read_text(encoding="utf-8"))
