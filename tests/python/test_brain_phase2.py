@@ -679,6 +679,23 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             (root / "secrets.py").write_text("PRIVATE_TOKEN = 'do-not-train'\\n", encoding="utf-8")
             (root / "node_modules" / "package" / "ignored.py").write_text("generated dependency\\n", encoding="utf-8")
             (root / "dist" / "ignored.js").write_text("generated build output\\n", encoding="utf-8")
+            for sensitive_name in (
+                ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+                ".dockerconfigjson", "service-account.json", "serviceaccount.json",
+            ):
+                (root / sensitive_name).write_text("excluded-config-marker", encoding="utf-8")
+            for directory, filename in (
+                (".ssh", "config"),
+                (".aws", "credentials"),
+                (".azure", "profile.json"),
+                (".kube", "config"),
+                (".docker", "config.json"),
+                (".gnupg", "gpg.conf"),
+                (".terraform", "credentials.tfrc.json"),
+            ):
+                secret_dir = root / directory
+                secret_dir.mkdir()
+                (secret_dir / filename).write_text("excluded-directory-marker", encoding="utf-8")
 
             train_text, validation_text, names, byte_count, fingerprint = _read_local_datasets(
                 [root], 1024 * 1024
@@ -690,6 +707,8 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertNotIn("PRIVATE_TOKEN", combined)
             self.assertNotIn("generated dependency", combined)
             self.assertNotIn("generated build output", combined)
+            self.assertNotIn("excluded-config-marker", combined)
+            self.assertNotIn("excluded-directory-marker", combined)
             self.assertEqual(len(names), 2)
             self.assertGreater(byte_count, 0)
             self.assertEqual(len(fingerprint), 64)
