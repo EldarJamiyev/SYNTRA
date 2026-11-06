@@ -53,7 +53,8 @@ SKIP_DIRECTORIES = frozenset({
     ".pytest_cache", ".ruff_cache", "__pycache__", "node_modules", "vendor",
     "dist", "build", "target", "coverage", ".next", ".nuxt", ".turbo",
     ".cache", ".idea", ".vscode", "site-packages", "checkpoints", "artifacts",
-    "logs", ".syntra",
+    "logs", ".syntra", ".ssh", ".aws", ".azure", ".kube", ".docker",
+    ".gnupg", ".terraform",
 })
 SENSITIVE_SUFFIXES = frozenset({
     ".pem", ".key", ".p12", ".pfx", ".p7b", ".p7c", ".jks", ".crt", ".cer", ".der",
@@ -119,6 +120,9 @@ def _is_sensitive_name(name: str) -> bool:
         "credentials", "credentials.json", "secrets", "secrets.json",
         "id_rsa", "id_ed25519", "known_hosts", "authorized_keys",
         "access_token", "access_token.txt", "refresh_token", "token.txt",
+        ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+        "dockerconfigjson", ".dockerconfigjson", "service-account.json",
+        "serviceaccount.json", "kubeconfig", "config.json",
     }:
         return True
     if any(marker in lower for marker in ("secret", "credential", "password", "private_key", "private-key")):
