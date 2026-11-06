@@ -259,7 +259,13 @@ def _safe_none_patch_examples(relative_path: str, source: str) -> list[dict[str,
         if left_is_none == right_is_none:
             continue
         before = ast.get_source_segment(source, node)
-        if not before:
+        if (
+            not before
+            or len(before) > 12_000
+            or source.count(before) != 1
+        ):
+            # The live agent rejects ambiguous or oversized exact anchors.
+            # Do not emit a curriculum repair task it cannot apply safely.
             continue
         if right_is_none:
             match = _NONE_COMPARE_LEFT.fullmatch(before.strip())
@@ -273,7 +279,7 @@ def _safe_none_patch_examples(relative_path: str, source: str) -> list[dict[str,
                 continue
             keyword = "is" if isinstance(operator, ast.Eq) else "is not"
             after = "None " + keyword + (match.group("space_right") or " ") + match.group("right").lstrip()
-        if before == after or (before, after) in seen:
+        if len(after) > 12_000 or before == after or (before, after) in seen:
             continue
         seen.add((before, after))
         examples.append({"before": before, "after": after, "line": str(node.lineno)})
