@@ -660,6 +660,23 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(tokenized.token_count, len(tokenized.token_ids))
             self.assertEqual(tokenized.token_count, corpus.token_count)
 
+    def test_source_only_corpus_scan_skips_files_that_exceed_remaining_token_budget(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-only-budget-") as temp:
+            root = Path(temp)
+            (root / "a_too_large.py").write_text("x" * 1100, encoding="utf-8")
+            small_text = "def small(): return 1\n" * 15
+            (root / "z_fits.py").write_text(small_text, encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus([root], max_tokens=1024, include_tokens=False)
+
+            self.assertEqual([Path(name).name for name in corpus.files], ["z_fits.py"])
+            self.assertEqual(corpus.documents, [small_text])
+            self.assertEqual(corpus.token_count, len(small_text.encode("utf-8")) + 2)
+            self.assertEqual(corpus.token_ids, [])
+            self.assertGreaterEqual(corpus.skipped_files, 1)
+
     def test_unified_brain_checkpoint_normalization_and_modern_config(self):
         from syntra_ai.runtime import _normalize_checkpoint_payload
 
