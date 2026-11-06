@@ -614,19 +614,25 @@ def synthesize_repository_curriculum(
         resolved = Path(source_path).resolve()
         relative_path = None
         source_root: Path | None = None
-        for approved_root in corpus_roots:
+        source_root_index: int | None = None
+        for root_index, approved_root in enumerate(corpus_roots):
             try:
                 relative_path = resolved.relative_to(approved_root).as_posix()
                 source_root = approved_root
+                source_root_index = root_index
                 break
             except ValueError:
                 continue
-        if relative_path is None or source_root is None:
+        if relative_path is None or source_root is None or source_root_index is None:
             raise ValueError("A source file escaped all approved curriculum roots.")
         is_active_workspace_source = (
             os.path.normcase(os.fspath(source_root))
             == os.path.normcase(os.fspath(output_root))
         )
+        if not is_active_workspace_source:
+            # Different approved roots may contain the same relative filename.
+            # Namespace read-only roots to avoid source_path and split-group collisions.
+            relative_path = f"approved-root-{source_root_index + 1}/{relative_path}"
         if not source_text.strip():
             continue
 
