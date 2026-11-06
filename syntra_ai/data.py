@@ -1,5 +1,6 @@
 """Safe local source corpus discovery and byte-level tokenization."""
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Iterable
 import os
 import stat
@@ -42,6 +43,7 @@ class Corpus:
     skipped_files: int
     documents: list[str]
     token_count: int = 0
+    source_sha256: str = ""
 
 
 def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, bytes, str] | None:
@@ -127,6 +129,7 @@ def load_corpus(
     total_bytes = 0
     skipped = 0
     documents: list[str] = []
+    digest = sha256()
     seen: set[str] = set()
     if max_files < 1 or max_files > MAX_CORPUS_FILES:
         raise ValueError(f"max_files must be between 1 and {MAX_CORPUS_FILES:,}.")
@@ -180,6 +183,11 @@ def load_corpus(
                 if normalized_key in seen:
                     continue
                 seen.add(normalized_key)
+                path_bytes = normalized_key.encode("utf-8")
+                digest.update(len(path_bytes).to_bytes(8, "big"))
+                digest.update(path_bytes)
+                digest.update(len(raw).to_bytes(8, "big"))
+                digest.update(raw)
                 remaining = max_tokens - token_count
                 if not include_tokens and len(raw) + 2 > remaining:
                     skipped += 1
@@ -206,4 +214,4 @@ def load_corpus(
                 break
     if not files:
         raise ValueError("No readable text/source files were found in the selected corpus root(s).")
-    return Corpus(tokens, files, total_bytes, skipped, documents, token_count)
+    return Corpus(tokens, files, total_bytes, skipped, documents, token_count, digest.hexdigest())
