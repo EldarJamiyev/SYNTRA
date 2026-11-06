@@ -97,39 +97,58 @@ def load_instruction_examples(
                 and len(split_group_value) <= 2048
                 else None
             )
-            example_id = hashlib.sha256(
-                (normalized_prompt + "\\0" + normalized_completion).encode("utf-8")
-            ).hexdigest()
             prompt = tokenizer.encode(prompt_text)
             completion = tokenizer.encode(completion_text)
-            completion = completion[:max(8, seq_len // 2)]
-            prompt_limit = max(0, seq_len - len(completion) - 2)
-            prompt = prompt[-prompt_limit:] if prompt_limit else []
+            # Retain the newest prompt context, then supervise every response
+            # token through causal windows instead of silently clipping code.
+            prompt = prompt[-(seq_len - 1):]
             sequence = [BOS_ID, *prompt, *completion, EOS_ID]
-            input_ids = sequence[:-1]
-            labels = sequence[1:]
-            # labels 0..len(prompt)-1 target the prompt; completion and EOS remain supervised.
-            for position in range(min(len(prompt), len(labels))):
-                labels[position] = -100
-            example_tokens = len(input_ids) + len(labels)
-            if total_tokens + example_tokens > max_tokens:
-                raise ValueError(
-                    f"Instruction dataset exceeds the {max_tokens:,}-token safety cap at line {line_number}. "
-                    "Reduce max_examples or shorten the prompt/completion examples."
-                )
-            examples.append({
-                "input_ids": input_ids,
-                "labels": labels,
-                "prompt_tokens": len(prompt),
-                "completion_tokens": len(completion),
-                "prompt_group_id": prompt_group_id,
-                "split_group_id": split_group_id,
-                "example_id": example_id,
-                "line": line_number,
-            })
-            total_tokens += example_tokens
-            if len(examples) >= max_examples:
-                break
+            first_response_target = 1 + len(prompt)
+            base_example_id = hashlib.sha256(
+                (normalized_prompt + "\0" + normalized_completion).encode("utf-8")
+            ).hexdigest()
+
+            start = max(0, first_response_target - seq_len)
+            chunk_index = 0
+            while start < len(sequence) - 1:
+                window = sequence[start:start + seq_len + 1]
+                if len(window) < 2:
+                    break
+                input_ids = window[:-1]
+                labels = window[1:]
+                for position in range(len(labels)):
+                    target_position = start + position + 1
+                    if target_position < first_response_target:
+                        labels[position] = -100
+
+                if any(token != -100 for token in labels):
+                    if len(examples) >= max_examples:
+                        raise ValueError(
+                            f"Instruction dataset exceeds the {max_examples:,}-example safety cap at line {line_number}."
+                        )
+                    example_tokens = len(input_ids) + len(labels)
+                    if total_tokens + example_tokens > max_tokens:
+                        raise ValueError(
+                            f"Instruction dataset exceeds the {max_tokens:,}-token safety cap at line {line_number}. "
+                            "Reduce max_examples or shorten the prompt/completion examples."
+                        )
+                    chunk_example_id = hashlib.sha256(
+                        (base_example_id + "\0" + str(chunk_index)).encode("utf-8")
+                    ).hexdigest()
+                    examples.append({
+                        "input_ids": input_ids,
+                        "labels": labels,
+                        "prompt_tokens": sum(token == -100 for token in labels),
+                        "completion_tokens": sum(token != -100 for token in labels),
+                        "prompt_group_id": prompt_group_id,
+                        "split_group_id": split_group_id,
+                        "example_id": chunk_example_id,
+                        "line": line_number,
+                        "chunk_index": chunk_index,
+                    })
+                    total_tokens += example_tokens
+                start += seq_len
+                chunk_index += 1
     if len(examples) < 1:
         raise ValueError("Instruction dataset contains no non-empty prompt/completion examples.")
     return examples
