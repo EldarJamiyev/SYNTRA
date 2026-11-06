@@ -710,8 +710,11 @@ def train(
             training_data_format = "mixed-raw-and-instruction-jsonl-v1"
         else:
             training_data_format = "instruction-jsonl-masked-v1"
+        # The source-group split policy is part of the effective training corpus.
+        # Bump this fingerprint domain so old prompt-only-split checkpoints cannot
+        # silently resume against a different train/validation assignment.
         dataset_hash = sha256(
-            ("syntra-brain-corpus-v2:" + raw_hash + ":" + instruction_hash).encode("ascii")
+            ("syntra-brain-corpus-v3:source-group-split-v2:" + raw_hash + ":" + instruction_hash).encode("ascii")
         ).hexdigest()
     else:
         training_records, validation_records = [], []
@@ -754,6 +757,7 @@ def train(
     )
 
     saved: dict | None = None
+    saved_training_settings: dict | None = None
     if resume:
         saved = load_checkpoint(target)
         if saved["dataset_sha256"] != dataset_hash:
@@ -767,6 +771,32 @@ def train(
                 "The selected dataset format differs from the checkpoint's training data format. "
                 "Start a new checkpoint rather than resuming across raw-text and supervised JSONL modes."
             )
+        if instruction_records:
+            settings = saved.get("training_settings")
+            required_settings = {"batch_size", "learning_rate", "weight_decay", "seed", "steps_per_epoch"}
+            if not isinstance(settings, dict) or not required_settings.issubset(settings):
+                raise ValueError(
+                    "The checkpoint does not contain complete instruction-training resume settings. "
+                    "Start a new checkpoint rather than risk skipping or repeating training data."
+                )
+            expected_settings = {
+                "batch_size": batch_size,
+                "learning_rate": learning_rate,
+                "weight_decay": weight_decay,
+                "seed": seed,
+            }
+            changed_settings = [
+                name for name, expected in expected_settings.items()
+                if type(settings.get(name)) not in (int, float)
+                or settings.get(name) != expected
+            ]
+            if changed_settings:
+                raise ValueError(
+                    "Instruction-training resume settings differ from the checkpoint: "
+                    + ", ".join(changed_settings)
+                    + ". Use the original settings or start a new checkpoint."
+                )
+            saved_training_settings = settings
         stored_config = TransformerConfig.from_dict(saved["config"])
         if config is not None:
             comparable_requested = replace(requested_config, vocab_size=stored_config.vocab_size)
@@ -820,6 +850,13 @@ def train(
     if chunk_count < 1:
         raise ValueError("The training corpus does not contain a supervised context block.")
     steps_per_epoch = math.ceil(chunk_count / batch_size)
+    if saved_training_settings is not None:
+        saved_steps_per_epoch = saved_training_settings.get("steps_per_epoch")
+        if type(saved_steps_per_epoch) is not int or saved_steps_per_epoch != steps_per_epoch:
+            raise ValueError(
+                "The training dataset now produces a different number of batches per epoch. "
+                "Start a new checkpoint rather than resuming with a changed data-order mapping."
+            )
     model = LocalTransformer(requested_config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
