@@ -9,6 +9,7 @@ from .config import ModelConfig
 from .data import load_corpus
 from .runtime import evaluate, generate, status, tokenize_text
 from .instruction import audit_instruction_dataset, finetune
+from .curriculum import synthesize_repository_curriculum
 from .training import train
 
 
@@ -34,6 +35,22 @@ def _parser() -> argparse.ArgumentParser:
     training.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     training.add_argument("--seed", type=int, default=1337)
     training.add_argument("--resume", action="store_true")
+
+    curriculum = sub.add_parser(
+        "curriculum",
+        help="Generate source-grounded module, symbol, and anchor-patch JSONL examples from approved local repositories.",
+    )
+    curriculum.add_argument(
+        "--root",
+        default=None,
+        help="Optional absolute repository root. When omitted, SYNTRA scans the project and every root in SYNTRA_ALLOWED_CORPUS_ROOTS.",
+    )
+    curriculum.add_argument(
+        "--output",
+        default=None,
+        help="Optional JSONL output path inside the project or selected workspace.",
+    )
+    curriculum.add_argument("--max-examples", type=int, default=240)
 
     tokenizer_parser = sub.add_parser("tokenize", help="Report real BPE token count and context use for text.")
     tokenizer_parser.add_argument("--text", required=True)
@@ -70,6 +87,14 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "curriculum":
+        result = synthesize_repository_curriculum(
+            root=args.root,
+            output_path=args.output,
+            max_examples=args.max_examples,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if args.command == "inspect-data":
         corpus = load_corpus([args.root], max_tokens=args.max_tokens)
         print(json.dumps({
