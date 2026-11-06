@@ -131,11 +131,16 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
             *module_values,
         ][:MAX_DECLARATIONS]
 
+    full_docstring = ast.get_docstring(tree, clean=False) or ""
     return {
-        "docstring": (ast.get_docstring(tree, clean=False) or "")[:MAX_MODULE_CHARS],
+        "docstring": full_docstring[:MAX_MODULE_CHARS],
+        "docstring_truncated": len(full_docstring) > MAX_MODULE_CHARS,
         "imports": imports[:MAX_IMPORTS],
+        "imports_truncated": len(imports) > MAX_IMPORTS,
         "symbols": symbols[:MAX_DECLARATIONS],
+        "symbols_truncated": len(symbols) > MAX_DECLARATIONS,
         "exports": exports,
+        "exports_truncated": len(exports) >= MAX_DECLARATIONS,
         "declarations": [item["name"] for item in symbols][:MAX_DECLARATIONS],
     }
 
@@ -152,25 +157,35 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
     symbols: list[dict[str, Any]] = []
     for position, (start, name, signature) in enumerate(starts[:MAX_DECLARATIONS]):
         next_start = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
-        end = min(next_start, start + 300)
+        hard_end = start + 300
+        end = min(next_start, hard_end)
+        truncated = next_start > hard_end
         brace_depth = lines[start].count("{") - lines[start].count("}")
         if brace_depth > 0:
+            closed = False
             for cursor in range(start + 1, end):
                 brace_depth += lines[cursor].count("{") - lines[cursor].count("}")
                 if brace_depth <= 0:
                     end = cursor + 1
+                    closed = True
                     break
+            if not closed:
+                truncated = True
         else:
             base_indent = len(lines[start]) - len(lines[start].lstrip())
+            ended_at_dedent = False
             for cursor in range(start + 1, end):
                 current = lines[cursor]
                 if current.strip() and len(current) - len(current.lstrip()) <= base_indent:
                     end = cursor
+                    ended_at_dedent = True
                     break
+            if not ended_at_dedent and next_start > hard_end:
+                truncated = True
         body = "\n".join(lines[start:end]).strip()
         if len(body) < 12:
             continue
-        truncated = len(body) > MAX_SYMBOL_CHARS
+        truncated = truncated or len(body) > MAX_SYMBOL_CHARS
         symbols.append({
             "name": name,
             "short_name": name,
@@ -195,16 +210,30 @@ def _module_metadata(relative_path: str, source: str) -> dict[str, Any]:
         docstring = parsed["docstring"]
         exports = parsed["exports"]
         declarations = parsed["declarations"]
+        metadata_truncated = any((
+            parsed["docstring_truncated"],
+            parsed["imports_truncated"],
+            parsed["symbols_truncated"],
+            parsed["exports_truncated"],
+        ))
     else:
-        imports = [line.strip() for line in lines if _IMPORT.match(line)][:MAX_IMPORTS]
-        symbols = _extract_logical_symbols(source)
-        docstring = (
-            "\n".join(lines[:min(18, len(lines))])[:MAX_MODULE_CHARS]
+        all_imports = [line.strip() for line in lines if _IMPORT.match(line)]
+        all_symbols = _extract_logical_symbols(source)
+        imports = all_imports[:MAX_IMPORTS]
+        symbols = all_symbols[:MAX_DECLARATIONS]
+        raw_docstring = (
+            "\n".join(lines[:min(18, len(lines))])
             if lines and lines[0].lstrip().startswith(('"', "'", "/*", "//", "#"))
             else ""
         )
+        docstring = raw_docstring[:MAX_MODULE_CHARS]
         exports = [item["name"] for item in symbols if not item["short_name"].startswith("_")][:MAX_DECLARATIONS]
         declarations = [item["name"] for item in symbols][:MAX_DECLARATIONS]
+        metadata_truncated = (
+            len(all_imports) > MAX_IMPORTS
+            or len(all_symbols) > MAX_DECLARATIONS
+            or len(raw_docstring) > MAX_MODULE_CHARS
+        )
 
     structure = [
         f"Module: {relative_path}",
@@ -227,12 +256,18 @@ def _module_metadata(relative_path: str, source: str) -> dict[str, Any]:
     else:
         structure.append("(No supported function, class, or declaration blocks were identified.)")
 
+    full_structure = "\n".join(structure)
+    structure_truncated = metadata_truncated or len(full_structure) > MAX_MODULE_CHARS * 3
+    if structure_truncated:
+        marker = "[PARTIAL STRUCTURAL SUMMARY: source declarations or metadata exceeded curriculum limits; omitted items are unknown.]"
+        full_structure = full_structure[:MAX_MODULE_CHARS * 3 - len(marker)].rstrip() + "\n" + marker
     return {
         "imports": imports,
         "symbols": symbols,
         "exports": exports,
         "declarations": declarations,
-        "structure": "\n".join(structure)[:MAX_MODULE_CHARS * 3],
+        "structure": full_structure,
+        "structure_truncated": structure_truncated,
     }
 
 
@@ -439,14 +474,18 @@ def synthesize_repository_curriculum(
             structure,
         )
 
-        file_symbols = 0
-        for symbol in metadata["symbols"]:
-            symbol_count += 1
-            if symbol.get("truncated"):
-                continue
-            if file_symbols >= per_file_symbol_limit:
-                continue
-            file_symbols += 1
+        symbol_count += len(metadata["symbols"])
+        eligible_symbols = [
+            item for item in metadata["symbols"]
+            if not item.get("truncated")
+        ]
+        eligible_symbols = sorted(
+            eligible_symbols,
+            key=lambda item: hashlib.sha256(
+                f"{relative_path}\\0{item['name']}".encode("utf-8")
+            ).hexdigest(),
+        )[:per_file_symbol_limit]
+        for symbol in eligible_symbols:
             signature = symbol["signature"] or symbol["name"]
             source_block = symbol["body"]
             offer_candidate(
