@@ -14,6 +14,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import stat
 from time import perf_counter
 from typing import Callable, Iterable
 import unicodedata
@@ -58,6 +59,55 @@ SENSITIVE_SUFFIXES = frozenset({
     ".keystore", ".sqlite", ".db", ".dump", ".bak", ".log",
 })
 MAX_DATASET_FILES = 20_000
+
+
+def _read_bounded_regular_file(
+    path: Path,
+    max_bytes: int,
+    *,
+    label: str,
+) -> bytes:
+    """Read one unchanged regular file without following a final-component symlink."""
+    if type(max_bytes) is not int or max_bytes < 0:
+        raise ValueError(f"{label} byte budget is invalid.")
+    descriptor: int | None = None
+    try:
+        before = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"{label} must be a regular file: {path}")
+        if before.st_size > max_bytes:
+            raise ValueError(
+                f"{label} exceeds the remaining {max_bytes:,}-byte local dataset budget: {path}"
+            )
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            opened = os.fstat(handle.fileno())
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                or opened.st_size > max_bytes
+            ):
+                raise ValueError(f"{label} changed while it was being opened: {path}")
+            raw = handle.read(max_bytes + 1)
+            after = os.fstat(handle.fileno())
+            if (
+                len(raw) > max_bytes
+                or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or opened.st_size != after.st_size
+                or opened.st_mtime_ns != after.st_mtime_ns
+                or opened.st_ctime_ns != after.st_ctime_ns
+            ):
+                raise ValueError(f"{label} changed while it was being read or exceeded its byte limit: {path}")
+            return raw
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError(f"Cannot safely read local {label.casefold()} {path}: {exc}") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _is_sensitive_name(name: str) -> bool:
@@ -150,18 +200,17 @@ def _read_local_datasets(
                 seen.add(resolved)
                 if file_count >= MAX_DATASET_FILES:
                     raise ValueError(f"Local training data exceeds the {MAX_DATASET_FILES:,}-file limit.")
-                size = resolved.stat().st_size
-                if size < 1:
+                if total_bytes >= max_dataset_bytes:
+                    raise ValueError(
+                        f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
+                    )
+                raw = _read_bounded_regular_file(
+                    resolved,
+                    max_dataset_bytes - total_bytes,
+                    label="training dataset",
+                )
+                if not raw:
                     continue
-                if total_bytes + size > max_dataset_bytes:
-                    raise ValueError(
-                        f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
-                    )
-                raw = resolved.read_bytes()
-                if total_bytes + len(raw) > max_dataset_bytes:
-                    raise ValueError(
-                        f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
-                    )
                 try:
                     source_text = raw.decode("utf-8")
                 except UnicodeDecodeError:
@@ -214,6 +263,7 @@ def _read_instruction_jsonl_datasets(
     names: list[str] = []
     digest = sha256()
     total_bytes = 0
+    scan_bytes = 0
     seen: set[Path] = set()
 
     for raw_path in paths:
@@ -224,13 +274,20 @@ def _read_instruction_jsonl_datasets(
                 if resolved.suffix.casefold() != ".jsonl" or resolved in seen:
                     continue
                 seen.add(resolved)
-                raw = resolved.read_bytes()
+                if len(seen) > MAX_DATASET_FILES:
+                    raise ValueError(f"Local training data exceeds the {MAX_DATASET_FILES:,}-file limit.")
+                if scan_bytes >= max_dataset_bytes:
+                    raise ValueError(
+                        f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
+                    )
+                raw = _read_bounded_regular_file(
+                    resolved,
+                    max_dataset_bytes - scan_bytes,
+                    label="instruction dataset",
+                )
+                scan_bytes += len(raw)
                 if not raw:
                     continue
-                if total_bytes + len(raw) > max_dataset_bytes:
-                    raise ValueError(
-                        f"Structured instruction datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
-                    )
                 try:
                     text = raw.decode("utf-8")
                 except UnicodeDecodeError:
