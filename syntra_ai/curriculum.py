@@ -493,7 +493,7 @@ def synthesize_repository_curriculum(
         if identity in candidate_sizes:
             return
         candidate_size = len(
-            (json.dumps(candidate, ensure_ascii=False, separators=(",", ":")) + "\\n").encode("utf-8")
+            (json.dumps(candidate, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         )
         if candidate_size > MAX_CURRICULUM_CANDIDATE_BYTES:
             candidate_budget_skips += 1
