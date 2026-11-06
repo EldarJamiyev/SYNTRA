@@ -180,6 +180,8 @@ def _read_local_datasets(
     allow_empty: bool = False,
     require_holdout: bool = True,
     max_files: int = MAX_DATASET_FILES,
+    preloaded_files: dict[str, tuple[str, bytes, bool]] | None = None,
+    already_scanned_files: int = 0,
 ) -> tuple[str, str, list[str], int, str]:
     """Read bounded local text/code files and produce a stable corpus fingerprint."""
     if type(max_files) is not int or not 0 <= max_files <= MAX_DATASET_FILES:
@@ -188,8 +190,12 @@ def _read_local_datasets(
     names: list[str] = []
     digest = sha256()
     total_bytes = 0
-    file_count = 0
+    newly_read_bytes = 0
+    file_count = already_scanned_files
     seen: set[Path] = set()
+    preloaded_files = preloaded_files or {}
+    if type(already_scanned_files) is not int or not 0 <= already_scanned_files <= max_files:
+        raise ValueError("already_scanned_files is outside the local dataset file limit.")
 
     for raw_path in paths:
         path = Path(raw_path).expanduser()
@@ -201,28 +207,36 @@ def _read_local_datasets(
                 if resolved in seen:
                     continue
                 seen.add(resolved)
-                if file_count >= max_files:
-                    raise ValueError(f"Local training data exceeds the {max_files:,}-file limit.")
-                if total_bytes >= max_dataset_bytes:
-                    raise ValueError(
-                        f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
+                preloaded = preloaded_files.get(str(resolved))
+                if preloaded is None:
+                    if file_count >= max_files:
+                        raise ValueError(f"Local training data exceeds the {max_files:,}-file limit.")
+                    if newly_read_bytes >= max_dataset_bytes:
+                        raise ValueError(
+                            f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
+                        )
+                    raw = _read_bounded_regular_file(
+                        resolved,
+                        max_dataset_bytes - newly_read_bytes,
+                        label="training dataset",
                     )
-                raw = _read_bounded_regular_file(
-                    resolved,
-                    max_dataset_bytes - total_bytes,
-                    label="training dataset",
-                )
+                    newly_read_bytes += len(raw)
+                    source_explicitly_selected = explicitly_selected
+                    file_count += 1
+                else:
+                    preloaded_name, raw, source_explicitly_selected = preloaded
+                    if preloaded_name != relative_name:
+                        raise ValueError("Preloaded dataset path metadata does not match the selected source path.")
                 if not raw:
                     continue
                 try:
                     source_text = raw.decode("utf-8")
                 except UnicodeDecodeError:
-                    if explicitly_selected:
+                    if source_explicitly_selected:
                         raise ValueError(f"Dataset must contain valid UTF-8 text: {resolved}") from None
                     continue
 
                 total_bytes += len(raw)
-                file_count += 1
                 relative_bytes = relative_name.encode("utf-8")
                 digest.update(len(relative_bytes).to_bytes(8, "big"))
                 digest.update(relative_bytes)
@@ -260,7 +274,7 @@ def _read_local_datasets(
 def _read_instruction_jsonl_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
-) -> tuple[list[dict[str, str]], list[str], int, str]:
+) -> tuple[list[dict[str, str]], list[str], int, str, int, int, dict[str, tuple[str, bytes, bool]]]:
     """Read structured prompt/response JSONL files; leave ordinary text for the legacy reader."""
     records: list[dict[str, str]] = []
     names: list[str] = []
@@ -268,12 +282,13 @@ def _read_instruction_jsonl_datasets(
     total_bytes = 0
     scan_bytes = 0
     seen: set[Path] = set()
+    fallback_files: dict[str, tuple[str, bytes, bool]] = {}
 
     for raw_path in paths:
         path = Path(raw_path).expanduser()
         try:
             source = path.resolve(strict=True)
-            for resolved, relative_name, _explicitly_selected in _iter_local_source_files(source):
+            for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
                 if resolved.suffix.casefold() != ".jsonl" or resolved in seen:
                     continue
                 seen.add(resolved)
@@ -362,9 +377,10 @@ def _read_instruction_jsonl_datasets(
                     })
 
                 # A JSONL file is treated as structured only when every non-blank
-                # record has a supported prompt/response shape. Otherwise it is
-                # retained as ordinary text by the backwards-compatible reader.
+                # record has a supported prompt/response shape. Preserve the exact
+                # bytes for raw-token fallback so the same file is not read twice.
                 if not structured or not nonempty_lines or not file_records:
+                    fallback_files[str(resolved)] = (relative_name, raw, explicitly_selected)
                     continue
 
                 total_bytes += len(raw)
@@ -380,7 +396,7 @@ def _read_instruction_jsonl_datasets(
         except OSError as exc:
             raise ValueError(f"Cannot read local dataset {path}: {exc}") from None
 
-    return records, names, total_bytes, digest.hexdigest()
+    return records, names, total_bytes, digest.hexdigest(), scan_bytes, len(seen), fallback_files
 
 
 def _split_instruction_records(
@@ -718,18 +734,26 @@ def train(
     if not paths:
         raise ValueError("At least one local dataset file is required.")
 
-    instruction_records, instruction_files, instruction_bytes, instruction_hash = (
-        _read_instruction_jsonl_datasets(paths, max_dataset_bytes)
-    )
+    (
+        instruction_records,
+        instruction_files,
+        instruction_bytes,
+        instruction_hash,
+        instruction_scan_bytes,
+        instruction_scan_files,
+        raw_jsonl_fallbacks,
+    ) = _read_instruction_jsonl_datasets(paths, max_dataset_bytes)
     structured_paths = set(instruction_files)
-    remaining_bytes = max_dataset_bytes - instruction_bytes
+    remaining_read_bytes = max_dataset_bytes - instruction_scan_bytes
     train_text, validation_text, raw_files, raw_bytes, raw_hash = _read_local_datasets(
         paths,
-        remaining_bytes,
+        remaining_read_bytes,
         exclude_paths=structured_paths,
         allow_empty=bool(instruction_records),
         require_holdout=not bool(instruction_records),
-        max_files=MAX_DATASET_FILES - len(instruction_files),
+        max_files=MAX_DATASET_FILES,
+        preloaded_files=raw_jsonl_fallbacks,
+        already_scanned_files=instruction_scan_files,
     )
 
     if instruction_records:
