@@ -483,6 +483,18 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "without a saved epoch permutation"):
             _validate_resume_order(None, 1, chunk_count=3, steps_per_epoch=2)
 
+    def test_global_learning_rate_schedule_is_stable_across_resume_boundaries(self):
+        from brain.train import _scheduled_learning_rate
+
+        base = 3e-4
+        schedule = [_scheduled_learning_rate(base, step) for step in range(1, 250)]
+        first_run = [_scheduled_learning_rate(base, step) for step in range(1, 101)]
+        resumed_run = [_scheduled_learning_rate(base, step) for step in range(101, 250)]
+        self.assertEqual(schedule, first_run + resumed_run)
+        self.assertGreater(schedule[0], 0)
+        self.assertGreater(schedule[99], schedule[100])
+        self.assertGreaterEqual(min(schedule), base * 0.05)
+
     def test_source_related_instruction_examples_never_cross_validation_split(self):
         from brain.train import _split_instruction_records
 
@@ -540,7 +552,23 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
 
             saved = load_checkpoint(checkpoint)
+            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v1")
             self.assertEqual(saved["epoch"], 1)
+            uninterrupted_checkpoint = root / "checkpoints" / "uninterrupted.pt"
+            uninterrupted = train(
+                [dataset],
+                checkpoint_path=uninterrupted_checkpoint,
+                config=self._config(),
+                epochs=2,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+            )
+            self.assertEqual(uninterrupted["status"], "completed")
+
             self.assertGreater(saved["step"], 0)
             self.assertEqual(saved["format"], "syntra-brain-checkpoint")
             self.assertEqual(
@@ -564,6 +592,17 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(resumed["status"], "completed")
             self.assertEqual(resumed["epoch"], 2)
             self.assertGreater(resumed["step"], first["step"])
+            resumed_saved = load_checkpoint(checkpoint)
+            uninterrupted_saved = load_checkpoint(uninterrupted_checkpoint)
+            self.assertEqual(resumed_saved["step"], uninterrupted_saved["step"])
+            for parameter_name, expected_value in uninterrupted_saved["model_state_dict"].items():
+                torch.testing.assert_close(
+                    resumed_saved["model_state_dict"][parameter_name],
+                    expected_value,
+                    rtol=0,
+                    atol=0,
+                    msg=f"resumed model diverged from uninterrupted training at {parameter_name}",
+                )
 
             from brain.generate import generate, load_for_inference
 
