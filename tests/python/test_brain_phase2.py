@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 try:
@@ -224,7 +225,6 @@ class LocalTrainingPipelineTests(unittest.TestCase):
 
         self.assertGreater(len(inputs), 1)
         prompt = "Instruction:\\n" + record["prompt"] + "\\nResponse:\\n"
-        prompt_tokens = len(tokenizer.encode(prompt))
         supervised = [
             token
             for row in targets
@@ -246,7 +246,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 }) for index in range(3)),
                 encoding="utf-8",
             )
-            with unittest.mock.patch.object(train_module, "MAX_INSTRUCTION_RECORDS", 2):
+            with patch("brain.train.MAX_INSTRUCTION_RECORDS", 2):
                 with self.assertRaisesRegex(ValueError, "2-record safety limit"):
                     train_module._read_instruction_jsonl_datasets([dataset], 1024 * 1024)
 
