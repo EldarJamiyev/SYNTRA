@@ -205,11 +205,13 @@ def _read_local_datasets(
     if type(already_scanned_files) is not int or not 0 <= already_scanned_files <= max_files:
         raise ValueError("already_scanned_files is outside the local dataset file limit.")
 
-    for raw_path in paths:
+    for source_index, raw_path in enumerate(paths):
         path = Path(raw_path).expanduser()
         try:
             source = path.resolve(strict=True)
             for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
+                if source_index > 0:
+                    relative_name = f"selected-root-{source_index + 1}/{relative_name}"
                 if exclude_paths and str(resolved) in exclude_paths:
                     continue
                 if resolved in seen:
@@ -318,12 +320,16 @@ def _read_instruction_jsonl_datasets(
     seen: set[Path] = set()
     fallback_files: dict[str, tuple[str, bytes, bool]] = {}
 
-    for raw_path in paths:
+    for source_index, raw_path in enumerate(paths):
         path = Path(raw_path).expanduser()
         try:
             source = path.resolve(strict=True)
             for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
                 if resolved.suffix.casefold() != ".jsonl" or resolved in seen:
+                    continue
+                if source_index > 0:
+                    relative_name = f"selected-root-{source_index + 1}/{relative_name}"
+                if resolved in seen:
                     continue
                 seen.add(resolved)
                 if len(seen) > MAX_DATASET_FILES:
