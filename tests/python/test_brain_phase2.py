@@ -243,6 +243,80 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertGreater(result["training_context_blocks"], 0)
             self.assertGreater(result["validation_context_blocks"], 0)
 
+    def test_structured_and_raw_jsonl_scans_share_file_and_byte_budgets_without_rereading(self):
+        import importlib
+        train_module = importlib.import_module("brain.train")
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-shared-dataset-budget-") as temp:
+            root = Path(temp)
+            structured = root / "instructions.jsonl"
+            structured_records = [
+                {"Instruction": "Explain alpha.", "Response": "Alpha is the first operation."},
+                {"Instruction": "Explain beta.", "Response": "Beta is the second operation."},
+            ]
+            structured.write_text(
+                "\n".join(json.dumps(item) for item in structured_records),
+                encoding="utf-8",
+            )
+            raw_jsonl = root / "legacy.jsonl"
+            raw_text = "Legacy raw language-model source remains supported.\n" * 10
+            raw_jsonl.write_text(raw_text, encoding="utf-8")
+            source = root / "module.py"
+            source_text = "def transform(value): return value + 1\n" * 5
+            source.write_text(source_text, encoding="utf-8")
+
+            real_reader = train_module._read_bounded_regular_file
+            with patch.object(train_module, "_read_bounded_regular_file", wraps=real_reader) as read_file:
+                (
+                    records,
+                    structured_paths,
+                    instruction_bytes,
+                    _instruction_hash,
+                    scan_bytes,
+                    scan_files,
+                    fallback_files,
+                ) = train_module._read_instruction_jsonl_datasets([root], 1024 * 1024)
+                self.assertEqual(len(records), 2)
+                self.assertEqual(scan_files, 2)
+                self.assertEqual(scan_bytes, structured.stat().st_size + raw_jsonl.stat().st_size)
+                self.assertEqual(set(fallback_files), {str(raw_jsonl.resolve())})
+
+                train_text, validation_text, raw_paths, raw_bytes, _raw_hash = (
+                    train_module._read_local_datasets(
+                        [root],
+                        1024 * 1024 - scan_bytes,
+                        exclude_paths=set(structured_paths),
+                        allow_empty=False,
+                        require_holdout=False,
+                        max_files=20,
+                        preloaded_files=fallback_files,
+                        already_scanned_files=scan_files,
+                    )
+                )
+                self.assertIn(raw_text, train_text + validation_text)
+                self.assertIn(source_text, train_text + validation_text)
+                self.assertIn(str(raw_jsonl.resolve()), raw_paths)
+                self.assertIn(str(source.resolve()), raw_paths)
+                self.assertEqual(raw_bytes, len(raw_text.encode("utf-8")) + len(source_text.encode("utf-8")))
+                self.assertLessEqual(instruction_bytes + raw_bytes, 1024 * 1024)
+                self.assertEqual(
+                    read_file.call_count,
+                    3,
+                    "both JSONL candidates are read once and the raw fallback is reused from memory",
+                )
+
+            with self.assertRaisesRegex(ValueError, "20,000-file limit"):
+                train_module._read_local_datasets(
+                    [root],
+                    1024 * 1024 - scan_bytes,
+                    exclude_paths=set(structured_paths),
+                    allow_empty=False,
+                    require_holdout=False,
+                    max_files=scan_files,
+                    preloaded_files=fallback_files,
+                    already_scanned_files=scan_files,
+                )
+
     def test_long_instruction_response_is_packed_without_missing_or_duplicate_targets(self):
         from brain.tokenizer import BytePairTokenizer, EOS_ID
         from brain.train import _instruction_context_blocks
