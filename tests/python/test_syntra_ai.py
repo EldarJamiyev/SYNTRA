@@ -1190,6 +1190,18 @@ class TransformerTests(unittest.TestCase):
                         resume=True,
                     )
             source.write_text(source_contents, encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "batch_size"):
+                    train(
+                        [str(root)],
+                        checkpoint,
+                        steps=1,
+                        batch_size=2,
+                        config=config,
+                        max_tokens=10000,
+                        device_name="cpu",
+                        resume=True,
+                    )
 
             dataset = root / "instructions.jsonl"
             records = [
