@@ -31,7 +31,7 @@ _DECLARATION = re.compile(
     r"([A-Za-z_$][A-Za-z0-9_$]*)"
 )
 _IMPORT = re.compile(r"^\s*(?:import\s|from\s.+\simport\s|#include\s|use\s)")
-_ARROW_DECLARATION = re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=")
+_ARROW_DECLARATION = re.compile(r"^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=")
 _NONE_COMPARE_LEFT = re.compile(
     r"^(?P<left>.+?)(?P<space_left>\s*)(?P<operator>==|!=)(?P<space_right>\s*)None$",
     re.DOTALL,
