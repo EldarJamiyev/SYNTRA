@@ -1230,12 +1230,12 @@ class TransformerTests(unittest.TestCase):
             external.mkdir()
             (project / "inside.py").write_text(
                 '"""Project-root module."""\n'
-                "def inside(value):\n    return value + 1\n",
+                "def inside(value):\n    return value == None\n",
                 encoding="utf-8",
             )
             (external / "outside.py").write_text(
                 '"""Approved external module."""\n'
-                "def outside(value):\n    return value * 2\n",
+                "def outside(value):\n    return value == None\n",
                 encoding="utf-8",
             )
 
@@ -1254,6 +1254,20 @@ class TransformerTests(unittest.TestCase):
             sources = {item["source_path"] for item in records}
             self.assertIn("inside.py", sources)
             self.assertIn("outside.py", sources)
+            patch_records = [
+                item for item in records
+                if item["kind"] == "anchor_patch_repair"
+            ]
+            self.assertGreaterEqual(len(patch_records), 1)
+            patch_paths = {
+                json.loads(item["completion"])["edits"][0]["path"]
+                for item in patch_records
+            }
+            self.assertEqual(
+                patch_paths,
+                {"inside.py"},
+                "repair tasks from additional approved roots must not target the active project workspace",
+            )
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_real_training_checkpoint_and_supervised_prompt_masking(self):
