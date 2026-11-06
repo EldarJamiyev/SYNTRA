@@ -871,7 +871,7 @@ def train(
             }
             changed_settings = [
                 name for name, expected in expected_settings.items()
-                if type(settings.get(name)) not in (int, float)
+                if type(settings.get(name)) is not type(expected)
                 or settings.get(name) != expected
             ]
             if changed_settings:
