@@ -1274,9 +1274,9 @@ class TransformerTests(unittest.TestCase):
                 "def inside(value):\n    return value == None\n",
                 encoding="utf-8",
             )
-            (external / "outside.py").write_text(
-                '"""Approved external module."""\n'
-                "def outside(value):\n    return value == None\n",
+            (external / "inside.py").write_text(
+                '"""Approved external module with a colliding relative path."""\\n'
+                "def outside(value):\\n    return value == None\\n",
                 encoding="utf-8",
             )
 
@@ -1294,7 +1294,7 @@ class TransformerTests(unittest.TestCase):
             ]
             sources = {item["source_path"] for item in records}
             self.assertIn("inside.py", sources)
-            self.assertIn("outside.py", sources)
+            self.assertIn("approved-root-2/inside.py", sources)
             patch_records = [
                 item for item in records
                 if item["kind"] == "anchor_patch_repair"
