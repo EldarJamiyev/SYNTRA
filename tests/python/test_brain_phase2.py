@@ -536,6 +536,8 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 ({"learning_rate": 1e-4}, "learning_rate"),
                 ({"weight_decay": 0.2}, "weight_decay"),
                 ({"seed": 456}, "seed"),
+                ({"evaluation_batches": 2}, "evaluation_batches"),
+                ({"save_every_steps": 3}, "save_every_steps"),
             ]
             for overrides, expected_setting in incompatible_settings:
                 with self.subTest(setting=expected_setting):
@@ -549,7 +551,8 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                             learning_rate=overrides.get("learning_rate", 3e-4),
                             weight_decay=overrides.get("weight_decay", 0.1),
                             tokenizer_bytes=1024,
-                            evaluation_batches=1,
+                            evaluation_batches=overrides.get("evaluation_batches", 1),
+                            save_every_steps=overrides.get("save_every_steps", 100),
                             device_name="cpu",
                             seed=overrides.get("seed", 123),
                             resume=True,
