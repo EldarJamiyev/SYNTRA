@@ -148,12 +148,84 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
     }
 
 
+def _logical_brace_deltas(lines: list[str]) -> list[int]:
+    """Count structural braces while ignoring quoted text and source comments."""
+    deltas: list[int] = []
+    in_block_comment = False
+    quote: str | None = None
+    escaped = False
+
+    for line in lines:
+        delta = 0
+        index = 0
+        while index < len(line):
+            char = line[index]
+            next_pair = line[index:index + 2]
+
+            if in_block_comment:
+                if next_pair == "*/":
+                    in_block_comment = False
+                    index += 2
+                else:
+                    index += 1
+                continue
+
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                index += 1
+                continue
+
+            if next_pair == "//" or char == "#":
+                break
+            if next_pair == "/*":
+                in_block_comment = True
+                index += 2
+                continue
+            if char in ("'", '"') or char == chr(96):
+                # Rust lifetimes and labels use apostrophes without a closing
+                # quote on the same line. Do not treat those as string literals.
+                if char == "'":
+                    has_closing_quote = False
+                    cursor = index + 1
+                    escaped_quote = False
+                    while cursor < len(line):
+                        current = line[cursor]
+                        if escaped_quote:
+                            escaped_quote = False
+                        elif current == "\\":
+                            escaped_quote = True
+                        elif current == "'":
+                            has_closing_quote = True
+                            break
+                        cursor += 1
+                    if not has_closing_quote:
+                        index += 1
+                        continue
+                quote = char
+                index += 1
+                continue
+
+            if char == "{":
+                delta += 1
+            elif char == "}":
+                delta -= 1
+            index += 1
+        deltas.append(delta)
+    return deltas
+
+
 def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
     """Extract bounded declarations while distinguishing module exports from members."""
     lines = source.splitlines()
     # Keep the enclosing brace depth at each declaration so a method body closes
     # at its own parent scope rather than being mistaken for a truncated module function.
     starts: list[tuple[int, str, str, int, bool]] = []
+    brace_deltas = _logical_brace_deltas(lines)
     brace_depth = 0
     for index, line in enumerate(lines):
         match = _DECLARATION.match(line) or _ARROW_DECLARATION.match(line)
@@ -161,8 +233,7 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
         if match:
             is_member = brace_depth > 0 or indentation > 0
             starts.append((index, match.group(1), line.strip(), brace_depth, is_member))
-        brace_depth += line.count("{") - line.count("}")
-        brace_depth = max(0, brace_depth)
+        brace_depth = max(0, brace_depth + brace_deltas[index])
 
     symbols: list[dict[str, Any]] = []
     for position, (start, name, signature, parent_depth, is_member) in enumerate(starts[:MAX_DECLARATIONS]):
@@ -170,11 +241,11 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
         hard_end = start + 300
         end = min(next_start, hard_end)
         truncated = next_start > hard_end
-        local_brace_depth = parent_depth + lines[start].count("{") - lines[start].count("}")
+        local_brace_depth = parent_depth + brace_deltas[start]
         if local_brace_depth > parent_depth:
             closed = False
             for cursor in range(start + 1, end):
-                local_brace_depth += lines[cursor].count("{") - lines[cursor].count("}")
+                local_brace_depth += brace_deltas[cursor]
                 if local_brace_depth <= parent_depth:
                     end = cursor + 1
                     closed = True
