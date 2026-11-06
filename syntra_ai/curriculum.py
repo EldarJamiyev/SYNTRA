@@ -146,26 +146,33 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
 
 
 def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
-    """Extract bounded declaration-shaped blocks for non-Python languages."""
+    """Extract bounded declarations while distinguishing module exports from members."""
     lines = source.splitlines()
-    starts: list[tuple[int, str, str]] = []
+    # Keep the enclosing brace depth at each declaration so a method body closes
+    # at its own parent scope rather than being mistaken for a truncated module function.
+    starts: list[tuple[int, str, str, int, bool]] = []
+    brace_depth = 0
     for index, line in enumerate(lines):
         match = _DECLARATION.match(line) or _ARROW_DECLARATION.match(line)
+        indentation = len(line) - len(line.lstrip())
         if match:
-            starts.append((index, match.group(1), line.strip()))
+            is_member = brace_depth > 0 or indentation > 0
+            starts.append((index, match.group(1), line.strip(), brace_depth, is_member))
+        brace_depth += line.count("{") - line.count("}")
+        brace_depth = max(0, brace_depth)
 
     symbols: list[dict[str, Any]] = []
-    for position, (start, name, signature) in enumerate(starts[:MAX_DECLARATIONS]):
+    for position, (start, name, signature, parent_depth, is_member) in enumerate(starts[:MAX_DECLARATIONS]):
         next_start = starts[position + 1][0] if position + 1 < len(starts) else len(lines)
         hard_end = start + 300
         end = min(next_start, hard_end)
         truncated = next_start > hard_end
-        brace_depth = lines[start].count("{") - lines[start].count("}")
-        if brace_depth > 0:
+        local_brace_depth = parent_depth + lines[start].count("{") - lines[start].count("}")
+        if local_brace_depth > parent_depth:
             closed = False
             for cursor in range(start + 1, end):
-                brace_depth += lines[cursor].count("{") - lines[cursor].count("}")
-                if brace_depth <= 0:
+                local_brace_depth += lines[cursor].count("{") - lines[cursor].count("}")
+                if local_brace_depth <= parent_depth:
                     end = cursor + 1
                     closed = True
                     break
@@ -193,6 +200,7 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
             "signature": signature[:1200],
             "body": "" if truncated else body,
             "truncated": truncated,
+            "is_member": is_member,
             "start_line": start + 1,
             "end_line": max(start + 1, end),
             "docstring": "",
@@ -231,7 +239,10 @@ def _module_metadata(relative_path: str, source: str) -> dict[str, Any]:
             else ""
         )
         docstring = raw_docstring[:MAX_MODULE_CHARS]
-        exports = [item["name"] for item in symbols if not item["short_name"].startswith("_")][:MAX_DECLARATIONS]
+        exports = [
+            item["name"] for item in symbols
+            if not item.get("is_member") and not item["short_name"].startswith("_")
+        ][:MAX_DECLARATIONS]
         declarations = [item["name"] for item in symbols][:MAX_DECLARATIONS]
         metadata_truncated = (
             len(all_imports) > MAX_IMPORTS
