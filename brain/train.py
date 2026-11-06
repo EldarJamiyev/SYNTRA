@@ -309,7 +309,9 @@ def _read_instruction_jsonl_datasets(
                 try:
                     text = raw.decode("utf-8")
                 except UnicodeDecodeError:
-                    # The general reader will raise for an explicitly selected invalid UTF-8 file.
+                    # Preserve scanned bytes for the ordinary reader, which applies
+                    # the existing explicitly-selected versus discovered-file policy.
+                    fallback_files[str(resolved)] = (relative_name, raw, explicitly_selected)
                     continue
 
                 file_records: list[dict[str, str]] = []
