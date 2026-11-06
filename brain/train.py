@@ -761,19 +761,41 @@ def _rng_state(device: torch.device) -> dict:
     return state
 
 
-def _restore_rng_state(state: dict | None, device: torch.device) -> None:
+def _restore_rng_state(state: object, device: torch.device) -> None:
+    """Restore exact checkpointed generators or reject an unsafe continuation."""
     if not isinstance(state, dict):
-        return
+        raise ValueError("Resume checkpoint is missing its random-generator state.")
     cpu_state = state.get("cpu")
-    if isinstance(cpu_state, torch.Tensor):
-        torch.set_rng_state(cpu_state)
-    cuda_states = state.get("cuda")
-    if device.type == "cuda" and torch.cuda.is_available() and isinstance(cuda_states, list):
+    if (
+        not isinstance(cpu_state, torch.Tensor)
+        or cpu_state.dtype != torch.uint8
+        or cpu_state.ndim != 1
+        or cpu_state.numel() < 1
+    ):
+        raise ValueError("Resume checkpoint CPU random-generator state is malformed.")
+    try:
+        torch.set_rng_state(cpu_state.cpu())
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Resume checkpoint CPU random-generator state is incompatible: {exc}") from None
+
+    if device.type == "cuda" and torch.cuda.is_available():
+        cuda_states = state.get("cuda")
+        if not isinstance(cuda_states, list) or len(cuda_states) != torch.cuda.device_count():
+            raise ValueError(
+                "Resume checkpoint CUDA random-generator state does not match the available device count."
+            )
+        if any(
+            not isinstance(item, torch.Tensor)
+            or item.dtype != torch.uint8
+            or item.ndim != 1
+            or item.numel() < 1
+            for item in cuda_states
+        ):
+            raise ValueError("Resume checkpoint CUDA random-generator state is malformed.")
         try:
             torch.cuda.set_rng_state_all(cuda_states)
-        except (RuntimeError, ValueError):
-            # Device topology may have changed; the saved model/optimizer remain valid.
-            pass
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError(f"Resume checkpoint CUDA random-generator state is incompatible: {exc}") from None
 
 
 def train(
