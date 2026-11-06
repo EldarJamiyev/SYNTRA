@@ -381,6 +381,52 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertGreaterEqual(result.tokens_per_second, 0)
             self.assertIn(result.finish_reason, {"length", "eos", "cancelled"})
 
+    def test_resume_rejects_batch_and_optimizer_settings_that_change_cursor_semantics(self):
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-resume-settings-") as temp:
+            root = Path(temp)
+            dataset = root / "dataset.txt"
+            self._dataset(dataset)
+            checkpoint = root / "model.pt"
+            train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=128,
+                learning_rate=3e-4,
+                weight_decay=0.1,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                device_name="cpu",
+                seed=123,
+            )
+
+            incompatible_settings = [
+                ({"batch_size": 64}, "batch_size"),
+                ({"learning_rate": 1e-4}, "learning_rate"),
+                ({"weight_decay": 0.2}, "weight_decay"),
+                ({"seed": 456}, "seed"),
+            ]
+            for overrides, expected_setting in incompatible_settings:
+                with self.subTest(setting=expected_setting):
+                    with self.assertRaisesRegex(ValueError, expected_setting):
+                        train(
+                            [dataset],
+                            checkpoint_path=checkpoint,
+                            config=self._config(),
+                            epochs=1,
+                            batch_size=overrides.get("batch_size", 128),
+                            learning_rate=overrides.get("learning_rate", 3e-4),
+                            weight_decay=overrides.get("weight_decay", 0.1),
+                            tokenizer_bytes=1024,
+                            evaluation_batches=1,
+                            device_name="cpu",
+                            seed=overrides.get("seed", 123),
+                            resume=True,
+                        )
+
     def test_resume_rejects_a_changed_dataset(self):
         from brain.train import train
 
