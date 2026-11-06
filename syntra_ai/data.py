@@ -23,14 +23,19 @@ IGNORED_DIRS = {
     ".git", ".syntra", ".venv", "venv", "env", "node_modules", "__pycache__",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build", "coverage",
     ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "obj",
-    "checkpoints", "runs", "wandb", "mlruns", "lightning_logs", "tensorboard", "logs"
+    "checkpoints", "runs", "wandb", "mlruns", "lightning_logs", "tensorboard", "logs",
+    ".kube", ".docker", ".gnupg", ".terraform"
 }
 SENSITIVE_DIRS = {
-    "secrets", "credentials", "private_keys", "certificates", ".ssh", ".aws", ".azure"
+    "secrets", "credentials", "private_keys", "certificates",
+    ".ssh", ".aws", ".azure", ".kube", ".docker", ".gnupg", ".terraform"
 }
 SENSITIVE_NAMES = {
-    ".env", ".env.local", ".env.production", ".npmrc", ".pypirc", "credentials",
-    "credentials.json", "secrets.json", "id_rsa", "id_ed25519", "known_hosts"
+    ".env", ".env.local", ".env.production", ".npmrc", ".pypirc", ".netrc",
+    ".git-credentials", ".dockerconfigjson", "credentials", "credentials.json",
+    "secrets.json", "id_rsa", "id_ed25519", "known_hosts", "authorized_keys",
+    "access_token", "access_token.txt", "refresh_token", "token.txt",
+    "service-account.json", "serviceaccount.json", "kubeconfig"
 }
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".keystore", ".secret"}
 
