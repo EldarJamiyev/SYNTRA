@@ -884,6 +884,10 @@ class LocalTrainingPipelineTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "sensitive file"):
                 _read_local_datasets([root / ".env"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "sensitive or generated directory root"):
+                _read_local_datasets([root / ".ssh"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "sensitive or generated directory root"):
+                _read_local_datasets([root / ".kube"], 1024 * 1024)
 
     def test_raw_repository_validation_split_keeps_each_source_file_wholly_separate(self):
         from brain.train import _read_local_datasets
