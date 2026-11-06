@@ -244,6 +244,12 @@ def _read_instruction_jsonl_datasets(
                     if not line.strip():
                         continue
                     nonempty_lines += 1
+                    # Ordinary text/code files may use a .jsonl suffix. Detect a
+                    # JSON object before applying structured-record size limits so
+                    # legacy raw text (including long lines) retains its fallback.
+                    if not line.lstrip().startswith("{"):
+                        structured = False
+                        break
                     if len(line.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES:
                         raise ValueError(
                             f"Instruction JSONL record in {relative_name}:{line_number} exceeds "
