@@ -438,6 +438,10 @@ class TransformerTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 corpus = load_corpus([root], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / ".kube"], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / "secrets"], max_tokens=1024)
             joined_paths = "\\n".join(corpus.files).lower()
             self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
             self.assertNotIn("checkpoints", joined_paths)
