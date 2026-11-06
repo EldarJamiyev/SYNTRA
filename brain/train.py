@@ -329,8 +329,6 @@ def _read_instruction_jsonl_datasets(
                     continue
                 if source_index > 0:
                     relative_name = f"selected-root-{source_index + 1}/{relative_name}"
-                if resolved in seen:
-                    continue
                 seen.add(resolved)
                 if len(seen) > MAX_DATASET_FILES:
                     raise ValueError(f"Local training data exceeds the {MAX_DATASET_FILES:,}-file limit.")
