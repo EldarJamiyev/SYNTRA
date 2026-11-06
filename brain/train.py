@@ -625,6 +625,32 @@ def _estimate_validation_loss(
     return weighted_loss / supervised_targets
 
 
+def _validate_resume_order(
+    raw_order: object,
+    raw_next_batch_index: object,
+    chunk_count: int,
+    steps_per_epoch: int,
+) -> tuple[torch.Tensor | None, int]:
+    """Reject corrupt or incompatible saved shuffle state before resuming training."""
+    if raw_order is None:
+        if raw_next_batch_index not in (None, 0):
+            raise ValueError("Checkpoint resume cursor is non-zero without a saved epoch permutation.")
+        return None, 0
+
+    if not isinstance(raw_order, torch.Tensor):
+        raise ValueError("Checkpoint epoch order must be a tensor.")
+    if raw_order.dtype != torch.long or raw_order.ndim != 1 or raw_order.numel() != chunk_count:
+        raise ValueError("Checkpoint epoch order shape or dtype does not match the current training blocks.")
+    if chunk_count < 1 or int(raw_order.min().item()) < 0 or int(raw_order.max().item()) >= chunk_count:
+        raise ValueError("Checkpoint epoch order contains an out-of-range training block index.")
+    if not torch.equal(torch.sort(raw_order.cpu()).values, torch.arange(chunk_count, dtype=torch.long)):
+        raise ValueError("Checkpoint epoch order is not a complete, duplicate-free permutation.")
+
+    if type(raw_next_batch_index) is not int or not 0 <= raw_next_batch_index <= steps_per_epoch:
+        raise ValueError("Checkpoint resume position is invalid.")
+    return raw_order.cpu(), raw_next_batch_index
+
+
 def _rng_state(device: torch.device) -> dict:
     state = {"cpu": torch.get_rng_state()}
     if device.type == "cuda" and torch.cuda.is_available():
@@ -885,13 +911,12 @@ def train(
         last_train_loss = saved.get("train_loss")
         last_validation_loss = saved.get("validation_loss")
         raw_order = saved.get("epoch_order")
-        if isinstance(raw_order, torch.Tensor) and raw_order.numel() == chunk_count:
-            epoch_order = raw_order.to(dtype=torch.long, device="cpu")
-            next_batch_index = int(saved.get("next_batch_index", 0))
-            if not 0 <= next_batch_index <= steps_per_epoch:
-                raise ValueError("Checkpoint resume position is invalid.")
-        elif raw_order is not None:
-            raise ValueError("Checkpoint data-order state does not match the current corpus.")
+        epoch_order, next_batch_index = _validate_resume_order(
+            raw_order,
+            saved.get("next_batch_index", 0),
+            chunk_count,
+            steps_per_epoch,
+        )
 
     parameter_count = model.parameter_count
     started = perf_counter()
