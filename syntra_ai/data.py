@@ -89,6 +89,15 @@ def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, byt
                 or opened.st_size > max_file_bytes):
                 return None
             raw = handle.read(max_file_bytes + 1)
+            after = os.fstat(handle.fileno())
+            if (
+                len(raw) > max_file_bytes
+                or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or opened.st_size != after.st_size
+                or opened.st_mtime_ns != after.st_mtime_ns
+                or opened.st_ctime_ns != after.st_ctime_ns
+            ):
+                return None
         if len(raw) > max_file_bytes:
             return None
         text = raw.decode("utf-8")
