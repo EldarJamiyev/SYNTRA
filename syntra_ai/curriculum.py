@@ -62,13 +62,16 @@ def _python_symbol(
     if not signature:
         signature = lines[node.lineno - 1].strip()
     body = _line_span(lines, start_line, end_line) or ast.get_source_segment(source, node) or lines[node.lineno - 1]
+    truncated = len(body) > MAX_SYMBOL_CHARS
     name = f"{prefix}.{node.name}" if prefix else node.name
     return {
         "name": name,
         "short_name": node.name,
         "kind": "class" if isinstance(node, ast.ClassDef) else "function",
         "signature": signature[:1200],
-        "body": body[:MAX_SYMBOL_CHARS],
+        # Never label a partial source excerpt as a complete implementation.
+        "body": "" if truncated else body,
+        "truncated": truncated,
         "start_line": start_line,
         "end_line": end_line,
         "docstring": (ast.get_docstring(node, clean=False) or "")[:1200],
@@ -111,7 +114,7 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
                 try:
                     parsed = ast.literal_eval(node.value) if node.value is not None else None
                     if isinstance(parsed, (list, tuple, set)) and all(isinstance(item, str) for item in parsed):
-                        explicit_exports = list(parsed)
+                        explicit_exports = sorted(parsed) if isinstance(parsed, set) else list(parsed)
                 except (ValueError, TypeError):
                     explicit_exports = None
 
@@ -165,12 +168,14 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
         body = "\n".join(lines[start:end]).strip()
         if len(body) < 12:
             continue
+        truncated = len(body) > MAX_SYMBOL_CHARS
         symbols.append({
             "name": name,
             "short_name": name,
             "kind": "declaration",
             "signature": signature[:1200],
-            "body": body[:MAX_SYMBOL_CHARS],
+            "body": "" if truncated else body,
+            "truncated": truncated,
             "start_line": start + 1,
             "end_line": max(start + 1, end),
             "docstring": "",
@@ -406,6 +411,8 @@ def synthesize_repository_curriculum(
             if len(records) >= max_examples:
                 break
             symbol_count += 1
+            if symbol.get("truncated"):
+                continue
             signature = symbol["signature"] or symbol["name"]
             source_block = symbol["body"]
             add_pair(
