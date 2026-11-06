@@ -810,6 +810,50 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "sensitive file"):
                 _read_local_datasets([root / ".env"], 1024 * 1024)
 
+    def test_raw_repository_validation_split_keeps_each_source_file_wholly_separate(self):
+        from brain.train import _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-file-holdout-") as temp:
+            root = Path(temp)
+            expected_names = set()
+            for index in range(7):
+                relative = f"src/module_{index}.py"
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    f'"""Unique source module {index}."""\n'
+                    f"def operation_{index}(value):\n"
+                    f"    return value + {index}\n",
+                    encoding="utf-8",
+                )
+                expected_names.add(relative)
+
+            first_train, first_validation, names, _byte_count, fingerprint = (
+                _read_local_datasets([root], 1024 * 1024)
+            )
+            second_train, second_validation, _names, _bytes, second_fingerprint = (
+                _read_local_datasets([root], 1024 * 1024)
+            )
+
+            def source_names(value: str) -> set[str]:
+                return {
+                    line.removeprefix("# SYNTRA_SOURCE_FILE: ").strip()
+                    for line in value.splitlines()
+                    if line.startswith("# SYNTRA_SOURCE_FILE: ")
+                }
+
+            training_sources = source_names(first_train)
+            validation_sources = source_names(first_validation)
+            self.assertTrue(training_sources)
+            self.assertTrue(validation_sources)
+            self.assertEqual(training_sources.intersection(validation_sources), set())
+            self.assertEqual(training_sources.union(validation_sources), expected_names)
+            self.assertEqual(len(names), len(expected_names))
+            self.assertEqual(len(fingerprint), 64)
+            self.assertEqual(first_train, second_train)
+            self.assertEqual(first_validation, second_validation)
+            self.assertEqual(fingerprint, second_fingerprint)
+
     def test_training_rejects_invalid_utf8_and_missing_files(self):
         from brain.train import train
 
