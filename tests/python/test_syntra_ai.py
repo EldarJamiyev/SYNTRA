@@ -441,7 +441,11 @@ class TransformerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
                     load_corpus([root / ".kube"], max_tokens=1024)
                 with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / "node_modules"], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
                     load_corpus([root / "secrets"], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / "credentials"], max_tokens=1024)
             joined_paths = "\\n".join(corpus.files).lower()
             self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
             self.assertNotIn("checkpoints", joined_paths)
@@ -677,6 +681,8 @@ class TransformerTests(unittest.TestCase):
             (root / "secrets" / "private.txt").write_text("API_TOKEN=should-not-train-on-this", encoding="utf-8")
             (root / "credentials" / "credentials.json").write_text('{"password":"do-not-train"}', encoding="utf-8")
             (root / ".env").write_text("API_KEY=do-not-train", encoding="utf-8")
+            (root / "node_modules").mkdir()
+            (root / "node_modules" / "package.json").write_text('{"name":"excluded"}', encoding="utf-8")
             for directory in (".kube", ".docker", ".gnupg", ".terraform"):
                 secret_dir = root / directory
                 secret_dir.mkdir()
