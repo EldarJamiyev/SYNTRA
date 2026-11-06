@@ -201,7 +201,7 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
             "body": "" if truncated else body,
             "truncated": truncated,
             "is_member": is_member,
-            "is_container": bool(re.match(r"^(?:(?:pub|public)\\s+)*impl\\b", signature.strip())),
+            "is_container": bool(re.match(r"^(?:(?:pub|public)\s+)*impl\b", signature.strip())),
             "start_line": start + 1,
             "end_line": max(start + 1, end),
             "docstring": "",
