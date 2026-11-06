@@ -891,6 +891,37 @@ class TransformerTests(unittest.TestCase):
         self.assertNotIn("Calculator.add", metadata["exports"])
         self.assertIn("Calculator.add", metadata["declarations"])
 
+    def test_non_python_curriculum_never_teaches_line_capped_declarations_as_complete(self):
+        from syntra_ai.curriculum import _extract_logical_symbols
+
+        oversized = (
+            "function large_operation() {\n"
+            + "".join(f"  const value_{index} = {index};\n" for index in range(310))
+            + "}\n"
+        )
+        symbols = _extract_logical_symbols(oversized)
+        large = next(item for item in symbols if item["name"] == "large_operation")
+        self.assertTrue(large["truncated"])
+        self.assertEqual(large["body"], "")
+        self.assertEqual(large["end_line"] - large["start_line"] + 1, 300)
+
+        complete = "function small_operation() {\n  return 42;\n}\n"
+        small = _extract_logical_symbols(complete)[0]
+        self.assertFalse(small["truncated"])
+        self.assertIn("return 42", small["body"])
+
+    def test_module_curriculum_marks_summaries_that_exceed_declaration_limits(self):
+        from syntra_ai.curriculum import MAX_DECLARATIONS, _module_metadata
+
+        source = "".join(
+            f"def operation_{index}(value):\n    return value + {index}\n\n"
+            for index in range(MAX_DECLARATIONS + 1)
+        )
+        metadata = _module_metadata("large_module.py", source)
+        self.assertEqual(len(metadata["symbols"]), MAX_DECLARATIONS)
+        self.assertTrue(metadata["structure_truncated"])
+        self.assertIn("PARTIAL STRUCTURAL SUMMARY", metadata["structure"])
+
     def test_curriculum_repair_examples_require_unique_exact_agent_anchors(self):
         from syntra_ai.curriculum import _safe_none_patch_examples
 
