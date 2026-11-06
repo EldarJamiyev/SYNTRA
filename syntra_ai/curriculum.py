@@ -7,6 +7,7 @@ for a narrow, mechanically checked Python rule.
 from __future__ import annotations
 
 import ast
+import heapq
 import json
 import os
 import re
@@ -354,28 +355,49 @@ def synthesize_repository_curriculum(
     symbol_count = 0
     patch_candidate_count = 0
 
-    def add_pair(kind: str, relative_path: str, prompt: str, completion: str) -> None:
-        if len(records) >= max_examples:
-            return
+    # Keep a bounded, deterministic candidate reservoir per instruction type.
+    # This prevents a large first module from consuming the entire dataset cap.
+    category_pools: dict[str, list[tuple[int, str, dict[str, str]]]] = {
+        kind: [] for kind in counts
+    }
+    per_file_symbol_limit = max(
+        2,
+        min(8, (max_examples + max(1, len(corpus.files)) - 1) // max(1, len(corpus.files))),
+    )
+    per_file_patch_limit = 2
+
+    def offer_candidate(
+        kind: str,
+        relative_path: str,
+        selector: str,
+        prompt: str,
+        completion: str,
+    ) -> None:
         prompt = prompt.strip()
         completion = completion.strip()
         if len(prompt) < 20 or len(completion) < 16:
             return
         normalised = _normalised_prompt(prompt)
-        if normalised in seen_prompts:
-            return
-        seen_prompts.add(normalised)
-        records.append({
+        identity = f"{relative_path}\\0{selector}\\0{normalised}"
+        rank = int(hashlib.sha256((kind + "\\0" + identity).encode("utf-8")).hexdigest(), 16)
+        candidate = {
             "prompt": prompt,
             "completion": completion,
             "kind": kind,
             "source_path": relative_path,
-        })
-        counts[kind] += 1
+        }
+        heap = category_pools[kind]
+        entry = (-rank, identity, candidate)
+        if len(heap) < max_examples:
+            heapq.heappush(heap, entry)
+        elif rank < -heap[0][0]:
+            heapq.heapreplace(heap, entry)
 
-    for source_path, source_text in zip(corpus.files, corpus.documents):
-        if len(records) >= max_examples:
-            break
+    source_documents = sorted(
+        zip(corpus.files, corpus.documents),
+        key=lambda item: os.path.normcase(item[0]),
+    )
+    for source_path, source_text in source_documents:
         resolved = Path(source_path).resolve()
         relative_path = None
         for approved_root in corpus_roots:
@@ -392,60 +414,66 @@ def synthesize_repository_curriculum(
         module_count += 1
         metadata = _module_metadata(relative_path, source_text)
         structure = metadata["structure"]
-        add_pair(
-            "module_comprehension", relative_path,
+        offer_candidate(
+            "module_comprehension",
+            relative_path,
+            "module-purpose-exports",
             (
                 f"Instruction: Explain the purpose and structural exports of module {relative_path}. "
                 "Describe its documented purpose, imports, public exports, and declared symbols."
             ),
             structure,
         )
-        if metadata["symbols"] and len(records) < max_examples:
-            add_pair(
-                "module_comprehension", relative_path,
-                f"Instruction: Identify the declarations, signatures, and dependency structure of module {relative_path}.",
-                structure,
-            )
 
+        file_symbols = 0
         for symbol in metadata["symbols"]:
-            if len(records) >= max_examples:
-                break
             symbol_count += 1
             if symbol.get("truncated"):
                 continue
+            if file_symbols >= per_file_symbol_limit:
+                continue
+            file_symbols += 1
             signature = symbol["signature"] or symbol["name"]
             source_block = symbol["body"]
-            add_pair(
-                "symbol_implementation", relative_path,
+            offer_candidate(
+                "symbol_implementation",
+                relative_path,
+                symbol["name"],
                 (
                     f"Instruction: Write a clean implementation of symbol {symbol['name']} "
-                    f"with its signature from module {relative_path}.\n"
-                    f"Signature:\n{signature}\n"
+                    f"with its signature from module {relative_path}.\\n"
+                    f"Signature:\\n{signature}\\n"
                     "Use the repository's observed implementation as the source of truth."
                 ),
                 source_block,
             )
-            if len(records) < max_examples:
-                explanation = [
-                    f"Symbol: {symbol['name']}",
-                    f"Module: {relative_path}",
-                    f"Kind: {symbol['kind']}",
-                    f"Lines: {symbol['start_line']}-{symbol['end_line']}",
-                    f"Signature: {signature}",
-                ]
-                if symbol["docstring"]:
-                    explanation.extend(["Documentation:", symbol["docstring"]])
-                explanation.extend(["Exact source implementation:", source_block])
-                add_pair(
-                    "symbol_comprehension", relative_path,
-                    f"Instruction: Explain the role, signature, and implementation of symbol {symbol['name']} in {relative_path}.",
-                    "\n".join(explanation),
-                )
+            explanation = [
+                f"Symbol: {symbol['name']}",
+                f"Module: {relative_path}",
+                f"Kind: {symbol['kind']}",
+                f"Lines: {symbol['start_line']}-{symbol['end_line']}",
+                f"Signature: {signature}",
+            ]
+            if symbol["docstring"]:
+                explanation.extend(["Documentation:", symbol["docstring"]])
+            explanation.extend(["Exact source implementation:", source_block])
+            offer_candidate(
+                "symbol_comprehension",
+                relative_path,
+                symbol["name"],
+                (
+                    f"Instruction: Explain the role, signature, and implementation of "
+                    f"symbol {symbol['name']} in {relative_path}."
+                ),
+                "\\n".join(explanation),
+            )
 
+        file_patch_count = 0
         for patch in _safe_none_patch_examples(relative_path, source_text):
             patch_candidate_count += 1
-            if len(records) >= max_examples:
-                break
+            if file_patch_count >= per_file_patch_limit:
+                continue
+            file_patch_count += 1
             patch_payload = {
                 "format": "SYNTRA_AGENT_PATCH_V1",
                 "summary": "Use identity comparison when checking the None sentinel.",
@@ -459,16 +487,62 @@ def synthesize_repository_curriculum(
                     ),
                 }],
             }
-            add_pair(
-                "anchor_patch_repair", relative_path,
+            offer_candidate(
+                "anchor_patch_repair",
+                relative_path,
+                f"none-comparison-line-{patch['line']}",
                 (
                     "Instruction: Apply a SYNTRA_AGENT_PATCH_V1 change to fix the "
-                    f"non-identity None comparison in {relative_path} at line {patch['line']}.\n"
-                    f"Exact source anchor:\n{patch['before']}\n"
+                    f"non-identity None comparison in {relative_path} at line {patch['line']}.\\n"
+                    f"Exact source anchor:\\n{patch['before']}\\n"
                     "Return a structured search/replace patch using the repository-relative path."
                 ),
                 json.dumps(patch_payload, ensure_ascii=False),
             )
+
+    def add_pair(kind: str, candidate: dict[str, str]) -> bool:
+        if len(records) >= max_examples:
+            return False
+        prompt = candidate["prompt"].strip()
+        completion = candidate["completion"].strip()
+        normalised = _normalised_prompt(prompt)
+        if normalised in seen_prompts:
+            return False
+        seen_prompts.add(normalised)
+        records.append(candidate)
+        counts[kind] += 1
+        return True
+
+    ordered_pools = {
+        kind: [
+            entry[2]
+            for entry in sorted(heap, key=lambda entry: (-entry[0], entry[1]))
+        ]
+        for kind, heap in category_pools.items()
+    }
+    pool_positions = {kind: 0 for kind in counts}
+    category_order = (
+        "module_comprehension",
+        "symbol_implementation",
+        "symbol_comprehension",
+        "anchor_patch_repair",
+    )
+    # Interleave types and source-ranked candidates so module order cannot starve
+    # later files or rarer repair examples.
+    while len(records) < max_examples:
+        made_progress = False
+        for kind in category_order:
+            candidates = ordered_pools[kind]
+            while pool_positions[kind] < len(candidates):
+                candidate = candidates[pool_positions[kind]]
+                pool_positions[kind] += 1
+                if add_pair(kind, candidate):
+                    made_progress = True
+                    break
+            if len(records) >= max_examples:
+                break
+        if not made_progress:
+            break
 
     if len(records) < 2:
         raise ValueError(
@@ -481,22 +555,42 @@ def synthesize_repository_curriculum(
     from .instruction import audit_instruction_dataset
 
     audit = audit_instruction_dataset(target)
+    represented_source_files = len({item["source_path"] for item in records})
+    warnings: list[str] = []
+    if not counts["anchor_patch_repair"]:
+        warnings.append(
+            "No supported, mechanically grounded patch pattern was found; no synthetic repair examples were fabricated."
+        )
+    if len(records) >= max_examples and represented_source_files < module_count:
+        warnings.append(
+            f"The {max_examples:,}-example curriculum cap selected {represented_source_files:,} of "
+            f"{module_count:,} source modules; increase --max-examples for broader coverage."
+        )
+    source_token_limit = 5_000_000
+    source_file_limit = 10_000
+    if len(corpus.token_ids) >= source_token_limit:
+        warnings.append(
+            f"Repository scanning reached the {source_token_limit:,}-token source limit; the corpus may be incomplete."
+        )
+    if len(corpus.files) >= source_file_limit:
+        warnings.append(
+            f"Repository scanning reached the {source_file_limit:,}-file source limit; additional files may not be included."
+        )
     return {
         "dataset_path": str(target),
         "workspace_root": str(output_root),
         "workspace_roots": [str(item) for item in corpus_roots],
         "source_files": len(corpus.files),
         "module_count": module_count,
+        "represented_source_files": represented_source_files,
+        "source_tokens": len(corpus.token_ids),
         "symbol_count": symbol_count,
         "patch_candidate_count": patch_candidate_count,
         "example_count": len(records),
         "examples_by_type": counts,
+        "selection_strategy": "deterministic-source-ranked-round-robin",
         "audit": audit,
-        "warnings": (
-            [] if counts["anchor_patch_repair"] else [
-                "No supported, mechanically grounded patch pattern was found; no synthetic repair examples were fabricated."
-            ]
-        ),
+        "warnings": warnings,
     }
 
 
