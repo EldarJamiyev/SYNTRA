@@ -761,7 +761,7 @@ class TransformerTests(unittest.TestCase):
             )
 
     def test_instruction_loader_preserves_entire_long_response_across_context_windows(self):
-        from syntra_ai.instruction import load_instruction_examples
+        from syntra_ai.instruction import audit_instruction_dataset, load_instruction_examples
         from syntra_ai.model import EOS_ID
         from syntra_ai.tokenizer import ByteBPETokenizer
 
@@ -806,6 +806,39 @@ class TransformerTests(unittest.TestCase):
                 [item["chunk_index"] for item in ordered],
                 list(range(len(ordered))),
             )
+            self.assertEqual(
+                sum(item["prompt_tokens"] for item in ordered),
+                len(tokenizer.encode(prompt)),
+            )
+            self.assertGreater(sum(item["context_overlap_tokens"] for item in ordered), 0)
+
+            audit = audit_instruction_dataset(dataset, seq_len=32, tokenizer=tokenizer)
+            self.assertTrue(audit["valid"])
+            self.assertFalse(audit["split_available"])
+            self.assertEqual(audit["example_count"], 1)
+            self.assertGreater(audit["context_window_count"], 1)
+            self.assertIsNone(audit["prompt_leakage_groups"])
+
+    def test_instruction_record_cap_counts_jsonl_records_not_context_windows(self):
+        from syntra_ai.instruction import load_instruction_examples
+        from syntra_ai.tokenizer import ByteBPETokenizer
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-record-cap-") as temp:
+            root = Path(temp)
+            dataset = root / "records.jsonl"
+            rows = [
+                {"prompt": f"Describe operation {index}.", "completion": f"Operation {index} is valid."}
+                for index in range(3)
+            ]
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "2-source-record safety limit"):
+                    load_instruction_examples(
+                        dataset,
+                        seq_len=64,
+                        tokenizer=ByteBPETokenizer.empty(),
+                        max_examples=2,
+                    )
 
     def test_instruction_finetuning_split_keeps_source_families_and_duplicate_prompts_together(self):
         from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
