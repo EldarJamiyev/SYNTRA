@@ -194,7 +194,7 @@ def _read_local_datasets(
     """Read bounded local text/code files and produce a stable corpus fingerprint."""
     if type(max_files) is not int or not 0 <= max_files <= MAX_DATASET_FILES:
         raise ValueError(f"max_files must be between 0 and {MAX_DATASET_FILES:,}.")
-    documents: list[str] = []
+    documents: list[tuple[str, str]] = []
     names: list[str] = []
     digest = sha256()
     total_bytes = 0
@@ -250,33 +250,59 @@ def _read_local_datasets(
                 digest.update(relative_bytes)
                 digest.update(len(raw).to_bytes(8, "big"))
                 digest.update(raw)
-                documents.append(f"\n# SYNTRA_SOURCE_FILE: {relative_name}\n{source_text}")
+                documents.append((
+                    relative_name,
+                    f"\n# SYNTRA_SOURCE_FILE: {relative_name}\n{source_text}",
+                ))
                 names.append(str(resolved))
         except ValueError:
             raise
         except OSError as exc:
             raise ValueError(f"Cannot read local dataset {path}: {exc}") from None
 
-    if not documents or not any(document.strip() for document in documents):
+    if not documents or not any(document.strip() for _, document in documents):
         if allow_empty:
             return "", "", names, total_bytes, digest.hexdigest()
         raise ValueError(
             "No readable UTF-8 source files were found. Select a text/code file or a project folder."
         )
 
-    combined = "\n\n".join(documents)
-    split_at = int(len(combined) * 0.9)
-    # Prefer a source-file line boundary while keeping both splits non-empty.
-    line_boundary = combined.rfind("\n", 0, split_at)
-    if line_boundary > 0 and len(combined) - line_boundary > 1:
-        split_at = line_boundary + 1
-    train_text = combined[:split_at]
-    validation_text = combined[split_at:]
+    if len(documents) >= 2:
+        # Keep every source file wholly inside one split. Splitting a concatenated
+        # repository at a character offset leaks definitions and shared file context
+        # across training and validation. The stable path hash makes the holdout
+        # reproducible when the same approved source set is selected again.
+        ranked_documents = sorted(
+            documents,
+            key=lambda item: sha256(
+                ("syntra-raw-file-holdout-v1:" + item[0]).encode("utf-8")
+            ).hexdigest(),
+        )
+        validation_count = min(
+            len(ranked_documents) - 1,
+            max(1, math.ceil(len(ranked_documents) * 0.1)),
+        )
+        validation_documents = ranked_documents[:validation_count]
+        training_documents = ranked_documents[validation_count:]
+        train_text = "\n\n".join(document for _, document in training_documents)
+        validation_text = "\n\n".join(document for _, document in validation_documents)
+    else:
+        # A single explicitly selected file cannot be held out by source identity.
+        # Retain the historical line-boundary split for this legacy use case.
+        combined = documents[0][1]
+        split_at = int(len(combined) * 0.9)
+        line_boundary = combined.rfind("\n", 0, split_at)
+        if line_boundary > 0 and len(combined) - line_boundary > 1:
+            split_at = line_boundary + 1
+        train_text = combined[:split_at]
+        validation_text = combined[split_at:]
+
     if not train_text.strip() or not validation_text.strip():
         if require_holdout:
             raise ValueError("The local corpus is too small to create separate training and validation splits.")
-        return combined, "", names, total_bytes, digest.hexdigest()
+        return train_text, validation_text, names, total_bytes, digest.hexdigest()
     return train_text, validation_text, names, total_bytes, digest.hexdigest()
+
 
 
 def _read_instruction_jsonl_datasets(
