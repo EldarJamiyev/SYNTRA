@@ -41,6 +41,7 @@ class Corpus:
     source_bytes: int
     skipped_files: int
     documents: list[str]
+    token_count: int = 0
 
 
 def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, bytes, str] | None:
@@ -107,8 +108,12 @@ def load_corpus(
     max_files: int = 10000,
     max_file_bytes: int = 256 * 1024,
     max_tokens: int = 5_000_000,
+    include_tokens: bool = True,
 ) -> Corpus:
+    if type(include_tokens) is not bool:
+        raise ValueError("include_tokens must be a boolean.")
     tokens: list[int] = []
+    token_count = 0
     files: list[str] = []
     total_bytes = 0
     skipped = 0
@@ -154,7 +159,7 @@ def load_corpus(
             dirnames[:] = safe_directories
 
             for filename in sorted(filenames):
-                if len(files) >= max_files or len(tokens) >= max_tokens:
+                if len(files) >= max_files or token_count >= max_tokens:
                     break
                 candidate = os.path.join(base, filename)
                 result = _read_safe_file(candidate, root, max_file_bytes)
@@ -166,16 +171,27 @@ def load_corpus(
                 if normalized_key in seen:
                     continue
                 seen.add(normalized_key)
-                encoded = [BOS_ID, *raw, EOS_ID]
-                remaining = max_tokens - len(tokens)
-                tokens.extend(encoded[:remaining])
+                remaining = max_tokens - token_count
+                added_tokens = min(len(raw) + 2, remaining)
+                if include_tokens and added_tokens:
+                    # Materialize only the retained prefix instead of allocating a
+                    # second full Python-int list for a large source file.
+                    append_bos = min(1, added_tokens)
+                    if append_bos:
+                        tokens.append(BOS_ID)
+                    retained_bytes = min(len(raw), added_tokens - append_bos)
+                    if retained_bytes:
+                        tokens.extend(raw[:retained_bytes])
+                    if added_tokens > append_bos + retained_bytes:
+                        tokens.append(EOS_ID)
+                token_count += added_tokens
                 files.append(resolved)
                 documents.append(text)
                 total_bytes += len(raw)
-                if len(tokens) >= max_tokens:
+                if token_count >= max_tokens:
                     break
-            if len(files) >= max_files or len(tokens) >= max_tokens:
+            if len(files) >= max_files or token_count >= max_tokens:
                 break
-    if not tokens:
+    if not files:
         raise ValueError("No readable text/source files were found in the selected corpus root(s).")
-    return Corpus(tokens, files, total_bytes, skipped, documents)
+    return Corpus(tokens, files, total_bytes, skipped, documents, token_count)
