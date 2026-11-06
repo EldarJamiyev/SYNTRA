@@ -158,6 +158,61 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertIn("long raw text fallback", train_text + validation_text)
             self.assertEqual(len(raw_files), 2)
 
+    def test_jsonl_instruction_schema_fails_closed_after_detection(self):
+        from brain.train import _read_instruction_jsonl_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-jsonl-schema-") as temp:
+            root = Path(temp)
+            malformed_json = root / "malformed.jsonl"
+            malformed_json.write_text(
+                json.dumps({"Instruction": "Explain alpha.", "Response": "Alpha is valid."})
+                + "\n"
+                + '{"Instruction": "Explain beta.",',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"Invalid instruction JSON.*malformed.jsonl:2"):
+                _read_instruction_jsonl_datasets([malformed_json], 1024 * 1024)
+
+            malformed_fields = root / "missing-response.jsonl"
+            malformed_fields.write_text(
+                json.dumps({"Instruction": "Explain alpha.", "Response": "Alpha is valid."})
+                + "\n"
+                + json.dumps({"Instruction": "Explain beta."}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"Incomplete instruction schema.*missing-response.jsonl:2"):
+                _read_instruction_jsonl_datasets([malformed_fields], 1024 * 1024)
+
+            invalid_group = root / "invalid-group.jsonl"
+            invalid_group.write_text(
+                json.dumps({
+                    "Instruction": "Explain alpha.",
+                    "Response": "Alpha is valid.",
+                    "split_group": ["not", "a", "string"],
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"split_group.*invalid-group.jsonl:1"):
+                _read_instruction_jsonl_datasets([invalid_group], 1024 * 1024)
+
+            generic_jsonl = root / "generic.jsonl"
+            generic_jsonl.write_text(
+                json.dumps({"event": "startup", "status": "ready"}) + "\n",
+                encoding="utf-8",
+            )
+            (
+                records,
+                structured_paths,
+                _instruction_bytes,
+                _instruction_hash,
+                _scan_bytes,
+                _scan_files,
+                fallback_files,
+            ) = _read_instruction_jsonl_datasets([generic_jsonl], 1024 * 1024)
+            self.assertEqual(records, [])
+            self.assertEqual(structured_paths, [])
+            self.assertIn(str(generic_jsonl.resolve()), fallback_files)
+
     def test_structured_jsonl_training_saves_masked_training_format(self):
         from brain.checkpoint import load_checkpoint
         from brain.train import train
