@@ -462,6 +462,9 @@ def synthesize_repository_curriculum(
     )
     per_file_patch_limit = 2
     candidate_sequence = 0
+    candidate_pool_bytes = 0
+    candidate_sizes: dict[str, int] = {}
+    candidate_budget_skips = 0
 
     def offer_candidate(
         kind: str,
@@ -471,7 +474,7 @@ def synthesize_repository_curriculum(
         prompt: str,
         completion: str,
     ) -> None:
-        nonlocal candidate_sequence
+        nonlocal candidate_sequence, candidate_pool_bytes, candidate_budget_skips
         prompt = prompt.strip()
         completion = completion.strip()
         if len(prompt) < 20 or len(completion) < 16:
@@ -487,12 +490,34 @@ def synthesize_repository_curriculum(
             "split_group": split_group,
         }
         heap = category_pools[kind]
+        if identity in candidate_sizes:
+            return
+        candidate_size = len(
+            (json.dumps(candidate, ensure_ascii=False, separators=(",", ":")) + "\\n").encode("utf-8")
+        )
+        if candidate_size > MAX_CURRICULUM_CANDIDATE_BYTES:
+            candidate_budget_skips += 1
+            return
+
         candidate_sequence += 1
         entry = (-rank, identity, candidate_sequence, candidate)
         if len(heap) < max_examples:
+            if candidate_pool_bytes + candidate_size > MAX_CURRICULUM_CANDIDATE_BYTES:
+                candidate_budget_skips += 1
+                return
             heapq.heappush(heap, entry)
+            candidate_sizes[identity] = candidate_size
+            candidate_pool_bytes += candidate_size
         elif rank < -heap[0][0]:
+            removed = heap[0]
+            removed_size = candidate_sizes.get(removed[1], 0)
+            if candidate_pool_bytes - removed_size + candidate_size > MAX_CURRICULUM_CANDIDATE_BYTES:
+                candidate_budget_skips += 1
+                return
             heapq.heapreplace(heap, entry)
+            candidate_sizes.pop(removed[1], None)
+            candidate_sizes[identity] = candidate_size
+            candidate_pool_bytes = candidate_pool_bytes - removed_size + candidate_size
 
     source_documents = sorted(
         zip(corpus.files, corpus.documents),
@@ -670,6 +695,11 @@ def synthesize_repository_curriculum(
     if not counts["anchor_patch_repair"]:
         warnings.append(
             "No supported, mechanically grounded patch pattern was found; no synthetic repair examples were fabricated."
+        )
+    if candidate_budget_skips:
+        warnings.append(
+            f"{candidate_budget_skips:,} candidate(s) were excluded by the "
+            f"{MAX_CURRICULUM_CANDIDATE_BYTES:,}-byte in-memory candidate budget."
         )
     if len(records) >= max_examples and represented_source_files < module_count:
         warnings.append(
