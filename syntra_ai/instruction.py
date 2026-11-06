@@ -88,6 +88,15 @@ def load_instruction_examples(
             normalized_prompt = _normalized_instruction_text(prompt_text)
             normalized_completion = _normalized_instruction_text(completion_text)
             prompt_group_id = hashlib.sha256(normalized_prompt.encode("utf-8")).hexdigest()
+            split_group_value = item.get("split_group")
+            split_group_id = (
+                hashlib.sha256(
+                    _normalized_instruction_text(split_group_value).encode("utf-8")
+                ).hexdigest()
+                if isinstance(split_group_value, str) and split_group_value.strip()
+                and len(split_group_value) <= 2048
+                else None
+            )
             example_id = hashlib.sha256(
                 (normalized_prompt + "\\0" + normalized_completion).encode("utf-8")
             ).hexdigest()
@@ -114,6 +123,7 @@ def load_instruction_examples(
                 "prompt_tokens": len(prompt),
                 "completion_tokens": len(completion),
                 "prompt_group_id": prompt_group_id,
+                "split_group_id": split_group_id,
                 "example_id": example_id,
                 "line": line_number,
             })
