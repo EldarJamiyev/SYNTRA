@@ -61,6 +61,9 @@ SENSITIVE_SUFFIXES = frozenset({
     ".keystore", ".sqlite", ".db", ".dump", ".bak", ".log",
 })
 MAX_DATASET_FILES = 20_000
+TRAINING_SCHEDULER = "global-cosine-warmup-v1"
+SCHEDULER_WARMUP_STEPS = 100
+SCHEDULER_DECAY_STEPS = 10_000
 
 
 def _read_bounded_regular_file(
@@ -646,6 +649,23 @@ def _estimate_validation_loss(
     return weighted_loss / supervised_targets
 
 
+def _scheduled_learning_rate(base_learning_rate: float, global_step: int) -> float:
+    """Return a resume-invariant learning rate based only on checkpointed global step."""
+    if (
+        isinstance(base_learning_rate, bool)
+        or not isinstance(base_learning_rate, (int, float))
+        or not math.isfinite(base_learning_rate)
+        or base_learning_rate <= 0
+    ):
+        raise ValueError("base_learning_rate must be a finite positive number.")
+    if type(global_step) is not int or global_step < 1:
+        raise ValueError("global_step must be a positive integer.")
+    warmup = min(1.0, global_step / SCHEDULER_WARMUP_STEPS)
+    progress = min(global_step / SCHEDULER_DECAY_STEPS, 1.0)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return max(float(base_learning_rate) * warmup * cosine, float(base_learning_rate) * 0.05)
+
+
 def _validate_resume_order(
     raw_order: object,
     raw_next_batch_index: object,
@@ -837,6 +857,7 @@ def train(
             "steps_per_epoch",
             "evaluation_batches",
             "save_every_steps",
+            "scheduler",
         }
         if isinstance(settings, dict) and required_settings.issubset(settings):
             expected_settings = {
@@ -846,6 +867,7 @@ def train(
                 "seed": seed,
                 "evaluation_batches": evaluation_batches,
                 "save_every_steps": save_every_steps,
+                "scheduler": TRAINING_SCHEDULER,
             }
             changed_settings = [
                 name for name, expected in expected_settings.items()
@@ -962,7 +984,6 @@ def train(
     parameter_count = model.parameter_count
     started = perf_counter()
     target_epoch = start_epoch + epochs
-    total_steps_this_run = epochs * steps_per_epoch
     current_step_in_run = 0
     supervised_tokens_processed = 0
 
@@ -995,6 +1016,7 @@ def train(
                 "steps_per_epoch": steps_per_epoch,
                 "evaluation_batches": evaluation_batches,
                 "save_every_steps": save_every_steps,
+                "scheduler": TRAINING_SCHEDULER,
             },
             "rng_state": _rng_state(device),
             "parameter_count": parameter_count,
@@ -1063,20 +1085,18 @@ def train(
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            progress = current_step_in_run / max(total_steps_this_run, 1)
-            warmup = min(1.0, current_step_in_run / max(10, min(total_steps_this_run, 100)))
-            cosine = 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
-            scheduled_lr = learning_rate * warmup * cosine
+            global_step = start_step + current_step_in_run
+            scheduled_lr = _scheduled_learning_rate(learning_rate, global_step)
             for group in optimizer.param_groups:
-                group["lr"] = max(scheduled_lr, learning_rate * 0.05)
+                group["lr"] = scheduled_lr
             optimizer.step()
             last_train_loss = float(loss.detach().item())
             supervised_tokens_processed += batch_supervised_tokens
             next_batch_index = batch_index + 1
 
             should_evaluate = (
-                current_step_in_run == 1
-                or current_step_in_run % save_every_steps == 0
+                global_step == 1
+                or global_step % save_every_steps == 0
                 or next_batch_index == steps_per_epoch
             )
             if should_evaluate:
@@ -1092,8 +1112,8 @@ def train(
                     best_validation_loss = last_validation_loss
 
             should_save = (
-                current_step_in_run == 1
-                or current_step_in_run % save_every_steps == 0
+                global_step == 1
+                or global_step % save_every_steps == 0
                 or next_batch_index == steps_per_epoch
             )
             if should_save:
