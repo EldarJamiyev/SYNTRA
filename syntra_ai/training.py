@@ -61,14 +61,38 @@ def _rng_state(device: torch.device) -> dict:
 
 
 def _restore_rng_state(state: object, device: torch.device) -> None:
-    if not isinstance(state, dict) or not isinstance(state.get("cpu"), torch.Tensor):
-        raise ValueError("Resume checkpoint does not contain a valid CPU random-generator state.")
-    torch.set_rng_state(state["cpu"].cpu())
+    if not isinstance(state, dict):
+        raise ValueError("Resume checkpoint does not contain random-generator state.")
+    cpu_state = state.get("cpu")
+    if (
+        not isinstance(cpu_state, torch.Tensor)
+        or cpu_state.dtype != torch.uint8
+        or cpu_state.ndim != 1
+        or cpu_state.numel() < 1
+    ):
+        raise ValueError("Resume checkpoint CPU random-generator state is malformed.")
+    try:
+        torch.set_rng_state(cpu_state.cpu())
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Resume checkpoint CPU random-generator state is incompatible: {exc}") from None
+
     cuda_states = state.get("cuda")
-    if device.type == "cuda" and torch.cuda.is_available() and isinstance(cuda_states, list):
+    if device.type == "cuda" and torch.cuda.is_available():
+        if not isinstance(cuda_states, list) or not cuda_states:
+            raise ValueError("Resume checkpoint is missing CUDA random-generator state for the selected device.")
+        if len(cuda_states) != torch.cuda.device_count():
+            raise ValueError("Resume checkpoint CUDA random-generator state does not match the available device count.")
+        if any(
+            not isinstance(item, torch.Tensor)
+            or item.dtype != torch.uint8
+            or item.ndim != 1
+            or item.numel() < 1
+            for item in cuda_states
+        ):
+            raise ValueError("Resume checkpoint CUDA random-generator state is malformed.")
         try:
             torch.cuda.set_rng_state_all(cuda_states)
-        except (RuntimeError, ValueError) as exc:
+        except (RuntimeError, TypeError, ValueError) as exc:
             raise ValueError(f"Resume checkpoint CUDA random-generator state is incompatible: {exc}") from None
 
 
@@ -322,6 +346,28 @@ def train(
             raise ValueError("Resume checkpoint is missing its optimizer state.")
         if not isinstance(saved.get("rng_state"), dict):
             raise ValueError("Resume checkpoint is missing its random-generator state.")
+        saved_settings = saved.get("training_settings")
+        required_settings = {"batch_size", "learning_rate", "seed", "max_tokens"}
+        if not isinstance(saved_settings, dict) or not required_settings.issubset(saved_settings):
+            raise ValueError("Resume checkpoint is missing complete training settings; start a new run.")
+        expected_settings = {
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "seed": seed,
+            "max_tokens": max_tokens,
+        }
+        changed_settings = [
+            name
+            for name, expected in expected_settings.items()
+            if type(saved_settings.get(name)) not in (int, float)
+            or saved_settings.get(name) != expected
+        ]
+        if changed_settings:
+            raise ValueError(
+                "Training resume settings differ from the checkpoint: "
+                + ", ".join(changed_settings)
+                + ". Use the original settings or start a new checkpoint."
+            )
     split = int(len(token_ids) * 0.8)
     if split <= config.seq_len + 1 or len(token_ids) - split <= config.seq_len + 1:
         raise ValueError(
