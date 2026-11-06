@@ -844,7 +844,7 @@ class TransformerTests(unittest.TestCase):
             self.assertGreater(sum(item["context_overlap_tokens"] for item in ordered), 0)
 
             audit = audit_instruction_dataset(dataset, seq_len=32, tokenizer=tokenizer)
-            self.assertTrue(audit["valid"])
+            self.assertTrue(audit["valid"], audit)
             self.assertFalse(audit["split_available"])
             self.assertEqual(audit["example_count"], 1)
             self.assertGreater(audit["context_window_count"], 1)
