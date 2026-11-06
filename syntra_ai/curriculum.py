@@ -218,6 +218,10 @@ def _module_metadata(relative_path: str, source: str) -> dict[str, Any]:
         ))
     else:
         all_imports = [line.strip() for line in lines if _IMPORT.match(line)]
+        declaration_count = sum(
+            1 for line in lines
+            if _DECLARATION.match(line) or _ARROW_DECLARATION.match(line)
+        )
         all_symbols = _extract_logical_symbols(source)
         imports = all_imports[:MAX_IMPORTS]
         symbols = all_symbols[:MAX_DECLARATIONS]
@@ -231,7 +235,7 @@ def _module_metadata(relative_path: str, source: str) -> dict[str, Any]:
         declarations = [item["name"] for item in symbols][:MAX_DECLARATIONS]
         metadata_truncated = (
             len(all_imports) > MAX_IMPORTS
-            or len(all_symbols) > MAX_DECLARATIONS
+            or declaration_count > MAX_DECLARATIONS
             or len(raw_docstring) > MAX_MODULE_CHARS
         )
 
