@@ -315,7 +315,8 @@ def _read_instruction_jsonl_datasets(
                 if not raw:
                     continue
                 file_records: list[dict[str, str]] = []
-                structured = True
+                schema_confirmed = False
+                plain_text_fallback = False
                 nonempty_lines = 0
                 for line_number, raw_line in enumerate(BytesIO(raw), start=1):
                     record_bytes = raw_line.rstrip(b"\r\n")
@@ -325,13 +326,21 @@ def _read_instruction_jsonl_datasets(
                     try:
                         line = record_bytes.decode("utf-8")
                     except UnicodeDecodeError:
-                        structured = False
+                        if schema_confirmed:
+                            raise ValueError(
+                                f"Malformed UTF-8 instruction record in {relative_name}:{line_number}."
+                            ) from None
+                        plain_text_fallback = True
                         break
-                    # Ordinary text/code files may use a .jsonl suffix. Detect a
-                    # JSON object before applying structured-record size limits so
-                    # legacy raw text (including long lines) retains its fallback.
+
+                    # A generic JSONL file or plain-text file remains eligible
+                    # for raw-token fallback until an instruction schema is seen.
                     if not line.lstrip().startswith("{"):
-                        structured = False
+                        if schema_confirmed:
+                            raise ValueError(
+                                f"Mixed instruction and raw-text records in {relative_name}:{line_number}."
+                            )
+                        plain_text_fallback = True
                         break
                     if len(record_bytes) > MAX_INSTRUCTION_RECORD_BYTES:
                         raise ValueError(
@@ -340,13 +349,32 @@ def _read_instruction_jsonl_datasets(
                         )
                     try:
                         item = json.loads(line)
-                    except json.JSONDecodeError:
-                        structured = False
+                    except json.JSONDecodeError as exc:
+                        if schema_confirmed:
+                            raise ValueError(
+                                f"Invalid instruction JSON in {relative_name}:{line_number}: {exc.msg}"
+                            ) from None
+                        plain_text_fallback = True
                         break
                     if not isinstance(item, dict):
-                        structured = False
+                        if schema_confirmed:
+                            raise ValueError(
+                                f"Instruction JSONL record in {relative_name}:{line_number} must be an object."
+                            )
+                        plain_text_fallback = True
                         break
+
                     fields = {str(key).casefold(): value for key, value in item.items()}
+                    prompt_present = "instruction" in fields or "prompt" in fields
+                    response_present = any(key in fields for key in ("response", "completion", "output"))
+                    if not schema_confirmed and not (prompt_present or response_present):
+                        plain_text_fallback = True
+                        break
+                    if not prompt_present or not response_present:
+                        raise ValueError(
+                            f"Incomplete instruction schema in {relative_name}:{line_number}; "
+                            "each record must contain Instruction/Prompt and Response/Completion."
+                        )
                     instruction = fields.get("instruction", fields.get("prompt"))
                     response = fields.get("response", fields.get("completion", fields.get("output")))
                     if (
@@ -355,8 +383,10 @@ def _read_instruction_jsonl_datasets(
                         or not instruction.strip()
                         or not response.strip()
                     ):
-                        structured = False
-                        break
+                        raise ValueError(
+                            f"Instruction/response fields in {relative_name}:{line_number} "
+                            "must be non-empty strings."
+                        )
                     if (
                         len(instruction.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES
                         or len(response.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES
@@ -369,13 +399,17 @@ def _read_instruction_jsonl_datasets(
                         raise ValueError(
                             f"Structured instruction datasets exceed the {MAX_INSTRUCTION_RECORDS:,}-record safety limit."
                         )
-                    split_group = fields.get("split_group")
+                    split_group = fields.get("split_group", "")
+                    if split_group is None:
+                        split_group = ""
                     if (
                         not isinstance(split_group, str)
-                        or not split_group.strip()
                         or len(split_group) > 2048
                     ):
-                        split_group = ""
+                        raise ValueError(
+                            f"split_group in {relative_name}:{line_number} must be a string of at most 2,048 characters."
+                        )
+                    schema_confirmed = True
                     file_records.append({
                         "prompt": instruction.strip(),
                         "completion": response.strip(),
@@ -384,13 +418,13 @@ def _read_instruction_jsonl_datasets(
                         "split_group": split_group.strip(),
                     })
 
-                # A JSONL file is treated as structured only when every non-blank
-                # record has a supported prompt/response shape. Preserve the exact
-                # bytes for raw-token fallback so the same file is not read twice.
-                if not structured or not nonempty_lines or not file_records:
+                # Generic JSONL and ordinary text keep their legacy raw-token
+                # path. Once one supported instruction record is recognized,
+                # malformed or mixed subsequent records fail instead of silently
+                # training raw source text as if it were valid supervision.
+                if plain_text_fallback or not nonempty_lines or not schema_confirmed or not file_records:
                     fallback_files[str(resolved)] = (relative_name, raw, explicitly_selected)
                     continue
-
                 total_bytes += len(raw)
                 names.append(str(resolved))
                 relative_bytes = relative_name.encode("utf-8")
