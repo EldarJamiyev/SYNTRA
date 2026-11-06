@@ -1002,6 +1002,39 @@ class TransformerTests(unittest.TestCase):
         self.assertNotIn("Calculator.add", metadata["exports"])
         self.assertIn("Calculator.add", metadata["declarations"])
 
+    def test_python_curriculum_recursively_extracts_nested_classes_and_methods(self):
+        from syntra_ai.curriculum import _module_metadata
+
+        source = (
+            '"""Nested class fixtures."""\\n'
+            "class Outer:\\n"
+            "    class Inner:\\n"
+            "        def compute(self, value):\\n"
+            "            return value + 1\\n"
+            "        class Deep:\\n"
+            "            async def run(self, value):\\n"
+            "                return value * 2\\n"
+            "    def direct(self):\\n"
+            "        return 42\\n"
+        )
+        metadata = _module_metadata("nested.py", source)
+        declarations = set(metadata["declarations"])
+        self.assertTrue({
+            "Outer",
+            "Outer.Inner",
+            "Outer.Inner.compute",
+            "Outer.Inner.Deep",
+            "Outer.Inner.Deep.run",
+            "Outer.direct",
+        }.issubset(declarations))
+        self.assertEqual(metadata["exports"], ["Outer"])
+        nested_method = next(
+            item for item in metadata["symbols"]
+            if item["name"] == "Outer.Inner.Deep.run"
+        )
+        self.assertTrue(nested_method["is_member"])
+        self.assertIn("return value * 2", nested_method["body"])
+
     def test_non_python_block_extraction_ignores_braces_inside_strings_and_comments(self):
         from syntra_ai.curriculum import _extract_logical_symbols, _logical_brace_deltas
 
