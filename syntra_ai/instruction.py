@@ -108,9 +108,11 @@ def load_instruction_examples(
                 (normalized_prompt + "\0" + normalized_completion).encode("utf-8")
             ).hexdigest()
 
+            stride = max(1, seq_len // 2)
             start = max(0, first_response_target - seq_len)
+            last_supervised_target = first_response_target - 1
             chunk_index = 0
-            while start < len(sequence) - 1:
+            while start < len(sequence) - 1 and last_supervised_target < len(sequence) - 1:
                 window = sequence[start:start + seq_len + 1]
                 if len(window) < 2:
                     break
@@ -118,7 +120,12 @@ def load_instruction_examples(
                 labels = window[1:]
                 for position in range(len(labels)):
                     target_position = start + position + 1
-                    if target_position < first_response_target:
+                    # Overlapping input windows preserve recent code context, but
+                    # every response target is charged to exactly one training block.
+                    if (
+                        target_position < first_response_target
+                        or target_position <= last_supervised_target
+                    ):
                         labels[position] = -100
 
                 if any(token != -100 for token in labels):
@@ -147,7 +154,8 @@ def load_instruction_examples(
                         "chunk_index": chunk_index,
                     })
                     total_tokens += example_tokens
-                start += seq_len
+                    last_supervised_target = start + len(labels)
+                start += stride
                 chunk_index += 1
     if len(examples) < 1:
         raise ValueError("Instruction dataset contains no non-empty prompt/completion examples.")
