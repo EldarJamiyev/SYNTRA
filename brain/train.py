@@ -138,23 +138,27 @@ def _is_sensitive_name(name: str) -> bool:
 def _iter_local_source_files(source: Path):
     """Yield approved text files in a file or project folder; never follow symlinks."""
     resolved_source = source.resolve(strict=True)
+    sensitive_root_components = {
+        "secrets", "credentials", "private", "private_keys", "certs", "certificates",
+        ".ssh", ".aws", ".azure", ".kube", ".docker", ".gnupg", ".terraform",
+    }
+    path_components = {part.casefold() for part in resolved_source.parts}
+    if path_components.intersection(sensitive_root_components):
+        raise ValueError("Refusing to train from a path inside a sensitive directory.")
     if resolved_source.is_file():
         if _is_sensitive_name(resolved_source.name):
             raise ValueError(f"Refusing to train on an obviously sensitive file: {resolved_source.name}")
+        if path_components.intersection(SKIP_DIRECTORIES):
+            raise ValueError("Refusing to train from a file inside a generated or excluded directory.")
         yield resolved_source, resolved_source.name, True
         return
     if not resolved_source.is_dir():
         raise ValueError(f"Dataset path must be a local file or directory: {source}")
 
-    sensitive_root_components = {
-        "secrets", "credentials", "private", "private_keys", "certs", "certificates",
-        ".ssh", ".aws", ".azure", ".kube", ".docker", ".gnupg", ".terraform",
-    }
-    root_components = {part.casefold() for part in resolved_source.parts}
     if (
         resolved_source.name.casefold() in SKIP_DIRECTORIES
+        or path_components.intersection(SKIP_DIRECTORIES)
         or _is_sensitive_name(resolved_source.name)
-        or root_components.intersection(sensitive_root_components)
     ):
         raise ValueError("Refusing to train on a sensitive or generated directory root.")
 
