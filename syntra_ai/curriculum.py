@@ -7,6 +7,7 @@ for a narrow, mechanically checked Python rule.
 from __future__ import annotations
 
 import ast
+import hashlib
 import heapq
 import json
 import os
