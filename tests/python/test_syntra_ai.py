@@ -712,7 +712,7 @@ class TransformerTests(unittest.TestCase):
                 result["audit"]["split_available"],
                 "a single source module must not be split into related train and validation examples",
             )
-            self.assertEqual(result["audit"]["prompt_leakage_groups"], 0)
+            self.assertIsNone(result["audit"]["prompt_leakage_groups"])
             self.assertTrue(
                 any("independent prompt/source groups" in warning for warning in result["audit"]["warnings"])
                 or "independent prompt/source groups" in result["audit"].get("error", "")
