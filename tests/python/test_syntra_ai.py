@@ -673,6 +673,12 @@ class TransformerTests(unittest.TestCase):
             (root / "secrets" / "private.txt").write_text("API_TOKEN=should-not-train-on-this", encoding="utf-8")
             (root / "credentials" / "credentials.json").write_text('{"password":"do-not-train"}', encoding="utf-8")
             (root / ".env").write_text("API_KEY=do-not-train", encoding="utf-8")
+            for directory in (".kube", ".docker", ".gnupg", ".terraform"):
+                secret_dir = root / directory
+                secret_dir.mkdir()
+                (secret_dir / "config.txt").write_text("excluded-directory-marker", encoding="utf-8")
+            for sensitive_name in (".netrc", ".git-credentials", ".dockerconfigjson", "service-account.json"):
+                (root / sensitive_name).write_text("excluded-config-marker", encoding="utf-8")
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 corpus = load_corpus([root], max_tokens=1024)
@@ -681,7 +687,12 @@ class TransformerTests(unittest.TestCase):
             self.assertNotIn("secrets", joined_paths)
             self.assertNotIn("credentials", joined_paths)
             self.assertNotIn(".env", joined_paths)
-            self.assertNotIn(b"API_TOKEN", bytes(token for token in corpus.token_ids if token < 256))
+            for path_marker in (".kube", ".docker", ".gnupg", ".terraform", ".netrc", ".git-credentials", "service-account.json"):
+                self.assertNotIn(path_marker, joined_paths)
+            corpus_bytes = bytes(token for token in corpus.token_ids if token < 256)
+            self.assertNotIn(b"API_TOKEN", corpus_bytes)
+            self.assertNotIn(b"excluded-directory-marker", corpus_bytes)
+            self.assertNotIn(b"excluded-config-marker", corpus_bytes)
 
     def test_corpus_source_scan_can_skip_unused_token_materialization(self):
         from syntra_ai.data import load_corpus
