@@ -846,6 +846,8 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             (root / "README.md").write_text("# Local project docs\\n", encoding="utf-8")
             (root / ".env").write_text("API_KEY=do-not-train\\n", encoding="utf-8")
             (root / "secrets.py").write_text("PRIVATE_TOKEN = 'do-not-train'\\n", encoding="utf-8")
+            (root / "secrets").mkdir()
+            (root / "secrets" / "module.py").write_text("PRIVATE_TOKEN = 'do-not-train'\\n", encoding="utf-8")
             (root / "node_modules" / "package" / "ignored.py").write_text("generated dependency\\n", encoding="utf-8")
             (root / "dist" / "ignored.js").write_text("generated build output\\n", encoding="utf-8")
             for sensitive_name in (
@@ -888,6 +890,10 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 _read_local_datasets([root / ".ssh"], 1024 * 1024)
             with self.assertRaisesRegex(ValueError, "sensitive or generated directory root"):
                 _read_local_datasets([root / ".kube"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "sensitive directory"):
+                _read_local_datasets([root / "secrets" / "module.py"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "generated or excluded directory"):
+                _read_local_datasets([root / "node_modules" / "package" / "ignored.py"], 1024 * 1024)
 
     def test_raw_repository_validation_split_keeps_each_source_file_wholly_separate(self):
         from brain.train import _read_local_datasets
