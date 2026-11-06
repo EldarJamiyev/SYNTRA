@@ -357,7 +357,7 @@ def synthesize_repository_curriculum(
 
     # Keep a bounded, deterministic candidate reservoir per instruction type.
     # This prevents a large first module from consuming the entire dataset cap.
-    category_pools: dict[str, list[tuple[int, str, dict[str, str]]]] = {
+    category_pools: dict[str, list[tuple[int, str, int, dict[str, str]]]] = {
         kind: [] for kind in counts
     }
     per_file_symbol_limit = max(
@@ -365,6 +365,7 @@ def synthesize_repository_curriculum(
         min(8, (max_examples + max(1, len(corpus.files)) - 1) // max(1, len(corpus.files))),
     )
     per_file_patch_limit = 2
+    candidate_sequence = 0
 
     def offer_candidate(
         kind: str,
@@ -373,6 +374,7 @@ def synthesize_repository_curriculum(
         prompt: str,
         completion: str,
     ) -> None:
+        nonlocal candidate_sequence
         prompt = prompt.strip()
         completion = completion.strip()
         if len(prompt) < 20 or len(completion) < 16:
@@ -387,7 +389,8 @@ def synthesize_repository_curriculum(
             "source_path": relative_path,
         }
         heap = category_pools[kind]
-        entry = (-rank, identity, candidate)
+        candidate_sequence += 1
+        entry = (-rank, identity, candidate_sequence, candidate)
         if len(heap) < max_examples:
             heapq.heappush(heap, entry)
         elif rank < -heap[0][0]:
@@ -441,8 +444,8 @@ def synthesize_repository_curriculum(
                 symbol["name"],
                 (
                     f"Instruction: Write a clean implementation of symbol {symbol['name']} "
-                    f"with its signature from module {relative_path}.\\n"
-                    f"Signature:\\n{signature}\\n"
+                    f"with its signature from module {relative_path}.\n"
+                    f"Signature:\n{signature}\n"
                     "Use the repository's observed implementation as the source of truth."
                 ),
                 source_block,
@@ -465,7 +468,7 @@ def synthesize_repository_curriculum(
                     f"Instruction: Explain the role, signature, and implementation of "
                     f"symbol {symbol['name']} in {relative_path}."
                 ),
-                "\\n".join(explanation),
+                "\n".join(explanation),
             )
 
         file_patch_count = 0
@@ -493,8 +496,8 @@ def synthesize_repository_curriculum(
                 f"none-comparison-line-{patch['line']}",
                 (
                     "Instruction: Apply a SYNTRA_AGENT_PATCH_V1 change to fix the "
-                    f"non-identity None comparison in {relative_path} at line {patch['line']}.\\n"
-                    f"Exact source anchor:\\n{patch['before']}\\n"
+                    f"non-identity None comparison in {relative_path} at line {patch['line']}.\n"
+                    f"Exact source anchor:\n{patch['before']}\n"
                     "Return a structured search/replace patch using the repository-relative path."
                 ),
                 json.dumps(patch_payload, ensure_ascii=False),
@@ -515,8 +518,8 @@ def synthesize_repository_curriculum(
 
     ordered_pools = {
         kind: [
-            entry[2]
-            for entry in sorted(heap, key=lambda entry: (-entry[0], entry[1]))
+            entry[3]
+            for entry in sorted(heap, key=lambda entry: (-entry[0], entry[1], entry[2]))
         ]
         for kind, heap in category_pools.items()
     }
