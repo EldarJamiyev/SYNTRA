@@ -221,13 +221,13 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         from brain.tokenizer import BytePairTokenizer, EOS_ID
         from brain.train import _instruction_context_blocks
 
-        response = "def transform(value): return value + 1\\n" * 24
+        response = "def transform(value): return value + 1\n" * 24
         record = {"prompt": "Implement the transform function.", "completion": response}
         tokenizer = BytePairTokenizer.empty()
         inputs, targets = _instruction_context_blocks([record], tokenizer, block_size=64)
 
         self.assertGreater(len(inputs), 1)
-        prompt = "Instruction:\\n" + record["prompt"] + "\\nResponse:\\n"
+        prompt = "Instruction:\n" + record["prompt"] + "\nResponse:\n"
         supervised = [
             token
             for row in targets
@@ -237,19 +237,20 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         self.assertEqual(supervised, tokenizer.encode(response) + [EOS_ID])
         self.assertTrue(all(len(row) == 64 for row in inputs))
     def test_instruction_record_limit_is_enforced_during_jsonl_parsing(self):
-        from brain import train as train_module
+        import importlib
+        train_module = importlib.import_module("brain.train")
 
         with tempfile.TemporaryDirectory(prefix="syntra-brain-record-cap-") as temp:
             root = Path(temp)
             dataset = root / "records.jsonl"
             dataset.write_text(
-                "\\n".join(json.dumps({
+                "\n".join(json.dumps({
                     "Instruction": f"Explain unique operation number {index}.",
                     "Response": f"Operation number {index} is local and deterministic.",
                 }) for index in range(3)),
                 encoding="utf-8",
             )
-            with patch("brain.train.MAX_INSTRUCTION_RECORDS", 2):
+            with patch.object(train_module, "MAX_INSTRUCTION_RECORDS", 2):
                 with self.assertRaisesRegex(ValueError, "2-record safety limit"):
                     train_module._read_instruction_jsonl_datasets([dataset], 1024 * 1024)
 
