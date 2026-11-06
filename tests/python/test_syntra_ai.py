@@ -991,6 +991,27 @@ class TransformerTests(unittest.TestCase):
         self.assertNotIn("Calculator.add", metadata["exports"])
         self.assertIn("Calculator.add", metadata["declarations"])
 
+    def test_non_python_block_extraction_ignores_braces_inside_strings_and_comments(self):
+        from syntra_ai.curriculum import _extract_logical_symbols
+
+        source = (
+            "function render(value) {\n"
+            "  const close = '}';\n"
+            '  const open = "{\"";\n'
+            "  // } this is only a comment\n"
+            "  /* { nested comment text } */\n"
+            "  return close + open + value;\n"
+            "}\n"
+            "function later() { return 42; }\n"
+        )
+        symbols = _extract_logical_symbols(source)
+        render = next(item for item in symbols if item["name"] == "render")
+        later = next(item for item in symbols if item["name"] == "later")
+        self.assertFalse(render["truncated"])
+        self.assertIn("return close + open + value", render["body"])
+        self.assertFalse(later["truncated"])
+        self.assertIn("return 42", later["body"])
+
     def test_non_python_module_exports_exclude_nested_methods_and_impl_containers(self):
         from syntra_ai.curriculum import _module_metadata
 
