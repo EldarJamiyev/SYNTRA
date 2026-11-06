@@ -121,16 +121,20 @@ def _atomic_checkpoint(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            descriptor = -1
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with handle:
             torch.save(payload, handle)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         _fsync_directory(path.parent)
     finally:
-        if descriptor not in (-1, None):
-            os.close(descriptor)
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         if os.path.exists(temporary):
             os.unlink(temporary)
 
@@ -140,17 +144,26 @@ def _atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\\n") as handle:
-            descriptor = -1
-            json.dump(payload, handle, ensure_ascii=False, indent=2, allow_nan=False)
-            handle.write("\\n")
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with handle:
+            content = json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+                allow_nan=False,
+            ).encode("utf-8") + b"\n"
+            handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
         _fsync_directory(path.parent)
     finally:
-        if descriptor not in (-1, None):
-            os.close(descriptor)
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         if os.path.exists(temporary):
             os.unlink(temporary)
 
