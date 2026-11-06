@@ -714,6 +714,7 @@ class TransformerTests(unittest.TestCase):
     def test_instruction_loader_preserves_entire_long_response_across_context_windows(self):
         from syntra_ai.instruction import load_instruction_examples
         from syntra_ai.model import EOS_ID
+        from syntra_ai.tokenizer import ByteBPETokenizer
 
         with tempfile.TemporaryDirectory(prefix="syntra-instruction-long-response-") as temp:
             root = Path(temp)
@@ -728,7 +729,7 @@ class TransformerTests(unittest.TestCase):
                 json.dumps({"prompt": prompt, "completion": completion}),
                 encoding="utf-8",
             )
-            tokenizer = BytePairTokenizer.empty()
+            tokenizer = ByteBPETokenizer.empty()
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 examples = load_instruction_examples(
                     dataset,
