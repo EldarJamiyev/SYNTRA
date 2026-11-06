@@ -33,6 +33,36 @@ class TransformerTests(unittest.TestCase):
         self.assertIsNotNone(model.token_embedding.weight.grad)
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_model_accepts_prompt_mask_but_rejects_invalid_or_all_masked_targets(self):
+        from syntra_ai.model import SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        model = SyntraTransformer(config)
+        tokens = torch.randint(0, config.vocab_size, (1, 8), dtype=torch.long)
+        targets = tokens.clone()
+        targets[:, :5] = -100
+
+        _, loss = model(tokens, targets)
+        self.assertIsNotNone(loss)
+        self.assertTrue(torch.isfinite(loss).item())
+
+        with self.assertRaisesRegex(ValueError, "at least one supervised token"):
+            model(tokens, torch.full_like(targets, -100))
+
+        invalid_negative = targets.clone()
+        invalid_negative[0, 5] = -1
+        with self.assertRaisesRegex(ValueError, "outside the configured vocabulary"):
+            model(tokens, invalid_negative)
+
+        invalid_positive = targets.clone()
+        invalid_positive[0, 5] = config.vocab_size
+        with self.assertRaisesRegex(ValueError, "outside the configured vocabulary"):
+            model(tokens, invalid_positive)
+
+        with self.assertRaisesRegex(ValueError, "same shape"):
+            model(tokens, targets[:, :-1])
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_cached_incremental_logits_match_full_forward(self):
         from syntra_ai.model import BOS_ID, SyntraTransformer
 
