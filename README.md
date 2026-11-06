@@ -159,7 +159,7 @@ Train the standalone brain directly on the generated file:
 npm run brain:train -- --dataset "D:\Datasets\MySource\syntra-curriculum.jsonl" --epochs 3 --device auto
 ```
 
-The brain trainer accepts `Instruction`/`Response` and `prompt`/`completion` JSONL records. Prompt tokens are masked from the supervised loss; response tokens and EOS remain supervised. Ordinary UTF-8 text/code sources keep the existing causal raw-token training path, including mixed raw-text and instruction datasets.
+The brain trainer accepts `Instruction`/`Response` and `prompt`/`completion` JSONL records (up to 10,000 structured examples, with bounded record and context-token budgets). Prompt tokens are masked from the supervised loss; response tokens and EOS remain supervised. Curriculum records carry source/symbol split groups, so related implementation and comprehension tasks stay together in validation; duplicate normalized prompts are also kept in the same split. Ordinary UTF-8 text/code sources keep the existing causal raw-token training path, including mixed raw-text and instruction datasets.
 
 ### Standalone `/brain` training and inference (Phase 2 & Unified Runtime)
 
