@@ -173,6 +173,12 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(result["instruction_examples"], 4)
             self.assertGreater(result["training_tokens"], 0)
             self.assertGreater(result["validation_tokens"], 0)
+            self.assertEqual(
+                result["supervised_tokens_processed"],
+                result["training_tokens"],
+                "one full epoch must process every supervised target exactly once",
+            )
+            self.assertEqual(result["throughput_basis"], "supervised_target_tokens")
 
             saved = load_checkpoint(checkpoint)
             self.assertEqual(saved["training_data_format"], "instruction-jsonl-masked-v1")
