@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 from hashlib import sha256
+from io import BytesIO
 import json
 import math
 import os
@@ -306,28 +307,26 @@ def _read_instruction_jsonl_datasets(
                 scan_bytes += len(raw)
                 if not raw:
                     continue
-                try:
-                    text = raw.decode("utf-8")
-                except UnicodeDecodeError:
-                    # Preserve scanned bytes for the ordinary reader, which applies
-                    # the existing explicitly-selected versus discovered-file policy.
-                    fallback_files[str(resolved)] = (relative_name, raw, explicitly_selected)
-                    continue
-
                 file_records: list[dict[str, str]] = []
                 structured = True
                 nonempty_lines = 0
-                for line_number, line in enumerate(text.splitlines(), start=1):
-                    if not line.strip():
+                for line_number, raw_line in enumerate(BytesIO(raw), start=1):
+                    record_bytes = raw_line.rstrip(b"\\r\\n")
+                    if not record_bytes.strip():
                         continue
                     nonempty_lines += 1
+                    try:
+                        line = record_bytes.decode("utf-8")
+                    except UnicodeDecodeError:
+                        structured = False
+                        break
                     # Ordinary text/code files may use a .jsonl suffix. Detect a
                     # JSON object before applying structured-record size limits so
                     # legacy raw text (including long lines) retains its fallback.
                     if not line.lstrip().startswith("{"):
                         structured = False
                         break
-                    if len(line.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES:
+                    if len(record_bytes) > MAX_INSTRUCTION_RECORD_BYTES:
                         raise ValueError(
                             f"Instruction JSONL record in {relative_name}:{line_number} exceeds "
                             f"{MAX_INSTRUCTION_RECORD_BYTES:,} bytes."
