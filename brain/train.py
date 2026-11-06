@@ -613,9 +613,6 @@ def _estimate_validation_loss(
             valid_count = int((y != -100).sum().item())
             if valid_count < 1:
                 raise RuntimeError("Validation batch contains no supervised target tokens.")
-            batch_supervised_tokens = int((y != -100).sum().item())
-            if batch_supervised_tokens < 1:
-                raise RuntimeError("Training batch contains no supervised target tokens.")
             _, loss = model(x, y)
             if loss is None or not torch.isfinite(loss).item():
                 raise RuntimeError("Validation produced a non-finite loss.")
@@ -946,6 +943,9 @@ def train(
             if indices.numel() == 0:
                 continue
             x, y = _batch(train_inputs, indices, block_size, device, train_targets)
+            batch_supervised_tokens = int((y != -100).sum().item())
+            if batch_supervised_tokens < 1:
+                raise RuntimeError("Training batch contains no supervised target tokens.")
 
             current_step_in_run += 1
             optimizer.zero_grad(set_to_none=True)
