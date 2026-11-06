@@ -95,6 +95,18 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
     module_values: list[str] = []
     explicit_exports: list[str] | None = None
 
+    def append_class_members(node: ast.ClassDef, prefix: str) -> None:
+        for child in node.body:
+            if isinstance(child, ast.ClassDef):
+                nested = _python_symbol(child, lines, source, prefix=prefix)
+                nested["is_member"] = True
+                symbols.append(nested)
+                append_class_members(child, f"{prefix}.{child.name}")
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                member = _python_symbol(child, lines, source, prefix=prefix)
+                member["is_member"] = True
+                symbols.append(member)
+
     for node in tree.body:
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             text = ast.get_source_segment(source, node)
@@ -103,11 +115,7 @@ def _parse_python_module(relative_path: str, source: str) -> dict[str, Any] | No
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             symbols.append(_python_symbol(node, lines, source))
             if isinstance(node, ast.ClassDef):
-                for child in node.body:
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        member = _python_symbol(child, lines, source, prefix=node.name)
-                        member["is_member"] = True
-                        symbols.append(member)
+                append_class_members(node, node.name)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names = [
