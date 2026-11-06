@@ -201,6 +201,7 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
             "body": "" if truncated else body,
             "truncated": truncated,
             "is_member": is_member,
+            "is_container": bool(re.match(r"^(?:(?:pub|public)\\s+)*impl\\b", signature.strip())),
             "start_line": start + 1,
             "end_line": max(start + 1, end),
             "docstring": "",
@@ -241,7 +242,11 @@ def _module_metadata(relative_path: str, source: str) -> dict[str, Any]:
         docstring = raw_docstring[:MAX_MODULE_CHARS]
         exports = [
             item["name"] for item in symbols
-            if not item.get("is_member") and not item["short_name"].startswith("_")
+            if (
+                not item.get("is_member")
+                and not item.get("is_container")
+                and not item["short_name"].startswith("_")
+            )
         ][:MAX_DECLARATIONS]
         declarations = [item["name"] for item in symbols][:MAX_DECLARATIONS]
         metadata_truncated = (
