@@ -213,6 +213,43 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertGreater(result["training_context_blocks"], 0)
             self.assertGreater(result["validation_context_blocks"], 0)
 
+    def test_long_instruction_response_is_packed_without_missing_or_duplicate_targets(self):
+        from brain.tokenizer import BytePairTokenizer, EOS_ID
+        from brain.train import _instruction_context_blocks
+
+        response = "def transform(value): return value + 1\\n" * 24
+        record = {"prompt": "Implement the transform function.", "completion": response}
+        tokenizer = BytePairTokenizer.empty()
+        inputs, targets = _instruction_context_blocks([record], tokenizer, block_size=64)
+
+        self.assertGreater(len(inputs), 1)
+        prompt = "Instruction:\\n" + record["prompt"] + "\\nResponse:\\n"
+        prompt_tokens = len(tokenizer.encode(prompt))
+        supervised = [
+            token
+            for row in targets
+            for token in row
+            if token != -100
+        ]
+        self.assertEqual(supervised, tokenizer.encode(response) + [EOS_ID])
+        self.assertTrue(all(len(row) == 64 for row in inputs))
+    def test_instruction_record_limit_is_enforced_during_jsonl_parsing(self):
+        from brain import train as train_module
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-record-cap-") as temp:
+            root = Path(temp)
+            dataset = root / "records.jsonl"
+            dataset.write_text(
+                "\\n".join(json.dumps({
+                    "Instruction": f"Explain unique operation number {index}.",
+                    "Response": f"Operation number {index} is local and deterministic.",
+                }) for index in range(3)),
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.object(train_module, "MAX_INSTRUCTION_RECORDS", 2):
+                with self.assertRaisesRegex(ValueError, "2-record safety limit"):
+                    train_module._read_instruction_jsonl_datasets([dataset], 1024 * 1024)
+
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata
         from brain.train import train
