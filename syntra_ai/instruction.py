@@ -25,7 +25,7 @@ from .runtime import _normalize_checkpoint_payload, checkpoint_path, clear_resid
 from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_instruction_dataset, resolve_curriculum_output_path
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
-    _atomic_checkpoint, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
+    _atomic_checkpoint, _atomic_json, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
 )
 
 
@@ -638,7 +638,7 @@ def finetune(
                 "instruction_dataset_quality": dataset_quality,
                 "pretrained_weights": False,
             }
-            metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            _atomic_json(metadata_path, metadata)
             report("running" if step < base_step + steps else "completed", step, "Checkpoint saved with measured supervised validation loss.")
     return report("completed", base_step + steps, "Supervised fine-tuning finished; the local BPE-tokenized checkpoint was updated.")
 
