@@ -386,9 +386,9 @@ def _raw_context_blocks(
         if len(window) != block_size + 1:
             continue
         x, y = window[:-1], window[1:]
+        if (len(inputs) + 1) * block_size > max_context_tokens:
+            raise ValueError("Packed raw context exceeds the remaining SYNTRA training token budget.")
         _append_context_block(x, y, block_size, inputs, targets)
-        if (len(inputs) * block_size) > MAX_PACKED_CONTEXT_TOKENS:
-            raise ValueError("Packed raw context exceeds the SYNTRA training token safety limit.")
     return inputs, targets
 
 
