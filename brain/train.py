@@ -597,23 +597,35 @@ def _estimate_validation_loss(
 ) -> float:
     was_training = model.training
     model.eval()
-    values: list[float] = []
-    if validation_data.ndim == 2:
-        if validation_targets is None or validation_targets.shape != validation_data.shape:
-            raise ValueError("Prepacked validation contexts require matching target blocks.")
-        available_chunks = validation_data.shape[0]
-    else:
-        available_chunks = max(1, (validation_data.numel() - 1) // block_size)
-    for _ in range(batches):
-        count = min(8, available_chunks)
-        starts = torch.randint(0, available_chunks, (count,), device="cpu")
-        x, y = _batch(validation_data, starts, block_size, device, validation_targets)
-        _, loss = model(x, y)
-        if loss is None or not torch.isfinite(loss).item():
-            raise RuntimeError("Validation produced a non-finite loss.")
-        values.append(float(loss.item()))
-    model.train(was_training)
-    return sum(values) / len(values)
+    weighted_loss = 0.0
+    supervised_targets = 0
+    try:
+        if validation_data.ndim == 2:
+            if validation_targets is None or validation_targets.shape != validation_data.shape:
+                raise ValueError("Prepacked validation contexts require matching target blocks.")
+            available_chunks = validation_data.shape[0]
+        else:
+            available_chunks = max(1, (validation_data.numel() - 1) // block_size)
+        for _ in range(batches):
+            count = min(8, available_chunks)
+            starts = torch.randint(0, available_chunks, (count,), device="cpu")
+            x, y = _batch(validation_data, starts, block_size, device, validation_targets)
+            valid_count = int((y != -100).sum().item())
+            if valid_count < 1:
+                raise RuntimeError("Validation batch contains no supervised target tokens.")
+            batch_supervised_tokens = int((y != -100).sum().item())
+            if batch_supervised_tokens < 1:
+                raise RuntimeError("Training batch contains no supervised target tokens.")
+            _, loss = model(x, y)
+            if loss is None or not torch.isfinite(loss).item():
+                raise RuntimeError("Validation produced a non-finite loss.")
+            weighted_loss += float(loss.item()) * valid_count
+            supervised_targets += valid_count
+    finally:
+        model.train(was_training)
+    if supervised_targets < 1:
+        raise RuntimeError("Validation did not process any supervised target tokens.")
+    return weighted_loss / supervised_targets
 
 
 def _rng_state(device: torch.device) -> dict:
@@ -849,6 +861,7 @@ def train(
     target_epoch = start_epoch + epochs
     total_steps_this_run = epochs * steps_per_epoch
     current_step_in_run = 0
+    supervised_tokens_processed = 0
 
     def payload_for_save(completed_epochs: int, order: torch.Tensor | None, next_index: int) -> dict:
         return {
@@ -896,7 +909,9 @@ def train(
             "train_loss": last_train_loss,
             "validation_loss": last_validation_loss,
             "best_validation_loss": best_validation_loss,
-            "tokens_per_second": round(current_step_in_run * batch_size * block_size / elapsed, 2),
+            "tokens_per_second": round(supervised_tokens_processed / elapsed, 2),
+            "supervised_tokens_processed": supervised_tokens_processed,
+            "throughput_basis": "supervised_target_tokens",
             "elapsed_seconds": round(elapsed, 2),
             "parameter_count": parameter_count,
             "dataset_files": len(dataset_files),
@@ -948,6 +963,7 @@ def train(
                 group["lr"] = max(scheduled_lr, learning_rate * 0.05)
             optimizer.step()
             last_train_loss = float(loss.detach().item())
+            supervised_tokens_processed += batch_supervised_tokens
             next_batch_index = batch_index + 1
 
             should_evaluate = (
