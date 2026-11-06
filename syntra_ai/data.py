@@ -146,7 +146,12 @@ def load_corpus(
     for raw_root in roots:
         # Canonicalize and approve the root before traversal. os.walk and all
         # descendant paths are derived from this bounded, trusted directory.
-        root = os.fspath(resolve_corpus_root(raw_root))
+        root_path = resolve_corpus_root(raw_root)
+        root = os.fspath(root_path)
+        root_parts = {part.casefold() for part in root_path.parts}
+        root_name = root_path.name.casefold()
+        if root_name in IGNORED_DIRS or root_name in SENSITIVE_DIRS or root_parts.intersection(SENSITIVE_DIRS):
+            raise ValueError("Refusing to scan a sensitive or generated corpus root.")
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             try:
                 base = os.path.realpath(current, strict=True)
