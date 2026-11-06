@@ -208,8 +208,25 @@ def train(
         if saved.get("format") != "syntra-transformer-v1":
             raise ValueError("Resume checkpoint is not a supported SYNTRA Transformer checkpoint.")
         stored_config = ModelConfig.from_dict(saved["config"])
-        if requested_config is not None and not _same_architecture(requested_config, stored_config):
-            raise ValueError("Resume architecture differs from the saved checkpoint configuration.")
+        if requested_config is not None:
+            saved_requested_config = saved.get("requested_config")
+            if isinstance(saved_requested_config, dict):
+                try:
+                    original_request = ModelConfig.from_dict(saved_requested_config)
+                except (TypeError, ValueError):
+                    raise ValueError("Resume checkpoint contains an invalid original model configuration.") from None
+                if not _same_architecture(requested_config, original_request):
+                    raise ValueError("Resume architecture differs from the original requested checkpoint configuration.")
+            else:
+                # Older checkpoints only stored the tokenizer's realized vocabulary.
+                # Compare every other architectural field without treating the
+                # corpus-dependent BPE vocabulary reduction as a user config change.
+                comparable_request = replace(requested_config, vocab_size=stored_config.vocab_size)
+                if not _same_architecture(comparable_request, stored_config):
+                    raise ValueError("Resume architecture differs from the saved checkpoint configuration.")
+        requested_config_payload = saved.get("requested_config")
+        if not isinstance(requested_config_payload, dict):
+            requested_config_payload = None
         config = stored_config
         config.validate()
         validate_training_memory_budget(config, batch_size, device)
@@ -223,6 +240,7 @@ def train(
     else:
         config = requested_config or ModelConfig()
         config.validate()
+        requested_config_payload = config.to_dict()
         validate_training_memory_budget(config, batch_size, device)
         corpus = load_corpus(roots, max_tokens=max_tokens)
         tokenizer = ByteBPETokenizer.train(corpus.documents, vocab_size=config.vocab_size)
@@ -327,6 +345,7 @@ def train(
                 "corpus_files": len(corpus.files),
                 "corpus_tokens": len(token_ids),
                 "training_data_sha256": training_data_sha256,
+                "requested_config": requested_config_payload or config.to_dict(),
                 "training_settings": {
                     "batch_size": batch_size,
                     "learning_rate": learning_rate,
