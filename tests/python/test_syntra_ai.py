@@ -711,6 +711,38 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(result["audit"]["split_available"])
             self.assertEqual(result["audit"]["prompt_leakage_groups"], 0)
 
+    def test_instruction_finetuning_split_keeps_source_families_and_duplicate_prompts_together(self):
+        from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-source-split-") as temp:
+            root = Path(temp)
+            dataset = root / "source-groups.jsonl"
+            records = [
+                {"prompt": "Implement alpha.", "completion": "alpha()", "split_group": "symbol:alpha"},
+                {"prompt": "Explain alpha.", "completion": "alpha is a function.", "split_group": "symbol:alpha"},
+                {"prompt": "Implement beta.", "completion": "beta()", "split_group": "symbol:beta"},
+                {"prompt": "Explain beta.", "completion": "beta is a function.", "split_group": "symbol:beta"},
+                {"prompt": "Repeated generic prompt.", "completion": "first completion.", "split_group": "module:gamma"},
+                {"prompt": "Repeated generic prompt.", "completion": "second completion.", "split_group": "module:delta"},
+                {"prompt": "Explain gamma.", "completion": "gamma module.", "split_group": "module:gamma"},
+            ]
+            dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(dataset, seq_len=64)
+            self.assertTrue(all(item["split_group_id"] for item in examples))
+            training, validation, quality = split_instruction_examples(examples)
+
+            memberships = {}
+            prompt_memberships = {}
+            for split_name, collection in (("train", training), ("validation", validation)):
+                for item in collection:
+                    memberships.setdefault(item["split_group_id"], set()).add(split_name)
+                    prompt_memberships.setdefault(item["prompt_group_id"], set()).add(split_name)
+            self.assertTrue(all(len(value) == 1 for value in memberships.values()))
+            self.assertTrue(all(len(value) == 1 for value in prompt_memberships.values()))
+            self.assertEqual(quality["prompt_leakage_groups"], 0)
+            self.assertGreaterEqual(quality["independent_split_group_count"], 3)
+
     def test_ast_curriculum_emits_grounded_module_symbol_and_patch_records(self):
         from syntra_ai.curriculum import synthesize_repository_curriculum
 
