@@ -771,14 +771,9 @@ def train(
                 "The selected dataset format differs from the checkpoint's training data format. "
                 "Start a new checkpoint rather than resuming across raw-text and supervised JSONL modes."
             )
-        if instruction_records:
-            settings = saved.get("training_settings")
-            required_settings = {"batch_size", "learning_rate", "weight_decay", "seed", "steps_per_epoch"}
-            if not isinstance(settings, dict) or not required_settings.issubset(settings):
-                raise ValueError(
-                    "The checkpoint does not contain complete instruction-training resume settings. "
-                    "Start a new checkpoint rather than risk skipping or repeating training data."
-                )
+        settings = saved.get("training_settings")
+        required_settings = {"batch_size", "learning_rate", "weight_decay", "seed", "steps_per_epoch"}
+        if isinstance(settings, dict) and required_settings.issubset(settings):
             expected_settings = {
                 "batch_size": batch_size,
                 "learning_rate": learning_rate,
@@ -792,11 +787,19 @@ def train(
             ]
             if changed_settings:
                 raise ValueError(
-                    "Instruction-training resume settings differ from the checkpoint: "
+                    "Training resume settings differ from the checkpoint: "
                     + ", ".join(changed_settings)
                     + ". Use the original settings or start a new checkpoint."
                 )
             saved_training_settings = settings
+        else:
+            # Older checkpoints can be resumed at a clean epoch boundary only.
+            # Mid-epoch cursors cannot be interpreted safely without saved batch settings.
+            if isinstance(saved.get("epoch_order"), torch.Tensor):
+                raise ValueError(
+                    "The checkpoint lacks the batch settings required for a safe mid-epoch resume. "
+                    "Finish from a compatible checkpoint or start a new training run."
+                )
         stored_config = TransformerConfig.from_dict(saved["config"])
         if config is not None:
             comparable_requested = replace(requested_config, vocab_size=stored_config.vocab_size)
