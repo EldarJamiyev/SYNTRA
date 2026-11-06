@@ -100,14 +100,57 @@ def _estimate_loss(model, data, batch_size, seq_len, device, batches=8) -> float
     return sum(values) / len(values)
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist a completed rename where the platform exposes directory fsync."""
+    if os.name == "nt":
+        return
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        os.fsync(descriptor)
+    except OSError:
+        # Some filesystems do not support directory fsync; file data itself is flushed.
+        pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _atomic_checkpoint(path: Path, payload: dict) -> None:
+    """Flush a complete tensor checkpoint before atomically replacing its destination."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
-    os.close(descriptor)
     try:
-        torch.save(payload, temporary)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            torch.save(payload, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
+        if descriptor not in (-1, None):
+            os.close(descriptor)
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    """Write status metadata atomically so readers see either old or complete new JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\\n") as handle:
+            descriptor = -1
+            json.dump(payload, handle, ensure_ascii=False, indent=2, allow_nan=False)
+            handle.write("\\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        if descriptor not in (-1, None):
+            os.close(descriptor)
         if os.path.exists(temporary):
             os.unlink(temporary)
 
@@ -375,8 +418,7 @@ def train(
                 "pretrained_weights": False,
             }
             metadata_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".json")
-            metadata_path.parent.mkdir(parents=True, exist_ok=True)
-            metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            _atomic_json(metadata_path, metadata)
             report(
                 "running" if step < start_step + steps else "completed",
                 step,
