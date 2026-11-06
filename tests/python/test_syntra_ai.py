@@ -992,7 +992,7 @@ class TransformerTests(unittest.TestCase):
         self.assertIn("Calculator.add", metadata["declarations"])
 
     def test_non_python_block_extraction_ignores_braces_inside_strings_and_comments(self):
-        from syntra_ai.curriculum import _extract_logical_symbols
+        from syntra_ai.curriculum import _extract_logical_symbols, _logical_brace_deltas
 
         source = (
             "function render(value) {\n"
@@ -1003,6 +1003,11 @@ class TransformerTests(unittest.TestCase):
             "  return close + open + value;\n"
             "}\n"
             "function later() { return 42; }\n"
+        )
+        self.assertEqual(
+            _logical_brace_deltas(source.splitlines()),
+            [1, 0, 0, 0, 0, 0, -1, 0],
+            "only the function's opening and closing braces may affect lexical depth",
         )
         symbols = _extract_logical_symbols(source)
         render = next(item for item in symbols if item["name"] == "render")
