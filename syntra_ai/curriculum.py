@@ -340,7 +340,7 @@ def synthesize_repository_curriculum(
 
     output_root = corpus_roots[0]
     target = resolve_curriculum_output_path(output_path, output_root)
-    corpus = load_corpus(corpus_roots)
+    corpus = load_corpus(corpus_roots, include_tokens=False)
     if len(corpus.files) != len(corpus.documents):
         raise RuntimeError("The bounded source reader returned inconsistent file/document counts.")
 
@@ -579,7 +579,7 @@ def synthesize_repository_curriculum(
         )
     source_token_limit = 5_000_000
     source_file_limit = 10_000
-    if len(corpus.token_ids) >= source_token_limit:
+    if corpus.token_count >= source_token_limit:
         warnings.append(
             f"Repository scanning reached the {source_token_limit:,}-token source limit; the corpus may be incomplete."
         )
@@ -594,7 +594,7 @@ def synthesize_repository_curriculum(
         "source_files": len(corpus.files),
         "module_count": module_count,
         "represented_source_files": represented_source_files,
-        "source_tokens": len(corpus.token_ids),
+        "source_tokens": corpus.token_count,
         "symbol_count": symbol_count,
         "patch_candidate_count": patch_candidate_count,
         "example_count": len(records),
