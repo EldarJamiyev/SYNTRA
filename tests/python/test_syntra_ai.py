@@ -810,6 +810,46 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(any("useful_symbol" in prompt for prompt in implementation_prompts))
             self.assertFalse(any("enormous_payload" in prompt for prompt in implementation_prompts))
 
+    def test_curriculum_selection_balances_large_repositories_under_example_cap(self):
+        from syntra_ai.curriculum import synthesize_repository_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-balanced-selection-") as temp:
+            root = Path(temp)
+            for module_index in range(12):
+                source = root / f"module_{module_index:02d}.py"
+                source.write_text(
+                    f'"""Module {module_index} provides independent operations."""\n'
+                    f"def add_{module_index}(left, right):\n"
+                    "    return left + right\n\n"
+                    f"def multiply_{module_index}(left, right):\n"
+                    "    return left * right\n\n"
+                    f"def normalize_{module_index}(value):\n"
+                    "    return value.strip()\n",
+                    encoding="utf-8",
+                )
+
+            output = root / "balanced.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_repository_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=16,
+                )
+
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            represented = {item["source_path"] for item in records}
+            self.assertEqual(result["module_count"], 12)
+            self.assertEqual(result["example_count"], 16)
+            self.assertGreaterEqual(result["represented_source_files"], 4)
+            self.assertGreaterEqual(len(represented), 4)
+            self.assertGreaterEqual(result["examples_by_type"]["module_comprehension"], 1)
+            self.assertGreaterEqual(result["examples_by_type"]["symbol_implementation"], 1)
+            self.assertGreaterEqual(result["examples_by_type"]["symbol_comprehension"], 1)
+            self.assertEqual(
+                result["selection_strategy"],
+                "deterministic-source-ranked-round-robin",
+            )
+
     def test_curriculum_scans_all_configured_approved_roots(self):
         from syntra_ai import curriculum, safe_paths
 
