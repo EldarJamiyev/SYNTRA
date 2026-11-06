@@ -173,9 +173,20 @@ def _logical_brace_deltas(lines: list[str]) -> list[int]:
             if quote is not None:
                 if escaped:
                     escaped = False
-                elif char == "\\":
+                    index += 1
+                    continue
+                if char == "\\":
                     escaped = True
-                elif char == quote:
+                    index += 1
+                    continue
+                if len(quote) == 3:
+                    if line[index:index + 3] == quote:
+                        quote = None
+                        index += 3
+                    else:
+                        index += 1
+                    continue
+                if char == quote:
                     quote = None
                 index += 1
                 continue
@@ -187,6 +198,11 @@ def _logical_brace_deltas(lines: list[str]) -> list[int]:
                 index += 2
                 continue
             if char in ("'", '"') or char == chr(96):
+                delimiter = line[index:index + 3]
+                if delimiter in ("'''", '"""'):
+                    quote = delimiter
+                    index += 3
+                    continue
                 # Rust lifetimes and labels use apostrophes without a closing
                 # quote on the same line. Do not treat those as string literals.
                 if char == "'":
