@@ -216,14 +216,39 @@ def load_instruction_examples(
     return examples
 
 
+def _source_record_index(examples: list[dict]) -> dict[str, dict[str, Any]]:
+    """Collapse overlapping context windows back to their originating JSONL records."""
+    records: dict[str, dict[str, Any]] = {}
+    for example in examples:
+        example_id = example.get("example_id")
+        if not isinstance(example_id, str) or len(example_id) != 64:
+            raise ValueError("Instruction context window is missing its exact example hash.")
+        row_id = example.get("source_row_id", example_id)
+        source_id = example.get("source_example_id", example_id)
+        if not isinstance(row_id, str) or len(row_id) != 64:
+            raise ValueError("Instruction context window has a malformed source-row identifier.")
+        if not isinstance(source_id, str) or len(source_id) != 64:
+            raise ValueError("Instruction context window has a malformed source-example identifier.")
+        record = {
+            "source_example_id": source_id,
+            "prompt_group_id": example["prompt_group_id"],
+            "split_group_id": example.get("split_group_id"),
+        }
+        previous = records.get(row_id)
+        if previous is not None and previous != record:
+            raise ValueError("Context windows from one source row contain inconsistent record metadata.")
+        records[row_id] = record
+    return records
+
+
 def split_instruction_examples(
     examples: list[dict],
     validation_fraction: float = INSTRUCTION_VALIDATION_FRACTION,
     seed: str = INSTRUCTION_SPLIT_SEED,
 ) -> tuple[list[dict], list[dict], dict]:
-    """Split duplicate prompts and explicitly related curriculum examples together."""
+    """Split duplicate prompts and explicitly related curriculum records together."""
     if not isinstance(examples, list) or len(examples) < 2:
-        raise ValueError("At least two instruction examples are required for a train/validation split.")
+        raise ValueError("At least two instruction context windows are required for a train/validation split.")
     if not isinstance(validation_fraction, (int, float)) or not 0 < validation_fraction < 0.5:
         raise ValueError("validation_fraction must be greater than 0 and less than 0.5.")
     if not isinstance(seed, str) or not seed.strip() or len(seed) > 128:
@@ -245,32 +270,25 @@ def split_instruction_examples(
 
     owners: dict[str, int] = {}
     record_keys: list[tuple[str, ...]] = []
-    prompt_ids: set[str] = set()
     source_group_ids: set[str] = set()
-    example_ids = []
 
     for index, example in enumerate(examples):
         if not isinstance(example, dict):
             raise ValueError("Instruction examples must be dictionaries returned by load_instruction_examples.")
         prompt_group_id = example.get("prompt_group_id")
-        example_id = example.get("example_id")
         split_group_id = example.get("split_group_id")
         if not isinstance(prompt_group_id, str) or len(prompt_group_id) != 64:
             raise ValueError("Instruction example is missing its normalized prompt-group hash.")
-        if not isinstance(example_id, str) or len(example_id) != 64:
-            raise ValueError("Instruction example is missing its exact example hash.")
         if split_group_id is not None and (
             not isinstance(split_group_id, str) or len(split_group_id) != 64
         ):
             raise ValueError("Instruction example has a malformed source-group hash.")
 
-        prompt_ids.add(prompt_group_id)
         keys = ["prompt:" + prompt_group_id]
         if split_group_id:
             keys.append("source:" + split_group_id)
             source_group_ids.add(split_group_id)
         record_keys.append(tuple(keys))
-        example_ids.append(example_id)
         for key in keys:
             previous = owners.get(key)
             if previous is None:
@@ -278,6 +296,7 @@ def split_instruction_examples(
             else:
                 union(index, previous)
 
+    source_records = _source_record_index(examples)
     component_members: dict[int, list[int]] = {}
     component_keys: dict[int, set[str]] = {}
     for index, keys in enumerate(record_keys):
@@ -287,7 +306,7 @@ def split_instruction_examples(
 
     groups: dict[str, list[dict]] = {}
     for root, members in component_members.items():
-        material = "\\0".join(sorted(component_keys[root]))
+        material = "\0".join(sorted(component_keys[root]))
         group_id = hashlib.sha256(material.encode("utf-8")).hexdigest()
         groups[group_id] = [examples[index] for index in members]
 
@@ -319,22 +338,34 @@ def split_instruction_examples(
     if not training_examples or not validation_examples:
         raise ValueError("Instruction split did not produce non-empty train and validation sets.")
 
-    unique_examples = len(set(example_ids))
-    unique_prompts = len(prompt_ids)
-    duplicate_prompts = len(examples) - unique_prompts
-    exact_duplicates = len(examples) - unique_examples
-    training_prompt_ids = {item["prompt_group_id"] for item in training_examples}
-    validation_prompt_ids = {item["prompt_group_id"] for item in validation_examples}
+    training_row_ids = {
+        item.get("source_row_id", item["example_id"]) for item in training_examples
+    }
+    validation_row_ids = {
+        item.get("source_row_id", item["example_id"]) for item in validation_examples
+    }
+    training_records = {key: source_records[key] for key in training_row_ids}
+    validation_records = {key: source_records[key] for key in validation_row_ids}
+
+    unique_prompts = len({item["prompt_group_id"] for item in source_records.values()})
+    source_record_count = len(source_records)
+    unique_source_examples = len({
+        item["source_example_id"] for item in source_records.values()
+    })
+    duplicate_prompts = source_record_count - unique_prompts
+    exact_duplicates = source_record_count - unique_source_examples
+    training_prompt_ids = {item["prompt_group_id"] for item in training_records.values()}
+    validation_prompt_ids = {item["prompt_group_id"] for item in validation_records.values()}
     prompt_leakage_groups = len(training_prompt_ids.intersection(validation_prompt_ids))
-    validation_fraction_actual = len(validation_examples) / len(examples)
+    validation_fraction_actual = len(validation_records) / source_record_count
     warnings = []
-    if len(examples) < 100:
-        warnings.append("Small dataset: fewer than 100 examples; validation loss is weak evidence of generalization.")
+    if source_record_count < 100:
+        warnings.append("Small dataset: fewer than 100 source records; validation loss is weak evidence of generalization.")
     if unique_prompts < 20:
         warnings.append("Low prompt diversity: fewer than 20 distinct normalized prompts.")
     if duplicate_prompts:
         warnings.append(
-            f"{duplicate_prompts} example(s) reuse an existing normalized prompt; all copies stay in one split."
+            f"{duplicate_prompts} source record(s) reuse an existing normalized prompt; all copies stay in one split."
         )
     if source_group_ids:
         warnings.append(
@@ -342,7 +373,7 @@ def split_instruction_examples(
         )
     if exact_duplicates:
         warnings.append(
-            f"{exact_duplicates} exact prompt/completion duplicate(s) may overweight repeated examples during training."
+            f"{exact_duplicates} exact prompt/completion duplicate(s) may overweight repeated records during training."
         )
     if validation_fraction_actual < 0.05 or validation_fraction_actual > 0.3:
         warnings.append(
@@ -350,14 +381,17 @@ def split_instruction_examples(
         )
 
     quality = {
-        "example_count": len(examples),
+        "example_count": source_record_count,
+        "context_window_count": len(examples),
         "unique_prompt_count": unique_prompts,
         "source_group_count": len(source_group_ids),
         "independent_split_group_count": len(groups),
         "repeated_prompt_example_count": duplicate_prompts,
         "exact_duplicate_example_count": exact_duplicates,
-        "training_examples": len(training_examples),
-        "validation_examples": len(validation_examples),
+        "training_examples": len(training_records),
+        "validation_examples": len(validation_records),
+        "training_context_windows": len(training_examples),
+        "validation_context_windows": len(validation_examples),
         "training_prompt_groups": len(training_prompt_ids),
         "validation_prompt_groups": len(validation_prompt_ids),
         "training_data_groups": len(groups) - len(validation_group_ids),
