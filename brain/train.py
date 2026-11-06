@@ -369,10 +369,13 @@ def _raw_context_blocks(
     text: str,
     tokenizer: BytePairTokenizer,
     block_size: int,
+    max_context_tokens: int = MAX_PACKED_CONTEXT_TOKENS,
 ) -> tuple[list[list[int]], list[list[int]]]:
     """Pack legacy raw text into fixed, shuffled causal context blocks."""
     if not text.strip():
         return [], []
+    if type(max_context_tokens) is not int or max_context_tokens < block_size:
+        raise ValueError("The remaining packed-context budget cannot fit one raw context block.")
     token_ids = [BOS_ID, *tokenizer.encode(text), EOS_ID]
     inputs: list[list[int]] = []
     targets: list[list[int]] = []
@@ -393,8 +396,11 @@ def _instruction_context_blocks(
     records: list[dict[str, str]],
     tokenizer: BytePairTokenizer,
     block_size: int,
+    max_context_tokens: int = MAX_PACKED_CONTEXT_TOKENS,
 ) -> tuple[list[list[int]], list[list[int]]]:
     """Pack prompt/response examples; mask prompt targets and supervise response plus EOS only."""
+    if records and (type(max_context_tokens) is not int or max_context_tokens < block_size):
+        raise ValueError("The remaining packed-context budget cannot fit one instruction context block.")
     inputs: list[list[int]] = []
     targets: list[list[int]] = []
     for record in records:
@@ -418,9 +424,9 @@ def _instruction_context_blocks(
                 if target_position < first_response_target:
                     y[index] = -100
             if any(token != -100 for token in y):
+                if (len(inputs) + 1) * block_size > max_context_tokens:
+                    raise ValueError("Packed instruction contexts exceed the remaining SYNTRA training token budget.")
                 _append_context_block(x, y, block_size, inputs, targets)
-            if (len(inputs) * block_size) > MAX_PACKED_CONTEXT_TOKENS:
-                raise ValueError("Packed instruction contexts exceed the SYNTRA training token safety limit.")
             start += block_size
     return inputs, targets
 
@@ -650,15 +656,24 @@ def train(
         raise ValueError("Model vocabulary and local tokenizer vocabulary do not match.")
 
     block_size = requested_config.block_size
-    train_input_rows, train_target_rows = _raw_context_blocks(train_text, tokenizer, block_size)
+    remaining_context_tokens = MAX_PACKED_CONTEXT_TOKENS
+    train_input_rows, train_target_rows = _raw_context_blocks(
+        train_text, tokenizer, block_size, remaining_context_tokens
+    )
+    remaining_context_tokens -= len(train_input_rows) * block_size
+
     validation_input_rows, validation_target_rows = _raw_context_blocks(
-        validation_text, tokenizer, block_size
+        validation_text, tokenizer, block_size, remaining_context_tokens
     )
+    remaining_context_tokens -= len(validation_input_rows) * block_size
+
     instruction_train_inputs, instruction_train_targets = _instruction_context_blocks(
-        training_records, tokenizer, block_size
+        training_records, tokenizer, block_size, remaining_context_tokens
     )
+    remaining_context_tokens -= len(instruction_train_inputs) * block_size
+
     instruction_validation_inputs, instruction_validation_targets = _instruction_context_blocks(
-        validation_records, tokenizer, block_size
+        validation_records, tokenizer, block_size, remaining_context_tokens
     )
     train_input_rows.extend(instruction_train_inputs)
     train_target_rows.extend(instruction_train_targets)
