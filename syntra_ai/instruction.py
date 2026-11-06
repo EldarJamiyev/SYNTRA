@@ -231,8 +231,8 @@ def split_instruction_examples(
 
     if len(groups) < 2:
         raise ValueError(
-            "At least two independent prompt/source groups are required; related curriculum examples "
-            "must remain together in one split."
+            "At least two distinct normalized prompts and two independent prompt/source groups are required; "
+            "related curriculum examples must remain together in one split."
         )
 
     validation_group_count = max(1, int(len(groups) * validation_fraction))
