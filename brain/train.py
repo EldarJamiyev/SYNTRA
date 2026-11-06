@@ -146,6 +146,18 @@ def _iter_local_source_files(source: Path):
     if not resolved_source.is_dir():
         raise ValueError(f"Dataset path must be a local file or directory: {source}")
 
+    sensitive_root_components = {
+        "secrets", "credentials", "private", "private_keys", "certs", "certificates",
+        ".ssh", ".aws", ".azure", ".kube", ".docker", ".gnupg", ".terraform",
+    }
+    root_components = {part.casefold() for part in resolved_source.parts}
+    if (
+        resolved_source.name.casefold() in SKIP_DIRECTORIES
+        or _is_sensitive_name(resolved_source.name)
+        or root_components.intersection(sensitive_root_components)
+    ):
+        raise ValueError("Refusing to train on a sensitive or generated directory root.")
+
     root = resolved_source
 
     def raise_walk_error(error: OSError) -> None:
