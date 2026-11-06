@@ -122,7 +122,7 @@ def _is_sensitive_name(name: str) -> bool:
         "access_token", "access_token.txt", "refresh_token", "token.txt",
         ".npmrc", ".pypirc", ".netrc", ".git-credentials",
         "dockerconfigjson", ".dockerconfigjson", "service-account.json",
-        "serviceaccount.json", "kubeconfig", "config.json",
+        "serviceaccount.json", "kubeconfig",
     }:
         return True
     if any(marker in lower for marker in ("secret", "credential", "password", "private_key", "private-key")):
