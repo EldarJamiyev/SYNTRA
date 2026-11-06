@@ -372,6 +372,7 @@ def synthesize_repository_curriculum(
         kind: str,
         relative_path: str,
         selector: str,
+        split_group: str,
         prompt: str,
         completion: str,
     ) -> None:
@@ -388,6 +389,7 @@ def synthesize_repository_curriculum(
             "completion": completion,
             "kind": kind,
             "source_path": relative_path,
+            "split_group": split_group,
         }
         heap = category_pools[kind]
         candidate_sequence += 1
@@ -422,6 +424,7 @@ def synthesize_repository_curriculum(
             "module_comprehension",
             relative_path,
             "module-purpose-exports",
+            f"module:{relative_path}",
             (
                 f"Instruction: Explain the purpose and structural exports of module {relative_path}. "
                 "Describe its documented purpose, imports, public exports, and declared symbols."
@@ -443,6 +446,7 @@ def synthesize_repository_curriculum(
                 "symbol_implementation",
                 relative_path,
                 symbol["name"],
+                f"symbol:{relative_path}:{symbol['name']}",
                 (
                     f"Instruction: Write a clean implementation of symbol {symbol['name']} "
                     f"with its signature from module {relative_path}.\n"
@@ -465,6 +469,7 @@ def synthesize_repository_curriculum(
                 "symbol_comprehension",
                 relative_path,
                 symbol["name"],
+                f"symbol:{relative_path}:{symbol['name']}",
                 (
                     f"Instruction: Explain the role, signature, and implementation of "
                     f"symbol {symbol['name']} in {relative_path}."
@@ -495,6 +500,7 @@ def synthesize_repository_curriculum(
                 "anchor_patch_repair",
                 relative_path,
                 f"none-comparison-line-{patch['line']}",
+                f"patch:{relative_path}:{patch['line']}",
                 (
                     "Instruction: Apply a SYNTRA_AGENT_PATCH_V1 change to fix the "
                     f"non-identity None comparison in {relative_path} at line {patch['line']}.\n"
