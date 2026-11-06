@@ -123,8 +123,10 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             )
             plain = root / "legacy.jsonl"
             plain.write_text("legacy source text\nwith a second line\n" * 100, encoding="utf-8")
+            long_plain = root / "legacy-long-line.jsonl"
+            long_plain.write_text("long raw text fallback " + ("x" * (1024 * 1024 + 1)), encoding="utf-8")
 
-            records, files, byte_count, fingerprint = _read_instruction_jsonl_datasets([root], 1024 * 1024)
+            records, files, byte_count, fingerprint = _read_instruction_jsonl_datasets([root], 2 * 1024 * 1024)
             self.assertEqual(len(records), 2)
             self.assertEqual(records[0]["prompt"], "Explain addition.")
             self.assertEqual(records[1]["completion"], "Multiply the two values.")
@@ -133,10 +135,11 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(len(fingerprint), 64)
 
             train_text, validation_text, raw_files, _, _ = _read_local_datasets(
-                [root], 1024 * 1024, exclude_paths=set(files)
+                [root], 2 * 1024 * 1024, exclude_paths=set(files)
             )
             self.assertIn("legacy source text", train_text + validation_text)
-            self.assertEqual(len(raw_files), 1)
+            self.assertIn("long raw text fallback", train_text + validation_text)
+            self.assertEqual(len(raw_files), 2)
 
     def test_structured_jsonl_training_saves_masked_training_format(self):
         from brain.checkpoint import load_checkpoint
