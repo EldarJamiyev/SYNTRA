@@ -140,7 +140,7 @@ def split_instruction_examples(
     validation_fraction: float = INSTRUCTION_VALIDATION_FRACTION,
     seed: str = INSTRUCTION_SPLIT_SEED,
 ) -> tuple[list[dict], list[dict], dict]:
-    """Split by normalized prompt groups so repeated prompts cannot leak across validation."""
+    """Split duplicate prompts and explicitly related curriculum examples together."""
     if not isinstance(examples, list) or len(examples) < 2:
         raise ValueError("At least two instruction examples are required for a train/validation split.")
     if not isinstance(validation_fraction, (int, float)) or not 0 < validation_fraction < 0.5:
@@ -148,42 +148,103 @@ def split_instruction_examples(
     if not isinstance(seed, str) or not seed.strip() or len(seed) > 128:
         raise ValueError("Instruction split seed must be a non-empty string of at most 128 characters.")
 
-    groups: dict[str, list[dict]] = {}
+    parents = list(range(len(examples)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left != root_right:
+            parents[max(root_left, root_right)] = min(root_left, root_right)
+
+    owners: dict[str, int] = {}
+    record_keys: list[tuple[str, ...]] = []
+    prompt_ids: set[str] = set()
+    source_group_ids: set[str] = set()
     example_ids = []
-    for example in examples:
+
+    for index, example in enumerate(examples):
         if not isinstance(example, dict):
             raise ValueError("Instruction examples must be dictionaries returned by load_instruction_examples.")
         prompt_group_id = example.get("prompt_group_id")
         example_id = example.get("example_id")
+        split_group_id = example.get("split_group_id")
         if not isinstance(prompt_group_id, str) or len(prompt_group_id) != 64:
             raise ValueError("Instruction example is missing its normalized prompt-group hash.")
         if not isinstance(example_id, str) or len(example_id) != 64:
             raise ValueError("Instruction example is missing its exact example hash.")
-        groups.setdefault(prompt_group_id, []).append(example)
+        if split_group_id is not None and (
+            not isinstance(split_group_id, str) or len(split_group_id) != 64
+        ):
+            raise ValueError("Instruction example has a malformed source-group hash.")
+
+        prompt_ids.add(prompt_group_id)
+        keys = ["prompt:" + prompt_group_id]
+        if split_group_id:
+            keys.append("source:" + split_group_id)
+            source_group_ids.add(split_group_id)
+        record_keys.append(tuple(keys))
         example_ids.append(example_id)
+        for key in keys:
+            previous = owners.get(key)
+            if previous is None:
+                owners[key] = index
+            else:
+                union(index, previous)
+
+    component_members: dict[int, list[int]] = {}
+    component_keys: dict[int, set[str]] = {}
+    for index, keys in enumerate(record_keys):
+        root = find(index)
+        component_members.setdefault(root, []).append(index)
+        component_keys.setdefault(root, set()).update(keys)
+
+    groups: dict[str, list[dict]] = {}
+    for root, members in component_members.items():
+        material = "\\0".join(sorted(component_keys[root]))
+        group_id = hashlib.sha256(material.encode("utf-8")).hexdigest()
+        groups[group_id] = [examples[index] for index in members]
 
     if len(groups) < 2:
         raise ValueError(
-            "At least two distinct normalized prompts are required; repeated copies of one prompt "
-            "cannot form an independent validation set."
+            "At least two independent prompt/source groups are required; related curriculum examples "
+            "must remain together in one split."
         )
 
     validation_group_count = max(1, int(len(groups) * validation_fraction))
     validation_group_count = min(validation_group_count, len(groups) - 1)
     ranked_groups = sorted(
         groups,
-        key=lambda group_id: hashlib.sha256((seed + ":" + group_id).encode("utf-8")).hexdigest()
+        key=lambda group_id: hashlib.sha256((seed + ":" + group_id).encode("utf-8")).hexdigest(),
     )
     validation_group_ids = set(ranked_groups[:validation_group_count])
-    training_examples = [example for example in examples if example["prompt_group_id"] not in validation_group_ids]
-    validation_examples = [example for example in examples if example["prompt_group_id"] in validation_group_ids]
+    training_examples = [
+        example
+        for group_id, members in groups.items()
+        if group_id not in validation_group_ids
+        for example in members
+    ]
+    validation_examples = [
+        example
+        for group_id, members in groups.items()
+        if group_id in validation_group_ids
+        for example in members
+    ]
     if not training_examples or not validation_examples:
         raise ValueError("Instruction split did not produce non-empty train and validation sets.")
 
     unique_examples = len(set(example_ids))
-    unique_prompts = len(groups)
+    unique_prompts = len(prompt_ids)
     duplicate_prompts = len(examples) - unique_prompts
     exact_duplicates = len(examples) - unique_examples
+    training_prompt_ids = {item["prompt_group_id"] for item in training_examples}
+    validation_prompt_ids = {item["prompt_group_id"] for item in validation_examples}
+    prompt_leakage_groups = len(training_prompt_ids.intersection(validation_prompt_ids))
     validation_fraction_actual = len(validation_examples) / len(examples)
     warnings = []
     if len(examples) < 100:
@@ -192,7 +253,11 @@ def split_instruction_examples(
         warnings.append("Low prompt diversity: fewer than 20 distinct normalized prompts.")
     if duplicate_prompts:
         warnings.append(
-            f"{duplicate_prompts} example(s) reuse an existing normalized prompt; all copies are kept in one split."
+            f"{duplicate_prompts} example(s) reuse an existing normalized prompt; all copies stay in one split."
+        )
+    if source_group_ids:
+        warnings.append(
+            "Curriculum source groups are kept intact across validation to reduce same-symbol/source leakage."
         )
     if exact_duplicates:
         warnings.append(
@@ -200,23 +265,27 @@ def split_instruction_examples(
         )
     if validation_fraction_actual < 0.05 or validation_fraction_actual > 0.3:
         warnings.append(
-            "The prompt-group constraint makes the actual validation fraction differ substantially from the requested fraction."
+            "The prompt/source-group constraint makes the actual validation fraction differ substantially from the requested fraction."
         )
 
     quality = {
         "example_count": len(examples),
         "unique_prompt_count": unique_prompts,
+        "source_group_count": len(source_group_ids),
+        "independent_split_group_count": len(groups),
         "repeated_prompt_example_count": duplicate_prompts,
         "exact_duplicate_example_count": exact_duplicates,
         "training_examples": len(training_examples),
         "validation_examples": len(validation_examples),
-        "training_prompt_groups": len({item["prompt_group_id"] for item in training_examples}),
-        "validation_prompt_groups": len(validation_group_ids),
+        "training_prompt_groups": len(training_prompt_ids),
+        "validation_prompt_groups": len(validation_prompt_ids),
+        "training_data_groups": len(groups) - len(validation_group_ids),
+        "validation_data_groups": len(validation_group_ids),
         "validation_fraction": round(validation_fraction_actual, 4),
         "requested_validation_fraction": float(validation_fraction),
-        "split_strategy": "deterministic-sha256-prompt-groups",
+        "split_strategy": "deterministic-sha256-prompt-and-source-groups-v2",
         "split_seed": seed,
-        "prompt_leakage_groups": 0,
+        "prompt_leakage_groups": prompt_leakage_groups,
         "warnings": warnings,
     }
     return training_examples, validation_examples, quality
