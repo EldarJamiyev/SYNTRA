@@ -286,11 +286,19 @@ def _read_instruction_jsonl_datasets(
                         raise ValueError(
                             f"Structured instruction datasets exceed the {MAX_INSTRUCTION_RECORDS:,}-record safety limit."
                         )
+                    split_group = fields.get("split_group")
+                    if (
+                        not isinstance(split_group, str)
+                        or not split_group.strip()
+                        or len(split_group) > 2048
+                    ):
+                        split_group = ""
                     file_records.append({
                         "prompt": instruction.strip(),
                         "completion": response.strip(),
                         "source_path": relative_name,
                         "source_line": str(line_number),
+                        "split_group": split_group.strip(),
                     })
 
                 # A JSONL file is treated as structured only when every non-blank
@@ -318,40 +326,90 @@ def _read_instruction_jsonl_datasets(
 def _split_instruction_records(
     records: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Split by normalized instruction groups to prevent repeated-prompt leakage."""
+    """Split prompt duplicates and curriculum-related source groups together."""
     if not records:
         return [], []
+
+    parents = list(range(len(records)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left != root_right:
+            parents[max(root_left, root_right)] = min(root_left, root_right)
+
+    owners: dict[str, int] = {}
+    record_keys: list[tuple[str, ...]] = []
+    prompt_ids: set[str] = set()
+    for index, record in enumerate(records):
+        normalized_prompt = " ".join(
+            unicodedata.normalize("NFKC", record["prompt"]).casefold().split()
+        )
+        prompt_id = sha256(normalized_prompt.encode("utf-8")).hexdigest()
+        prompt_ids.add(prompt_id)
+        keys = ["prompt:" + prompt_id]
+
+        split_group = record.get("split_group")
+        if isinstance(split_group, str) and split_group.strip():
+            normalized_group = " ".join(
+                unicodedata.normalize("NFKC", split_group).casefold().split()
+            )
+            if normalized_group:
+                keys.append("source:" + sha256(normalized_group.encode("utf-8")).hexdigest())
+
+        record_keys.append(tuple(keys))
+        for key in keys:
+            previous = owners.get(key)
+            if previous is None:
+                owners[key] = index
+            else:
+                union(index, previous)
+
+    component_keys: dict[int, set[str]] = {}
+    component_members: dict[int, list[int]] = {}
+    for index, keys in enumerate(record_keys):
+        root = find(index)
+        component_keys.setdefault(root, set()).update(keys)
+        component_members.setdefault(root, []).append(index)
+
     groups: dict[str, list[dict[str, str]]] = {}
-    for record in records:
-        normalized = " ".join(unicodedata.normalize("NFKC", record["prompt"]).casefold().split())
-        group_id = sha256(normalized.encode("utf-8")).hexdigest()
-        groups.setdefault(group_id, []).append(record)
+    for root, members in component_members.items():
+        stable_material = "\\0".join(sorted(component_keys[root]))
+        group_id = sha256(stable_material.encode("utf-8")).hexdigest()
+        groups[group_id] = [records[index] for index in members]
+
     if len(groups) < 2:
         raise ValueError(
-            "Structured instruction training needs at least two distinct prompts "
-            "so validation can remain separate from training."
+            "Structured instruction training needs at least two independent prompt/source groups "
+            "so validation remains separate from related curriculum examples."
         )
     validation_count = max(1, int(len(groups) * 0.1))
     validation_count = min(validation_count, len(groups) - 1)
     ranked = sorted(
         groups,
-        key=lambda key: sha256(("syntra-brain-instruction-split-v1:" + key).encode("utf-8")).hexdigest(),
+        key=lambda key: sha256(
+            ("syntra-brain-instruction-split-v2:" + key).encode("utf-8")
+        ).hexdigest(),
     )
     validation_groups = set(ranked[:validation_count])
     training = [
-        item for item in records
-        if sha256(
-            " ".join(unicodedata.normalize("NFKC", item["prompt"]).casefold().split()).encode("utf-8")
-        ).hexdigest() not in validation_groups
+        item for group_id, items in groups.items()
+        if group_id not in validation_groups
+        for item in items
     ]
     validation = [
-        item for item in records
-        if sha256(
-            " ".join(unicodedata.normalize("NFKC", item["prompt"]).casefold().split()).encode("utf-8")
-        ).hexdigest() in validation_groups
+        item for group_id, items in groups.items()
+        if group_id in validation_groups
+        for item in items
     ]
     if not training or not validation:
-        raise ValueError("The instruction dataset did not produce non-empty train and validation sets.")
+        raise ValueError("The instruction dataset did not produce independent train and validation sets.")
     return training, validation
 
 
