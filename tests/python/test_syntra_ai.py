@@ -843,7 +843,8 @@ class TransformerTests(unittest.TestCase):
             )
             self.assertGreater(sum(item["context_overlap_tokens"] for item in ordered), 0)
 
-            audit = audit_instruction_dataset(dataset, seq_len=32, tokenizer=tokenizer)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                audit = audit_instruction_dataset(dataset, seq_len=32, tokenizer=tokenizer)
             self.assertTrue(audit["valid"], audit)
             self.assertFalse(audit["split_available"])
             self.assertEqual(audit["example_count"], 1)
