@@ -597,14 +597,20 @@ def synthesize_repository_curriculum(
     for source_path, source_text in source_documents:
         resolved = Path(source_path).resolve()
         relative_path = None
+        source_root: Path | None = None
         for approved_root in corpus_roots:
             try:
                 relative_path = resolved.relative_to(approved_root).as_posix()
+                source_root = approved_root
                 break
             except ValueError:
                 continue
-        if relative_path is None:
+        if relative_path is None or source_root is None:
             raise ValueError("A source file escaped all approved curriculum roots.")
+        is_active_workspace_source = (
+            os.path.normcase(os.fspath(source_root))
+            == os.path.normcase(os.fspath(output_root))
+        )
         if not source_text.strip():
             continue
 
@@ -674,7 +680,16 @@ def synthesize_repository_curriculum(
             )
 
         file_patch_count = 0
-        for patch in _safe_none_patch_examples(relative_path, source_text):
+        # Patch paths are relative to the active workspace and are applied by
+        # the local agent there. Other approved roots are read-only curriculum
+        # sources; never train a repair action that could target an unrelated
+        # same-named file in the active workspace.
+        patch_examples = (
+            _safe_none_patch_examples(relative_path, source_text)
+            if is_active_workspace_source
+            else []
+        )
+        for patch in patch_examples:
             patch_candidate_count += 1
             if file_patch_count >= per_file_patch_limit:
                 continue
@@ -765,7 +780,11 @@ def synthesize_repository_curriculum(
     warnings: list[str] = []
     if not counts["anchor_patch_repair"]:
         warnings.append(
-            "No supported, mechanically grounded patch pattern was found; no synthetic repair examples were fabricated."
+            "No supported, mechanically grounded patch pattern was found in the active workspace; no synthetic repair examples were fabricated."
+        )
+    if len(corpus_roots) > 1:
+        warnings.append(
+            "Anchor-patch examples are restricted to the active output workspace; additional approved roots contribute read-only comprehension and implementation examples."
         )
     if candidate_budget_skips:
         warnings.append(
