@@ -181,6 +181,9 @@ def load_corpus(
                     continue
                 seen.add(normalized_key)
                 remaining = max_tokens - token_count
+                if not include_tokens and len(raw) + 2 > remaining:
+                    skipped += 1
+                    continue
                 added_tokens = min(len(raw) + 2, remaining)
                 if include_tokens and added_tokens:
                     # Materialize only the retained prefix instead of allocating a
