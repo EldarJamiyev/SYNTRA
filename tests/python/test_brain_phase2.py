@@ -213,6 +213,55 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(structured_paths, [])
             self.assertIn(str(generic_jsonl.resolve()), fallback_files)
 
+    def test_multiple_selected_roots_keep_colliding_jsonl_paths_distinct(self):
+        from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-multi-root-jsonl-") as temp:
+            root = Path(temp)
+            first_root = root / "first"
+            second_root = root / "second"
+            first_root.mkdir()
+            second_root.mkdir()
+            first_source = first_root / "records.jsonl"
+            second_source = second_root / "records.jsonl"
+            first_source.write_text("raw fallback from first root\n", encoding="utf-8")
+            second_source.write_text("raw fallback from second root\n", encoding="utf-8")
+
+            (
+                records,
+                structured_files,
+                instruction_bytes,
+                _instruction_hash,
+                scan_bytes,
+                scan_files,
+                fallback_files,
+            ) = _read_instruction_jsonl_datasets(
+                [first_root, second_root],
+                1024 * 1024,
+            )
+            self.assertEqual(records, [])
+            self.assertEqual(structured_files, [])
+            self.assertEqual(instruction_bytes, 0)
+            self.assertEqual(scan_files, 2)
+            self.assertEqual(
+                {item[0] for item in fallback_files.values()},
+                {"records.jsonl", "selected-root-2/records.jsonl"},
+            )
+
+            train_text, validation_text, raw_files, raw_bytes, _raw_hash = _read_local_datasets(
+                [first_root, second_root],
+                1024 * 1024 - scan_bytes,
+                preloaded_files=fallback_files,
+                already_scanned_files=scan_files,
+            )
+            combined = train_text + validation_text
+            self.assertIn("first root", combined)
+            self.assertIn("second root", combined)
+            self.assertIn("# SYNTRA_SOURCE_FILE: records.jsonl", combined)
+            self.assertIn("# SYNTRA_SOURCE_FILE: selected-root-2/records.jsonl", combined)
+            self.assertEqual(set(raw_files), {str(first_source.resolve()), str(second_source.resolve())})
+            self.assertEqual(raw_bytes, first_source.stat().st_size + second_source.stat().st_size)
+
     def test_structured_jsonl_training_saves_masked_training_format(self):
         from brain.checkpoint import load_checkpoint
         from brain.train import train
