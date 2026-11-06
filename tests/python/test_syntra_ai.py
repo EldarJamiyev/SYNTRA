@@ -837,8 +837,9 @@ class TransformerTests(unittest.TestCase):
                 list(range(len(ordered))),
             )
             self.assertEqual(
-                sum(item["prompt_tokens"] for item in ordered),
-                len(tokenizer.encode(prompt)),
+                ordered[0]["prompt_tokens"],
+                min(len(tokenizer.encode(prompt)), 31),
+                "the first context window must mask the full retained prompt context",
             )
             self.assertGreater(sum(item["context_overlap_tokens"] for item in ordered), 0)
 
