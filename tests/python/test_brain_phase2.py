@@ -501,6 +501,32 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "2-record safety limit"):
                     train_module._read_instruction_jsonl_datasets([dataset], 1024 * 1024)
 
+    def test_checkpoint_rng_restore_is_exact_and_rejects_malformed_state(self):
+        import torch
+        from brain.train import _restore_rng_state, _rng_state
+
+        device = torch.device("cpu")
+        torch.manual_seed(12345)
+        saved_state = _rng_state(device)
+        expected = torch.rand(16)
+
+        torch.manual_seed(98765)
+        _restore_rng_state(saved_state, device)
+        actual = torch.rand(16)
+        self.assertTrue(torch.equal(actual, expected))
+
+        malformed = [
+            None,
+            {},
+            {"cpu": torch.tensor([1, 2, 3], dtype=torch.int64)},
+            {"cpu": torch.empty(0, dtype=torch.uint8)},
+            {"cpu": "not-a-tensor"},
+        ]
+        for state in malformed:
+            with self.subTest(state=type(state).__name__):
+                with self.assertRaisesRegex(ValueError, "random-generator state"):
+                    _restore_rng_state(state, device)
+
     def test_resume_order_validation_rejects_corrupt_permutations_and_cursors(self):
         import torch
         from brain.train import _validate_resume_order
