@@ -991,6 +991,35 @@ class TransformerTests(unittest.TestCase):
         self.assertNotIn("Calculator.add", metadata["exports"])
         self.assertIn("Calculator.add", metadata["declarations"])
 
+    def test_non_python_module_exports_exclude_nested_methods_and_impl_containers(self):
+        from syntra_ai.curriculum import _module_metadata
+
+        source = (
+            "pub struct Engine {}\n"
+            "impl Engine {\n"
+            "    pub fn run(&self, value: i32) -> i32 {\n"
+            "        value + 1\n"
+            "    }\n"
+            "}\n"
+            "pub fn create_engine() -> Engine { Engine {} }\n"
+        )
+        metadata = _module_metadata("engine.rs", source)
+        self.assertIn("Engine", metadata["exports"])
+        self.assertIn("create_engine", metadata["exports"])
+        self.assertNotIn("run", metadata["exports"])
+        self.assertEqual(metadata["exports"].count("Engine"), 1)
+
+        method = next(item for item in metadata["symbols"] if item["name"] == "run")
+        self.assertTrue(method["is_member"])
+        self.assertFalse(method["truncated"])
+        self.assertIn("value + 1", method["body"])
+
+        implementation = next(
+            item for item in metadata["symbols"]
+            if item["name"] == "Engine" and item.get("is_container")
+        )
+        self.assertTrue(implementation["is_container"])
+
     def test_non_python_curriculum_never_teaches_line_capped_declarations_as_complete(self):
         from syntra_ai.curriculum import _extract_logical_symbols
 
