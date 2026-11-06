@@ -200,6 +200,176 @@
       "skillFolderHash": "4cbe1c131e1ea54109cb1e4e5f3c505810db6606",
       "installedAt": "2026-11-05T07:18:06.418Z",
       "updatedAt": "2026-11-05T07:18:06.418Z"
+    },
+    "llm-prompt-optimizer": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/llm-prompt-optimizer",
+      "skillFolderHash": "159c7f2db8f203f1ac7ecc1b0aca00b06a2c4ab8",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "strategic-compact": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/cc-skill-strategic-compact",
+      "skillFolderHash": "099ed8ee72f924693bcb274d31baf56f811a41a5",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "backend-patterns": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/cc-skill-backend-patterns",
+      "skillFolderHash": "8bf7b388f06741bf561db30958c2c091c34a6f16",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "security-review": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/cc-skill-security-review",
+      "skillFolderHash": "3d27c11b39ef9eb302f10e827869f4d683e39d38",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "animate": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/animate",
+      "skillFolderHash": "eb0f479a7a33b8882751f6032eb7c44cff745f88",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "animation-performance": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/animation-performance",
+      "skillFolderHash": "bced0c8b99fad490c6be81bceb41174c2795316a",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "animejs-animation": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/animejs-animation",
+      "skillFolderHash": "acbf54aff16abdc2041909c3ba3b3691b4bc6648",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "anti-ui-slop": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/anti-ui-slop",
+      "skillFolderHash": "ebc7ae93280981d5c7dbaca679d974e4dda74c6f",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "antigravity-design-expert": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/antigravity-design-expert",
+      "skillFolderHash": "b058161ac049924020fa8f234d64a92a4a4af4d6",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "accessibility": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/accessibility-compliance-accessibility-audit",
+      "skillFolderHash": "98ba8d5c21570bfc1e819b9937d63bdcc16dd9b9",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "api-design": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/api-design-principles",
+      "skillFolderHash": "df307202538132183cd9784b73d5f2cad1bd845e",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "agent-evaluation-benchmarking": {
+      "source": "sickn33/agentic-awesome-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/sickn33/agentic-awesome-skills",
+      "ref": "828257c3037dc7c3c3ec987decc5a603025a0ce5",
+      "skillPath": "skills/ai-agent-evaluation-benchmarking",
+      "skillFolderHash": "7bf1499ba190ad2b5caea4b6c663114f62260e13",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "grilling": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "ref": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "skillPath": "skills/productivity/grilling",
+      "skillFolderHash": "f551b6e0d219fdda0b6abf277f8f915b3127d1e9",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "domain-modeling": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "ref": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "skillPath": "skills/engineering/domain-modeling",
+      "skillFolderHash": "ea30ee454ba264543dbe40737973b1a5afb9f0e6",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "improve-codebase-architecture": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "ref": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "skillPath": "skills/engineering/improve-codebase-architecture",
+      "skillFolderHash": "587147dd230da299cc5e84971cb0a33f6676f8a6",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "prototype": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "ref": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "skillPath": "skills/engineering/prototype",
+      "skillFolderHash": "e41d92e171f074a2b6887d8f6faca4a15c83d1ca",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
+    },
+    "karpathy-guidelines": {
+      "source": "multica-ai/andrej-karpathy-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/multica-ai/andrej-karpathy-skills",
+      "ref": "2c606141936f1eeef17fa3043a72095b4765b9c2",
+      "skillPath": "skills/karpathy-guidelines",
+      "skillFolderHash": "e119339197d600aa39a24fd7a95c946800c9c949",
+      "installedAt": "2026-11-06T12:33:16.563Z",
+      "updatedAt": "2026-11-06T12:33:16.563Z"
     }
   }
 }

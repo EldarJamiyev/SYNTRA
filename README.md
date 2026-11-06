@@ -190,7 +190,7 @@ npm run ai:curriculum -- --max-examples 240
 
 The default output is `data/curricula/workspace-instructions.jsonl`. Use `--root` to scan one approved workspace instead of the project-plus-configured-roots set, and `--output` to choose a JSONL filename inside the project or active workspace. Secondary approved roots receive namespaced source paths; repair patches are emitted only for the active workspace because their paths must resolve against the workspace the coding agent can edit. Currently supported repair examples are intentionally narrow: source-verified Python comparisons against `None`.
 
-These capabilities should be treated as branch work until PR #47 passes its validation and is merged. Curriculum generation creates training examples; it does not prove that those examples are semantically useful or that fine-tuning will improve coding performance.
+These capabilities remain branch work until PR #47 is merged. Curriculum generation creates training examples; it does not prove that those examples are semantically useful or that fine-tuning will improve coding performance.
 
 ## Security and execution boundaries
 
