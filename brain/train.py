@@ -104,7 +104,7 @@ def _read_bounded_regular_file(
     except ValueError:
         raise
     except OSError as exc:
-        raise ValueError(f"Cannot safely read local {label.casefold()} {path}: {exc}") from None
+        raise ValueError(f"Cannot read local dataset {path}: {exc}") from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
