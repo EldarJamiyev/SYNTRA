@@ -1051,6 +1051,54 @@ class TransformerTests(unittest.TestCase):
         self.assertTrue(metadata["structure_truncated"])
         self.assertIn("PARTIAL STRUCTURAL SUMMARY", metadata["structure"])
 
+    def test_curriculum_jsonl_writer_enforces_record_and_total_byte_limits_atomically(self):
+        from syntra_ai import curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-output-bounds-") as temp:
+            root = Path(temp)
+            output = root / "curriculum.jsonl"
+            output.write_text("previous complete dataset\n", encoding="utf-8")
+            records = [{
+                "prompt": "Explain a local module's public interface.",
+                "completion": "The module exports a deterministic operation.",
+                "kind": "module_comprehension",
+                "source_path": "module.py",
+                "split_group": "module:module.py",
+            }]
+
+            with patch.object(curriculum, "MAX_CURRICULUM_RECORD_BYTES", 16):
+                with self.assertRaisesRegex(ValueError, "record limit"):
+                    curriculum._write_jsonl_atomically(output, records)
+            self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
+
+            with patch.object(curriculum, "MAX_CURRICULUM_OUTPUT_BYTES", 32):
+                with self.assertRaisesRegex(ValueError, "dataset limit"):
+                    curriculum._write_jsonl_atomically(output, records)
+            self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
+            self.assertEqual(list(root.glob(".syntra-curriculum-*.tmp")), [])
+
+    def test_curriculum_candidate_reservoir_respects_its_memory_budget(self):
+        from syntra_ai import curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-candidate-cap-") as temp:
+            root = Path(temp)
+            (root / "module.py").write_text(
+                '"""A useful local module."""\n'
+                "def transform(value):\n"
+                "    return value + 1\n",
+                encoding="utf-8",
+            )
+            output = root / "bounded.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with patch.object(curriculum, "MAX_CURRICULUM_CANDIDATE_BYTES", 64):
+                    with self.assertRaisesRegex(ValueError, "did not yield two distinct"):
+                        curriculum.synthesize_repository_curriculum(
+                            root=root,
+                            output_path=output,
+                            max_examples=8,
+                        )
+            self.assertFalse(output.exists())
+
     def test_curriculum_repair_examples_require_unique_exact_agent_anchors(self):
         from syntra_ai.curriculum import _safe_none_patch_examples
 
