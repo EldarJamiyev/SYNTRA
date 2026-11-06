@@ -222,6 +222,81 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(resumed_saved["training_data_format"], "instruction-jsonl-masked-v1")
             self.assertEqual(resumed_saved["instruction_example_count"], 4)
 
+    def test_tokenizer_is_fitted_only_on_instruction_training_records(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.tokenizer import BytePairTokenizer
+        from brain.train import _split_instruction_records, train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-tokenizer-holdout-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            records = [
+                {
+                    "prompt": f"Write routine number {index}.",
+                    "completion": f"def routine_{index}(value): return value + {index}",
+                    "split_group": f"module:{index}",
+                }
+                for index in range(4)
+            ]
+            _training, validation = _split_instruction_records(records)
+            validation_prompts = {item["prompt"] for item in validation}
+            validation_marker = "VALIDATION_ONLY_TOKEN_SEQUENCE_ZEBRA_QUARTZ_"
+            for item in records:
+                if item["prompt"] in validation_prompts:
+                    item["completion"] = (
+                        "def validation_only(value): return "
+                        + validation_marker * 30
+                    )
+
+            training_records, validation_records = _split_instruction_records(records)
+            self.assertEqual(len(training_records), 3)
+            self.assertEqual(len(validation_records), 1)
+            training_text = "\n\n".join(
+                "Instruction:\n" + item["prompt"] + "\nResponse:\n" + item["completion"]
+                for item in training_records
+            )
+            full_text = "\n\n".join(
+                "Instruction:\n" + item["prompt"] + "\nResponse:\n" + item["completion"]
+                for item in records
+            )
+            expected_training_tokenizer = BytePairTokenizer.train_from_text(
+                training_text,
+                vocab_size=self._config().vocab_size,
+                max_training_bytes=1024,
+            )
+            full_dataset_tokenizer = BytePairTokenizer.train_from_text(
+                full_text,
+                vocab_size=self._config().vocab_size,
+                max_training_bytes=1024,
+            )
+            self.assertNotEqual(
+                expected_training_tokenizer,
+                full_dataset_tokenizer,
+                "the held-out completion must materially affect a tokenizer fitted on all records",
+            )
+
+            dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            checkpoint = root / "training-only-tokenizer.pt"
+            train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=2,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+                seed=1337,
+            )
+            saved = load_checkpoint(checkpoint)
+            actual_tokenizer = BytePairTokenizer.from_dict(saved["tokenizer"])
+            self.assertEqual(
+                actual_tokenizer,
+                expected_training_tokenizer,
+                "the persisted BPE merges must be learned from training prompts/responses only",
+            )
+
     def test_mixed_raw_text_and_instruction_jsonl_training(self):
         from brain.checkpoint import load_checkpoint
         from brain.train import train
