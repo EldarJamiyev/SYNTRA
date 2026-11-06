@@ -135,7 +135,6 @@ def load_instruction_examples(
         if split_group_value is not None and (
             not isinstance(split_group_value, str)
             or len(split_group_value) > 2048
-            or (split_group_value.strip() and not split_group_value.strip())
         ):
             raise ValueError(f"split_group on line {line_number} must be a string of at most 2,048 characters.")
         split_group_id = (
