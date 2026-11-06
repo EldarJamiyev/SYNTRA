@@ -374,8 +374,6 @@ def _raw_context_blocks(
     """Pack legacy raw text into fixed, shuffled causal context blocks."""
     if not text.strip():
         return [], []
-    if type(max_context_tokens) is not int or max_context_tokens < block_size:
-        raise ValueError("The remaining packed-context budget cannot fit one raw context block.")
     token_ids = [BOS_ID, *tokenizer.encode(text), EOS_ID]
     inputs: list[list[int]] = []
     targets: list[list[int]] = []
@@ -399,8 +397,6 @@ def _instruction_context_blocks(
     max_context_tokens: int = MAX_PACKED_CONTEXT_TOKENS,
 ) -> tuple[list[list[int]], list[list[int]]]:
     """Pack prompt/response examples; mask prompt targets and supervise response plus EOS only."""
-    if records and (type(max_context_tokens) is not int or max_context_tokens < block_size):
-        raise ValueError("The remaining packed-context budget cannot fit one instruction context block.")
     inputs: list[list[int]] = []
     targets: list[list[int]] = []
     for record in records:
