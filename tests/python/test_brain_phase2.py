@@ -274,6 +274,33 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "2-record safety limit"):
                     train_module._read_instruction_jsonl_datasets([dataset], 1024 * 1024)
 
+    def test_source_related_instruction_examples_never_cross_validation_split(self):
+        from brain.train import _split_instruction_records
+
+        records = [
+            {"prompt": "Implement alpha.", "completion": "alpha()", "split_group": "symbol:alpha"},
+            {"prompt": "Explain alpha.", "completion": "alpha is a function.", "split_group": "symbol:alpha"},
+            {"prompt": "Implement beta.", "completion": "beta()", "split_group": "symbol:beta"},
+            {"prompt": "Explain beta.", "completion": "beta is a function.", "split_group": "symbol:beta"},
+            {"prompt": "Repeated generic prompt.", "completion": "first completion.", "split_group": "module:gamma"},
+            {"prompt": "Repeated generic prompt.", "completion": "second completion.", "split_group": "module:delta"},
+            {"prompt": "Explain gamma.", "completion": "gamma module.", "split_group": "module:gamma"},
+        ]
+        training, validation = _split_instruction_records(records)
+
+        memberships = {}
+        for split_name, collection in (("train", training), ("validation", validation)):
+            for record in collection:
+                group = record["split_group"]
+                memberships.setdefault(group, set()).add(split_name)
+        self.assertTrue(all(len(splits) == 1 for splits in memberships.values()))
+
+        repeated_prompt_memberships = set()
+        for split_name, collection in (("train", training), ("validation", validation)):
+            if any(item["prompt"] == "Repeated generic prompt." for item in collection):
+                repeated_prompt_memberships.add(split_name)
+        self.assertEqual(len(repeated_prompt_memberships), 1)
+
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata
         from brain.train import train
