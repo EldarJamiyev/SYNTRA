@@ -775,6 +775,41 @@ class TransformerTests(unittest.TestCase):
         self.assertNotIn("Calculator.add", metadata["exports"])
         self.assertIn("Calculator.add", metadata["declarations"])
 
+    def test_curriculum_skips_truncated_symbol_implementations(self):
+        from syntra_ai.curriculum import synthesize_repository_curriculum, _module_metadata
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-large-symbol-") as temp:
+            root = Path(temp)
+            source = root / "large.py"
+            long_literal = "x" * 12_500
+            source.write_text(
+                "def enormous_payload():\\n"
+                f"    payload = {long_literal!r}\\n"
+                "    return len(payload)\\n\\n"
+                "def useful_symbol(value):\\n"
+                "    return value + 1\\n",
+                encoding="utf-8",
+            )
+            metadata = _module_metadata("large.py", source.read_text(encoding="utf-8"))
+            enormous = next(item for item in metadata["symbols"] if item["name"] == "enormous_payload")
+            self.assertTrue(enormous["truncated"])
+            self.assertEqual(enormous["body"], "")
+
+            output = root / "curriculum.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                synthesize_repository_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=40,
+                )
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            implementation_prompts = [
+                item["prompt"] for item in records
+                if item["kind"] == "symbol_implementation"
+            ]
+            self.assertTrue(any("useful_symbol" in prompt for prompt in implementation_prompts))
+            self.assertFalse(any("enormous_payload" in prompt for prompt in implementation_prompts))
+
     def test_curriculum_scans_all_configured_approved_roots(self):
         from syntra_ai import curriculum, safe_paths
 
