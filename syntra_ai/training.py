@@ -1,6 +1,7 @@
 """Neural training loop with corpus-trained BPE tokenization and local checkpoints."""
 from __future__ import annotations
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from time import monotonic
 from typing import Callable
@@ -37,6 +38,38 @@ def choose_device(requested: str = "auto") -> torch.device:
     if device.type == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
         raise ValueError("MPS was requested but is not available on this machine.")
     return device
+
+
+def _training_data_fingerprint(corpus, max_tokens: int, config: ModelConfig, tokenizer: ByteBPETokenizer) -> str:
+    """Bind a training checkpoint to the exact selected corpus, limits, config and tokenizer."""
+    payload = {
+        "schema": "syntra-causal-source-corpus-v1",
+        "source_sha256": corpus.source_sha256,
+        "max_tokens": max_tokens,
+        "config": config.to_dict(),
+        "tokenizer": tokenizer.to_dict(),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _rng_state(device: torch.device) -> dict:
+    state = {"cpu": torch.get_rng_state()}
+    if device.type == "cuda" and torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state: object, device: torch.device) -> None:
+    if not isinstance(state, dict) or not isinstance(state.get("cpu"), torch.Tensor):
+        raise ValueError("Resume checkpoint does not contain a valid CPU random-generator state.")
+    torch.set_rng_state(state["cpu"].cpu())
+    cuda_states = state.get("cuda")
+    if device.type == "cuda" and torch.cuda.is_available() and isinstance(cuda_states, list):
+        try:
+            torch.cuda.set_rng_state_all(cuda_states)
+        except (RuntimeError, ValueError) as exc:
+            raise ValueError(f"Resume checkpoint CUDA random-generator state is incompatible: {exc}") from None
 
 
 def _batch(data, batch_size: int, seq_len: int, device):
@@ -199,6 +232,22 @@ def train(
     if corpus is None:
         corpus = load_corpus(roots, max_tokens=max_tokens)
     token_ids = _encode_documents(corpus.documents, tokenizer, max_tokens=max_tokens)
+    training_data_sha256 = _training_data_fingerprint(corpus, max_tokens, config, tokenizer)
+    if saved is not None:
+        if saved.get("training_mode") != "causal-source-pretraining":
+            raise ValueError(
+                "The checkpoint was not produced by causal source pretraining. "
+                "Resume it with its matching training workflow or start a new pretraining checkpoint."
+            )
+        if saved.get("training_data_sha256") != training_data_sha256:
+            raise ValueError(
+                "The selected source corpus, token budget, or tokenizer differs from the checkpoint's "
+                "training corpus. Select the original source set and settings or start a new checkpoint."
+            )
+        if not isinstance(saved.get("optimizer_state"), dict):
+            raise ValueError("Resume checkpoint is missing its optimizer state.")
+        if not isinstance(saved.get("rng_state"), dict):
+            raise ValueError("Resume checkpoint is missing its random-generator state.")
     split = int(len(token_ids) * 0.8)
     if split <= config.seq_len + 1 or len(token_ids) - split <= config.seq_len + 1:
         raise ValueError(
@@ -213,8 +262,8 @@ def train(
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
     if saved is not None:
         model.load_state_dict(saved["model_state"])
-        if saved.get("optimizer_state"):
-            optimizer.load_state_dict(saved["optimizer_state"])
+        optimizer.load_state_dict(saved["optimizer_state"])
+        _restore_rng_state(saved["rng_state"], device)
         start_step = int(saved.get("step", 0))
 
     started = monotonic()
@@ -277,6 +326,14 @@ def train(
                 "device_at_training": str(device),
                 "corpus_files": len(corpus.files),
                 "corpus_tokens": len(token_ids),
+                "training_data_sha256": training_data_sha256,
+                "training_settings": {
+                    "batch_size": batch_size,
+                    "learning_rate": learning_rate,
+                    "seed": seed,
+                    "max_tokens": max_tokens,
+                },
+                "rng_state": _rng_state(device),
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
                 "training_mode": "causal-source-pretraining",
