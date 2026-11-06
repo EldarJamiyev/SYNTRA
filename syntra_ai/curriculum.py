@@ -420,6 +420,7 @@ def synthesize_repository_curriculum(
         module_count += 1
         metadata = _module_metadata(relative_path, source_text)
         structure = metadata["structure"]
+        module_split_group = f"module:{relative_path}"
         offer_candidate(
             "module_comprehension",
             relative_path,
@@ -446,7 +447,7 @@ def synthesize_repository_curriculum(
                 "symbol_implementation",
                 relative_path,
                 symbol["name"],
-                f"symbol:{relative_path}:{symbol['name']}",
+                module_split_group,
                 (
                     f"Instruction: Write a clean implementation of symbol {symbol['name']} "
                     f"with its signature from module {relative_path}.\n"
@@ -469,7 +470,7 @@ def synthesize_repository_curriculum(
                 "symbol_comprehension",
                 relative_path,
                 symbol["name"],
-                f"symbol:{relative_path}:{symbol['name']}",
+                module_split_group,
                 (
                     f"Instruction: Explain the role, signature, and implementation of "
                     f"symbol {symbol['name']} in {relative_path}."
@@ -500,7 +501,7 @@ def synthesize_repository_curriculum(
                 "anchor_patch_repair",
                 relative_path,
                 f"none-comparison-line-{patch['line']}",
-                f"patch:{relative_path}:{patch['line']}",
+                module_split_group,
                 (
                     "Instruction: Apply a SYNTRA_AGENT_PATCH_V1 change to fix the "
                     f"non-identity None comparison in {relative_path} at line {patch['line']}.\n"
