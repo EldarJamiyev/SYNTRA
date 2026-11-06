@@ -305,7 +305,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                     "both JSONL candidates are read once and the raw fallback is reused from memory",
                 )
 
-            with self.assertRaisesRegex(ValueError, "20,000-file limit"):
+            with self.assertRaisesRegex(ValueError, "2-file limit"):
                 train_module._read_local_datasets(
                     [root],
                     1024 * 1024 - scan_bytes,
