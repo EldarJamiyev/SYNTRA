@@ -280,6 +280,43 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "2-record safety limit"):
                     train_module._read_instruction_jsonl_datasets([dataset], 1024 * 1024)
 
+    def test_resume_order_validation_rejects_corrupt_permutations_and_cursors(self):
+        import torch
+        from brain.train import _validate_resume_order
+
+        order, next_batch = _validate_resume_order(
+            torch.tensor([2, 0, 1], dtype=torch.long),
+            1,
+            chunk_count=3,
+            steps_per_epoch=2,
+        )
+        self.assertTrue(torch.equal(order, torch.tensor([2, 0, 1])))
+        self.assertEqual(next_batch, 1)
+
+        invalid_orders = [
+            torch.tensor([0, 0, 1], dtype=torch.long),
+            torch.tensor([[0, 1, 2]], dtype=torch.long),
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([0, 1, 3], dtype=torch.long),
+        ]
+        for invalid in invalid_orders:
+            with self.subTest(order=invalid.tolist()):
+                with self.assertRaisesRegex(ValueError, "epoch order"):
+                    _validate_resume_order(invalid, 0, chunk_count=3, steps_per_epoch=2)
+
+        for invalid_cursor in (-1, 3, 1.5, True):
+            with self.subTest(cursor=invalid_cursor):
+                with self.assertRaisesRegex(ValueError, "resume position"):
+                    _validate_resume_order(
+                        torch.tensor([0, 1, 2], dtype=torch.long),
+                        invalid_cursor,
+                        chunk_count=3,
+                        steps_per_epoch=2,
+                    )
+
+        with self.assertRaisesRegex(ValueError, "without a saved epoch permutation"):
+            _validate_resume_order(None, 1, chunk_count=3, steps_per_epoch=2)
+
     def test_source_related_instruction_examples_never_cross_validation_split(self):
         from brain.train import _split_instruction_records
 
