@@ -15,7 +15,7 @@
     "ai:server": "python scripts/run_syntra_module.py server",
     "ai:cli": "python scripts/run_syntra_module.py cli",
     "ai:curriculum": "python scripts/run_syntra_module.py cli curriculum",
-    "brain:train": "python -m brain.train",
+    "brain:train": "python scripts/run_syntra_module.py brain-train",
     "benchmark": "node scripts/benchmark-agent.mjs",
     "benchmark:reports": "node scripts/benchmark-report.mjs",
     "test:e2e": "playwright test"
