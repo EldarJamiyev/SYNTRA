@@ -748,6 +748,11 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(all(len(item["input_ids"]) <= 32 for item in examples))
             self.assertTrue(all(len(item["labels"]) == len(item["input_ids"]) for item in examples))
             self.assertEqual(
+                ordered[1]["input_ids"][:16],
+                ordered[0]["input_ids"][16:],
+                "subsequent response windows must retain the prior 16-token context",
+            )
+            self.assertEqual(
                 [item["chunk_index"] for item in ordered],
                 list(range(len(ordered))),
             )
