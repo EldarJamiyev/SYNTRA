@@ -126,16 +126,33 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             long_plain = root / "legacy-long-line.jsonl"
             long_plain.write_text("long raw text fallback " + ("x" * (1024 * 1024 + 1)), encoding="utf-8")
 
-            records, files, byte_count, fingerprint = _read_instruction_jsonl_datasets([root], 2 * 1024 * 1024)
+            (
+                records,
+                files,
+                byte_count,
+                fingerprint,
+                scan_bytes,
+                scan_files,
+                fallback_files,
+            ) = _read_instruction_jsonl_datasets([root], 2 * 1024 * 1024)
             self.assertEqual(len(records), 2)
             self.assertEqual(records[0]["prompt"], "Explain addition.")
             self.assertEqual(records[1]["completion"], "Multiply the two values.")
             self.assertEqual(len(files), 1)
             self.assertGreater(byte_count, 0)
             self.assertEqual(len(fingerprint), 64)
+            self.assertEqual(scan_files, 3)
+            self.assertEqual(
+                set(fallback_files),
+                {str(plain.resolve()), str(long_plain.resolve())},
+            )
 
             train_text, validation_text, raw_files, _, _ = _read_local_datasets(
-                [root], 2 * 1024 * 1024, exclude_paths=set(files)
+                [root],
+                2 * 1024 * 1024 - scan_bytes,
+                exclude_paths=set(files),
+                preloaded_files=fallback_files,
+                already_scanned_files=scan_files,
             )
             self.assertIn("legacy source text", train_text + validation_text)
             self.assertIn("long raw text fallback", train_text + validation_text)
