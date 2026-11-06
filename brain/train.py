@@ -826,13 +826,23 @@ def train(
                 "Start a new checkpoint rather than resuming across raw-text and supervised JSONL modes."
             )
         settings = saved.get("training_settings")
-        required_settings = {"batch_size", "learning_rate", "weight_decay", "seed", "steps_per_epoch"}
+        required_settings = {
+            "batch_size",
+            "learning_rate",
+            "weight_decay",
+            "seed",
+            "steps_per_epoch",
+            "evaluation_batches",
+            "save_every_steps",
+        }
         if isinstance(settings, dict) and required_settings.issubset(settings):
             expected_settings = {
                 "batch_size": batch_size,
                 "learning_rate": learning_rate,
                 "weight_decay": weight_decay,
                 "seed": seed,
+                "evaluation_batches": evaluation_batches,
+                "save_every_steps": save_every_steps,
             }
             changed_settings = [
                 name for name, expected in expected_settings.items()
@@ -980,6 +990,8 @@ def train(
                 "weight_decay": weight_decay,
                 "seed": seed,
                 "steps_per_epoch": steps_per_epoch,
+                "evaluation_batches": evaluation_batches,
+                "save_every_steps": save_every_steps,
             },
             "rng_state": _rng_state(device),
             "parameter_count": parameter_count,
