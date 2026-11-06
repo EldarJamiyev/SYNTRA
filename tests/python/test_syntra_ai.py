@@ -997,7 +997,7 @@ class TransformerTests(unittest.TestCase):
         source = (
             "function render(value) {\n"
             "  const close = '}';\n"
-            '  const open = "{\"";\n'
+            '  const open = "{";\n'
             "  // } this is only a comment\n"
             "  /* { nested comment text } */\n"
             "  return close + open + value;\n"
