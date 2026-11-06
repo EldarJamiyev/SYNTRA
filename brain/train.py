@@ -179,8 +179,11 @@ def _read_local_datasets(
     exclude_paths: set[str] | None = None,
     allow_empty: bool = False,
     require_holdout: bool = True,
+    max_files: int = MAX_DATASET_FILES,
 ) -> tuple[str, str, list[str], int, str]:
     """Read bounded local text/code files and produce a stable corpus fingerprint."""
+    if type(max_files) is not int or not 0 <= max_files <= MAX_DATASET_FILES:
+        raise ValueError(f"max_files must be between 0 and {MAX_DATASET_FILES:,}.")
     documents: list[str] = []
     names: list[str] = []
     digest = sha256()
@@ -198,8 +201,8 @@ def _read_local_datasets(
                 if resolved in seen:
                     continue
                 seen.add(resolved)
-                if file_count >= MAX_DATASET_FILES:
-                    raise ValueError(f"Local training data exceeds the {MAX_DATASET_FILES:,}-file limit.")
+                if file_count >= max_files:
+                    raise ValueError(f"Local training data exceeds the {max_files:,}-file limit.")
                 if total_bytes >= max_dataset_bytes:
                     raise ValueError(
                         f"Selected datasets exceed the {max_dataset_bytes:,}-byte local corpus limit."
@@ -689,6 +692,7 @@ def train(
         exclude_paths=structured_paths,
         allow_empty=bool(instruction_records),
         require_holdout=not bool(instruction_records),
+        max_files=MAX_DATASET_FILES - len(instruction_files),
     )
 
     if instruction_records:
