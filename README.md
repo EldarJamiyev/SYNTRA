@@ -297,6 +297,17 @@ Run the checks relevant to your change:
 | [Product roadmap](docs/ROADMAP.md) | Current baseline, delivery phases, planned work |
 | [Release checklist](docs/RELEASE_CHECKLIST.md) | Validation and release preparation |
 
+## 🧩 Agent skills
+
+SYNTRA includes a curated library of **66 composable skill entry points** under `.agents/skills/`. The collection covers token and context management, repository-aware engineering, backend and TypeScript patterns, API contracts, native model/data throughput, UI/UX, animation, accessibility, security review, verification, specialist workflows and release discipline.
+
+- **Upstream provenance:** `skills-lock.json` pins source revisions and skill-folder hashes for the upstream-managed playbooks. Upstream license notices are retained under `.agents/skills/_licenses/`.
+- **SYNTRA-native guidance:** project-specific and adapted skills are maintained directly in this repository beside the imported playbooks. Their front matter or skill text records relevant origins and applicability.
+- **Architecture boundary:** these are instruction assets, not runtime installations. They do not add external model providers, change SYNTRA's native PyTorch-only inference design, migrate the project to Bun, or install GCP/animation dependencies. Conditional skills apply only when the corresponding technology is already part of an explicitly requested task.
+- **Truthful verification:** skill instructions require real source inspection, executed checks and evidence-backed claims. They must not invent telemetry, token costs, benchmark results, tool availability or successful operations.
+
+The library is intended to guide the existing agent and preserve the current application architecture; it does not itself grant tools or enforce host-level permissions.
+
 ## About
 
 SYNTRA is developed by **[Eldar Jamiyev](https://github.com/EldarJamiyev)**.
