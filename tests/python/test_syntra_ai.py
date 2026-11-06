@@ -822,6 +822,11 @@ class TransformerTests(unittest.TestCase):
                 )
 
             records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                {record["split_group"] for record in records},
+                {"module:sentinels.py"},
+                "all tasks derived from a module must remain in one validation group",
+            )
             kinds = {record["kind"] for record in records}
             self.assertIn("module_comprehension", kinds)
             self.assertIn("symbol_implementation", kinds)
