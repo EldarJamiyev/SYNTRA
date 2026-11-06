@@ -247,6 +247,18 @@ class SyntraTransformer(nn.Module):
         past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = None,
         use_cache: bool = False,
     ):
+        if targets is not None:
+            if not isinstance(targets, torch.Tensor) or targets.shape != tokens.shape:
+                raise ValueError("targets must be a tensor with the same shape as input tokens.")
+            if targets.dtype != torch.long:
+                raise ValueError("targets must use torch.long token IDs.")
+            if targets.device != tokens.device:
+                raise ValueError("targets and input tokens must be on the same device.")
+            supervised = targets != -100
+            if torch.any((targets < 0) & supervised) or torch.any(targets >= self.config.vocab_size):
+                raise ValueError("targets contains a token outside the configured vocabulary.")
+            if not torch.any(supervised):
+                raise ValueError("targets must contain at least one supervised token (not -100).")
         if use_cache:
             hidden, presents = self._forward_hidden(tokens, past_key_values=past_key_values, use_cache=True)
         else:
@@ -254,7 +266,11 @@ class SyntraTransformer(nn.Module):
         logits = self.lm_head(hidden)
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            loss = F.cross_entropy(
+                logits.reshape(-1, logits.size(-1)),
+                targets.reshape(-1),
+                ignore_index=-100,
+            )
         if use_cache:
             return logits, loss, presents
         return logits, loss
