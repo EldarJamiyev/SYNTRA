@@ -179,6 +179,26 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(saved["instruction_example_count"], 4)
             self.assertGreater(saved["training_context_blocks"], 0)
 
+            resumed = train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=2,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+                resume=True,
+            )
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(resumed["epoch"], 2)
+            self.assertEqual(resumed["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertGreater(resumed["step"], result["step"])
+            resumed_saved = load_checkpoint(checkpoint)
+            self.assertEqual(resumed_saved["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertEqual(resumed_saved["instruction_example_count"], 4)
+
     def test_mixed_raw_text_and_instruction_jsonl_training(self):
         from brain.checkpoint import load_checkpoint
         from brain.train import train
