@@ -711,6 +711,47 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(result["audit"]["split_available"])
             self.assertEqual(result["audit"]["prompt_leakage_groups"], 0)
 
+    def test_instruction_loader_preserves_entire_long_response_across_context_windows(self):
+        from syntra_ai.instruction import load_instruction_examples
+        from syntra_ai.model import EOS_ID
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-long-response-") as temp:
+            root = Path(temp)
+            dataset = root / "long-response.jsonl"
+            prompt = "Implement a complete transformation routine."
+            completion = (
+                "def transform(value):\n"
+                "    normalized = value.strip().casefold()\n"
+                "    return normalized.replace('-', '_')\n"
+            ) * 18
+            dataset.write_text(
+                json.dumps({"prompt": prompt, "completion": completion}),
+                encoding="utf-8",
+            )
+            tokenizer = BytePairTokenizer.empty()
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(
+                    dataset,
+                    seq_len=32,
+                    tokenizer=tokenizer,
+                )
+
+            self.assertGreater(len(examples), 1)
+            ordered = sorted(examples, key=lambda item: item["chunk_index"])
+            supervised = [
+                token
+                for item in ordered
+                for token in item["labels"]
+                if token != -100
+            ]
+            self.assertEqual(supervised, tokenizer.encode(completion) + [EOS_ID])
+            self.assertTrue(all(len(item["input_ids"]) <= 32 for item in examples))
+            self.assertTrue(all(len(item["labels"]) == len(item["input_ids"]) for item in examples))
+            self.assertEqual(
+                [item["chunk_index"] for item in ordered],
+                list(range(len(ordered))),
+            )
+
     def test_instruction_finetuning_split_keeps_source_families_and_duplicate_prompts_together(self):
         from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
 
