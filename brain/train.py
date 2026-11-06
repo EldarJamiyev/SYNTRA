@@ -633,7 +633,9 @@ def _validate_resume_order(
 ) -> tuple[torch.Tensor | None, int]:
     """Reject corrupt or incompatible saved shuffle state before resuming training."""
     if raw_order is None:
-        if raw_next_batch_index not in (None, 0):
+        if raw_next_batch_index is not None and (
+            type(raw_next_batch_index) is not int or raw_next_batch_index != 0
+        ):
             raise ValueError("Checkpoint resume cursor is non-zero without a saved epoch permutation.")
         return None, 0
 
