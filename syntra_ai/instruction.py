@@ -29,6 +29,7 @@ from .training import (
 
 
 MAX_INSTRUCTION_EXAMPLES = 10_000
+MAX_INSTRUCTION_WINDOWS = 100_000
 MAX_INSTRUCTION_TOKENS = 3_000_000
 MAX_INSTRUCTION_FILE_BYTES = 100 * 1024 * 1024
 MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
@@ -51,113 +52,167 @@ def load_instruction_examples(
     # Direct library callers receive the same approved-root protection as HTTP
     # and CLI entry points; a caller cannot bypass the dataset path boundary.
     path = os.fspath(resolve_instruction_dataset(dataset_path))
-    if not isinstance(seq_len, int) or seq_len < 16 or seq_len > 16384:
+    if type(seq_len) is not int or seq_len < 16 or seq_len > 16384:
         raise ValueError("Instruction context must be between 16 and 16,384 tokens.")
-    if not isinstance(max_examples, int) or max_examples < 2 or max_examples > MAX_INSTRUCTION_EXAMPLES:
+    if type(max_examples) is not int or max_examples < 2 or max_examples > MAX_INSTRUCTION_EXAMPLES:
         raise ValueError(f"max_examples must be between 2 and {MAX_INSTRUCTION_EXAMPLES:,}.")
-    if not isinstance(max_tokens, int) or max_tokens < 1024 or max_tokens > MAX_INSTRUCTION_TOKENS:
+    if type(max_tokens) is not int or max_tokens < 1024 or max_tokens > MAX_INSTRUCTION_TOKENS:
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_INSTRUCTION_TOKENS:,}.")
     tokenizer = tokenizer or ByteBPETokenizer.empty()
-    examples = []
+    examples: list[dict] = []
     total_tokens = 0
+    source_record_count = 0
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
-        file_info = os.fstat(handle.fileno())
-        if not stat.S_ISREG(file_info.st_mode):
-            raise ValueError("Instruction dataset must be an existing regular file.")
-        if file_info.st_size > MAX_INSTRUCTION_FILE_BYTES:
-            raise ValueError(f"Instruction JSONL is limited to {MAX_INSTRUCTION_FILE_BYTES // (1024 * 1024)} MiB.")
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            if len(line.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES:
-                raise ValueError(f"Instruction record on line {line_number} exceeds the 1 MiB record limit.")
-            try:
-                item = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Invalid JSON on line {line_number}: {exc.msg}") from exc
-            if not isinstance(item, dict) or not isinstance(item.get("prompt"), str) or not isinstance(item.get("completion"), str):
-                raise ValueError(f"Line {line_number} must contain string fields named prompt and completion.")
-            prompt_text, completion_text = item["prompt"], item["completion"]
-            if not prompt_text.strip() or not completion_text.strip():
-                continue
-            if (len(prompt_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES
-                or len(completion_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES):
-                raise ValueError(f"Prompt/completion on line {line_number} exceeds the 512 KiB field limit.")
-            normalized_prompt = _normalized_instruction_text(prompt_text)
-            normalized_completion = _normalized_instruction_text(completion_text)
-            prompt_group_id = hashlib.sha256(normalized_prompt.encode("utf-8")).hexdigest()
-            split_group_value = item.get("split_group")
-            split_group_id = (
-                hashlib.sha256(
-                    _normalized_instruction_text(split_group_value).encode("utf-8")
-                ).hexdigest()
-                if isinstance(split_group_value, str) and split_group_value.strip()
-                and len(split_group_value) <= 2048
-                else None
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            file_info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(file_info.st_mode):
+                raise ValueError("Instruction dataset must be an existing regular file.")
+            if file_info.st_size > MAX_INSTRUCTION_FILE_BYTES:
+                raise ValueError(
+                    f"Instruction JSONL is limited to {MAX_INSTRUCTION_FILE_BYTES // (1024 * 1024)} MiB."
+                )
+            raw = handle.read(MAX_INSTRUCTION_FILE_BYTES + 1)
+            after = os.fstat(handle.fileno())
+            if (
+                len(raw) > MAX_INSTRUCTION_FILE_BYTES
+                or (file_info.st_dev, file_info.st_ino) != (after.st_dev, after.st_ino)
+                or file_info.st_size != after.st_size
+                or file_info.st_mtime_ns != after.st_mtime_ns
+                or file_info.st_ctime_ns != after.st_ctime_ns
+            ):
+                raise ValueError("Instruction dataset changed while it was being read or exceeded its file-size limit.")
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError(f"Cannot safely read instruction dataset: {exc}") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    try:
+        dataset_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("Instruction dataset must contain valid UTF-8 JSONL.") from None
+
+    for line_number, line in enumerate(dataset_text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        if len(line.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES:
+            raise ValueError(f"Instruction record on line {line_number} exceeds the 1 MiB record limit.")
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON on line {line_number}: {exc.msg}") from exc
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("prompt"), str)
+            or not isinstance(item.get("completion"), str)
+        ):
+            raise ValueError(f"Line {line_number} must contain string fields named prompt and completion.")
+        prompt_text, completion_text = item["prompt"], item["completion"]
+        if not prompt_text.strip() or not completion_text.strip():
+            continue
+        if (
+            len(prompt_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES
+            or len(completion_text.encode("utf-8")) > MAX_INSTRUCTION_FIELD_BYTES
+        ):
+            raise ValueError(f"Prompt/completion on line {line_number} exceeds the 512 KiB field limit.")
+
+        source_record_count += 1
+        if source_record_count > max_examples:
+            raise ValueError(
+                f"Instruction dataset exceeds the {max_examples:,}-source-record safety limit."
             )
-            prompt = tokenizer.encode(prompt_text)
-            completion = tokenizer.encode(completion_text)
-            # Retain the newest prompt context, then supervise every response
-            # token through causal windows instead of silently clipping code.
-            prompt = prompt[-(seq_len - 1):]
-            sequence = [BOS_ID, *prompt, *completion, EOS_ID]
-            first_response_target = 1 + len(prompt)
-            base_example_id = hashlib.sha256(
-                (normalized_prompt + "\0" + normalized_completion).encode("utf-8")
-            ).hexdigest()
 
-            stride = max(1, seq_len // 2)
-            start = max(0, first_response_target - seq_len)
-            last_supervised_target = first_response_target - 1
-            chunk_index = 0
-            while start < len(sequence) - 1 and last_supervised_target < len(sequence) - 1:
-                window = sequence[start:start + seq_len + 1]
-                if len(window) < 2:
-                    break
-                input_ids = window[:-1]
-                labels = window[1:]
-                for position in range(len(labels)):
-                    target_position = start + position + 1
-                    # Overlapping input windows preserve recent code context, but
-                    # every response target is charged to exactly one training block.
-                    if (
-                        target_position < first_response_target
-                        or target_position <= last_supervised_target
-                    ):
-                        labels[position] = -100
+        normalized_prompt = _normalized_instruction_text(prompt_text)
+        normalized_completion = _normalized_instruction_text(completion_text)
+        prompt_group_id = hashlib.sha256(normalized_prompt.encode("utf-8")).hexdigest()
+        split_group_value = item.get("split_group")
+        if split_group_value is not None and (
+            not isinstance(split_group_value, str)
+            or len(split_group_value) > 2048
+            or (split_group_value.strip() and not split_group_value.strip())
+        ):
+            raise ValueError(f"split_group on line {line_number} must be a string of at most 2,048 characters.")
+        split_group_id = (
+            hashlib.sha256(_normalized_instruction_text(split_group_value).encode("utf-8")).hexdigest()
+            if isinstance(split_group_value, str) and split_group_value.strip()
+            else None
+        )
 
-                if any(token != -100 for token in labels):
-                    if len(examples) >= max_examples:
-                        raise ValueError(
-                            f"Instruction dataset exceeds the {max_examples:,}-example safety cap at line {line_number}."
-                        )
-                    example_tokens = len(input_ids) + len(labels)
-                    if total_tokens + example_tokens > max_tokens:
-                        raise ValueError(
-                            f"Instruction dataset exceeds the {max_tokens:,}-token safety cap at line {line_number}. "
-                            "Reduce max_examples or shorten the prompt/completion examples."
-                        )
-                    chunk_example_id = hashlib.sha256(
-                        (base_example_id + "\0" + str(chunk_index)).encode("utf-8")
-                    ).hexdigest()
-                    examples.append({
-                        "input_ids": input_ids,
-                        "labels": labels,
-                        "prompt_tokens": sum(token == -100 for token in labels),
-                        "completion_tokens": sum(token != -100 for token in labels),
-                        "prompt_group_id": prompt_group_id,
-                        "split_group_id": split_group_id,
-                        "example_id": chunk_example_id,
-                        "line": line_number,
-                        "chunk_index": chunk_index,
-                    })
-                    total_tokens += example_tokens
-                    last_supervised_target = start + len(labels)
-                start += stride
-                chunk_index += 1
-    if len(examples) < 1:
+        prompt = tokenizer.encode(prompt_text)
+        completion = tokenizer.encode(completion_text)
+        # Retain the newest prompt context, then supervise every response
+        # token through causal windows instead of silently clipping code.
+        prompt = prompt[-(seq_len - 1):]
+        sequence = [BOS_ID, *prompt, *completion, EOS_ID]
+        first_response_target = 1 + len(prompt)
+        source_example_id = hashlib.sha256(
+            (normalized_prompt + "\0" + normalized_completion).encode("utf-8")
+        ).hexdigest()
+        source_row_id = hashlib.sha256(
+            (source_example_id + "\0line:" + str(line_number)).encode("utf-8")
+        ).hexdigest()
+
+        stride = max(1, seq_len // 2)
+        start = max(0, first_response_target - seq_len)
+        last_supervised_target = first_response_target - 1
+        chunk_index = 0
+        while start < len(sequence) - 1 and last_supervised_target < len(sequence) - 1:
+            window = sequence[start:start + seq_len + 1]
+            if len(window) < 2:
+                break
+            input_ids = window[:-1]
+            labels = window[1:]
+            prompt_target_count = 0
+            overlap_target_count = 0
+            for position in range(len(labels)):
+                target_position = start + position + 1
+                if target_position < first_response_target:
+                    prompt_target_count += 1
+                    labels[position] = -100
+                elif target_position <= last_supervised_target:
+                    overlap_target_count += 1
+                    labels[position] = -100
+
+            if any(token != -100 for token in labels):
+                if len(examples) >= MAX_INSTRUCTION_WINDOWS:
+                    raise ValueError(
+                        f"Instruction dataset exceeds the {MAX_INSTRUCTION_WINDOWS:,}-context-window safety limit."
+                    )
+                example_tokens = len(input_ids) + len(labels)
+                if total_tokens + example_tokens > max_tokens:
+                    raise ValueError(
+                        f"Instruction dataset exceeds the {max_tokens:,}-token safety cap at line {line_number}. "
+                        "Reduce max_examples or shorten the prompt/completion examples."
+                    )
+                chunk_example_id = hashlib.sha256(
+                    (source_example_id + "\0" + str(chunk_index)).encode("utf-8")
+                ).hexdigest()
+                examples.append({
+                    "input_ids": input_ids,
+                    "labels": labels,
+                    "prompt_tokens": prompt_target_count,
+                    "completion_tokens": sum(token != -100 for token in labels),
+                    "context_overlap_tokens": overlap_target_count,
+                    "prompt_group_id": prompt_group_id,
+                    "split_group_id": split_group_id,
+                    "source_example_id": source_example_id,
+                    "source_row_id": source_row_id,
+                    "example_id": chunk_example_id,
+                    "line": line_number,
+                    "chunk_index": chunk_index,
+                })
+                total_tokens += example_tokens
+                last_supervised_target = start + len(labels)
+            start += stride
+            chunk_index += 1
+
+    if not examples:
         raise ValueError("Instruction dataset contains no non-empty prompt/completion examples.")
     return examples
 
