@@ -164,6 +164,24 @@ class TransformerTests(unittest.TestCase):
                 self.assertFalse(_same_architecture(changed, base))
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_source_pretraining_rng_restore_rejects_malformed_checkpoint_state(self):
+        from syntra_ai.training import _restore_rng_state
+
+        valid_state = torch.get_rng_state()
+        _restore_rng_state({"cpu": valid_state}, torch.device("cpu"))
+
+        malformed_states = [
+            {"cpu": torch.tensor([1, 2, 3], dtype=torch.int64)},
+            {"cpu": torch.empty(0, dtype=torch.uint8)},
+            {"cpu": "not-a-tensor"},
+            {},
+        ]
+        for state in malformed_states:
+            with self.subTest(state=type(state.get("cpu")).__name__):
+                with self.assertRaisesRegex(ValueError, "CPU random-generator state"):
+                    _restore_rng_state(state, torch.device("cpu"))
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_validation_loss_helpers_restore_the_callers_model_mode(self):
         from syntra_ai.instruction import _instruction_loss
         from syntra_ai.model import BOS_ID, SyntraTransformer
