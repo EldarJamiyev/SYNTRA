@@ -708,8 +708,15 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(out_file.is_file())
             self.assertGreaterEqual(result["example_count"], 4)
             self.assertTrue(result["audit"]["valid"])
-            self.assertTrue(result["audit"]["split_available"])
+            self.assertFalse(
+                result["audit"]["split_available"],
+                "a single source module must not be split into related train and validation examples",
+            )
             self.assertEqual(result["audit"]["prompt_leakage_groups"], 0)
+            self.assertTrue(
+                any("independent prompt/source groups" in warning for warning in result["audit"]["warnings"])
+                or "independent prompt/source groups" in result["audit"].get("error", "")
+            )
 
     def test_instruction_loader_preserves_entire_long_response_across_context_windows(self):
         from syntra_ai.instruction import load_instruction_examples
