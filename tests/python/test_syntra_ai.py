@@ -1170,6 +1170,25 @@ class TransformerTests(unittest.TestCase):
             self.assertIn("optimizer_state", full_saved)
             self.assertNotIn("optimizer_state", inference_saved)
             self.assertLess(inference_checkpoint.stat().st_size, checkpoint.stat().st_size)
+            self.assertEqual(len(full_saved["training_data_sha256"]), 64)
+            self.assertIn("rng_state", full_saved)
+            self.assertIn("cpu", full_saved["rng_state"])
+
+            source_contents = source.read_text(encoding="utf-8")
+            source.write_text(source_contents + "\n# source fingerprint must detect this change\n", encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "differs from the checkpoint's training corpus"):
+                    train(
+                        [str(root)],
+                        checkpoint,
+                        steps=1,
+                        batch_size=1,
+                        config=config,
+                        max_tokens=10000,
+                        device_name="cpu",
+                        resume=True,
+                    )
+            source.write_text(source_contents, encoding="utf-8")
 
             dataset = root / "instructions.jsonl"
             records = [
@@ -1211,6 +1230,18 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(saved["training_mode"], "supervised-instruction-finetuning")
             self.assertEqual(saved["step"], 2)
             self.assertNotIn("optimizer_state", saved)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "not produced by causal source pretraining"):
+                    train(
+                        [str(root)],
+                        checkpoint,
+                        steps=1,
+                        batch_size=1,
+                        config=config,
+                        max_tokens=10000,
+                        device_name="cpu",
+                        resume=True,
+                    )
             context = torch.tensor([[BOS_ID, *b"def add"]], dtype=torch.long, device=device)
             generated = model.generate(context, max_new_tokens=2, temperature=1.0, top_k=2)
             self.assertGreaterEqual(generated.shape[1], context.shape[1] + 1)
