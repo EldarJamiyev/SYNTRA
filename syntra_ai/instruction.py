@@ -5,6 +5,7 @@ from time import monotonic
 from typing import Any, Callable
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -494,21 +495,27 @@ def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
 def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int, batches: int = 4) -> float:
     was_training = model.training
     model.eval()
-    values = []
+    weighted_loss = 0.0
+    supervised_tokens = 0
     try:
         with torch.no_grad():
             for _ in range(batches):
                 x, y = _instruction_batch(examples, batch_size, device)
+                valid_count = int((y != -100).sum().item())
+                if valid_count < 1:
+                    raise ValueError("Validation batch contained no supervised completion tokens.")
                 _, loss = model(x, y)
-                if loss is not None and torch.isfinite(loss):
-                    values.append(float(loss.item()))
+                if loss is None or not torch.isfinite(loss).item():
+                    raise RuntimeError("Validation produced a non-finite instruction loss.")
+                weighted_loss += float(loss.item()) * valid_count
+                supervised_tokens += valid_count
     finally:
         # Keep this helper safe for both training-time validation and standalone
         # evaluation of a model that may be resident in the inference process.
         model.train(was_training)
-    if not values:
-        raise ValueError("Validation batch contained no supervised completion tokens.")
-    return sum(values) / len(values)
+    if supervised_tokens < 1:
+        raise ValueError("Validation did not process any supervised completion tokens.")
+    return weighted_loss / supervised_tokens
 
 
 def finetune(
@@ -520,12 +527,17 @@ def finetune(
     checkpoint: str | Path | None = None,
     callback: Callable[[dict], None] | None = None,
 ) -> dict:
-    if steps < 1 or steps > 1_000_000:
-        raise ValueError("steps must be between 1 and 1,000,000.")
-    if batch_size < 1 or batch_size > 128:
-        raise ValueError("batch_size must be between 1 and 128.")
-    if not 1e-6 <= learning_rate <= 1e-2:
-        raise ValueError("learning_rate must be between 1e-6 and 1e-2.")
+    if type(steps) is not int or steps < 1 or steps > 1_000_000:
+        raise ValueError("steps must be an integer between 1 and 1,000,000.")
+    if type(batch_size) is not int or batch_size < 1 or batch_size > 128:
+        raise ValueError("batch_size must be an integer between 1 and 128.")
+    if (
+        isinstance(learning_rate, bool)
+        or not isinstance(learning_rate, (int, float))
+        or not math.isfinite(learning_rate)
+        or not 1e-6 <= learning_rate <= 1e-2
+    ):
+        raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.")
     checkpoint_path_value = Path(checkpoint).expanduser().resolve() if checkpoint else checkpoint_path()
     if not checkpoint_path_value.is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
@@ -578,7 +590,9 @@ def finetune(
     report(
         "running", base_step,
         f"Supervised fine-tuning started with {len(training_examples)} training and "
-        f"{len(validation_examples)} validation examples. "
+        f"{len(validation_examples)} validation context windows across "
+        f"{dataset_quality['training_examples']} training and "
+        f"{dataset_quality['validation_examples']} validation source records. "
         + ("Dataset warnings: " + " ".join(dataset_quality["warnings"]) if dataset_quality["warnings"] else "No basic dataset-quality warnings.")
     )
     for step in range(base_step + 1, base_step + steps + 1):
