@@ -891,6 +891,30 @@ class TransformerTests(unittest.TestCase):
         self.assertNotIn("Calculator.add", metadata["exports"])
         self.assertIn("Calculator.add", metadata["declarations"])
 
+    def test_curriculum_repair_examples_require_unique_exact_agent_anchors(self):
+        from syntra_ai.curriculum import _safe_none_patch_examples
+
+        ambiguous_source = (
+            "def first(value):\n"
+            "    return value == None\n\n"
+            "def second(value):\n"
+            "    return value == None\n"
+        )
+        self.assertEqual(
+            _safe_none_patch_examples("ambiguous.py", ambiguous_source),
+            [],
+            "the agent rejects exact search anchors that occur more than once",
+        )
+
+        unique_source = (
+            "def first(value):\n"
+            "    return value == None\n"
+        )
+        patches = _safe_none_patch_examples("unique.py", unique_source)
+        self.assertEqual(len(patches), 1)
+        self.assertEqual(patches[0]["before"], "value == None")
+        self.assertEqual(patches[0]["after"], "value is None")
+
     def test_curriculum_skips_truncated_symbol_implementations(self):
         from syntra_ai.curriculum import synthesize_repository_curriculum, _module_metadata
 
