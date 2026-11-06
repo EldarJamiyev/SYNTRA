@@ -33,6 +33,7 @@ DEFAULT_DATASET = Path("dataset.txt")
 DEFAULT_CHECKPOINT = Path("checkpoints") / "syntra-brain.pt"
 MAX_DATASET_BYTES = 256 * 1024 * 1024
 MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
+MAX_INSTRUCTION_RECORDS = 10_000
 MAX_PACKED_CONTEXT_TOKENS = 10_000_000
 ProgressCallback = Callable[[dict], None]
 
@@ -274,6 +275,10 @@ def _read_instruction_jsonl_datasets(
                         raise ValueError(
                             f"Instruction/response field in {relative_name}:{line_number} exceeds "
                             f"{MAX_INSTRUCTION_RECORD_BYTES:,} bytes."
+                        )
+                    if len(records) + len(file_records) >= MAX_INSTRUCTION_RECORDS:
+                        raise ValueError(
+                            f"Structured instruction datasets exceed the {MAX_INSTRUCTION_RECORDS:,}-record safety limit."
                         )
                     file_records.append({
                         "prompt": instruction.strip(),
