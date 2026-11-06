@@ -635,6 +635,31 @@ class TransformerTests(unittest.TestCase):
             self.assertNotIn(".env", joined_paths)
             self.assertNotIn(b"API_TOKEN", bytes(token for token in corpus.token_ids if token < 256))
 
+    def test_corpus_source_scan_can_skip_unused_token_materialization(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-only-corpus-") as temp:
+            root = Path(temp)
+            source_text = (
+                '"""Local source-only scan."""\n'
+                "def calculate(value):\n"
+                "    return value * 3\n"
+            )
+            (root / "module.py").write_text(source_text, encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus([root], include_tokens=False)
+
+            self.assertEqual(corpus.token_ids, [])
+            self.assertEqual(corpus.documents, [source_text])
+            self.assertEqual(len(corpus.files), 1)
+            self.assertEqual(corpus.source_bytes, len(source_text.encode("utf-8")))
+            self.assertEqual(corpus.token_count, len(source_text.encode("utf-8")) + 2)
+
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                tokenized = load_corpus([root])
+            self.assertEqual(tokenized.token_count, len(tokenized.token_ids))
+            self.assertEqual(tokenized.token_count, corpus.token_count)
+
     def test_unified_brain_checkpoint_normalization_and_modern_config(self):
         from syntra_ai.runtime import _normalize_checkpoint_payload
 
