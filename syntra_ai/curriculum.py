@@ -24,6 +24,9 @@ MAX_SYMBOL_CHARS = 12_000
 MAX_MODULE_CHARS = 8_000
 MAX_IMPORTS = 80
 MAX_DECLARATIONS = 120
+MAX_CURRICULUM_CANDIDATE_BYTES = 128 * 1024 * 1024
+MAX_CURRICULUM_RECORD_BYTES = 1024 * 1024
+MAX_CURRICULUM_OUTPUT_BYTES = 128 * 1024 * 1024
 
 _DECLARATION = re.compile(
     r"^\s*(?:(?:export|default|pub|public|async|static|abstract|declare)\s+)*"
@@ -341,26 +344,57 @@ def _safe_none_patch_examples(relative_path: str, source: str) -> list[dict[str,
     return examples
 
 
+def _fsync_output_directory(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _write_jsonl_atomically(target: Path, records: list[dict[str, str]]) -> None:
+    """Write a size-bounded JSONL dataset atomically and durably."""
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.is_symlink():
         raise ValueError("Curriculum output must not be a symbolic link.")
     temporary_path: str | None = None
+    total_bytes = 0
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="\n",
-            prefix=".syntra-curriculum-", suffix=".tmp",
-            dir=target.parent, delete=False,
+            mode="wb",
+            prefix=".syntra-curriculum-",
+            suffix=".tmp",
+            dir=target.parent,
+            delete=False,
         ) as handle:
             temporary_path = handle.name
             for record in records:
-                handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+                encoded = (
+                    json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+                ).encode("utf-8")
+                if len(encoded) > MAX_CURRICULUM_RECORD_BYTES:
+                    raise ValueError(
+                        f"Curriculum record exceeds the {MAX_CURRICULUM_RECORD_BYTES:,}-byte output record limit."
+                    )
+                if total_bytes + len(encoded) > MAX_CURRICULUM_OUTPUT_BYTES:
+                    raise ValueError(
+                        f"Curriculum output exceeds the {MAX_CURRICULUM_OUTPUT_BYTES:,}-byte dataset limit."
+                    )
+                handle.write(encoded)
+                total_bytes += len(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         if target.is_symlink():
             raise ValueError("Curriculum output must not be a symbolic link.")
         os.replace(temporary_path, target)
         temporary_path = None
+        _fsync_output_directory(target.parent)
     finally:
         if temporary_path:
             try:
