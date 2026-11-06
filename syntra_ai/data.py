@@ -150,7 +150,12 @@ def load_corpus(
         root = os.fspath(root_path)
         root_parts = {part.casefold() for part in root_path.parts}
         root_name = root_path.name.casefold()
-        if root_name in IGNORED_DIRS or root_name in SENSITIVE_DIRS or root_parts.intersection(SENSITIVE_DIRS):
+        if (
+            root_name in IGNORED_DIRS
+            or root_name in SENSITIVE_DIRS
+            or root_parts.intersection(IGNORED_DIRS)
+            or root_parts.intersection(SENSITIVE_DIRS)
+        ):
             raise ValueError("Refusing to scan a sensitive or generated corpus root.")
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             try:
