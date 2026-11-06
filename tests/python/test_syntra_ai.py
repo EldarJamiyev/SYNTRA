@@ -1028,6 +1028,31 @@ class TransformerTests(unittest.TestCase):
         self.assertFalse(later["truncated"])
         self.assertIn("return 42", later["body"])
 
+    def test_non_python_block_extraction_ignores_multiline_triple_quoted_literals(self):
+        from syntra_ai.curriculum import _extract_logical_symbols, _logical_brace_deltas
+
+        source = (
+            "fun render(): String {\n"
+            '    val literal = """\n'
+            "        } this brace belongs to text\n"
+            "        { this brace belongs to text too\n"
+            '    """\n'
+            "    return literal\n"
+            "}\n"
+            "fun later(): Int { return 42 }\n"
+        )
+        self.assertEqual(
+            _logical_brace_deltas(source.splitlines()),
+            [1, 0, 0, 0, 0, 0, -1, 0],
+        )
+        symbols = _extract_logical_symbols(source)
+        render = next(item for item in symbols if item["name"] == "render")
+        later = next(item for item in symbols if item["name"] == "later")
+        self.assertFalse(render["truncated"])
+        self.assertIn("return literal", render["body"])
+        self.assertFalse(later["truncated"])
+        self.assertIn("return 42", later["body"])
+
     def test_non_python_module_exports_exclude_nested_methods_and_impl_containers(self):
         from syntra_ai.curriculum import _module_metadata
 
