@@ -30,7 +30,7 @@ MAX_CURRICULUM_OUTPUT_BYTES = 128 * 1024 * 1024
 
 _DECLARATION = re.compile(
     r"^\s*(?:(?:export|default|pub|public|async|static|abstract|declare)\s+)*"
-    r"(?:function|class|interface|type|enum|def|fn|func|struct|trait|impl)\s+"
+    r"(?:function|class|interface|type|enum|def|fn|fun|func|struct|trait|impl)\s+"
     r"([A-Za-z_$][A-Za-z0-9_$]*)"
 )
 _IMPORT = re.compile(r"^\s*(?:import\s|from\s.+\simport\s|#include\s|use\s)")
