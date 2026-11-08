@@ -14,7 +14,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .data import load_corpus
 from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_curriculum_output_path
