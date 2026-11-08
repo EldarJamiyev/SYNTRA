@@ -765,7 +765,7 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         "environment_image": isolation.get("image"), "status": "failed", "baseline": {}, "baseline_validated": False,
         "patch_correctness": False, "task_completion": False,
         "regression_prevention": None, "changed_paths": [], "error": None,
-        "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "context_window_tokens": None, "context_utilization": None, "generated_tokens": 0, "output_tokens_per_second": None},
+        "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "context_window_tokens": None, "context_utilization": None, "context_tokens_over_limit": 0, "context_status": "not-measured", "generated_tokens": 0, "output_tokens_per_second": None},
     }
     with tempfile.TemporaryDirectory(prefix="syntra-benchmark-" + task["id"] + "-") as temp:
         workspace = _copy_fixture_workspace(task, Path(temp))
@@ -795,6 +795,15 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         try:
             prompt = build_prompt(task, collect_sources(workspace))
             generation = _generate_patch(runtime, prompt, checkpoint, device, max_new_tokens)
+        except ContextWindowExceeded as exc:
+            speed = result["execution_speed"]
+            speed["prompt_tokens"] = exc.prompt_tokens
+            speed["context_window_tokens"] = exc.context_window_tokens
+            speed["context_utilization"] = exc.context_utilization
+            speed["context_tokens_over_limit"] = exc.tokens_over_context
+            speed["context_status"] = "exceeded"
+            result["status"], result["error"] = "context-exceeded", str(exc)[:1500]
+            return _finish_result(result, started)
         except (BenchmarkError, OSError, RuntimeError, ValueError) as exc:
             result["status"], result["error"] = "generation-error", str(exc)[:1500]
             return _finish_result(result, started)
@@ -805,6 +814,8 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         result["execution_speed"]["prompt_tokens"] = generation["prompt_tokens"]
         result["execution_speed"]["context_window_tokens"] = generation["context_window_tokens"]
         result["execution_speed"]["context_utilization"] = generation["context_utilization"]
+        result["execution_speed"]["context_status"] = "within-window"
+        result["execution_speed"]["context_tokens_over_limit"] = 0
         result["execution_speed"]["generated_tokens"] = generation["generated_tokens"]
         seconds = generation["generation_ms"] / 1000
         result["execution_speed"]["output_tokens_per_second"] = round(generation["generated_tokens"] / seconds, 2) if seconds > 0 else None
@@ -986,7 +997,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
                 "id": task["id"], "language": task["language"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
                 "environment_image": isolations[task["language"]].get("image"), "status": "error", "baseline": {}, "patch_correctness": False, "task_completion": False,
                 "regression_prevention": None, "baseline_validated": False, "changed_paths": [], "error": str(exc)[:1500],
-                "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "context_window_tokens": None, "context_utilization": None, "generated_tokens": 0, "output_tokens_per_second": None},
+                "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "context_window_tokens": None, "context_utilization": None, "context_tokens_over_limit": 0, "context_status": "not-measured", "generated_tokens": 0, "output_tokens_per_second": None},
             }
         results.append(result)
         print("[" + task["id"] + "] " + result["status"] + " | patch=" + str(result["patch_correctness"]) + " | target=" + str(result["task_completion"]) + " | regression=" + str(result["regression_prevention"]))
