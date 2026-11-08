@@ -453,6 +453,32 @@ class TransformerTests(unittest.TestCase):
             self.assertNotIn("checkpoints", joined_paths)
             self.assertNotIn("wandb", joined_paths)
 
+    def test_corpus_loader_excludes_explicit_managed_output_roots(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-managed-exclusions-") as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            benchmarks = root / "data" / "benchmarks"
+            curricula = root / "data" / "curricula"
+            benchmarks.mkdir(parents=True)
+            curricula.mkdir(parents=True)
+            (root / "src" / "module.py").write_text("def useful_source(): return 42\\n", encoding="utf-8")
+            (benchmarks / "latest.json").write_text('{"task_completion_rate":1.0}', encoding="utf-8")
+            (curricula / "summary.md").write_text("# Generated training summary\\n", encoding="utf-8")
+
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus(
+                    [root],
+                    max_tokens=1024,
+                    include_tokens=False,
+                    exclude_paths=[benchmarks, curricula],
+                )
+            self.assertEqual(len(corpus.files), 1)
+            self.assertTrue(corpus.files[0].endswith("module.py"))
+            self.assertNotIn("task_completion_rate", "\\n".join(corpus.documents))
+            self.assertNotIn("Generated training summary", "\\n".join(corpus.documents))
+
     def test_instruction_dataset_loader_bounds_examples_records_and_token_memory(self):
         from syntra_ai.instruction import (
             MAX_INSTRUCTION_EXAMPLES,
