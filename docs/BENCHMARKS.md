@@ -49,7 +49,7 @@ npm run benchmark:model -- --task python-clamp
 # Evaluate the TypeScript task
 npm run benchmark:model -- --task typescript-object-mapper
 
-# Run the complete 12-task matrix
+# Run the complete 13-task matrix
 npm run benchmark:model
 ```
 
@@ -128,7 +128,7 @@ The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` warning triggers only when the sa
 
 ## Comparability and limitations
 
-Do not combine raw-model results with full-agent results. The direct raw-model suite now has 13 small held-out fixtures across five languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior are each represented by one narrow task; that is not broad language competence.
+Do not combine raw-model results with full-agent results. The direct raw-model suite now has 13 small held-out fixtures across five languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. JavaScript event normalization, Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior are each represented by one narrow task; that is not broad language competence.
 
 GitHub CI installs the required Go/Rust toolchains to validate the fixture baselines and the runner implementation. Actual benchmark execution remains offline: it uses pre-provisioned local Docker images and does not pull images or packages. The benchmark does not fabricate a score when a checkpoint, local image, language runtime, or valid fixture baseline is unavailable.
 
