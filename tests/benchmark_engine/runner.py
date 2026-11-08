@@ -552,7 +552,18 @@ def prepare_isolation(mode: str, image: str) -> dict[str, Any]:
     return {"mode": "docker-no-network", "image": image, "image_id": image_id, "warning": "Docker still trusts the Docker daemon and host kernel; it is not a VM boundary."}
 
 
-def run_hidden_test(*, isolation: dict[str, Any], workspace: Path, hidden_dir: Path, test_name: str, run_id: str, phase: str) -> dict[str, Any]:
+def run_hidden_test(
+    *,
+    isolation: dict[str, Any],
+    workspace: Path,
+    hidden_dir: Path,
+    test_name: str,
+    run_id: str,
+    phase: str,
+    language: str = "python",
+) -> dict[str, Any]:
+    if test_name != expected_test_filename(language, phase):
+        raise BenchmarkError("Hidden test filename does not match its language and evaluation phase.")
     hidden_input = hidden_dir
     if hidden_input.is_symlink():
         raise BenchmarkError("Hidden evaluation directory must not be a symbolic link.")
@@ -564,25 +575,85 @@ def run_hidden_test(*, isolation: dict[str, Any], workspace: Path, hidden_dir: P
     hidden_base = (ENGINE_ROOT / "hidden").resolve(strict=True)
     if not _is_within(hidden_base, hidden_root) or not _is_within(hidden_root, test_file) or not test_file.is_file():
         raise BenchmarkError("Hidden test must be a regular file inside its declared hidden directory.")
-    if isolation["mode"] == "host-opt-in":
-        env = dict(os.environ)
-        env.update({"SYNTRA_BENCHMARK_WORKSPACE": str(workspace.resolve()), "PYTHONPATH": str(workspace.resolve()), "PYTHONDONTWRITEBYTECODE": "1"})
-        return run_command([sys.executable, str(test_file)], cwd=workspace, env=env)
-    docker = shutil.which("docker")
-    name = "syntra-bench-" + run_id[-8:] + "-" + phase + "-" + uuid.uuid4().hex[:6]
-    command = [
-        docker, "run", "--rm", "--pull=never", "--name", name,
-        "--network", "none", "--read-only",
-        "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m",
-        "--pids-limit", "64", "--memory", "512m", "--cpus", "1",
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "65534:65534",
-        "--mount", f"type=bind,src={workspace.resolve()},dst=/workspace,readonly",
-        "--mount", f"type=bind,src={hidden_root},dst=/evaluation,readonly",
-        "--workdir", "/workspace", "--env", "SYNTRA_BENCHMARK_WORKSPACE=/workspace",
-        "--env", "PYTHONPATH=/workspace", "--env", "PYTHONDONTWRITEBYTECODE=1",
-        isolation["image"], "python", "-B", "/evaluation/" + test_name,
-    ]
-    return run_command(command, cwd=workspace, env=dict(os.environ), cleanup_command=[docker, "kill", name])
+
+    if language == "python":
+        argv = (
+            [sys.executable, "-B", str(test_file)]
+            if isolation["mode"] == "host-opt-in"
+            else ["python", "-B", "/evaluation/" + test_name]
+        )
+        return run_environment_command(
+            language=language, isolation=isolation, workspace=workspace, argv=argv,
+            run_id=run_id, phase=phase, hidden_dir=hidden_root, timeout_seconds=COMMAND_TIMEOUT_SECONDS,
+        )
+
+    if language == "typescript":
+        if isolation["mode"] == "host-opt-in":
+            scratch = workspace.parent / ("typescript-evaluation-" + uuid.uuid4().hex)
+            try:
+                staged_workspace = scratch / "workspace"
+                staged_evaluation = scratch / "evaluation"
+                build_directory = scratch / "build"
+                shutil.copytree(workspace, staged_workspace)
+                staged_evaluation.mkdir(parents=True, mode=0o755)
+                shutil.copyfile(test_file, staged_evaluation / test_name)
+                return run_environment_command(
+                    language=language, isolation=isolation, workspace=staged_workspace,
+                    argv=["node", str(TYPESCRIPT_TEST_RUNNER), str(staged_evaluation / test_name), str(build_directory)],
+                    run_id=run_id, phase=phase, timeout_seconds=60,
+                )
+            finally:
+                if scratch.exists():
+                    shutil.rmtree(scratch, ignore_errors=True)
+        return run_environment_command(
+            language=language, isolation=isolation, workspace=workspace,
+            argv=[
+                "node", "/benchmark/typescript_test_runner.mjs",
+                "/evaluation/" + test_name, "/tmp/syntra-typescript-" + run_id[-8:] + "-" + phase,
+            ],
+            run_id=run_id, phase=phase, hidden_dir=hidden_root, timeout_seconds=60,
+        )
+
+    if language == "go":
+        test_path = str(test_file) if isolation["mode"] == "host-opt-in" else "/evaluation/" + test_name
+        return run_environment_command(
+            language=language, isolation=isolation, workspace=workspace,
+            argv=["go", "run", test_path], run_id=run_id, phase=phase,
+            hidden_dir=hidden_root, timeout_seconds=60,
+        )
+
+    if language == "rust":
+        target_name = Path(test_name).stem
+        if isolation["mode"] == "host-opt-in":
+            scratch = workspace.parent / ("rust-evaluation-" + uuid.uuid4().hex)
+            try:
+                shutil.copytree(workspace, scratch)
+                tests_dir = scratch / "tests"
+                if tests_dir.exists():
+                    shutil.rmtree(tests_dir)
+                tests_dir.mkdir(mode=0o755)
+                shutil.copyfile(test_file, tests_dir / test_name)
+                return run_environment_command(
+                    language=language, isolation=isolation, workspace=scratch,
+                    argv=[
+                        "cargo", "test", "--offline", "--locked", "--manifest-path",
+                        str(scratch / "Cargo.toml"), "--test", target_name,
+                    ],
+                    run_id=run_id, phase=phase, timeout_seconds=90,
+                )
+            finally:
+                if scratch.exists():
+                    shutil.rmtree(scratch, ignore_errors=True)
+        return run_environment_command(
+            language=language, isolation=isolation, workspace=workspace,
+            argv=[
+                "cargo", "test", "--offline", "--locked", "--manifest-path",
+                "/workspace/Cargo.toml", "--test", target_name,
+            ],
+            run_id=run_id, phase=phase, hidden_dir=hidden_root, timeout_seconds=90,
+        )
+
+    raise BenchmarkError("No hidden-test executor is configured for " + language + ".")
 
 
 def _expected_baseline_failure(result: dict[str, Any]) -> bool:
