@@ -305,6 +305,38 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertEqual(captured.exception.tokens_over_context, 1)
         self.assertEqual(captured.exception.context_utilization, 1.125)
 
+    def test_run_task_records_context_overflow_without_starting_generation(self):
+        class ContextLimitedRuntime:
+            stream_called = False
+
+            def tokenize_text(self, prompt, path=None):
+                return {
+                    "token_count": 120,
+                    "context_window_tokens": 100,
+                    "tokens_over_context": 21,
+                }
+
+            def stream_generate(self, *args, **kwargs):
+                self.stream_called = True
+                raise AssertionError("Model generation must not start for an over-context prompt.")
+
+        runtime = ContextLimitedRuntime()
+        task = next(task for task in self.suite["tasks"] if task["id"] == "python-clamp")
+        result = runner.run_task(
+            task, runtime=runtime, checkpoint=Path("unused-checkpoint"),
+            device="cpu", max_new_tokens=16,
+            isolation={"mode": "host-opt-in", "image": None, "image_id": None},
+            run_id="context-evidence-test",
+        )
+        self.assertFalse(runtime.stream_called)
+        self.assertTrue(result["baseline_validated"])
+        self.assertEqual(result["status"], "context-exceeded")
+        self.assertEqual(result["execution_speed"]["prompt_tokens"], 120)
+        self.assertEqual(result["execution_speed"]["context_window_tokens"], 100)
+        self.assertEqual(result["execution_speed"]["context_tokens_over_limit"], 21)
+        self.assertEqual(result["execution_speed"]["context_utilization"], 1.2)
+        self.assertEqual(result["execution_speed"]["context_status"], "exceeded")
+
     def test_loss_intelligence_divergence_requires_low_loss_and_at_least_three_zero_success_tasks(self):
         checkpoint = {"train_loss": 0.4}
         summary = {"task_count": 5, "task_completion_rate": 0.0}
