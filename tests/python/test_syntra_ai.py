@@ -1016,16 +1016,16 @@ class TransformerTests(unittest.TestCase):
         from syntra_ai.curriculum import _module_metadata
 
         source = (
-            '"""Nested class fixtures."""\\n'
-            "class Outer:\\n"
-            "    class Inner:\\n"
-            "        def compute(self, value):\\n"
-            "            return value + 1\\n"
-            "        class Deep:\\n"
-            "            async def run(self, value):\\n"
-            "                return value * 2\\n"
-            "    def direct(self):\\n"
-            "        return 42\\n"
+            '"""Nested class fixtures."""\n'
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def compute(self, value):\n"
+            "            return value + 1\n"
+            "        class Deep:\n"
+            "            async def run(self, value):\n"
+            "                return value * 2\n"
+            "    def direct(self):\n"
+            "        return 42\n"
         )
         metadata = _module_metadata("nested.py", source)
         declarations = set(metadata["declarations"])
