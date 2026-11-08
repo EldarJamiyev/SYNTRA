@@ -334,6 +334,7 @@ def _read_local_datasets(
 def _read_instruction_jsonl_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
+    exclude_paths: set[str] | None = None,
 ) -> tuple[list[dict[str, str]], list[str], int, str, int, int, dict[str, tuple[str, bytes, bool]]]:
     """Read structured prompt/response JSONL files; leave ordinary text for the legacy reader."""
     records: list[dict[str, str]] = []
@@ -349,6 +350,8 @@ def _read_instruction_jsonl_datasets(
         try:
             source = path.resolve(strict=True)
             for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
+                if exclude_paths and str(resolved) in exclude_paths:
+                    continue
                 if resolved.suffix.casefold() != ".jsonl" or resolved in seen:
                     continue
                 if source_index > 0:
@@ -886,6 +889,7 @@ def train(
     device_name: str = "auto",
     seed: int = 1337,
     resume: bool = False,
+    exclude_dataset_paths: Iterable[str | os.PathLike[str]] = (),
     callback: ProgressCallback | None = None,
 ) -> dict:
     """Train or resume a local model, saving complete optimizer/model state."""
@@ -919,6 +923,13 @@ def train(
     paths = tuple(dataset_paths)
     if not paths:
         raise ValueError("At least one local dataset file is required.")
+    try:
+        excluded_dataset_paths = {
+            str(Path(item).expanduser().resolve(strict=False))
+            for item in exclude_dataset_paths
+        }
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("Excluded dataset paths could not be normalized: " + str(exc)) from None
 
     (
         instruction_records,
@@ -928,13 +939,17 @@ def train(
         instruction_scan_bytes,
         instruction_scan_files,
         raw_jsonl_fallbacks,
-    ) = _read_instruction_jsonl_datasets(paths, max_dataset_bytes)
+    ) = _read_instruction_jsonl_datasets(
+        paths,
+        max_dataset_bytes,
+        exclude_paths=excluded_dataset_paths,
+    )
     structured_paths = set(instruction_files)
     remaining_read_bytes = max_dataset_bytes - instruction_scan_bytes
     train_text, validation_text, raw_files, raw_bytes, raw_hash = _read_local_datasets(
         paths,
         remaining_read_bytes,
-        exclude_paths=structured_paths,
+        exclude_paths=structured_paths | excluded_dataset_paths,
         allow_empty=bool(instruction_records),
         require_holdout=not bool(instruction_records),
         max_files=MAX_DATASET_FILES,
@@ -1386,6 +1401,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Train SYNTRA's local Transformer from randomly initialized weights.",
     )
     parser.add_argument("--dataset", action="append", default=None, help="Local UTF-8 text/code file or project directory; repeat to add sources. Defaults to dataset.txt.")
+    parser.add_argument("--exclude-dataset", action="append", default=[], help="Exclude an exact local file from both raw and structured corpus ingestion; may be repeated.")
     parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT), help="Local checkpoint output path.")
     parser.add_argument("--epochs", type=int, default=1, help="Additional full passes through shuffled training blocks.")
     parser.add_argument("--batch-size", type=int, default=4)
@@ -1424,6 +1440,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = train(
             dataset_paths=args.dataset or (DEFAULT_DATASET,),
+            exclude_dataset_paths=args.exclude_dataset,
             checkpoint_path=args.checkpoint,
             config=config,
             epochs=args.epochs,
