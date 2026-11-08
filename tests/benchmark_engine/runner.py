@@ -135,7 +135,12 @@ def validate_suite(suite: Any) -> None:
         for value in expected:
             if not isinstance(value, str) or not value or "\\" in value or Path(value).is_absolute():
                 raise BenchmarkError("Task " + task_id + " contains an unsafe changed path.")
-            if any(part in {"", ".", ".."} for part in PurePosixPath(value).parts):
+            pure = PurePosixPath(value)
+            if (
+                pure.is_absolute() or pure.as_posix() != value
+                or re.match(r"^[A-Za-z]:", value)
+                or any(part in {"", ".", ".."} for part in pure.parts)
+            ):
                 raise BenchmarkError("Task " + task_id + " contains an unsafe changed path.")
         if len(set(expected)) != len(expected):
             raise BenchmarkError("Task " + task_id + " contains duplicate changed paths.")
@@ -280,7 +285,11 @@ def parse_patch_output(raw_output: str) -> dict[str, Any]:
             raise BenchmarkError("Patch edit fields must be strings.")
         relative = edit["path"]
         pure = PurePosixPath(relative)
-        if not relative or pure.is_absolute() or "\\" in relative or any(part in {"", ".", ".."} for part in pure.parts):
+        if (
+            not relative or pure.is_absolute() or pure.as_posix() != relative
+            or "\\" in relative or re.match(r"^[A-Za-z]:", relative)
+            or any(part in {"", ".", ".."} for part in pure.parts)
+        ):
             raise BenchmarkError("Patch edit paths must be safe relative repository paths.")
         if relative in seen_paths:
             raise BenchmarkError("A multi-file patch may edit each path only once.")
