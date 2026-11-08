@@ -183,6 +183,81 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
             seen,
         ))
 
+    def test_completed_benchmark_requires_the_exact_staged_checkpoint_hash(self):
+        from unittest.mock import Mock
+
+        with tempfile.TemporaryDirectory(prefix=".syntra-eval-report-identity-", dir=ROOT) as temp:
+            root = Path(temp)
+            run_root = root / "run"
+            run_root.mkdir()
+            evaluator = evaluate_epochs.BackgroundEvaluator(
+                run_root, "identity-test", device="cpu", isolation="docker",
+                allow_host_execution=False,
+            )
+            checkpoint_hash = "a" * 64
+            report_path = evaluator.reports_dir / "matched.json"
+            log_path = evaluator.logs_dir / "matched.log"
+            report_path.write_text(json.dumps({
+                "schema_version": 1,
+                "benchmark_track": "raw-native-model",
+                "suite_version": "1.3.0",
+                "model": {"checkpoint_sha256": checkpoint_hash},
+                "training_loss": {"train_loss": 1.25, "validation_loss": 1.5},
+                "summary": {
+                    "task_completion_rate": 0.25,
+                    "completed_task_count": 3,
+                    "baseline_valid_task_count": 12,
+                    "regression_prevention_rate": 0.8,
+                },
+            }), encoding="utf-8")
+            log_path.write_text("benchmark completed", encoding="utf-8")
+            process = Mock()
+            process.wait.return_value = 0
+            handle = log_path.open("a", encoding="utf-8")
+            evaluator.active.append(evaluate_epochs.EvaluationJob(
+                stage="pretraining", step=500, checkpoint_sha256=checkpoint_hash,
+                checkpoint_path=root / "snapshot.pt", report_path=report_path,
+                log_path=log_path, process=process, log_handle=handle,
+            ))
+            evaluator._wait_one()
+            self.assertEqual(evaluator.results[0]["status"], "completed")
+            self.assertEqual(evaluator.results[0]["task_completion_rate"], 0.25)
+            self.assertEqual(evaluator.results[0]["completed_task_count"], 3)
+            self.assertEqual(evaluator.results[0]["train_loss"], 1.25)
+
+    def test_benchmark_report_from_a_different_checkpoint_is_rejected(self):
+        from unittest.mock import Mock
+
+        with tempfile.TemporaryDirectory(prefix=".syntra-eval-report-mismatch-", dir=ROOT) as temp:
+            root = Path(temp)
+            evaluator = evaluate_epochs.BackgroundEvaluator(
+                root / "run", "identity-mismatch", device="cpu", isolation="docker",
+                allow_host_execution=False,
+            )
+            report_path = evaluator.reports_dir / "mismatch.json"
+            log_path = evaluator.logs_dir / "mismatch.log"
+            report_path.write_text(json.dumps({
+                "schema_version": 1,
+                "benchmark_track": "raw-native-model",
+                "suite_version": "1.3.0",
+                "model": {"checkpoint_sha256": "b" * 64},
+                "training_loss": {"train_loss": 0.1, "validation_loss": 0.2},
+                "summary": {"task_completion_rate": 1.0, "completed_task_count": 12, "baseline_valid_task_count": 12},
+            }), encoding="utf-8")
+            log_path.write_text("", encoding="utf-8")
+            process = Mock()
+            process.wait.return_value = 0
+            handle = log_path.open("a", encoding="utf-8")
+            evaluator.active.append(evaluate_epochs.EvaluationJob(
+                stage="pretraining", step=500, checkpoint_sha256="a" * 64,
+                checkpoint_path=root / "snapshot.pt", report_path=report_path,
+                log_path=log_path, process=process, log_handle=handle,
+            ))
+            evaluator._wait_one()
+            self.assertEqual(evaluator.results[0]["status"], "failed")
+            self.assertIsNone(evaluator.results[0]["task_completion_rate"])
+            self.assertIn("does not match", evaluator.results[0]["error"])
+
     def test_ascii_trends_do_not_turn_missing_measurements_into_zero(self):
         empty = evaluate_epochs._ascii_plot([], "task_completion_rate", "Completion")
         self.assertIn("No verified measurements", empty)
