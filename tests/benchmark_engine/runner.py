@@ -434,6 +434,21 @@ def syntax_check(
             return {"passed": True, "checked_paths": checked, "error": None}
         if isolation is None:
             raise BenchmarkError("A language-specific syntax check requires a selected runtime environment.")
+        if language == "javascript":
+            for index, relative in enumerate(checked):
+                source_path = (
+                    ("/workspace/" if isolation["mode"] == "docker-no-network" else str(root) + os.sep)
+                    + relative.replace("/", os.sep)
+                )
+                outcome = run_environment_command(
+                    language=language, isolation=isolation, workspace=root,
+                    argv=["node", "--check", source_path], run_id=run_id,
+                    phase="syntax-" + str(index), timeout_seconds=30,
+                )
+                if outcome["returncode"] != 0 or outcome["timed_out"] or outcome["output_limited"]:
+                    diagnostic = (outcome["stderr"] + "\n" + outcome["stdout"]).strip()
+                    return {"passed": False, "checked_paths": checked, "error": diagnostic[-1000:] or "Node.js syntax check failed."}
+            return {"passed": True, "checked_paths": checked, "error": None}
         if language == "typescript":
             compiler = "/opt/typescript/bin/tsc" if isolation["mode"] == "docker-no-network" else str(TYPESCRIPT_ROOT / "bin" / "tsc")
             source_paths = [
@@ -586,6 +601,14 @@ def run_hidden_test(
         return run_environment_command(
             language=language, isolation=isolation, workspace=workspace, argv=argv,
             run_id=run_id, phase=phase, hidden_dir=hidden_root, timeout_seconds=COMMAND_TIMEOUT_SECONDS,
+        )
+
+    if language == "javascript":
+        test_path = str(test_file) if isolation["mode"] == "host-opt-in" else "/evaluation/" + test_name
+        return run_environment_command(
+            language=language, isolation=isolation, workspace=workspace,
+            argv=["node", test_path], run_id=run_id, phase=phase,
+            hidden_dir=hidden_root, timeout_seconds=60,
         )
 
     if language == "typescript":
