@@ -1391,15 +1391,23 @@ def train(
                 or at_step_limit
             )
             if should_save:
+                completed_epoch_at_limit = at_step_limit and next_batch_index == steps_per_epoch
+                saved_epoch = start_epoch + 1 if completed_epoch_at_limit else start_epoch
+                saved_order = None if completed_epoch_at_limit else epoch_order
+                saved_cursor = 0 if completed_epoch_at_limit else next_batch_index
                 save_checkpoint(
                     target,
-                    payload_for_save(start_epoch, epoch_order, next_batch_index),
+                    payload_for_save(saved_epoch, saved_order, saved_cursor),
                 )
                 report(
                     "completed" if at_step_limit else "running",
-                    start_epoch,
+                    saved_epoch,
                     "Requested training-step block saved." if at_step_limit else "Checkpoint saved; training and held-out validation metrics updated.",
                 )
+                if completed_epoch_at_limit:
+                    start_epoch = saved_epoch
+                    epoch_order = None
+                    next_batch_index = 0
             if at_step_limit:
                 step_limit_reached = True
                 break
