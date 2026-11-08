@@ -7,7 +7,7 @@ export function mapObject<TSource extends object, TKey extends string, TValue>(
 ): MappedRecord<TSource, TKey, TValue> {
   const output = {} as MappedRecord<TSource, TKey, TValue>;
   for (const key of keys) {
-    output[key] = mapper(source[key as keyof TSource], key);
+    output[key] = mapper(source[key as unknown as keyof TSource], key);
   }
   return output;
 }
