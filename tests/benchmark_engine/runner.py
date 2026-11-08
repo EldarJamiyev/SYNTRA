@@ -658,7 +658,16 @@ def run_hidden_test(
 
 def _expected_baseline_failure(result: dict[str, Any]) -> bool:
     output = result["stdout"] + "\n" + result["stderr"]
-    assertion = "AssertionError" in output or "FAIL: test_" in output or "FAILED (failures=" in output
+    assertion = (
+        "SYNTRA_BENCHMARK_ASSERTION_FAILED" in output
+        or "AssertionError" in output
+        or "FAIL: test_" in output
+        or "ERROR: test_" in output
+        or "FAILED (failures=" in output
+        or "FAILED (errors=" in output
+        or "panicked at" in output
+        or re.search(r"test .* FAILED", output) is not None
+    )
     return result["returncode"] not in (None, 0) and not result["timed_out"] and not result["output_limited"] and assertion
 
 
@@ -682,7 +691,18 @@ def _generate_patch(runtime: Any, prompt: str, checkpoint: Path, device: str, ma
     output = "".join(pieces)
     if terminal.get("text") != output:
         raise BenchmarkError("Native model terminal text does not match streamed deltas.")
-    return {"text": output, "prompt_tokens": int(prompt_info["token_count"]), "generated_tokens": int(terminal.get("generated_tokens", 0)), "generation_ms": round(elapsed, 2), "prompt_truncated": bool(terminal.get("prompt_truncated", False))}
+    context_window = prompt_info.get("context_window_tokens")
+    if type(context_window) is not int or context_window < 2:
+        raise BenchmarkError("Native tokenizer did not return a valid context-window size.")
+    prompt_tokens = int(prompt_info["token_count"])
+    return {
+        "text": output, "prompt_tokens": prompt_tokens,
+        "context_window_tokens": context_window,
+        "context_utilization": round(prompt_tokens / context_window, 4),
+        "generated_tokens": int(terminal.get("generated_tokens", 0)),
+        "generation_ms": round(elapsed, 2),
+        "prompt_truncated": bool(terminal.get("prompt_truncated", False)),
+    }
 
 
 def _finish_result(result: dict[str, Any], started: float) -> dict[str, Any]:
@@ -691,11 +711,11 @@ def _finish_result(result: dict[str, Any], started: float) -> dict[str, Any]:
 def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: str, max_new_tokens: int, isolation: dict[str, Any], run_id: str) -> dict[str, Any]:
     started = time.perf_counter()
     result = {
-        "id": task["id"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
-        "status": "failed", "baseline": {}, "baseline_validated": False,
+        "id": task["id"], "language": task["language"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
+        "environment_image": isolation.get("image"), "status": "failed", "baseline": {}, "baseline_validated": False,
         "patch_correctness": False, "task_completion": False,
         "regression_prevention": None, "changed_paths": [], "error": None,
-        "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "generated_tokens": 0, "output_tokens_per_second": None},
+        "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "context_window_tokens": None, "context_utilization": None, "generated_tokens": 0, "output_tokens_per_second": None},
     }
     with tempfile.TemporaryDirectory(prefix="syntra-benchmark-" + task["id"] + "-") as temp:
         workspace = _copy_fixture_workspace(task, Path(temp))
@@ -706,8 +726,8 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         hidden_base = (ENGINE_ROOT / "hidden").resolve(strict=True)
         if not _is_within(hidden_base, hidden_dir) or not hidden_dir.is_dir():
             raise BenchmarkError("Task hidden evaluation directory is invalid.")
-        baseline_target = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["target_test"], run_id=run_id, phase="baseline-target")
-        baseline_regression = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["regression_test"], run_id=run_id, phase="baseline-regression")
+        baseline_target = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["target_test"], run_id=run_id, phase="baseline-target", language=task["language"])
+        baseline_regression = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["regression_test"], run_id=run_id, phase="baseline-regression", language=task["language"])
         result["baseline"] = {
             "target_expected_to_fail": _expected_baseline_failure(baseline_target),
             "target_exit_code": baseline_target["returncode"], "target_elapsed_ms": baseline_target["elapsed_ms"],
@@ -733,6 +753,8 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
             return _finish_result(result, started)
         result["execution_speed"]["generation_ms"] = generation["generation_ms"]
         result["execution_speed"]["prompt_tokens"] = generation["prompt_tokens"]
+        result["execution_speed"]["context_window_tokens"] = generation["context_window_tokens"]
+        result["execution_speed"]["context_utilization"] = generation["context_utilization"]
         result["execution_speed"]["generated_tokens"] = generation["generated_tokens"]
         seconds = generation["generation_ms"] / 1000
         result["execution_speed"]["output_tokens_per_second"] = round(generation["generated_tokens"] / seconds, 2) if seconds > 0 else None
@@ -752,7 +774,7 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         result["execution_speed"]["patch_apply_ms"] = round((time.perf_counter() - patch_started) * 1000, 2)
         result["changed_paths"] = changed
         syntax_started = time.perf_counter()
-        syntax = syntax_check(workspace, changed)
+        syntax = syntax_check(workspace, changed, language=task["language"], isolation=isolation, run_id=run_id)
         result["execution_speed"]["syntax_check_ms"] = round((time.perf_counter() - syntax_started) * 1000, 2)
         if not syntax["passed"]:
             result["status"], result["error"] = "syntax-failed", syntax["error"]
@@ -760,8 +782,8 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         result["patch_correctness"] = True
 
         try:
-            target_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["target_test"], run_id=run_id, phase="target")
-            regression_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["regression_test"], run_id=run_id, phase="regression")
+            target_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["target_test"], run_id=run_id, phase="target", language=task["language"])
+            regression_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["regression_test"], run_id=run_id, phase="regression", language=task["language"])
         except (BenchmarkError, OSError, RuntimeError, ValueError) as exc:
             result["status"], result["error"] = "test-execution-error", str(exc)[:1500]
             return _finish_result(result, started)
@@ -890,7 +912,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
                 "id": task["id"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
                 "status": "error", "baseline": {}, "patch_correctness": False, "task_completion": False,
                 "regression_prevention": None, "baseline_validated": False, "changed_paths": [], "error": str(exc)[:1500],
-                "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "generated_tokens": 0, "output_tokens_per_second": None},
+                "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "context_window_tokens": None, "context_utilization": None, "generated_tokens": 0, "output_tokens_per_second": None},
             }
         results.append(result)
         print("[" + task["id"] + "] " + result["status"] + " | patch=" + str(result["patch_correctness"]) + " | target=" + str(result["task_completion"]) + " | regression=" + str(result["regression_prevention"]))
