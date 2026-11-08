@@ -97,6 +97,55 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
             self.assertFalse(os.stat(staged).st_mode & stat.S_IWUSR)
             self.assertEqual(metadata["global_step"], 500)
 
+    def test_fresh_pretraining_refuses_an_unhandled_stale_inference_companion(self):
+        with tempfile.TemporaryDirectory(prefix=".syntra-stale-companion-", dir=ROOT) as temp:
+            root = Path(temp)
+            checkpoint = root / "staging" / "syntra-brain.pt"
+            checkpoint.parent.mkdir()
+            companion = root / "staging" / "syntra-brain.inference.pt"
+            companion.write_bytes(b"old inference weights")
+            with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "stale inference companion"):
+                evaluate_epochs._prepare_inference_companion_for_fresh_pretraining(
+                    checkpoint,
+                    root / "backup",
+                    resume=False,
+                    overwrite=False,
+                )
+            self.assertTrue(companion.is_file())
+
+    def test_fresh_pretraining_backs_up_and_removes_stale_inference_companion(self):
+        with tempfile.TemporaryDirectory(prefix=".syntra-stale-companion-backup-", dir=ROOT) as temp:
+            root = Path(temp)
+            checkpoint = root / "staging" / "syntra-brain.pt"
+            checkpoint.parent.mkdir()
+            companion = root / "staging" / "syntra-brain.inference.pt"
+            companion.write_bytes(b"old inference weights")
+            backup = evaluate_epochs._prepare_inference_companion_for_fresh_pretraining(
+                checkpoint,
+                root / "backup",
+                resume=False,
+                overwrite=True,
+            )
+            self.assertIsNotNone(backup)
+            self.assertFalse(companion.exists())
+            self.assertEqual(backup.read_bytes(), b"old inference weights")
+
+    def test_pretraining_resume_preserves_existing_inference_companion(self):
+        with tempfile.TemporaryDirectory(prefix=".syntra-resume-companion-", dir=ROOT) as temp:
+            root = Path(temp)
+            checkpoint = root / "staging" / "syntra-brain.pt"
+            checkpoint.parent.mkdir()
+            companion = root / "staging" / "syntra-brain.inference.pt"
+            companion.write_bytes(b"resumable inference weights")
+            returned = evaluate_epochs._prepare_inference_companion_for_fresh_pretraining(
+                checkpoint,
+                root / "backup",
+                resume=True,
+                overwrite=False,
+            )
+            self.assertEqual(returned, companion)
+            self.assertTrue(companion.is_file())
+
     def test_checkpoint_snapshot_rejects_symlinks(self):
         with tempfile.TemporaryDirectory(prefix=".syntra-evaluate-symlink-", dir=ROOT) as temp:
             root = Path(temp)
