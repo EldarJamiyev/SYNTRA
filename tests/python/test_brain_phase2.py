@@ -262,6 +262,56 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(set(raw_files), {str(first_source.resolve()), str(second_source.resolve())})
             self.assertEqual(raw_bytes, first_source.stat().st_size + second_source.stat().st_size)
 
+    def test_excluded_curriculum_jsonl_is_omitted_from_both_raw_and_structured_pretraining(self):
+        from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets, train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-curriculum-exclusion-") as temp:
+            root = Path(temp)
+            source = root / "source.py"
+            docs = root / "README.md"
+            curriculum = root / "workspace-instructions.jsonl"
+            source.write_text("def source_function(value):\\n    return value + 3\\n" * 100, encoding="utf-8")
+            docs.write_text("# Repository corpus\\n" + ("source documentation and design notes\\n" * 500), encoding="utf-8")
+            curriculum.write_text(
+                "\\n".join(json.dumps({
+                    "prompt": f"Implement repository function number {index}.",
+                    "completion": f"def generated_{index}(value): return value + {index}",
+                    "split_group": f"module:{index}",
+                }) for index in range(6)),
+                encoding="utf-8",
+            )
+            excluded = {str(curriculum.resolve())}
+
+            records, names, _size, _digest, _scan, _count, fallbacks = _read_instruction_jsonl_datasets(
+                [root], 4 * 1024 * 1024, exclude_paths=excluded
+            )
+            self.assertEqual(records, [])
+            self.assertNotIn(str(curriculum.resolve()), names)
+            self.assertNotIn(str(curriculum.resolve()), fallbacks)
+
+            train_text, validation_text, raw_names, _raw_size, _raw_digest = _read_local_datasets(
+                [root], 4 * 1024 * 1024, exclude_paths=excluded
+            )
+            self.assertNotIn("Implement repository function number", train_text + validation_text)
+            self.assertNotIn(str(curriculum.resolve()), raw_names)
+
+            checkpoint = root / "checkpoint.pt"
+            result = train(
+                [root],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                exclude_dataset_paths=[curriculum],
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["instruction_examples"], 0)
+            self.assertEqual(set(result["dataset_files"]), {str(source.resolve()), str(docs.resolve())})
+
     def test_structured_jsonl_training_saves_masked_training_format(self):
         from brain.checkpoint import load_checkpoint
         from brain.train import train
