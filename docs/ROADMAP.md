@@ -182,8 +182,11 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Harden Docker check containers with init, private IPC, bounded swap and an open-file limit; retain no-network, read-only root, dropped capabilities, no-new-privileges and candidate-only write mount.
 - [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
 - [x] Add checkpoint-aware context sizing with output caps and safety reserves; derive exact prompt counts from SYNTRA's saved tokenizer.
-- [ ] Build a cross-language empirical model capability matrix from repeatable runs across the available JavaScript, Python, Go and Rust fixtures.
-- [ ] Expand the raw native-model suite beyond its initial five Python tasks with independent, source-reviewed fixtures in JavaScript, Go and Rust; keep each language's toolchain availability and baseline validity explicit.
+- [ ] Build a cross-language empirical model capability matrix from repeatable live-checkpoint runs across the available TypeScript, Python, Go and Rust fixtures. Implementation and fixture baselines are not a substitute for measured model outcomes.
+- [x] Expand the raw native-model suite from its initial Python-only baseline to version 1.2.0 with 12 independently validated held-out fixtures: nine Python tasks plus TypeScript, Go and Rust tasks.
+- [x] Add a multi-file task that requires coordinated edits across two Python modules; present all connected source files in one prompt and require one exact, non-duplicated changed-path set.
+- [x] Add language-specific offline runtime selection, compiler/test validation, local-image-only Docker preflight, and per-language score breakdowns without combining the direct-model track with the full-agent suite.
+- [x] Record exact prompt-token count and context-window utilization per task; reject over-context prompts and truncated generation streams rather than silently dropping source context.
 - [ ] Establish a repeatable raw-checkpoint benchmark baseline on target hardware before comparing training/curriculum changes; do not use training loss as a substitute for task-level outcomes.
 - [x] Add bounded, validated training-loss history to native source pretraining and instruction fine-tuning checkpoints, including inference sidecars and model status.
 - [x] Add a direct native-model benchmark track that calls the checkpoint streaming runtime, hides target/regression tests from model context, reuses SYNTRA's production patch validator, and separates patch validity, target completion, and regression prevention.
