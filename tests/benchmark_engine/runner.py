@@ -300,21 +300,172 @@ def apply_patch(workspace: Path, patch: dict[str, Any], expected_paths: list[str
             payload_file.unlink()
 
 
-def syntax_check(workspace: Path, paths: list[str]) -> dict[str, Any]:
+def _runtime_environment(language: str, workspace: Path, *, in_container: bool) -> dict[str, str]:
+    if in_container:
+        env = {"HOME": "/tmp", "TMPDIR": "/build"}
+        if language == "python":
+            env.update({"PYTHONPATH": "/workspace", "PYTHONDONTWRITEBYTECODE": "1"})
+        elif language == "typescript":
+            env["SYNTRA_TYPESCRIPT_ROOT"] = "/opt/typescript"
+        elif language == "go":
+            env.update({
+                "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off",
+                "GOFLAGS": "-mod=readonly", "GOCACHE": "/build/go-cache",
+                "GOTMPDIR": "/build/go-tmp", "GOMODCACHE": "/build/go-mod-cache",
+            })
+        elif language == "rust":
+            env.update({
+                "CARGO_HOME": "/tmp/cargo-home", "CARGO_TARGET_DIR": "/build/cargo-target",
+                "CARGO_NET_OFFLINE": "true", "CARGO_INCREMENTAL": "0",
+            })
+        return env
+
+    env = dict(os.environ)
+    runtime_root = workspace.parent / (".syntra-runtime-" + language)
+    runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    env["HOME"] = str(runtime_root)
+    if language == "python":
+        env.update({
+            "SYNTRA_BENCHMARK_WORKSPACE": str(workspace.resolve()),
+            "PYTHONPATH": str(workspace.resolve()),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        })
+    elif language == "typescript":
+        if not TYPESCRIPT_ROOT.is_dir():
+            raise BenchmarkError("The locked local TypeScript dependency is missing; install the repository's npm dependencies before evaluating TypeScript tasks.")
+        env["SYNTRA_TYPESCRIPT_ROOT"] = str(TYPESCRIPT_ROOT.resolve())
+    elif language == "go":
+        for name in ("go-cache", "go-tmp", "go-mod-cache"):
+            (runtime_root / name).mkdir(mode=0o700, exist_ok=True)
+        env.update({
+            "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off",
+            "GOFLAGS": "-mod=readonly", "GOCACHE": str(runtime_root / "go-cache"),
+            "GOTMPDIR": str(runtime_root / "go-tmp"), "GOMODCACHE": str(runtime_root / "go-mod-cache"),
+        })
+    elif language == "rust":
+        (runtime_root / "cargo-home").mkdir(mode=0o700, exist_ok=True)
+        (runtime_root / "cargo-target").mkdir(mode=0o700, exist_ok=True)
+        env.update({
+            "CARGO_HOME": str(runtime_root / "cargo-home"),
+            "CARGO_TARGET_DIR": str(runtime_root / "cargo-target"),
+            "CARGO_NET_OFFLINE": "true", "CARGO_INCREMENTAL": "0",
+        })
+    return env
+
+
+def run_environment_command(
+    *,
+    language: str,
+    isolation: dict[str, Any],
+    workspace: Path,
+    argv: list[str],
+    run_id: str,
+    phase: str,
+    hidden_dir: Path | None = None,
+    timeout_seconds: int = COMMAND_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Run a fixed language command in the selected host or networkless Docker boundary."""
+    if language not in SUPPORTED_LANGUAGES:
+        raise BenchmarkError("Unsupported benchmark language: " + language)
+    if isolation["mode"] == "host-opt-in":
+        env = _runtime_environment(language, workspace, in_container=False)
+        return run_command(argv, cwd=workspace, env=env, timeout_seconds=timeout_seconds)
+
+    docker = shutil.which("docker")
+    if not docker:
+        raise BenchmarkError("Docker disappeared after environment preflight.")
+    if language == "typescript" and not TYPESCRIPT_ROOT.is_dir():
+        raise BenchmarkError("The local TypeScript compiler package is unavailable for the isolated Node environment.")
+    name = "syntra-bench-" + run_id[-8:] + "-" + language + "-" + phase + "-" + uuid.uuid4().hex[:6]
+    command = [
+        docker, "run", "--rm", "--pull=never", "--name", name,
+        "--network", "none", "--read-only",
+        "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=256m,uid=65534,gid=65534,mode=700",
+        "--tmpfs", "/build:rw,nosuid,nodev,size=512m,uid=65534,gid=65534,mode=700",
+        "--pids-limit", "96", "--memory", "768m", "--cpus", "1",
+        "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "65534:65534",
+        "--mount", f"type=bind,src={workspace.resolve()},dst=/workspace,readonly",
+    ]
+    if hidden_dir is not None:
+        if language == "rust":
+            command.extend(["--mount", f"type=bind,src={hidden_dir.resolve()},dst=/workspace/tests,readonly"])
+        else:
+            command.extend(["--mount", f"type=bind,src={hidden_dir.resolve()},dst=/evaluation,readonly"])
+    if language == "typescript":
+        command.extend([
+            "--mount", f"type=bind,src={TYPESCRIPT_ROOT.resolve()},dst=/opt/typescript,readonly",
+            "--mount", f"type=bind,src={TYPESCRIPT_TEST_RUNNER.resolve()},dst=/benchmark/typescript_test_runner.mjs,readonly",
+        ])
+    for key, value in _runtime_environment(language, workspace, in_container=True).items():
+        command.extend(["--env", key + "=" + value])
+    command.extend(["--workdir", "/workspace", isolation["image"], *argv])
+    return run_command(
+        command, cwd=workspace, env=dict(os.environ), timeout_seconds=timeout_seconds,
+        cleanup_command=[docker, "kill", name],
+    )
+
+
+def syntax_check(
+    workspace: Path,
+    paths: list[str],
+    *,
+    language: str = "python",
+    isolation: dict[str, Any] | None = None,
+    run_id: str = "syntax-check",
+) -> dict[str, Any]:
     checked = []
     try:
+        root = workspace.resolve(strict=True)
         for relative in paths:
             pure = PurePosixPath(relative)
             if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts) or "\\" in relative:
                 raise BenchmarkError("Invalid syntax-check path.")
-            target = (workspace / Path(*pure.parts)).resolve(strict=True)
-            if not _is_within(workspace.resolve(strict=True), target) or target.suffix.lower() not in {".py", ".pyi"}:
-                raise BenchmarkError("No supported syntax check for " + relative)
-            ast.parse(target.read_text(encoding="utf-8"), filename=relative, type_comments=True)
+            target = (root / Path(*pure.parts)).resolve(strict=True)
+            if not _is_within(root, target):
+                raise BenchmarkError("Syntax-check path escapes the task workspace.")
             checked.append(relative)
-        return {"passed": True, "checked_paths": checked, "error": None}
-    except (BenchmarkError, SyntaxError, UnicodeError, OSError) as exc:
+        if language == "python":
+            for relative in checked:
+                target = root / Path(*PurePosixPath(relative).parts)
+                if target.suffix.lower() not in {".py", ".pyi"}:
+                    raise BenchmarkError("No supported Python syntax check for " + relative)
+                ast.parse(target.read_text(encoding="utf-8"), filename=relative, type_comments=True)
+            return {"passed": True, "checked_paths": checked, "error": None}
+        if isolation is None:
+            raise BenchmarkError("A language-specific syntax check requires a selected runtime environment.")
+        if language == "typescript":
+            compiler = "/opt/typescript/bin/tsc" if isolation["mode"] == "docker-no-network" else str(TYPESCRIPT_ROOT / "bin" / "tsc")
+            source_paths = [
+                ("/workspace/" if isolation["mode"] == "docker-no-network" else str(root) + os.sep)
+                + relative.replace("/", os.sep)
+                for relative in checked
+            ]
+            command = [
+                "node", compiler, "--noEmit", "--strict", "--target", "ES2022",
+                "--module", "ESNext", "--moduleResolution", "Bundler", "--skipLibCheck",
+                "--pretty", "false", *source_paths,
+            ]
+        elif language == "go":
+            command = ["go", "test", "./..."]
+        elif language == "rust":
+            manifest = "/workspace/Cargo.toml" if isolation["mode"] == "docker-no-network" else str(root / "Cargo.toml")
+            command = ["cargo", "check", "--offline", "--locked", "--manifest-path", manifest]
+        else:
+            raise BenchmarkError("No syntax compiler is configured for " + language + ".")
+        outcome = run_environment_command(
+            language=language, isolation=isolation, workspace=root, argv=command,
+            run_id=run_id, phase="syntax", timeout_seconds=60,
+        )
+        passed = outcome["returncode"] == 0 and not outcome["timed_out"] and not outcome["output_limited"]
+        diagnostic = (outcome["stderr"] + "\n" + outcome["stdout"]).strip()
+        return {
+            "passed": passed, "checked_paths": checked,
+            "error": None if passed else diagnostic[-1000:] or "Language compiler exited unsuccessfully.",
+        }
+    except (BenchmarkError, SyntaxError, UnicodeError, OSError, RuntimeError, ValueError) as exc:
         return {"passed": False, "checked_paths": checked, "error": str(exc)[:1000]}
+
+
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     try:
         if os.name == "nt":
