@@ -1038,7 +1038,7 @@ async function reviewCandidatePatch({
   return { status: review.verdict === "accept" ? "accepted" : "rejected", review };
 }
 
-async function validatePatch(root, payload, expectedBaseHashes = null) {
+export async function validatePatch(root, payload, expectedBaseHashes = null) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("Structured patch must be a JSON object.");
   if (typeof payload.summary !== "string" || !payload.summary.trim()) throw new Error("Structured patch is missing a short summary.");
   if (!Array.isArray(payload.edits) || payload.edits.length < 1 || payload.edits.length > 6) throw new Error("Patch must contain between 1 and 6 file edits.");
@@ -1139,7 +1139,7 @@ async function copySandbox(root) {
 }
 
 
-async function writeCandidateChanges(sandboxRoot, changes) {
+export async function writeCandidateChanges(sandboxRoot, changes) {
   for (const change of changes) {
     const target = path.resolve(sandboxRoot, change.path.split("/").join(path.sep));
     if (!within(sandboxRoot, target)) throw new Error("Candidate path escaped the sandbox.");
