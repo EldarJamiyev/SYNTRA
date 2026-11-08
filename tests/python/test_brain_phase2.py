@@ -280,7 +280,13 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 }) for index in range(6)),
                 encoding="utf-8",
             )
-            excluded = {str(curriculum.resolve())}
+            benchmark_artifacts = root / "data" / "benchmarks"
+            benchmark_artifacts.mkdir(parents=True)
+            (benchmark_artifacts / "old-run.json").write_text(
+                json.dumps({"model": {"checkpoint_sha256": "not-source-code"}}),
+                encoding="utf-8",
+            )
+            excluded = {str(curriculum.resolve()), str(benchmark_artifacts.resolve())}
 
             records, names, _size, _digest, _scan, _count, fallbacks = _read_instruction_jsonl_datasets(
                 [root], 4 * 1024 * 1024, exclude_paths=excluded
@@ -306,7 +312,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
                 evaluation_batches=1,
                 save_every_steps=2,
                 device_name="cpu",
-                exclude_dataset_paths=[curriculum],
+                exclude_dataset_paths=[curriculum, benchmark_artifacts],
             )
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["instruction_examples"], 0)
