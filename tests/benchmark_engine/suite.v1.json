@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "description": "Held-out raw-native-model coding benchmark. Evaluation scripts remain outside the model-visible workspace.",
+  "task_count": 5,
+  "tasks": [
+    {
+      "id": "python-slugify",
+      "category": "string-processing",
+      "title": "Normalize strings into deterministic ASCII slugs",
+      "workspace": "fixtures/python-slugify/workspace",
+      "hidden_evaluation": "hidden/python-slugify",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/slug.py"
+      ],
+      "goal": "Implement slugify(value: str | None) in src/slug.py. Return an empty string for None. Otherwise lowercase the input, replace each consecutive run of characters outside ASCII letters and digits with one hyphen, and trim leading/trailing hyphens. Keep the existing function name and do not add dependencies."
+    },
+    {
+      "id": "python-clamp",
+      "category": "numeric-boundaries",
+      "title": "Implement inclusive numeric clamping",
+      "workspace": "fixtures/python-clamp/workspace",
+      "hidden_evaluation": "hidden/python-clamp",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/math_utils.py"
+      ],
+      "goal": "Implement clamp(value: float, minimum: float, maximum: float) in src/math_utils.py. Return minimum below the lower bound, maximum above the upper bound, and the original value inside the inclusive range. Assume minimum <= maximum. Do not mutate inputs."
+    },
+    {
+      "id": "python-deep-merge",
+      "category": "configuration",
+      "title": "Merge nested configuration mappings without mutation",
+      "workspace": "fixtures/python-deep-merge/workspace",
+      "hidden_evaluation": "hidden/python-deep-merge",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/config.py"
+      ],
+      "goal": "Implement merge_config(base, override) in src/config.py. Recursively merge nested dictionaries, preserve base keys that are absent from override, and replace lists rather than merging their elements. Return a new dictionary and do not mutate either input."
+    },
+    {
+      "id": "python-duration-format",
+      "category": "time-formatting",
+      "title": "Format elapsed seconds into compact duration units",
+      "workspace": "fixtures/python-duration-format/workspace",
+      "hidden_evaluation": "hidden/python-duration-format",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/duration.py"
+      ],
+      "goal": "Implement format_duration(total_seconds) in src/duration.py. Accept a non-negative finite number of seconds, floor fractional seconds, and format non-zero units as compact tokens separated by one space: hours as h, minutes as m, seconds as s. Omit zero-valued units, except return 0s for zero. Do not add dependencies."
+    },
+    {
+      "id": "python-array-chunk",
+      "category": "data-structures",
+      "title": "Split a sequence into ordered fixed-size chunks",
+      "workspace": "fixtures/python-array-chunk/workspace",
+      "hidden_evaluation": "hidden/python-array-chunk",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/chunks.py"
+      ],
+      "goal": "Implement chunk_array(values, size) in src/chunks.py. Return consecutive ordered lists, each no larger than size. Preserve item order and values. Return an empty list when values is empty. For a non-positive or non-integer size, return an empty list. Do not mutate the input."
+    }
+  ]
+}
