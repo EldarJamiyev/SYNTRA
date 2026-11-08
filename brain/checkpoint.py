@@ -124,6 +124,7 @@ def save_checkpoint(
         "config": config.to_dict(),
         "vocab_size": tokenizer.vocab_size,
         "parameter_count": int(payload.get("parameter_count", 0)),
+        "estimated_training_memory_bytes": int(payload.get("estimated_training_memory_bytes", 0)),
         "updated_at": payload.get("updated_at"),
     }
     _atomic_write_json(checkpoint_metadata_path(destination), metadata)
