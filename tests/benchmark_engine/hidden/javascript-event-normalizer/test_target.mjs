@@ -27,3 +27,19 @@ assert.equal(normalizeEvent({ type: "   ", timestamp: 1, payload: {} }), null);
 assert.equal(normalizeEvent({ type: "ready", timestamp: -1, payload: {} }), null);
 assert.equal(normalizeEvent({ type: "ready", timestamp: true, payload: {} }), null);
 assert.equal(normalizeEvent({ type: "ready", timestamp: 1, payload: [] }), null);
+
+const originalPayload = { nested: { counter: 1 } };
+const directObject = normalizeEvent({
+  type: " DEVICE.READY ",
+  timestamp: 42,
+  payload: originalPayload,
+});
+assert.deepEqual(directObject, {
+  type: "device.ready",
+  timestamp: 42,
+  payload: { nested: { counter: 1 } },
+});
+assert.notEqual(directObject.payload, originalPayload, "Object input must not leak the caller's payload reference.");
+assert.notEqual(directObject.payload.nested, originalPayload.nested, "Nested payload values must be deep-cloned.");
+directObject.payload.nested.counter = 2;
+assert.equal(originalPayload.nested.counter, 1, "Mutating the normalized result must not mutate the caller's input.");
