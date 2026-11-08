@@ -704,6 +704,8 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
         f"- SFT result: {training.get('sft_status', 'not run')}",
         f"- Curriculum dataset: {training.get('curriculum_dataset', 'not generated')}",
         f"- Checkpoint: {training.get('checkpoint', 'not available')}",
+        f"- Pretraining device: {training.get('pretraining_result', {}).get('device', 'not available') if isinstance(training.get('pretraining_result'), dict) else 'not available'}",
+        f"- Estimated pretraining working set: {training.get('pretraining_result', {}).get('estimated_training_memory_bytes', 'not available') if isinstance(training.get('pretraining_result'), dict) else 'not available'} bytes",
         f"- Benchmark reports: {len([item for item in ordered if item.get('status') == 'completed'])} verified, "
         f"{len([item for item in ordered if item.get('status') != 'completed'])} failed or unverified",
         "",
