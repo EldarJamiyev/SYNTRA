@@ -2,7 +2,7 @@
 
 ## Local API boundary
 
-SYNTRA binds its application service to loopback. The local API validates the Host header, accepts only configured loopback browser origins, ignores forwarded-host headers, and requires a process-scoped bearer session for non-public API routes. The frontend keeps that session token in memory rather than local storage.
+SYNTRA's Node workspace API, Vite development server, and Vite preview server bind to loopback (`127.0.0.1`). The Vite host allowlist accepts only `localhost` and `127.0.0.1`; the maintained npm scripts do not expose the frontend on all network interfaces. The local API validates the Host header, accepts only configured loopback browser origins, ignores forwarded-host headers, and requires a process-scoped bearer session for non-public API routes. The frontend keeps that session token in memory rather than local storage.
 
 Privileged tool calls use short-lived, one-time capabilities bound to the resolved workspace, tool name, and exact input. Legacy apply/check endpoints use the same capability mechanism. A caller-supplied boolean is not an approval capability.
 
