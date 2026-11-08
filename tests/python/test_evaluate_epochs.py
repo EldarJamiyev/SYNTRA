@@ -25,6 +25,7 @@ class Phase4Milestone4ProfileTests(unittest.TestCase):
         self.assertEqual(pre["minimum_learning_rate"], 1e-5)
         self.assertEqual(pre["warmup_steps"], 100)
         self.assertEqual(pre["decay_steps"], 5000)
+        self.assertEqual(pre["gradient_clip_norm"], 1.0)
         self.assertEqual(profile["evaluation"]["every_steps"], 500)
         self.assertEqual(profile["evaluation"]["isolation"], "docker")
         self.assertEqual(profile["checkpoint"], "data/checkpoints/staging/syntra-brain.pt")
