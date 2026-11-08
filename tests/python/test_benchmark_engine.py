@@ -144,6 +144,32 @@ class RawModelBenchmarkTests(unittest.TestCase):
             self.assertIn("single JSON response", prompt)
             self.assertNotIn("test_target.py", prompt)
 
+    def test_javascript_runtime_checks_and_executes_hidden_modules_against_workspace(self):
+        isolation = {"mode": "host-opt-in", "image": None, "image_id": None}
+        with tempfile.TemporaryDirectory(prefix="syntra-javascript-runtime-") as temp:
+            workspace = Path(temp)
+            source = workspace / "src" / "value.mjs"
+            source.parent.mkdir()
+            source.write_text("export function readValue() { return 41; }\\n", encoding="utf-8")
+            syntax = runner.syntax_check(
+                workspace, ["src/value.mjs"], language="javascript",
+                isolation=isolation, run_id="javascript-smoke",
+            )
+            self.assertTrue(syntax["passed"], syntax["error"])
+            hidden = (runner.ENGINE_ROOT / "hidden" / "javascript-runtime").resolve()
+            target = runner.run_hidden_test(
+                isolation=isolation, workspace=workspace, hidden_dir=hidden,
+                test_name="test_target.mjs", run_id="javascript-smoke", phase="target",
+                language="javascript",
+            )
+            regression = runner.run_hidden_test(
+                isolation=isolation, workspace=workspace, hidden_dir=hidden,
+                test_name="test_regression.mjs", run_id="javascript-smoke", phase="regression",
+                language="javascript",
+            )
+            self.assertEqual(target["returncode"], 0, target["stdout"] + target["stderr"])
+            self.assertEqual(regression["returncode"], 0, regression["stdout"] + regression["stderr"])
+
     def test_every_fixture_has_a_failing_target_and_passing_regression_baseline(self):
         isolation = {"mode": "host-opt-in", "image": None, "image_id": None}
         for task in self.suite["tasks"]:
