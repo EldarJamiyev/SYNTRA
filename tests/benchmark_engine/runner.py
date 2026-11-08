@@ -305,6 +305,8 @@ def _runtime_environment(language: str, workspace: Path, *, in_container: bool) 
         env = {"HOME": "/tmp", "TMPDIR": "/build"}
         if language == "python":
             env.update({"PYTHONPATH": "/workspace", "PYTHONDONTWRITEBYTECODE": "1", "SYNTRA_BENCHMARK_WORKSPACE": "/workspace"})
+        elif language == "javascript":
+            env["SYNTRA_BENCHMARK_WORKSPACE"] = "/workspace"
         elif language == "typescript":
             env["SYNTRA_TYPESCRIPT_ROOT"] = "/opt/typescript"
         elif language == "go":
@@ -330,6 +332,8 @@ def _runtime_environment(language: str, workspace: Path, *, in_container: bool) 
             "PYTHONPATH": str(workspace.resolve()),
             "PYTHONDONTWRITEBYTECODE": "1",
         })
+    elif language == "javascript":
+        env["SYNTRA_BENCHMARK_WORKSPACE"] = str(workspace.resolve())
     elif language == "typescript":
         if not TYPESCRIPT_ROOT.is_dir():
             raise BenchmarkError("The locked local TypeScript dependency is missing; install the repository's npm dependencies before evaluating TypeScript tasks.")
