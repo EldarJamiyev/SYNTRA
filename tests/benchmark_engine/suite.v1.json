@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Held-out raw-native-model coding benchmark. Evaluation scripts remain outside the model-visible workspace.",
-  "task_count": 5,
+  "task_count": 8,
   "tasks": [
     {
       "id": "python-slugify",
@@ -68,6 +68,45 @@
         "src/chunks.py"
       ],
       "goal": "Implement chunk_array(values, size) in src/chunks.py. Return consecutive ordered lists, each no larger than size. Preserve item order and values. Return an empty list when values is empty. For a non-positive or non-integer size, return an empty list. Do not mutate the input."
+    },
+    {
+      "id": "python-safe-path",
+      "category": "path-security",
+      "title": "Normalize and reject unsafe relative paths",
+      "workspace": "fixtures/python-safe-path/workspace",
+      "hidden_evaluation": "hidden/python-safe-path",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/path_utils.py"
+      ],
+      "goal": "Implement normalize_relative_path(value) in src/path_utils.py. Accept only strings. Normalize backslashes to forward slashes, collapse repeated separators, and remove '.' segments. Reject empty/whitespace-only paths, NUL characters, absolute POSIX paths, UNC paths, Windows drive-prefixed paths, and any '..' segment by returning None. Otherwise return the normalized relative path. Preserve Unicode filename characters. Do not use platform-dependent path resolution or add dependencies."
+    },
+    {
+      "id": "python-header-lookup",
+      "category": "http-headers",
+      "title": "Look up HTTP headers case-insensitively",
+      "workspace": "fixtures/python-header-lookup/workspace",
+      "hidden_evaluation": "hidden/python-header-lookup",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/headers.py"
+      ],
+      "goal": "Implement lookup_header(headers, name, default=None) in src/headers.py. Match header names using case-insensitive Unicode casefold semantics. Return the value belonging to the first matching key in the input mapping's iteration order. Return default when no matching key exists. Do not mutate the mapping or normalize returned values."
+    },
+    {
+      "id": "python-retry-backoff",
+      "category": "retry-control",
+      "title": "Calculate bounded exponential retry delay",
+      "workspace": "fixtures/python-retry-backoff/workspace",
+      "hidden_evaluation": "hidden/python-retry-backoff",
+      "target_test": "test_target.py",
+      "regression_test": "test_regression.py",
+      "expected_changed_paths": [
+        "src/backoff.py"
+      ],
+      "goal": "Implement calculate_backoff(attempt, base_delay, max_delay) in src/backoff.py. Attempts are 1-based. For attempt less than one return 0.0. Otherwise return min(base_delay * 2 ** (attempt - 1), max_delay) for finite non-negative delay inputs. Avoid excessive intermediate values or overflow for very large attempt values by respecting the cap. Do not mutate inputs or add dependencies."
     }
   ]
 }
