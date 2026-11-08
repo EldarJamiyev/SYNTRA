@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 TESTS_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TESTS_ROOT.parent
@@ -93,6 +94,71 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertEqual(runner.resolve_environment("javascript", {"javascript": "node:20-slim"})["image"], "node:20-slim")
         with self.assertRaises(ValueError):
             runner.resolve_environment("unknown")
+
+    def test_docker_preflight_records_a_full_immutable_image_id(self):
+        image_id = "sha256:" + ("a" * 64)
+        with mock.patch.object(runner.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            runner,
+            "run_command",
+            return_value={"returncode": 0, "stdout": image_id + "\\n", "stderr": "", "timed_out": False, "output_limited": False, "elapsed_ms": 1},
+        ):
+            isolation = runner.prepare_isolation("docker", "node:20-slim")
+        self.assertEqual(isolation["image"], "node:20-slim")
+        self.assertEqual(isolation["image_id"], image_id)
+        self.assertEqual(isolation["mode"], "docker-no-network")
+
+    def test_docker_preflight_rejects_malformed_image_identity(self):
+        for image_id in ("sha256:short", "node:20-slim", "sha256:" + ("g" * 64)):
+            with self.subTest(image_id=image_id), mock.patch.object(
+                runner.shutil, "which", return_value="/usr/bin/docker"
+            ), mock.patch.object(
+                runner,
+                "run_command",
+                return_value={"returncode": 0, "stdout": image_id + "\\n", "stderr": "", "timed_out": False, "output_limited": False, "elapsed_ms": 1},
+            ):
+                with self.assertRaisesRegex(runner.BenchmarkError, "valid immutable image ID"):
+                    runner.prepare_isolation("docker", "node:20-slim")
+
+    def test_docker_execution_uses_the_preflight_image_id_not_its_mutable_tag(self):
+        image_id = "sha256:" + ("b" * 64)
+        with tempfile.TemporaryDirectory(prefix="syntra-docker-image-id-") as temp:
+            workspace = Path(temp)
+            isolation = {"mode": "docker-no-network", "image": "node:20-slim", "image_id": image_id}
+            outcome = {"returncode": 0, "timed_out": False, "output_limited": False, "stdout": "v20\\n", "stderr": "", "elapsed_ms": 3}
+            with mock.patch.object(runner.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+                runner, "run_command", return_value=outcome
+            ) as command_runner:
+                result = runner.run_environment_command(
+                    language="javascript",
+                    isolation=isolation,
+                    workspace=workspace,
+                    argv=["node", "--version"],
+                    run_id="raw-model-image-id-test",
+                    phase="preflight-identity",
+                )
+        command = command_runner.call_args.args[0]
+        self.assertIn("--pull=never", command)
+        self.assertIn(image_id, command)
+        self.assertNotIn("node:20-slim", command)
+        self.assertEqual(result, outcome)
+
+    def test_docker_execution_rejects_missing_or_mutable_image_identity(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-docker-image-guard-") as temp:
+            for image_id in (None, "node:20-slim", "sha256:short"):
+                isolation = {"mode": "docker-no-network", "image": "node:20-slim", "image_id": image_id}
+                with self.subTest(image_id=image_id), mock.patch.object(
+                    runner.shutil, "which", return_value="/usr/bin/docker"
+                ), mock.patch.object(runner, "run_command") as command_runner:
+                    with self.assertRaisesRegex(runner.BenchmarkError, "immutable image ID"):
+                        runner.run_environment_command(
+                            language="javascript",
+                            isolation=isolation,
+                            workspace=Path(temp),
+                            argv=["node", "--version"],
+                            run_id="raw-model-image-id-reject",
+                            phase="preflight-identity",
+                        )
+                    command_runner.assert_not_called()
 
     def test_suite_rejects_a_test_extension_that_does_not_match_its_language(self):
         invalid = copy.deepcopy(self.suite)
