@@ -1,5 +1,7 @@
+import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 try:
@@ -89,6 +91,567 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         path.write_text(source, encoding="utf-8")
         return source
 
+    def test_instruction_context_blocks_mask_prompt_and_supervise_response(self):
+        from brain.tokenizer import BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        records = [{
+            "prompt": "Write a function that returns the larger integer.",
+            "completion": "def larger(a, b): return a if a >= b else b",
+        }]
+        tokenizer = BytePairTokenizer.empty()
+        inputs, targets = _instruction_context_blocks(records, tokenizer, block_size=128)
+
+        self.assertEqual(len(inputs), 1)
+        self.assertEqual(len(targets), 1)
+        prompt_prefix = "Instruction:\n" + records[0]["prompt"] + "\nResponse:\n"
+        prompt_token_count = len(tokenizer.encode(prompt_prefix))
+        self.assertTrue(all(token == -100 for token in targets[0][:prompt_token_count]))
+        self.assertNotEqual(targets[0][prompt_token_count], -100)
+        self.assertIn(257, targets[0], "EOS must remain supervised after the response.")
+
+    def test_structured_jsonl_reader_and_plain_text_fallback(self):
+        from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-jsonl-loader-") as temp:
+            root = Path(temp)
+            structured = root / "instructions.jsonl"
+            structured.write_text(
+                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values."}) + "\n" +
+                json.dumps({"prompt": "Explain multiplication.", "completion": "Multiply the two values."}),
+                encoding="utf-8",
+            )
+            plain = root / "legacy.jsonl"
+            plain.write_text("legacy source text\nwith a second line\n" * 100, encoding="utf-8")
+            long_plain = root / "legacy-long-line.jsonl"
+            long_plain.write_text("long raw text fallback " + ("x" * (1024 * 1024 + 1)), encoding="utf-8")
+
+            (
+                records,
+                files,
+                byte_count,
+                fingerprint,
+                scan_bytes,
+                scan_files,
+                fallback_files,
+            ) = _read_instruction_jsonl_datasets([root], 2 * 1024 * 1024)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(records[0]["prompt"], "Explain addition.")
+            self.assertEqual(records[1]["completion"], "Multiply the two values.")
+            self.assertEqual(len(files), 1)
+            self.assertGreater(byte_count, 0)
+            self.assertEqual(len(fingerprint), 64)
+            self.assertEqual(scan_files, 3)
+            self.assertEqual(
+                set(fallback_files),
+                {str(plain.resolve()), str(long_plain.resolve())},
+            )
+
+            train_text, validation_text, raw_files, _, _ = _read_local_datasets(
+                [root],
+                2 * 1024 * 1024 - scan_bytes,
+                exclude_paths=set(files),
+                preloaded_files=fallback_files,
+                already_scanned_files=scan_files,
+            )
+            self.assertIn("legacy source text", train_text + validation_text)
+            self.assertIn("long raw text fallback", train_text + validation_text)
+            self.assertEqual(len(raw_files), 2)
+
+    def test_jsonl_instruction_schema_fails_closed_after_detection(self):
+        from brain.train import _read_instruction_jsonl_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-jsonl-schema-") as temp:
+            root = Path(temp)
+            malformed_json = root / "malformed.jsonl"
+            malformed_json.write_text(
+                json.dumps({"Instruction": "Explain alpha.", "Response": "Alpha is valid."})
+                + "\n"
+                + '{"Instruction": "Explain beta.",',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"Invalid instruction JSON.*malformed.jsonl:2"):
+                _read_instruction_jsonl_datasets([malformed_json], 1024 * 1024)
+
+            malformed_fields = root / "missing-response.jsonl"
+            malformed_fields.write_text(
+                json.dumps({"Instruction": "Explain alpha.", "Response": "Alpha is valid."})
+                + "\n"
+                + json.dumps({"Instruction": "Explain beta."}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"Incomplete instruction schema.*missing-response.jsonl:2"):
+                _read_instruction_jsonl_datasets([malformed_fields], 1024 * 1024)
+
+            invalid_group = root / "invalid-group.jsonl"
+            invalid_group.write_text(
+                json.dumps({
+                    "Instruction": "Explain alpha.",
+                    "Response": "Alpha is valid.",
+                    "split_group": ["not", "a", "string"],
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"split_group.*invalid-group.jsonl:1"):
+                _read_instruction_jsonl_datasets([invalid_group], 1024 * 1024)
+
+            generic_jsonl = root / "generic.jsonl"
+            generic_jsonl.write_text(
+                json.dumps({"event": "startup", "status": "ready"}) + "\n",
+                encoding="utf-8",
+            )
+            (
+                records,
+                structured_paths,
+                _instruction_bytes,
+                _instruction_hash,
+                _scan_bytes,
+                _scan_files,
+                fallback_files,
+            ) = _read_instruction_jsonl_datasets([generic_jsonl], 1024 * 1024)
+            self.assertEqual(records, [])
+            self.assertEqual(structured_paths, [])
+            self.assertIn(str(generic_jsonl.resolve()), fallback_files)
+
+    def test_multiple_selected_roots_keep_colliding_jsonl_paths_distinct(self):
+        from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-multi-root-jsonl-") as temp:
+            root = Path(temp)
+            first_root = root / "first"
+            second_root = root / "second"
+            first_root.mkdir()
+            second_root.mkdir()
+            first_source = first_root / "records.jsonl"
+            second_source = second_root / "records.jsonl"
+            first_source.write_text("raw fallback from first root\n", encoding="utf-8")
+            second_source.write_text("raw fallback from second root\n", encoding="utf-8")
+
+            (
+                records,
+                structured_files,
+                instruction_bytes,
+                _instruction_hash,
+                scan_bytes,
+                scan_files,
+                fallback_files,
+            ) = _read_instruction_jsonl_datasets(
+                [first_root, second_root],
+                1024 * 1024,
+            )
+            self.assertEqual(records, [])
+            self.assertEqual(structured_files, [])
+            self.assertEqual(instruction_bytes, 0)
+            self.assertEqual(scan_files, 2)
+            self.assertEqual(
+                {item[0] for item in fallback_files.values()},
+                {"records.jsonl", "selected-root-2/records.jsonl"},
+            )
+
+            train_text, validation_text, raw_files, raw_bytes, _raw_hash = _read_local_datasets(
+                [first_root, second_root],
+                1024 * 1024 - scan_bytes,
+                preloaded_files=fallback_files,
+                already_scanned_files=scan_files,
+            )
+            combined = train_text + validation_text
+            self.assertIn("first root", combined)
+            self.assertIn("second root", combined)
+            self.assertIn("# SYNTRA_SOURCE_FILE: records.jsonl", combined)
+            self.assertIn("# SYNTRA_SOURCE_FILE: selected-root-2/records.jsonl", combined)
+            self.assertEqual(set(raw_files), {str(first_source.resolve()), str(second_source.resolve())})
+            self.assertEqual(raw_bytes, first_source.stat().st_size + second_source.stat().st_size)
+
+    def test_structured_jsonl_training_saves_masked_training_format(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-jsonl-train-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            records = [
+                {"Instruction": "Write a function that adds two integers.", "Response": "def add(a, b): return a + b"},
+                {"Instruction": "Write a function that multiplies two integers.", "Response": "def multiply(a, b): return a * b"},
+                {"Instruction": "Write a function that clamps an integer.", "Response": "def clamp(x, low, high): return min(max(x, low), high)"},
+                {"Instruction": "Write a function that returns the larger integer.", "Response": "def larger(a, b): return max(a, b)"},
+            ]
+            dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            checkpoint = root / "checkpoints" / "instruction-model.pt"
+
+            result = train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=2,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertEqual(result["instruction_examples"], 4)
+            self.assertGreater(result["training_tokens"], 0)
+            self.assertGreater(result["validation_tokens"], 0)
+            self.assertEqual(
+                result["supervised_tokens_processed"],
+                result["training_tokens"],
+                "one full epoch must process every supervised target exactly once",
+            )
+            self.assertEqual(result["throughput_basis"], "supervised_target_tokens")
+
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(saved["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertEqual(saved["instruction_example_count"], 4)
+            self.assertGreater(saved["training_context_blocks"], 0)
+
+            resumed = train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=2,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+                resume=True,
+            )
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(resumed["epoch"], 2)
+            self.assertEqual(resumed["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertGreater(resumed["step"], result["step"])
+            resumed_saved = load_checkpoint(checkpoint)
+            self.assertEqual(resumed_saved["training_data_format"], "instruction-jsonl-masked-v1")
+            self.assertEqual(resumed_saved["instruction_example_count"], 4)
+
+    def test_tokenizer_is_fitted_only_on_instruction_training_records(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.tokenizer import BytePairTokenizer
+        from brain.train import _split_instruction_records, train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-tokenizer-holdout-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            records = [
+                {
+                    "prompt": f"Write routine number {index}.",
+                    "completion": f"def routine_{index}(value): return value + {index}",
+                    "split_group": f"module:{index}",
+                }
+                for index in range(4)
+            ]
+            _training, validation = _split_instruction_records(records)
+            validation_prompts = {item["prompt"] for item in validation}
+            validation_marker = "VALIDATION_ONLY_TOKEN_SEQUENCE_ZEBRA_QUARTZ_"
+            for item in records:
+                if item["prompt"] in validation_prompts:
+                    item["completion"] = (
+                        "def validation_only(value): return "
+                        + validation_marker * 30
+                    )
+
+            training_records, validation_records = _split_instruction_records(records)
+            self.assertEqual(len(training_records), 3)
+            self.assertEqual(len(validation_records), 1)
+            training_text = "\n\n".join(
+                "Instruction:\n" + item["prompt"] + "\nResponse:\n" + item["completion"]
+                for item in training_records
+            )
+            full_text = "\n\n".join(
+                "Instruction:\n" + item["prompt"] + "\nResponse:\n" + item["completion"]
+                for item in records
+            )
+            expected_training_tokenizer = BytePairTokenizer.train_from_text(
+                training_text,
+                vocab_size=self._config().vocab_size,
+                max_training_bytes=1024,
+            )
+            full_dataset_tokenizer = BytePairTokenizer.train_from_text(
+                full_text,
+                vocab_size=self._config().vocab_size,
+                max_training_bytes=1024,
+            )
+            self.assertNotEqual(
+                expected_training_tokenizer,
+                full_dataset_tokenizer,
+                "the held-out completion must materially affect a tokenizer fitted on all records",
+            )
+
+            dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            checkpoint = root / "training-only-tokenizer.pt"
+            train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=2,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+                seed=1337,
+            )
+            saved = load_checkpoint(checkpoint)
+            actual_tokenizer = BytePairTokenizer.from_dict(saved["tokenizer"])
+            self.assertEqual(
+                actual_tokenizer,
+                expected_training_tokenizer,
+                "the persisted BPE merges must be learned from training prompts/responses only",
+            )
+
+    def test_mixed_raw_text_and_instruction_jsonl_training(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-mixed-training-") as temp:
+            root = Path(temp)
+            instructions = root / "instructions.jsonl"
+            records = [
+                {"Instruction": "Explain addition.", "Response": "Addition combines two values."},
+                {"Instruction": "Explain multiplication.", "Response": "Multiplication scales a value."},
+                {"Instruction": "Explain subtraction.", "Response": "Subtraction finds a difference."},
+                {"Instruction": "Explain division.", "Response": "Division splits a value into parts."},
+            ]
+            instructions.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            raw = root / "legacy.txt"
+            raw.write_text(("Legacy raw corpus remains part of causal language-model training.\n" * 120), encoding="utf-8")
+            checkpoint = root / "checkpoints" / "mixed-model.pt"
+
+            result = train(
+                [root],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=64,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=100,
+                device_name="cpu",
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["training_data_format"], "mixed-raw-and-instruction-jsonl-v1")
+            self.assertEqual(result["instruction_examples"], 4)
+            saved = load_checkpoint(checkpoint)
+            self.assertIn(str(raw.resolve()), saved["dataset_files"])
+            self.assertIn(str(instructions.resolve()), saved["dataset_files"])
+            self.assertGreater(result["training_context_blocks"], 0)
+            self.assertGreater(result["validation_context_blocks"], 0)
+
+    def test_structured_and_raw_jsonl_scans_share_file_and_byte_budgets_without_rereading(self):
+        import importlib
+        train_module = importlib.import_module("brain.train")
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-shared-dataset-budget-") as temp:
+            root = Path(temp)
+            structured = root / "instructions.jsonl"
+            structured_records = [
+                {"Instruction": "Explain alpha.", "Response": "Alpha is the first operation."},
+                {"Instruction": "Explain beta.", "Response": "Beta is the second operation."},
+            ]
+            structured.write_text(
+                "\n".join(json.dumps(item) for item in structured_records),
+                encoding="utf-8",
+            )
+            raw_jsonl = root / "legacy.jsonl"
+            raw_text = "Legacy raw language-model source remains supported.\n" * 10
+            raw_jsonl.write_text(raw_text, encoding="utf-8")
+            source = root / "module.py"
+            source_text = "def transform(value): return value + 1\n" * 5
+            source.write_text(source_text, encoding="utf-8")
+
+            real_reader = train_module._read_bounded_regular_file
+            with patch.object(train_module, "_read_bounded_regular_file", wraps=real_reader) as read_file:
+                (
+                    records,
+                    structured_paths,
+                    instruction_bytes,
+                    _instruction_hash,
+                    scan_bytes,
+                    scan_files,
+                    fallback_files,
+                ) = train_module._read_instruction_jsonl_datasets([root], 1024 * 1024)
+                self.assertEqual(len(records), 2)
+                self.assertEqual(scan_files, 2)
+                self.assertEqual(scan_bytes, structured.stat().st_size + raw_jsonl.stat().st_size)
+                self.assertEqual(set(fallback_files), {str(raw_jsonl.resolve())})
+
+                train_text, validation_text, raw_paths, raw_bytes, _raw_hash = (
+                    train_module._read_local_datasets(
+                        [root],
+                        1024 * 1024 - scan_bytes,
+                        exclude_paths=set(structured_paths),
+                        allow_empty=False,
+                        require_holdout=False,
+                        max_files=20,
+                        preloaded_files=fallback_files,
+                        already_scanned_files=scan_files,
+                    )
+                )
+                self.assertIn(raw_text, train_text + validation_text)
+                self.assertIn(source_text, train_text + validation_text)
+                self.assertIn(str(raw_jsonl.resolve()), raw_paths)
+                self.assertIn(str(source.resolve()), raw_paths)
+                self.assertEqual(raw_bytes, len(raw_text.encode("utf-8")) + len(source_text.encode("utf-8")))
+                self.assertLessEqual(instruction_bytes + raw_bytes, 1024 * 1024)
+                self.assertEqual(
+                    read_file.call_count,
+                    3,
+                    "both JSONL candidates are read once and the raw fallback is reused from memory",
+                )
+
+            with self.assertRaisesRegex(ValueError, "2-file limit"):
+                train_module._read_local_datasets(
+                    [root],
+                    1024 * 1024 - scan_bytes,
+                    exclude_paths=set(structured_paths),
+                    allow_empty=False,
+                    require_holdout=False,
+                    max_files=scan_files,
+                    preloaded_files=fallback_files,
+                    already_scanned_files=scan_files,
+                )
+
+    def test_long_instruction_response_is_packed_without_missing_or_duplicate_targets(self):
+        from brain.tokenizer import BytePairTokenizer, EOS_ID
+        from brain.train import _instruction_context_blocks
+
+        response = "def transform(value): return value + 1\n" * 24
+        record = {"prompt": "Implement the transform function.", "completion": response}
+        tokenizer = BytePairTokenizer.empty()
+        inputs, targets = _instruction_context_blocks([record], tokenizer, block_size=64)
+
+        self.assertGreater(len(inputs), 1)
+        prompt = "Instruction:\n" + record["prompt"] + "\nResponse:\n"
+        supervised = [
+            token
+            for row in targets
+            for token in row
+            if token != -100
+        ]
+        self.assertEqual(supervised, tokenizer.encode(response) + [EOS_ID])
+        self.assertTrue(all(len(row) == 64 for row in inputs))
+    def test_instruction_record_limit_is_enforced_during_jsonl_parsing(self):
+        import importlib
+        train_module = importlib.import_module("brain.train")
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-record-cap-") as temp:
+            root = Path(temp)
+            dataset = root / "records.jsonl"
+            dataset.write_text(
+                "\n".join(json.dumps({
+                    "Instruction": f"Explain unique operation number {index}.",
+                    "Response": f"Operation number {index} is local and deterministic.",
+                }) for index in range(3)),
+                encoding="utf-8",
+            )
+            with patch.object(train_module, "MAX_INSTRUCTION_RECORDS", 2):
+                with self.assertRaisesRegex(ValueError, "2-record safety limit"):
+                    train_module._read_instruction_jsonl_datasets([dataset], 1024 * 1024)
+
+    def test_checkpoint_rng_restore_is_exact_and_rejects_malformed_state(self):
+        import torch
+        from brain.train import _restore_rng_state, _rng_state
+
+        device = torch.device("cpu")
+        torch.manual_seed(12345)
+        saved_state = _rng_state(device)
+        expected = torch.rand(16)
+
+        torch.manual_seed(98765)
+        _restore_rng_state(saved_state, device)
+        actual = torch.rand(16)
+        self.assertTrue(torch.equal(actual, expected))
+
+        malformed = [
+            None,
+            {},
+            {"cpu": torch.tensor([1, 2, 3], dtype=torch.int64)},
+            {"cpu": torch.empty(0, dtype=torch.uint8)},
+            {"cpu": "not-a-tensor"},
+        ]
+        for state in malformed:
+            with self.subTest(state=type(state).__name__):
+                with self.assertRaisesRegex(ValueError, "random-generator state"):
+                    _restore_rng_state(state, device)
+
+    def test_resume_order_validation_rejects_corrupt_permutations_and_cursors(self):
+        import torch
+        from brain.train import _validate_resume_order
+
+        order, next_batch = _validate_resume_order(
+            torch.tensor([2, 0, 1], dtype=torch.long),
+            1,
+            chunk_count=3,
+            steps_per_epoch=2,
+        )
+        self.assertTrue(torch.equal(order, torch.tensor([2, 0, 1])))
+        self.assertEqual(next_batch, 1)
+
+        invalid_orders = [
+            torch.tensor([0, 0, 1], dtype=torch.long),
+            torch.tensor([[0, 1, 2]], dtype=torch.long),
+            torch.tensor([0.0, 1.0, 2.0]),
+            torch.tensor([0, 1, 3], dtype=torch.long),
+        ]
+        for invalid in invalid_orders:
+            with self.subTest(order=invalid.tolist()):
+                with self.assertRaisesRegex(ValueError, "epoch order"):
+                    _validate_resume_order(invalid, 0, chunk_count=3, steps_per_epoch=2)
+
+        for invalid_cursor in (-1, 3, 1.5, True):
+            with self.subTest(cursor=invalid_cursor):
+                with self.assertRaisesRegex(ValueError, "resume position"):
+                    _validate_resume_order(
+                        torch.tensor([0, 1, 2], dtype=torch.long),
+                        invalid_cursor,
+                        chunk_count=3,
+                        steps_per_epoch=2,
+                    )
+
+        with self.assertRaisesRegex(ValueError, "without a saved epoch permutation"):
+            _validate_resume_order(None, 1, chunk_count=3, steps_per_epoch=2)
+
+    def test_global_learning_rate_schedule_is_stable_across_resume_boundaries(self):
+        from brain.train import _scheduled_learning_rate
+
+        base = 3e-4
+        schedule = [_scheduled_learning_rate(base, step) for step in range(1, 250)]
+        first_run = [_scheduled_learning_rate(base, step) for step in range(1, 101)]
+        resumed_run = [_scheduled_learning_rate(base, step) for step in range(101, 250)]
+        self.assertEqual(schedule, first_run + resumed_run)
+        self.assertGreater(schedule[0], 0)
+        self.assertGreater(schedule[99], schedule[100])
+        self.assertGreaterEqual(min(schedule), base * 0.05)
+
+    def test_source_related_instruction_examples_never_cross_validation_split(self):
+        from brain.train import _split_instruction_records
+
+        records = [
+            {"prompt": "Implement alpha.", "completion": "alpha()", "split_group": "symbol:alpha"},
+            {"prompt": "Explain alpha.", "completion": "alpha is a function.", "split_group": "symbol:alpha"},
+            {"prompt": "Implement beta.", "completion": "beta()", "split_group": "symbol:beta"},
+            {"prompt": "Explain beta.", "completion": "beta is a function.", "split_group": "symbol:beta"},
+            {"prompt": "Repeated generic prompt.", "completion": "first completion.", "split_group": "module:gamma"},
+            {"prompt": "Repeated generic prompt.", "completion": "second completion.", "split_group": "module:delta"},
+            {"prompt": "Explain gamma.", "completion": "gamma module.", "split_group": "module:gamma"},
+        ]
+        training, validation = _split_instruction_records(records)
+
+        memberships = {}
+        for split_name, collection in (("train", training), ("validation", validation)):
+            for record in collection:
+                group = record["split_group"]
+                memberships.setdefault(group, set()).add(split_name)
+        self.assertTrue(all(len(splits) == 1 for splits in memberships.values()))
+
+        repeated_prompt_memberships = set()
+        for split_name, collection in (("train", training), ("validation", validation)):
+            if any(item["prompt"] == "Repeated generic prompt." for item in collection):
+                repeated_prompt_memberships.add(split_name)
+        self.assertEqual(len(repeated_prompt_memberships), 1)
+
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata
         from brain.train import train
@@ -119,7 +682,23 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
 
             saved = load_checkpoint(checkpoint)
+            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v1")
             self.assertEqual(saved["epoch"], 1)
+            uninterrupted_checkpoint = root / "checkpoints" / "uninterrupted.pt"
+            uninterrupted = train(
+                [dataset],
+                checkpoint_path=uninterrupted_checkpoint,
+                config=self._config(),
+                epochs=2,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+            )
+            self.assertEqual(uninterrupted["status"], "completed")
+
             self.assertGreater(saved["step"], 0)
             self.assertEqual(saved["format"], "syntra-brain-checkpoint")
             self.assertEqual(
@@ -143,6 +722,17 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(resumed["status"], "completed")
             self.assertEqual(resumed["epoch"], 2)
             self.assertGreater(resumed["step"], first["step"])
+            resumed_saved = load_checkpoint(checkpoint)
+            uninterrupted_saved = load_checkpoint(uninterrupted_checkpoint)
+            self.assertEqual(resumed_saved["step"], uninterrupted_saved["step"])
+            for parameter_name, expected_value in uninterrupted_saved["model_state_dict"].items():
+                torch.testing.assert_close(
+                    resumed_saved["model_state_dict"][parameter_name],
+                    expected_value,
+                    rtol=0,
+                    atol=0,
+                    msg=f"resumed model diverged from uninterrupted training at {parameter_name}",
+                )
 
             from brain.generate import generate, load_for_inference
 
@@ -162,6 +752,55 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertLessEqual(result.tokens_generated, 6)
             self.assertGreaterEqual(result.tokens_per_second, 0)
             self.assertIn(result.finish_reason, {"length", "eos", "cancelled"})
+
+    def test_resume_rejects_batch_and_optimizer_settings_that_change_cursor_semantics(self):
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-resume-settings-") as temp:
+            root = Path(temp)
+            dataset = root / "dataset.txt"
+            self._dataset(dataset)
+            checkpoint = root / "model.pt"
+            train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=128,
+                learning_rate=3e-4,
+                weight_decay=0.1,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                device_name="cpu",
+                seed=123,
+            )
+
+            incompatible_settings = [
+                ({"batch_size": 64}, "batch_size"),
+                ({"learning_rate": 1e-4}, "learning_rate"),
+                ({"weight_decay": 0.2}, "weight_decay"),
+                ({"seed": 456}, "seed"),
+                ({"evaluation_batches": 2}, "evaluation_batches"),
+                ({"save_every_steps": 3}, "save_every_steps"),
+            ]
+            for overrides, expected_setting in incompatible_settings:
+                with self.subTest(setting=expected_setting):
+                    with self.assertRaisesRegex(ValueError, expected_setting):
+                        train(
+                            [dataset],
+                            checkpoint_path=checkpoint,
+                            config=self._config(),
+                            epochs=1,
+                            batch_size=overrides.get("batch_size", 128),
+                            learning_rate=overrides.get("learning_rate", 3e-4),
+                            weight_decay=overrides.get("weight_decay", 0.1),
+                            tokenizer_bytes=1024,
+                            evaluation_batches=overrides.get("evaluation_batches", 1),
+                            save_every_steps=overrides.get("save_every_steps", 100),
+                            device_name="cpu",
+                            seed=overrides.get("seed", 123),
+                            resume=True,
+                        )
 
     def test_resume_rejects_a_changed_dataset(self):
         from brain.train import train
@@ -207,8 +846,27 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             (root / "README.md").write_text("# Local project docs\\n", encoding="utf-8")
             (root / ".env").write_text("API_KEY=do-not-train\\n", encoding="utf-8")
             (root / "secrets.py").write_text("PRIVATE_TOKEN = 'do-not-train'\\n", encoding="utf-8")
+            (root / "secrets").mkdir()
+            (root / "secrets" / "module.py").write_text("PRIVATE_TOKEN = 'do-not-train'\\n", encoding="utf-8")
             (root / "node_modules" / "package" / "ignored.py").write_text("generated dependency\\n", encoding="utf-8")
             (root / "dist" / "ignored.js").write_text("generated build output\\n", encoding="utf-8")
+            for sensitive_name in (
+                ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+                ".dockerconfigjson", "service-account.json", "serviceaccount.json",
+            ):
+                (root / sensitive_name).write_text("excluded-config-marker", encoding="utf-8")
+            for directory, filename in (
+                (".ssh", "config"),
+                (".aws", "credentials"),
+                (".azure", "profile.json"),
+                (".kube", "config"),
+                (".docker", "config.json"),
+                (".gnupg", "gpg.conf"),
+                (".terraform", "credentials.tfrc.json"),
+            ):
+                secret_dir = root / directory
+                secret_dir.mkdir()
+                (secret_dir / filename).write_text("excluded-directory-marker", encoding="utf-8")
 
             train_text, validation_text, names, byte_count, fingerprint = _read_local_datasets(
                 [root], 1024 * 1024
@@ -220,12 +878,66 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertNotIn("PRIVATE_TOKEN", combined)
             self.assertNotIn("generated dependency", combined)
             self.assertNotIn("generated build output", combined)
+            self.assertNotIn("excluded-config-marker", combined)
+            self.assertNotIn("excluded-directory-marker", combined)
             self.assertEqual(len(names), 2)
             self.assertGreater(byte_count, 0)
             self.assertEqual(len(fingerprint), 64)
 
             with self.assertRaisesRegex(ValueError, "sensitive file"):
                 _read_local_datasets([root / ".env"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "sensitive or generated directory root"):
+                _read_local_datasets([root / ".ssh"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "sensitive or generated directory root"):
+                _read_local_datasets([root / ".kube"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "sensitive directory"):
+                _read_local_datasets([root / "secrets" / "module.py"], 1024 * 1024)
+            with self.assertRaisesRegex(ValueError, "generated or excluded directory"):
+                _read_local_datasets([root / "node_modules" / "package" / "ignored.py"], 1024 * 1024)
+
+    def test_raw_repository_validation_split_keeps_each_source_file_wholly_separate(self):
+        from brain.train import _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-file-holdout-") as temp:
+            root = Path(temp)
+            expected_names = set()
+            for index in range(7):
+                relative = f"src/module_{index}.py"
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    f'"""Unique source module {index}."""\n'
+                    f"def operation_{index}(value):\n"
+                    f"    return value + {index}\n",
+                    encoding="utf-8",
+                )
+                expected_names.add(relative)
+
+            first_train, first_validation, names, _byte_count, fingerprint = (
+                _read_local_datasets([root], 1024 * 1024)
+            )
+            second_train, second_validation, _names, _bytes, second_fingerprint = (
+                _read_local_datasets([root], 1024 * 1024)
+            )
+
+            def source_names(value: str) -> set[str]:
+                return {
+                    line.removeprefix("# SYNTRA_SOURCE_FILE: ").strip()
+                    for line in value.splitlines()
+                    if line.startswith("# SYNTRA_SOURCE_FILE: ")
+                }
+
+            training_sources = source_names(first_train)
+            validation_sources = source_names(first_validation)
+            self.assertTrue(training_sources)
+            self.assertTrue(validation_sources)
+            self.assertEqual(training_sources.intersection(validation_sources), set())
+            self.assertEqual(training_sources.union(validation_sources), expected_names)
+            self.assertEqual(len(names), len(expected_names))
+            self.assertEqual(len(fingerprint), 64)
+            self.assertEqual(first_train, second_train)
+            self.assertEqual(first_validation, second_validation)
+            self.assertEqual(fingerprint, second_fingerprint)
 
     def test_training_rejects_invalid_utf8_and_missing_files(self):
         from brain.train import train

@@ -33,6 +33,36 @@ class TransformerTests(unittest.TestCase):
         self.assertIsNotNone(model.token_embedding.weight.grad)
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_model_accepts_prompt_mask_but_rejects_invalid_or_all_masked_targets(self):
+        from syntra_ai.model import SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        model = SyntraTransformer(config)
+        tokens = torch.randint(0, config.vocab_size, (1, 8), dtype=torch.long)
+        targets = tokens.clone()
+        targets[:, :5] = -100
+
+        _, loss = model(tokens, targets)
+        self.assertIsNotNone(loss)
+        self.assertTrue(torch.isfinite(loss).item())
+
+        with self.assertRaisesRegex(ValueError, "at least one supervised token"):
+            model(tokens, torch.full_like(targets, -100))
+
+        invalid_negative = targets.clone()
+        invalid_negative[0, 5] = -1
+        with self.assertRaisesRegex(ValueError, "outside the configured vocabulary"):
+            model(tokens, invalid_negative)
+
+        invalid_positive = targets.clone()
+        invalid_positive[0, 5] = config.vocab_size
+        with self.assertRaisesRegex(ValueError, "outside the configured vocabulary"):
+            model(tokens, invalid_positive)
+
+        with self.assertRaisesRegex(ValueError, "same shape"):
+            model(tokens, targets[:, :-1])
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_cached_incremental_logits_match_full_forward(self):
         from syntra_ai.model import BOS_ID, SyntraTransformer
 
@@ -132,6 +162,24 @@ class TransformerTests(unittest.TestCase):
             with self.subTest(field=field):
                 changed = replace(base, **{field: value})
                 self.assertFalse(_same_architecture(changed, base))
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_source_pretraining_rng_restore_rejects_malformed_checkpoint_state(self):
+        from syntra_ai.training import _restore_rng_state
+
+        valid_state = torch.get_rng_state()
+        _restore_rng_state({"cpu": valid_state}, torch.device("cpu"))
+
+        malformed_states = [
+            {"cpu": torch.tensor([1, 2, 3], dtype=torch.int64)},
+            {"cpu": torch.empty(0, dtype=torch.uint8)},
+            {"cpu": "not-a-tensor"},
+            {},
+        ]
+        for state in malformed_states:
+            with self.subTest(state=type(state.get("cpu")).__name__):
+                with self.assertRaisesRegex(ValueError, "CPU random-generator state"):
+                    _restore_rng_state(state, torch.device("cpu"))
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_validation_loss_helpers_restore_the_callers_model_mode(self):
@@ -387,9 +435,19 @@ class TransformerTests(unittest.TestCase):
             (root / "src" / "safe.py").write_text("def safe(): return 1\n", encoding="utf-8")
             (root / "data" / "checkpoints" / "syntra.pt.json").write_text('{"checkpoint":"metadata"}', encoding="utf-8")
             (root / "wandb" / "run-1" / "config.yaml").write_text("api_key: should-not-train", encoding="utf-8")
+            for directory in (".kube", "node_modules", "secrets", "credentials"):
+                (root / directory).mkdir()
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 corpus = load_corpus([root], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / ".kube"], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / "node_modules"], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / "secrets"], max_tokens=1024)
+                with self.assertRaisesRegex(ValueError, "sensitive or generated corpus root"):
+                    load_corpus([root / "credentials"], max_tokens=1024)
             joined_paths = "\\n".join(corpus.files).lower()
             self.assertTrue(any(path.endswith("safe.py") for path in corpus.files))
             self.assertNotIn("checkpoints", joined_paths)
@@ -625,6 +683,14 @@ class TransformerTests(unittest.TestCase):
             (root / "secrets" / "private.txt").write_text("API_TOKEN=should-not-train-on-this", encoding="utf-8")
             (root / "credentials" / "credentials.json").write_text('{"password":"do-not-train"}', encoding="utf-8")
             (root / ".env").write_text("API_KEY=do-not-train", encoding="utf-8")
+            (root / "node_modules").mkdir()
+            (root / "node_modules" / "package.json").write_text('{"name":"excluded"}', encoding="utf-8")
+            for directory in (".kube", ".docker", ".gnupg", ".terraform"):
+                secret_dir = root / directory
+                secret_dir.mkdir()
+                (secret_dir / "config.txt").write_text("excluded-directory-marker", encoding="utf-8")
+            for sensitive_name in (".netrc", ".git-credentials", ".dockerconfigjson", "service-account.json"):
+                (root / sensitive_name).write_text("excluded-config-marker", encoding="utf-8")
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 corpus = load_corpus([root], max_tokens=1024)
@@ -633,7 +699,54 @@ class TransformerTests(unittest.TestCase):
             self.assertNotIn("secrets", joined_paths)
             self.assertNotIn("credentials", joined_paths)
             self.assertNotIn(".env", joined_paths)
-            self.assertNotIn(b"API_TOKEN", bytes(token for token in corpus.token_ids if token < 256))
+            for path_marker in (".kube", ".docker", ".gnupg", ".terraform", ".netrc", ".git-credentials", "service-account.json"):
+                self.assertNotIn(path_marker, joined_paths)
+            corpus_bytes = bytes(token for token in corpus.token_ids if token < 256)
+            self.assertNotIn(b"API_TOKEN", corpus_bytes)
+            self.assertNotIn(b"excluded-directory-marker", corpus_bytes)
+            self.assertNotIn(b"excluded-config-marker", corpus_bytes)
+
+    def test_corpus_source_scan_can_skip_unused_token_materialization(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-only-corpus-") as temp:
+            root = Path(temp)
+            source_text = (
+                '"""Local source-only scan."""\n'
+                "def calculate(value):\n"
+                "    return value * 3\n"
+            )
+            (root / "module.py").write_text(source_text, encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus([root], include_tokens=False)
+
+            self.assertEqual(corpus.token_ids, [])
+            self.assertEqual(corpus.documents, [source_text])
+            self.assertEqual(len(corpus.files), 1)
+            self.assertEqual(corpus.source_bytes, len(source_text.encode("utf-8")))
+            self.assertEqual(corpus.token_count, len(source_text.encode("utf-8")) + 2)
+
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                tokenized = load_corpus([root])
+            self.assertEqual(tokenized.token_count, len(tokenized.token_ids))
+            self.assertEqual(tokenized.token_count, corpus.token_count)
+
+    def test_source_only_corpus_scan_skips_files_that_exceed_remaining_token_budget(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-only-budget-") as temp:
+            root = Path(temp)
+            (root / "a_too_large.py").write_text("x" * 1100, encoding="utf-8")
+            small_text = "def small(): return 1\n" * 15
+            (root / "z_fits.py").write_text(small_text, encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus([root], max_tokens=1024, include_tokens=False)
+
+            self.assertEqual([Path(name).name for name in corpus.files], ["z_fits.py"])
+            self.assertEqual(corpus.documents, [small_text])
+            self.assertEqual(corpus.token_count, len(small_text.encode("utf-8")) + 2)
+            self.assertEqual(corpus.token_ids, [])
+            self.assertGreaterEqual(corpus.skipped_files, 1)
 
     def test_unified_brain_checkpoint_normalization_and_modern_config(self):
         from syntra_ai.runtime import _normalize_checkpoint_payload
@@ -708,8 +821,539 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(out_file.is_file())
             self.assertGreaterEqual(result["example_count"], 4)
             self.assertTrue(result["audit"]["valid"])
-            self.assertTrue(result["audit"]["split_available"])
-            self.assertEqual(result["audit"]["prompt_leakage_groups"], 0)
+            self.assertFalse(
+                result["audit"]["split_available"],
+                "a single source module must not be split into related train and validation examples",
+            )
+            self.assertIsNone(result["audit"]["prompt_leakage_groups"])
+            self.assertTrue(
+                any("independent prompt/source groups" in warning for warning in result["audit"]["warnings"])
+                or "independent prompt/source groups" in result["audit"].get("error", "")
+            )
+
+    def test_instruction_loader_preserves_entire_long_response_across_context_windows(self):
+        from syntra_ai.instruction import audit_instruction_dataset, load_instruction_examples
+        from syntra_ai.model import EOS_ID
+        from syntra_ai.tokenizer import ByteBPETokenizer
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-long-response-") as temp:
+            root = Path(temp)
+            dataset = root / "long-response.jsonl"
+            prompt = "Implement a complete transformation routine."
+            completion = (
+                "def transform(value):\n"
+                "    normalized = value.strip().casefold()\n"
+                "    return normalized.replace('-', '_')\n"
+            ) * 18
+            dataset.write_text(
+                json.dumps({"prompt": prompt, "completion": completion}),
+                encoding="utf-8",
+            )
+            tokenizer = ByteBPETokenizer.empty()
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(
+                    dataset,
+                    seq_len=32,
+                    tokenizer=tokenizer,
+                )
+
+            self.assertGreater(len(examples), 1)
+            ordered = sorted(examples, key=lambda item: item["chunk_index"])
+            supervised = [
+                token
+                for item in ordered
+                for token in item["labels"]
+                if token != -100
+            ]
+            self.assertEqual(supervised, tokenizer.encode(completion) + [EOS_ID])
+            self.assertTrue(all(len(item["input_ids"]) <= 32 for item in examples))
+            self.assertTrue(all(len(item["labels"]) == len(item["input_ids"]) for item in examples))
+            self.assertEqual(
+                ordered[1]["input_ids"][:16],
+                ordered[0]["input_ids"][16:],
+                "subsequent response windows must retain the prior 16-token context",
+            )
+            self.assertEqual(
+                [item["chunk_index"] for item in ordered],
+                list(range(len(ordered))),
+            )
+            self.assertEqual(
+                ordered[0]["prompt_tokens"],
+                min(len(tokenizer.encode(prompt)), 31),
+                "the first context window must mask the full retained prompt context",
+            )
+            self.assertGreater(sum(item["context_overlap_tokens"] for item in ordered), 0)
+
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                audit = audit_instruction_dataset(dataset, seq_len=32, tokenizer=tokenizer)
+            self.assertTrue(audit["valid"], audit)
+            self.assertFalse(audit["split_available"])
+            self.assertEqual(audit["example_count"], 1)
+            self.assertGreater(audit["context_window_count"], 1)
+            self.assertIsNone(audit["prompt_leakage_groups"])
+
+    def test_instruction_record_cap_counts_jsonl_records_not_context_windows(self):
+        from syntra_ai.instruction import load_instruction_examples
+        from syntra_ai.tokenizer import ByteBPETokenizer
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-record-cap-") as temp:
+            root = Path(temp)
+            dataset = root / "records.jsonl"
+            rows = [
+                {"prompt": f"Describe operation {index}.", "completion": f"Operation {index} is valid."}
+                for index in range(3)
+            ]
+            dataset.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "2-source-record safety limit"):
+                    load_instruction_examples(
+                        dataset,
+                        seq_len=64,
+                        tokenizer=ByteBPETokenizer.empty(),
+                        max_examples=2,
+                    )
+
+    def test_instruction_finetuning_split_keeps_source_families_and_duplicate_prompts_together(self):
+        from syntra_ai.instruction import load_instruction_examples, split_instruction_examples
+
+        with tempfile.TemporaryDirectory(prefix="syntra-instruction-source-split-") as temp:
+            root = Path(temp)
+            dataset = root / "source-groups.jsonl"
+            records = [
+                {"prompt": "Implement alpha.", "completion": "alpha()", "split_group": "symbol:alpha"},
+                {"prompt": "Explain alpha.", "completion": "alpha is a function.", "split_group": "symbol:alpha"},
+                {"prompt": "Implement beta.", "completion": "beta()", "split_group": "symbol:beta"},
+                {"prompt": "Explain beta.", "completion": "beta is a function.", "split_group": "symbol:beta"},
+                {"prompt": "Repeated generic prompt.", "completion": "first completion.", "split_group": "module:gamma"},
+                {"prompt": "Repeated generic prompt.", "completion": "second completion.", "split_group": "module:delta"},
+                {"prompt": "Explain gamma.", "completion": "gamma module.", "split_group": "module:gamma"},
+            ]
+            dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(dataset, seq_len=64)
+            self.assertTrue(all(item["split_group_id"] for item in examples))
+            training, validation, quality = split_instruction_examples(examples)
+
+            memberships = {}
+            prompt_memberships = {}
+            for split_name, collection in (("train", training), ("validation", validation)):
+                for item in collection:
+                    memberships.setdefault(item["split_group_id"], set()).add(split_name)
+                    prompt_memberships.setdefault(item["prompt_group_id"], set()).add(split_name)
+            self.assertTrue(all(len(value) == 1 for value in memberships.values()))
+            self.assertTrue(all(len(value) == 1 for value in prompt_memberships.values()))
+            self.assertEqual(quality["prompt_leakage_groups"], 0)
+            self.assertGreaterEqual(quality["independent_split_group_count"], 3)
+
+    def test_ast_curriculum_emits_grounded_module_symbol_and_patch_records(self):
+        from syntra_ai.curriculum import synthesize_repository_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-ast-curriculum-") as temp:
+            root = Path(temp)
+            source = root / "sentinels.py"
+            source.write_text(
+                '"""Utilities for sentinel checks and bounded arithmetic."""\n'
+                "from typing import Optional\n"
+                "__all__ = ['is_missing', 'clamp_value']\n\n"
+                "def is_missing(value):\n"
+                "    return value == None\n\n"
+                "def clamp_value(value, lower, upper):\n"
+                "    return min(max(value, lower), upper)\n",
+                encoding="utf-8",
+            )
+            output = root / "curriculum.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_repository_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=40,
+                )
+
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                {record["split_group"] for record in records},
+                {"module:sentinels.py"},
+                "all tasks derived from a module must remain in one validation group",
+            )
+            kinds = {record["kind"] for record in records}
+            self.assertIn("module_comprehension", kinds)
+            self.assertIn("symbol_implementation", kinds)
+            self.assertIn("anchor_patch_repair", kinds)
+            module_record = next(item for item in records if item["kind"] == "module_comprehension")
+            self.assertIn("Utilities for sentinel checks", module_record["completion"])
+            self.assertIn("from typing import Optional", module_record["completion"])
+            implementation = next(
+                item for item in records
+                if item["kind"] == "symbol_implementation" and "is_missing" in item["prompt"]
+            )
+            self.assertIn("return value == None", implementation["completion"])
+            patch_record = next(item for item in records if item["kind"] == "anchor_patch_repair")
+            patch_payload = json.loads(patch_record["completion"])
+            self.assertEqual(patch_payload["edits"][0]["path"], "sentinels.py")
+            self.assertEqual(patch_payload["edits"][0]["find"], "value == None")
+            self.assertEqual(patch_payload["edits"][0]["replace"], "value is None")
+            self.assertTrue(result["audit"]["valid"])
+            self.assertGreaterEqual(result["example_count"], 4)
+
+    def test_module_exports_exclude_class_methods_and_include_module_values(self):
+        from syntra_ai.curriculum import _module_metadata
+
+        source = (
+            '"""Module documentation."""\n'
+            "DEFAULT_LIMIT = 128\n\n"
+            "class Calculator:\n"
+            "    def add(self, left, right):\n"
+            "        return left + right\n\n"
+            "def normalize(value):\n"
+            "    return value.strip()\n"
+        )
+        metadata = _module_metadata("calculator.py", source)
+        self.assertIn("Calculator", metadata["exports"])
+        self.assertIn("normalize", metadata["exports"])
+        self.assertIn("DEFAULT_LIMIT", metadata["exports"])
+        self.assertNotIn("Calculator.add", metadata["exports"])
+        self.assertIn("Calculator.add", metadata["declarations"])
+
+    def test_python_curriculum_recursively_extracts_nested_classes_and_methods(self):
+        from syntra_ai.curriculum import _module_metadata
+
+        source = (
+            '"""Nested class fixtures."""\n'
+            "class Outer:\n"
+            "    class Inner:\n"
+            "        def compute(self, value):\n"
+            "            return value + 1\n"
+            "        class Deep:\n"
+            "            async def run(self, value):\n"
+            "                return value * 2\n"
+            "    def direct(self):\n"
+            "        return 42\n"
+        )
+        metadata = _module_metadata("nested.py", source)
+        declarations = set(metadata["declarations"])
+        self.assertTrue({
+            "Outer",
+            "Outer.Inner",
+            "Outer.Inner.compute",
+            "Outer.Inner.Deep",
+            "Outer.Inner.Deep.run",
+            "Outer.direct",
+        }.issubset(declarations))
+        self.assertEqual(metadata["exports"], ["Outer"])
+        nested_method = next(
+            item for item in metadata["symbols"]
+            if item["name"] == "Outer.Inner.Deep.run"
+        )
+        self.assertTrue(nested_method["is_member"])
+        self.assertIn("return value * 2", nested_method["body"])
+
+    def test_non_python_block_extraction_ignores_braces_inside_strings_and_comments(self):
+        from syntra_ai.curriculum import _extract_logical_symbols, _logical_brace_deltas
+
+        source = (
+            "function render(value) {\n"
+            "  const close = '}';\n"
+            '  const open = "{";\n'
+            "  // } this is only a comment\n"
+            "  /* { nested comment text } */\n"
+            "  return close + open + value;\n"
+            "}\n"
+            "function later() { return 42; }\n"
+        )
+        self.assertEqual(
+            _logical_brace_deltas(source.splitlines()),
+            [1, 0, 0, 0, 0, 0, -1, 0],
+            "only the function's opening and closing braces may affect lexical depth",
+        )
+        symbols = _extract_logical_symbols(source)
+        render = next(item for item in symbols if item["name"] == "render")
+        later = next(item for item in symbols if item["name"] == "later")
+        self.assertFalse(render["truncated"])
+        self.assertIn("return close + open + value", render["body"])
+        self.assertFalse(later["truncated"])
+        self.assertIn("return 42", later["body"])
+
+    def test_non_python_block_extraction_ignores_multiline_triple_quoted_literals(self):
+        from syntra_ai.curriculum import _extract_logical_symbols, _logical_brace_deltas
+
+        source = (
+            "fun render(): String {\n"
+            '    val literal = """\n'
+            "        } this brace belongs to text\n"
+            "        { this brace belongs to text too\n"
+            '    """\n'
+            "    return literal\n"
+            "}\n"
+            "fun later(): Int { return 42 }\n"
+        )
+        self.assertEqual(
+            _logical_brace_deltas(source.splitlines()),
+            [1, 0, 0, 0, 0, 0, -1, 0],
+        )
+        symbols = _extract_logical_symbols(source)
+        render = next(item for item in symbols if item["name"] == "render")
+        later = next(item for item in symbols if item["name"] == "later")
+        self.assertFalse(render["truncated"])
+        self.assertIn("return literal", render["body"])
+        self.assertFalse(later["truncated"])
+        self.assertIn("return 42", later["body"])
+
+    def test_non_python_module_exports_exclude_nested_methods_and_impl_containers(self):
+        from syntra_ai.curriculum import _module_metadata
+
+        source = (
+            "pub struct Engine {}\n"
+            "impl Engine {\n"
+            "    pub fn run(&self, value: i32) -> i32 {\n"
+            "        value + 1\n"
+            "    }\n"
+            "}\n"
+            "pub fn create_engine() -> Engine { Engine {} }\n"
+        )
+        metadata = _module_metadata("engine.rs", source)
+        self.assertIn("Engine", metadata["exports"])
+        self.assertIn("create_engine", metadata["exports"])
+        self.assertNotIn("run", metadata["exports"])
+        self.assertEqual(metadata["exports"].count("Engine"), 1)
+
+        method = next(item for item in metadata["symbols"] if item["name"] == "run")
+        self.assertTrue(method["is_member"])
+        self.assertFalse(method["truncated"])
+        self.assertIn("value + 1", method["body"])
+
+        implementation = next(
+            item for item in metadata["symbols"]
+            if item["name"] == "Engine" and item.get("is_container")
+        )
+        self.assertTrue(implementation["is_container"])
+
+    def test_non_python_curriculum_never_teaches_line_capped_declarations_as_complete(self):
+        from syntra_ai.curriculum import _extract_logical_symbols
+
+        oversized = (
+            "function large_operation() {\n"
+            + "".join(f"  const value_{index} = {index};\n" for index in range(310))
+            + "}\n"
+        )
+        symbols = _extract_logical_symbols(oversized)
+        large = next(item for item in symbols if item["name"] == "large_operation")
+        self.assertTrue(large["truncated"])
+        self.assertEqual(large["body"], "")
+        self.assertEqual(large["end_line"] - large["start_line"] + 1, 300)
+
+        complete = "function small_operation() {\n  return 42;\n}\n"
+        small = _extract_logical_symbols(complete)[0]
+        self.assertFalse(small["truncated"])
+        self.assertIn("return 42", small["body"])
+
+    def test_module_curriculum_marks_summaries_that_exceed_declaration_limits(self):
+        from syntra_ai.curriculum import MAX_DECLARATIONS, _module_metadata
+
+        source = "".join(
+            f"def operation_{index}(value):\n    return value + {index}\n\n"
+            for index in range(MAX_DECLARATIONS + 1)
+        )
+        metadata = _module_metadata("large_module.py", source)
+        self.assertEqual(len(metadata["symbols"]), MAX_DECLARATIONS)
+        self.assertTrue(metadata["structure_truncated"])
+        self.assertIn("PARTIAL STRUCTURAL SUMMARY", metadata["structure"])
+
+    def test_curriculum_jsonl_writer_enforces_record_and_total_byte_limits_atomically(self):
+        from syntra_ai import curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-output-bounds-") as temp:
+            root = Path(temp)
+            output = root / "curriculum.jsonl"
+            output.write_text("previous complete dataset\n", encoding="utf-8")
+            records = [{
+                "prompt": "Explain a local module's public interface.",
+                "completion": "The module exports a deterministic operation.",
+                "kind": "module_comprehension",
+                "source_path": "module.py",
+                "split_group": "module:module.py",
+            }]
+
+            with patch.object(curriculum, "MAX_CURRICULUM_RECORD_BYTES", 16):
+                with self.assertRaisesRegex(ValueError, "record limit"):
+                    curriculum._write_jsonl_atomically(output, records)
+            self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
+
+            with patch.object(curriculum, "MAX_CURRICULUM_OUTPUT_BYTES", 32):
+                with self.assertRaisesRegex(ValueError, "dataset limit"):
+                    curriculum._write_jsonl_atomically(output, records)
+            self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
+            self.assertEqual(list(root.glob(".syntra-curriculum-*.tmp")), [])
+
+    def test_curriculum_candidate_reservoir_respects_its_memory_budget(self):
+        from syntra_ai import curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-candidate-cap-") as temp:
+            root = Path(temp)
+            (root / "module.py").write_text(
+                '"""A useful local module."""\n'
+                "def transform(value):\n"
+                "    return value + 1\n",
+                encoding="utf-8",
+            )
+            output = root / "bounded.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with patch.object(curriculum, "MAX_CURRICULUM_CANDIDATE_BYTES", 64):
+                    with self.assertRaisesRegex(ValueError, "did not yield two distinct"):
+                        curriculum.synthesize_repository_curriculum(
+                            root=root,
+                            output_path=output,
+                            max_examples=8,
+                        )
+            self.assertFalse(output.exists())
+
+    def test_curriculum_repair_examples_require_unique_exact_agent_anchors(self):
+        from syntra_ai.curriculum import _safe_none_patch_examples
+
+        ambiguous_source = (
+            "def first(value):\n"
+            "    return value == None\n\n"
+            "def second(value):\n"
+            "    return value == None\n"
+        )
+        self.assertEqual(
+            _safe_none_patch_examples("ambiguous.py", ambiguous_source),
+            [],
+            "the agent rejects exact search anchors that occur more than once",
+        )
+
+        unique_source = (
+            "def first(value):\n"
+            "    return value == None\n"
+        )
+        patches = _safe_none_patch_examples("unique.py", unique_source)
+        self.assertEqual(len(patches), 1)
+        self.assertEqual(patches[0]["before"], "value == None")
+        self.assertEqual(patches[0]["after"], "value is None")
+
+    def test_curriculum_skips_truncated_symbol_implementations(self):
+        from syntra_ai.curriculum import synthesize_repository_curriculum, _module_metadata
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-large-symbol-") as temp:
+            root = Path(temp)
+            source = root / "large.py"
+            long_literal = "x" * 12_500
+            source.write_text(
+                "def enormous_payload():\n"
+                f"    payload = {long_literal!r}\n"
+                "    return len(payload)\n\n"
+                "def useful_symbol(value):\n"
+                "    return value + 1\n",
+                encoding="utf-8",
+            )
+            metadata = _module_metadata("large.py", source.read_text(encoding="utf-8"))
+            enormous = next(item for item in metadata["symbols"] if item["name"] == "enormous_payload")
+            self.assertTrue(enormous["truncated"])
+            self.assertEqual(enormous["body"], "")
+
+            output = root / "curriculum.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                synthesize_repository_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=40,
+                )
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            implementation_prompts = [
+                item["prompt"] for item in records
+                if item["kind"] == "symbol_implementation"
+            ]
+            self.assertTrue(any("useful_symbol" in prompt for prompt in implementation_prompts))
+            self.assertFalse(any("enormous_payload" in prompt for prompt in implementation_prompts))
+
+    def test_curriculum_selection_balances_large_repositories_under_example_cap(self):
+        from syntra_ai.curriculum import synthesize_repository_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-balanced-selection-") as temp:
+            root = Path(temp)
+            for module_index in range(12):
+                source = root / f"module_{module_index:02d}.py"
+                source.write_text(
+                    f'"""Module {module_index} provides independent operations."""\n'
+                    f"def add_{module_index}(left, right):\n"
+                    "    return left + right\n\n"
+                    f"def multiply_{module_index}(left, right):\n"
+                    "    return left * right\n\n"
+                    f"def normalize_{module_index}(value):\n"
+                    "    return value.strip()\n",
+                    encoding="utf-8",
+                )
+
+            output = root / "balanced.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_repository_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=16,
+                )
+
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            represented = {item["source_path"] for item in records}
+            self.assertEqual(result["module_count"], 12)
+            self.assertEqual(result["example_count"], 16)
+            self.assertGreaterEqual(result["represented_source_files"], 4)
+            self.assertGreaterEqual(len(represented), 4)
+            self.assertGreaterEqual(result["examples_by_type"]["module_comprehension"], 1)
+            self.assertGreaterEqual(result["examples_by_type"]["symbol_implementation"], 1)
+            self.assertGreaterEqual(result["examples_by_type"]["symbol_comprehension"], 1)
+            self.assertEqual(
+                result["selection_strategy"],
+                "deterministic-source-ranked-round-robin",
+            )
+
+    def test_curriculum_scans_all_configured_approved_roots(self):
+        from syntra_ai import curriculum, safe_paths
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-roots-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            external = root / "external"
+            project.mkdir()
+            external.mkdir()
+            (project / "inside.py").write_text(
+                '"""Project-root module."""\n'
+                "def inside(value):\n    return value == None\n",
+                encoding="utf-8",
+            )
+            (external / "inside.py").write_text(
+                '"""Approved external module with a colliding relative path."""\\n'
+                "def outside(value):\\n    return value == None\\n",
+                encoding="utf-8",
+            )
+
+            with patch.object(curriculum, "PROJECT_ROOT", project):
+                with patch.object(safe_paths, "PROJECT_ROOT", project):
+                    with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(external)}):
+                        result = curriculum.synthesize_repository_curriculum(max_examples=20)
+
+            self.assertEqual(result["workspace_roots"], [str(project), str(external)])
+            self.assertGreaterEqual(result["source_files"], 2)
+            self.assertTrue(Path(result["dataset_path"]).is_file())
+            records = [
+                json.loads(line)
+                for line in Path(result["dataset_path"]).read_text(encoding="utf-8").splitlines()
+            ]
+            sources = {item["source_path"] for item in records}
+            self.assertIn("inside.py", sources)
+            self.assertIn("approved-root-2/inside.py", sources)
+            patch_records = [
+                item for item in records
+                if item["kind"] == "anchor_patch_repair"
+            ]
+            self.assertGreaterEqual(len(patch_records), 1)
+            patch_paths = {
+                json.loads(item["completion"])["edits"][0]["path"]
+                for item in patch_records
+            }
+            self.assertEqual(
+                patch_paths,
+                {"inside.py"},
+                "repair tasks from additional approved roots must not target the active project workspace",
+            )
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_real_training_checkpoint_and_supervised_prompt_masking(self):
@@ -743,6 +1387,37 @@ class TransformerTests(unittest.TestCase):
             self.assertIn("optimizer_state", full_saved)
             self.assertNotIn("optimizer_state", inference_saved)
             self.assertLess(inference_checkpoint.stat().st_size, checkpoint.stat().st_size)
+            self.assertEqual(len(full_saved["training_data_sha256"]), 64)
+            self.assertIn("rng_state", full_saved)
+            self.assertIn("cpu", full_saved["rng_state"])
+
+            source_contents = source.read_text(encoding="utf-8")
+            source.write_text(source_contents + "\n# source fingerprint must detect this change\n", encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "differs from the checkpoint's training corpus"):
+                    train(
+                        [str(root)],
+                        checkpoint,
+                        steps=1,
+                        batch_size=1,
+                        config=config,
+                        max_tokens=10000,
+                        device_name="cpu",
+                        resume=True,
+                    )
+            source.write_text(source_contents, encoding="utf-8")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "batch_size"):
+                    train(
+                        [str(root)],
+                        checkpoint,
+                        steps=1,
+                        batch_size=2,
+                        config=config,
+                        max_tokens=10000,
+                        device_name="cpu",
+                        resume=True,
+                    )
 
             dataset = root / "instructions.jsonl"
             records = [
@@ -784,6 +1459,18 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(saved["training_mode"], "supervised-instruction-finetuning")
             self.assertEqual(saved["step"], 2)
             self.assertNotIn("optimizer_state", saved)
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "not produced by causal source pretraining"):
+                    train(
+                        [str(root)],
+                        checkpoint,
+                        steps=1,
+                        batch_size=1,
+                        config=config,
+                        max_tokens=10000,
+                        device_name="cpu",
+                        resume=True,
+                    )
             context = torch.tensor([[BOS_ID, *b"def add"]], dtype=torch.long, device=device)
             generated = model.generate(context, max_new_tokens=2, temperature=1.0, top_k=2)
             self.assertGreaterEqual(generated.shape[1], context.shape[1] + 1)

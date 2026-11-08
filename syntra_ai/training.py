@@ -1,6 +1,7 @@
 """Neural training loop with corpus-trained BPE tokenization and local checkpoints."""
 from __future__ import annotations
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from time import monotonic
 from typing import Callable
@@ -39,6 +40,62 @@ def choose_device(requested: str = "auto") -> torch.device:
     return device
 
 
+def _training_data_fingerprint(corpus, max_tokens: int, config: ModelConfig, tokenizer: ByteBPETokenizer) -> str:
+    """Bind a training checkpoint to the exact selected corpus, limits, config and tokenizer."""
+    payload = {
+        "schema": "syntra-causal-source-corpus-v1",
+        "source_sha256": corpus.source_sha256,
+        "max_tokens": max_tokens,
+        "config": config.to_dict(),
+        "tokenizer": tokenizer.to_dict(),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _rng_state(device: torch.device) -> dict:
+    state = {"cpu": torch.get_rng_state()}
+    if device.type == "cuda" and torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state: object, device: torch.device) -> None:
+    if not isinstance(state, dict):
+        raise ValueError("Resume checkpoint does not contain random-generator state.")
+    cpu_state = state.get("cpu")
+    if (
+        not isinstance(cpu_state, torch.Tensor)
+        or cpu_state.dtype != torch.uint8
+        or cpu_state.ndim != 1
+        or cpu_state.numel() < 1
+    ):
+        raise ValueError("Resume checkpoint CPU random-generator state is malformed.")
+    try:
+        torch.set_rng_state(cpu_state.cpu())
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError(f"Resume checkpoint CPU random-generator state is incompatible: {exc}") from None
+
+    cuda_states = state.get("cuda")
+    if device.type == "cuda" and torch.cuda.is_available():
+        if not isinstance(cuda_states, list) or not cuda_states:
+            raise ValueError("Resume checkpoint is missing CUDA random-generator state for the selected device.")
+        if len(cuda_states) != torch.cuda.device_count():
+            raise ValueError("Resume checkpoint CUDA random-generator state does not match the available device count.")
+        if any(
+            not isinstance(item, torch.Tensor)
+            or item.dtype != torch.uint8
+            or item.ndim != 1
+            or item.numel() < 1
+            for item in cuda_states
+        ):
+            raise ValueError("Resume checkpoint CUDA random-generator state is malformed.")
+        try:
+            torch.cuda.set_rng_state_all(cuda_states)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError(f"Resume checkpoint CUDA random-generator state is incompatible: {exc}") from None
+
+
 def _batch(data, batch_size: int, seq_len: int, device):
     if data.numel() <= seq_len + 1:
         raise ValueError("The tokenized corpus split is too small for the configured context length.")
@@ -67,14 +124,70 @@ def _estimate_loss(model, data, batch_size, seq_len, device, batches=8) -> float
     return sum(values) / len(values)
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist a completed rename where the platform exposes directory fsync."""
+    if os.name == "nt":
+        return
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        os.fsync(descriptor)
+    except OSError:
+        # Some filesystems do not support directory fsync; file data itself is flushed.
+        pass
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _atomic_checkpoint(path: Path, payload: dict) -> None:
+    """Flush a complete tensor checkpoint before atomically replacing its destination."""
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
-    os.close(descriptor)
     try:
-        torch.save(payload, temporary)
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with handle:
+            torch.save(payload, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    """Write status metadata atomically so readers see either old or complete new JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
+    try:
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = None
+        with handle:
+            content = json.dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+                allow_nan=False,
+            ).encode("utf-8") + b"\n"
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         if os.path.exists(temporary):
             os.unlink(temporary)
 
@@ -175,8 +288,25 @@ def train(
         if saved.get("format") != "syntra-transformer-v1":
             raise ValueError("Resume checkpoint is not a supported SYNTRA Transformer checkpoint.")
         stored_config = ModelConfig.from_dict(saved["config"])
-        if requested_config is not None and not _same_architecture(requested_config, stored_config):
-            raise ValueError("Resume architecture differs from the saved checkpoint configuration.")
+        if requested_config is not None:
+            saved_requested_config = saved.get("requested_config")
+            if isinstance(saved_requested_config, dict):
+                try:
+                    original_request = ModelConfig.from_dict(saved_requested_config)
+                except (TypeError, ValueError):
+                    raise ValueError("Resume checkpoint contains an invalid original model configuration.") from None
+                if not _same_architecture(requested_config, original_request):
+                    raise ValueError("Resume architecture differs from the original requested checkpoint configuration.")
+            else:
+                # Older checkpoints only stored the tokenizer's realized vocabulary.
+                # Compare every other architectural field without treating the
+                # corpus-dependent BPE vocabulary reduction as a user config change.
+                comparable_request = replace(requested_config, vocab_size=stored_config.vocab_size)
+                if not _same_architecture(comparable_request, stored_config):
+                    raise ValueError("Resume architecture differs from the saved checkpoint configuration.")
+        requested_config_payload = saved.get("requested_config")
+        if not isinstance(requested_config_payload, dict):
+            requested_config_payload = None
         config = stored_config
         config.validate()
         validate_training_memory_budget(config, batch_size, device)
@@ -190,6 +320,7 @@ def train(
     else:
         config = requested_config or ModelConfig()
         config.validate()
+        requested_config_payload = config.to_dict()
         validate_training_memory_budget(config, batch_size, device)
         corpus = load_corpus(roots, max_tokens=max_tokens)
         tokenizer = ByteBPETokenizer.train(corpus.documents, vocab_size=config.vocab_size)
@@ -199,6 +330,44 @@ def train(
     if corpus is None:
         corpus = load_corpus(roots, max_tokens=max_tokens)
     token_ids = _encode_documents(corpus.documents, tokenizer, max_tokens=max_tokens)
+    training_data_sha256 = _training_data_fingerprint(corpus, max_tokens, config, tokenizer)
+    if saved is not None:
+        if saved.get("training_mode") != "causal-source-pretraining":
+            raise ValueError(
+                "The checkpoint was not produced by causal source pretraining. "
+                "Resume it with its matching training workflow or start a new pretraining checkpoint."
+            )
+        if saved.get("training_data_sha256") != training_data_sha256:
+            raise ValueError(
+                "The selected source corpus, token budget, or tokenizer differs from the checkpoint's "
+                "training corpus. Select the original source set and settings or start a new checkpoint."
+            )
+        if not isinstance(saved.get("optimizer_state"), dict):
+            raise ValueError("Resume checkpoint is missing its optimizer state.")
+        if not isinstance(saved.get("rng_state"), dict):
+            raise ValueError("Resume checkpoint is missing its random-generator state.")
+        saved_settings = saved.get("training_settings")
+        required_settings = {"batch_size", "learning_rate", "seed", "max_tokens"}
+        if not isinstance(saved_settings, dict) or not required_settings.issubset(saved_settings):
+            raise ValueError("Resume checkpoint is missing complete training settings; start a new run.")
+        expected_settings = {
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "seed": seed,
+            "max_tokens": max_tokens,
+        }
+        changed_settings = [
+            name
+            for name, expected in expected_settings.items()
+            if type(saved_settings.get(name)) not in (int, float)
+            or saved_settings.get(name) != expected
+        ]
+        if changed_settings:
+            raise ValueError(
+                "Training resume settings differ from the checkpoint: "
+                + ", ".join(changed_settings)
+                + ". Use the original settings or start a new checkpoint."
+            )
     split = int(len(token_ids) * 0.8)
     if split <= config.seq_len + 1 or len(token_ids) - split <= config.seq_len + 1:
         raise ValueError(
@@ -213,8 +382,8 @@ def train(
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
     if saved is not None:
         model.load_state_dict(saved["model_state"])
-        if saved.get("optimizer_state"):
-            optimizer.load_state_dict(saved["optimizer_state"])
+        optimizer.load_state_dict(saved["optimizer_state"])
+        _restore_rng_state(saved["rng_state"], device)
         start_step = int(saved.get("step", 0))
 
     started = monotonic()
@@ -277,6 +446,15 @@ def train(
                 "device_at_training": str(device),
                 "corpus_files": len(corpus.files),
                 "corpus_tokens": len(token_ids),
+                "training_data_sha256": training_data_sha256,
+                "requested_config": requested_config_payload or config.to_dict(),
+                "training_settings": {
+                    "batch_size": batch_size,
+                    "learning_rate": learning_rate,
+                    "seed": seed,
+                    "max_tokens": max_tokens,
+                },
+                "rng_state": _rng_state(device),
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
                 "training_mode": "causal-source-pretraining",
@@ -299,8 +477,7 @@ def train(
                 "pretrained_weights": False,
             }
             metadata_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".json")
-            metadata_path.parent.mkdir(parents=True, exist_ok=True)
-            metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            _atomic_json(metadata_path, metadata)
             report(
                 "running" if step < start_step + steps else "completed",
                 step,

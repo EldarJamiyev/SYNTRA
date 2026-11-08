@@ -154,6 +154,9 @@ npm run ai:cli -- audit-instructions --dataset "D:\Datasets\instructions.jsonl" 
 
 # Fine-tune the existing native checkpoint on an audited prompt/completion JSONL dataset
 npm run ai:cli -- finetune --dataset "D:\Datasets\instructions.jsonl" --steps 1000
+
+# Generate repository-grounded instruction examples from the project and approved roots
+npm run ai:curriculum -- --max-examples 240
 ```
 
 External training data must be in an explicitly approved absolute directory. In PowerShell, configure the approved root before using it:
@@ -179,7 +182,15 @@ The current development increment in [PR #47](https://github.com/EldarJamiyev/SY
 - Masks prompt tokens from supervised loss while training on response tokens and EOS.
 - Preserves the existing raw-text training path.
 
-These capabilities should be treated as branch work until PR #47 passes its validation and is merged. Curriculum generation creates training examples; it does not prove that those examples are semantically useful or that fine-tuning will improve coding performance.
+Generate the curriculum from the project and every configured approved root with:
+
+```powershell
+npm run ai:curriculum -- --max-examples 240
+```
+
+The default output is `data/curricula/workspace-instructions.jsonl`. Use `--root` to scan one approved workspace instead of the project-plus-configured-roots set, and `--output` to choose a JSONL filename inside the project or active workspace. Secondary approved roots receive namespaced source paths; repair patches are emitted only for the active workspace because their paths must resolve against the workspace the coding agent can edit. Currently supported repair examples are intentionally narrow: source-verified Python comparisons against `None`.
+
+These capabilities remain branch work until PR #47 is merged. Curriculum generation creates training examples; it does not prove that those examples are semantically useful or that fine-tuning will improve coding performance.
 
 ## Security and execution boundaries
 

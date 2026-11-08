@@ -1,5 +1,6 @@
 """Safe local source corpus discovery and byte-level tokenization."""
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Iterable
 import os
 import stat
@@ -22,14 +23,19 @@ IGNORED_DIRS = {
     ".git", ".syntra", ".venv", "venv", "env", "node_modules", "__pycache__",
     ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build", "coverage",
     ".next", ".nuxt", ".idea", ".vscode", "target", "vendor", "obj",
-    "checkpoints", "runs", "wandb", "mlruns", "lightning_logs", "tensorboard", "logs"
+    "checkpoints", "runs", "wandb", "mlruns", "lightning_logs", "tensorboard", "logs",
+    ".kube", ".docker", ".gnupg", ".terraform"
 }
 SENSITIVE_DIRS = {
-    "secrets", "credentials", "private_keys", "certificates", ".ssh", ".aws", ".azure"
+    "secrets", "credentials", "private_keys", "certificates",
+    ".ssh", ".aws", ".azure", ".kube", ".docker", ".gnupg", ".terraform"
 }
 SENSITIVE_NAMES = {
-    ".env", ".env.local", ".env.production", ".npmrc", ".pypirc", "credentials",
-    "credentials.json", "secrets.json", "id_rsa", "id_ed25519", "known_hosts"
+    ".env", ".env.local", ".env.production", ".npmrc", ".pypirc", ".netrc",
+    ".git-credentials", ".dockerconfigjson", "credentials", "credentials.json",
+    "secrets.json", "id_rsa", "id_ed25519", "known_hosts", "authorized_keys",
+    "access_token", "access_token.txt", "refresh_token", "token.txt",
+    "service-account.json", "serviceaccount.json", "kubeconfig"
 }
 SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".keystore", ".secret"}
 
@@ -41,6 +47,8 @@ class Corpus:
     source_bytes: int
     skipped_files: int
     documents: list[str]
+    token_count: int = 0
+    source_sha256: str = ""
 
 
 def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, bytes, str] | None:
@@ -88,6 +96,15 @@ def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, byt
                 or opened.st_size > max_file_bytes):
                 return None
             raw = handle.read(max_file_bytes + 1)
+            after = os.fstat(handle.fileno())
+            if (
+                len(raw) > max_file_bytes
+                or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or opened.st_size != after.st_size
+                or opened.st_mtime_ns != after.st_mtime_ns
+                or opened.st_ctime_ns != after.st_ctime_ns
+            ):
+                return None
         if len(raw) > max_file_bytes:
             return None
         text = raw.decode("utf-8")
@@ -107,12 +124,17 @@ def load_corpus(
     max_files: int = 10000,
     max_file_bytes: int = 256 * 1024,
     max_tokens: int = 5_000_000,
+    include_tokens: bool = True,
 ) -> Corpus:
+    if type(include_tokens) is not bool:
+        raise ValueError("include_tokens must be a boolean.")
     tokens: list[int] = []
+    token_count = 0
     files: list[str] = []
     total_bytes = 0
     skipped = 0
     documents: list[str] = []
+    digest = sha256()
     seen: set[str] = set()
     if max_files < 1 or max_files > MAX_CORPUS_FILES:
         raise ValueError(f"max_files must be between 1 and {MAX_CORPUS_FILES:,}.")
@@ -124,7 +146,17 @@ def load_corpus(
     for raw_root in roots:
         # Canonicalize and approve the root before traversal. os.walk and all
         # descendant paths are derived from this bounded, trusted directory.
-        root = os.fspath(resolve_corpus_root(raw_root))
+        root_path = resolve_corpus_root(raw_root)
+        root = os.fspath(root_path)
+        root_parts = {part.casefold() for part in root_path.parts}
+        root_name = root_path.name.casefold()
+        if (
+            root_name in IGNORED_DIRS
+            or root_name in SENSITIVE_DIRS
+            or root_parts.intersection(IGNORED_DIRS)
+            or root_parts.intersection(SENSITIVE_DIRS)
+        ):
+            raise ValueError("Refusing to scan a sensitive or generated corpus root.")
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             try:
                 base = os.path.realpath(current, strict=True)
@@ -154,7 +186,7 @@ def load_corpus(
             dirnames[:] = safe_directories
 
             for filename in sorted(filenames):
-                if len(files) >= max_files or len(tokens) >= max_tokens:
+                if len(files) >= max_files or token_count >= max_tokens:
                     break
                 candidate = os.path.join(base, filename)
                 result = _read_safe_file(candidate, root, max_file_bytes)
@@ -166,16 +198,35 @@ def load_corpus(
                 if normalized_key in seen:
                     continue
                 seen.add(normalized_key)
-                encoded = [BOS_ID, *raw, EOS_ID]
-                remaining = max_tokens - len(tokens)
-                tokens.extend(encoded[:remaining])
+                path_bytes = normalized_key.encode("utf-8")
+                digest.update(len(path_bytes).to_bytes(8, "big"))
+                digest.update(path_bytes)
+                digest.update(len(raw).to_bytes(8, "big"))
+                digest.update(raw)
+                remaining = max_tokens - token_count
+                if not include_tokens and len(raw) + 2 > remaining:
+                    skipped += 1
+                    continue
+                added_tokens = min(len(raw) + 2, remaining)
+                if include_tokens and added_tokens:
+                    # Materialize only the retained prefix instead of allocating a
+                    # second full Python-int list for a large source file.
+                    append_bos = min(1, added_tokens)
+                    if append_bos:
+                        tokens.append(BOS_ID)
+                    retained_bytes = min(len(raw), added_tokens - append_bos)
+                    if retained_bytes:
+                        tokens.extend(raw[:retained_bytes])
+                    if added_tokens > append_bos + retained_bytes:
+                        tokens.append(EOS_ID)
+                token_count += added_tokens
                 files.append(resolved)
                 documents.append(text)
                 total_bytes += len(raw)
-                if len(tokens) >= max_tokens:
+                if token_count >= max_tokens:
                     break
-            if len(files) >= max_files or len(tokens) >= max_tokens:
+            if len(files) >= max_files or token_count >= max_tokens:
                 break
-    if not tokens:
+    if not files:
         raise ValueError("No readable text/source files were found in the selected corpus root(s).")
-    return Corpus(tokens, files, total_bytes, skipped, documents)
+    return Corpus(tokens, files, total_bytes, skipped, documents, token_count, digest.hexdigest())

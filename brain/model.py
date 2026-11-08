@@ -422,8 +422,11 @@ class LocalTransformer(nn.Module):
                 raise ValueError("targets must use torch.long token IDs.")
             if targets.device != input_ids.device:
                 raise ValueError("targets and input_ids must be on the same device.")
-            if torch.any(targets < 0) or torch.any(targets >= self.config.vocab_size):
+            valid_targets = targets != -100
+            if torch.any((targets < 0) & valid_targets) or torch.any(targets >= self.config.vocab_size):
                 raise ValueError("targets contains a token outside the configured vocabulary.")
+            if not torch.any(valid_targets):
+                raise ValueError("targets must contain at least one supervised token (not -100).")
 
         if use_cache:
             hidden, presents = self._forward_hidden(input_ids, past_key_values=past_key_values, use_cache=True)
@@ -436,6 +439,7 @@ class LocalTransformer(nn.Module):
             loss = F.cross_entropy(
                 logits.reshape(-1, logits.shape[-1]),
                 targets.reshape(-1),
+                ignore_index=-100,
             )
         if use_cache:
             return logits, loss, tuple(presents)
