@@ -435,6 +435,8 @@ class TransformerTests(unittest.TestCase):
             (root / "src" / "safe.py").write_text("def safe(): return 1\n", encoding="utf-8")
             (root / "data" / "checkpoints" / "syntra.pt.json").write_text('{"checkpoint":"metadata"}', encoding="utf-8")
             (root / "wandb" / "run-1" / "config.yaml").write_text("api_key: should-not-train", encoding="utf-8")
+            for directory in (".kube", "node_modules", "secrets", "credentials"):
+                (root / directory).mkdir()
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 corpus = load_corpus([root], max_tokens=1024)
