@@ -557,7 +557,9 @@ def _training_callback(
     seen: set[tuple[str, int]],
 ):
     def callback(progress: dict[str, Any]) -> None:
-        if not _should_snapshot(stage, progress, interval, seen):
+        # Snapshots exist to bind evaluations to an immutable model revision.
+        # Avoid duplicating full checkpoints when the user explicitly skips benchmarking.
+        if evaluator is None or not _should_snapshot(stage, progress, interval, seen):
             return
         step = progress["step"]
         seen.add((stage, step))
@@ -787,9 +789,6 @@ def main(argv: list[str] | None = None) -> int:
                 isolation=isolation, allow_host_execution=args.allow_host_execution,
                 max_parallel=evaluation["max_parallel"], max_new_tokens=evaluation["max_new_tokens"],
             )
-        elif isolation == "host" and not args.allow_host_execution:
-            raise OrchestrationError("Host execution is unsandboxed and requires --allow-host-execution.")
-
         baseline_only = args.skip_pretraining and args.skip_sft
         if baseline_only and args.skip_benchmark:
             raise OrchestrationError("Skipping both training stages requires benchmark execution; remove --skip-benchmark.")
