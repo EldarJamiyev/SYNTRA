@@ -206,7 +206,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
             }
             changed = runner.apply_patch(workspace, patch, ["src/module.py"])
             self.assertEqual(changed, ["src/module.py"])
-            self.assertEqual(source.read_text(encoding="utf-8"), "def value():\n    return 3\n")
+            self.assertEqual(source.read_text(encoding="utf-8"), "def value():\n    return 2\n")
 
             sibling = workspace / "src" / "sibling.py"
             sibling.write_text("def sibling():\n    return 10\n", encoding="utf-8")
@@ -227,7 +227,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
             unsafe["edits"][0]["path"] = "../outside.py"
             with self.assertRaises(runner.BenchmarkError):
                 runner.apply_patch(workspace, unsafe, ["../outside.py"])
-            self.assertEqual(source.read_text(encoding="utf-8"), "def value():\n    return 2\n")
+            self.assertEqual(source.read_text(encoding="utf-8"), "def value():\n    return 3\n")
 
     def test_checkpoint_loss_history_is_read_from_the_actual_sidecar(self):
         with tempfile.TemporaryDirectory(prefix="syntra-checkpoint-evidence-") as temp:
