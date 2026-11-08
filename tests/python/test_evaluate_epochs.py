@@ -42,6 +42,28 @@ class Phase4Milestone4ProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "max_parallel"):
             evaluate_epochs._validate_profile_values(invalid_parallel)
 
+    def test_windows_npm_benchmark_command_preserves_paths_with_spaces(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory(prefix=".syntra-windows-command-", dir=ROOT) as temp:
+            evaluator = evaluate_epochs.BackgroundEvaluator(
+                Path(temp), "windows-command-test", device="cpu", isolation="docker",
+                allow_host_execution=False,
+            )
+            executable = r"C:\Program Files\nodejs\npm.cmd"
+            with patch.object(evaluate_epochs.os, "name", "nt"), patch.object(
+                evaluate_epochs.shutil, "which", return_value=executable
+            ):
+                command = evaluator._npm_command([
+                    "run", "benchmark:model", "--", "--checkpoint",
+                    r"C:\SYNTRA Workspace\data\checkpoints\snapshot.pt",
+                ])
+            self.assertEqual(command[:4], ["cmd.exe", "/d", "/s", "/c"])
+            self.assertTrue(command[4].startswith('"'))
+            self.assertTrue(command[4].endswith('"'))
+            self.assertIn('"C:\\Program Files\\nodejs\\npm.cmd"', command[4])
+            self.assertIn('"C:\\SYNTRA Workspace\\data\\checkpoints\\snapshot.pt"', command[4])
+
     def test_repository_benchmark_runner_loads_without_importing_a_site_packages_tests_package(self):
         runner = evaluate_epochs._load_benchmark_runner()
         suite = runner.load_suite()
