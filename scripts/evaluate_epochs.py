@@ -11,6 +11,7 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -511,11 +512,39 @@ class BackgroundEvaluator:
         return self.results
 
 
+def _load_benchmark_runner():
+    """Load the repository-owned runner by file path, independent of site-packages 'tests' packages."""
+    module_name = "syntra_phase4_milestone4_benchmark_runner"
+    cached = sys.modules.get(module_name)
+    if cached is not None:
+        return cached
+    engine_root = ROOT / "tests" / "benchmark_engine"
+    source_path = engine_root / "runner.py"
+    spec = importlib.util.spec_from_file_location(module_name, source_path)
+    if spec is None or spec.loader is None:
+        raise OrchestrationError("The local raw benchmark runner cannot be loaded.")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    engine_path = str(engine_root)
+    sys.path.insert(0, engine_path)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
+    finally:
+        try:
+            sys.path.remove(engine_path)
+        except ValueError:
+            pass
+    return module
+
+
 def _preflight_benchmark(isolation: str, allow_host_execution: bool) -> dict[str, Any]:
     if isolation == "host" and not allow_host_execution:
         raise OrchestrationError("Host execution is unsandboxed and requires --allow-host-execution.")
     try:
-        from tests.benchmark_engine import runner as benchmark_runner
+        benchmark_runner = _load_benchmark_runner()
         suite = benchmark_runner.load_suite()
         environments = {}
         for language in sorted({task["language"] for task in suite["tasks"]}):
