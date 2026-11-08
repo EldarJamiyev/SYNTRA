@@ -205,7 +205,7 @@ def load_corpus(
                     skipped += 1
                     continue
                 normalized_candidate = os.path.normcase(candidate_real)
-                if any(is_path_within(excluded, normalized_candidate) for excluded in excluded_paths):
+                if any(is_path_within(normalized_candidate, excluded) for excluded in excluded_paths):
                     skipped += 1
                     continue
                 result = _read_safe_file(candidate, root, max_file_bytes)
