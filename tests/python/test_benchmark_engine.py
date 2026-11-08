@@ -77,6 +77,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
     def test_environment_matrix_uses_pinned_offline_images_and_language_test_extensions(self):
         expected = {
             "python": ("python:3.12-slim", ".py"),
+            "javascript": ("node:20-slim", ".mjs"),
             "typescript": ("node:20-slim", ".ts"),
             "go": ("golang:1.22-alpine", ".go"),
             "rust": ("rust:1.78-slim", ".rs"),
