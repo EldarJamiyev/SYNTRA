@@ -321,6 +321,17 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertEqual(captured.exception.tokens_over_context, 1)
         self.assertEqual(captured.exception.context_utilization, 1.125)
 
+    def test_generation_rejects_malformed_tokenizer_evidence(self):
+        class MalformedTokenizer:
+            def tokenize_text(self, prompt, path=None):
+                return ["not", "a", "tokenizer", "result"]
+
+            def stream_generate(self, *args, **kwargs):
+                raise AssertionError("Generation must not run without validated tokenizer evidence.")
+
+        with self.assertRaisesRegex(runner.BenchmarkError, "malformed context evidence"):
+            runner._generate_patch(MalformedTokenizer(), "prompt", Path("unused"), "cpu", 16)
+
     def test_run_task_records_context_overflow_without_starting_generation(self):
         class ContextLimitedRuntime:
             stream_called = False
