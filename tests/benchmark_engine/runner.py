@@ -25,11 +25,17 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 ENGINE_ROOT = Path(__file__).resolve().parent
 SUITE_PATH = ENGINE_ROOT / "suite.v1.json"
+TYPESCRIPT_ROOT = REPOSITORY_ROOT / "node_modules" / "typescript"
+TYPESCRIPT_TEST_RUNNER = ENGINE_ROOT / "typescript_test_runner.mjs"
+
+try:
+    from .environments import SUPPORTED_LANGUAGES, expected_test_filename, resolve_environment
+except ImportError:
+    from environments import SUPPORTED_LANGUAGES, expected_test_filename, resolve_environment
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "data" / "benchmarks" / "latest_run.json"
-DEFAULT_DOCKER_IMAGE = "python:3.12-slim"
-MAX_SOURCE_FILES = 32
+MAX_SOURCE_FILES = 48
 MAX_SOURCE_FILE_BYTES = 128 * 1024
-MAX_PROMPT_BYTES = 160 * 1024
+MAX_PROMPT_BYTES = 192 * 1024
 MAX_PATCH_BYTES = 256 * 1024
 MAX_COMMAND_OUTPUT_BYTES = 256 * 1024
 MAX_TRAINING_HISTORY_POINTS = 512
@@ -100,12 +106,15 @@ def validate_suite(suite: Any) -> None:
             parts = PurePosixPath(value).parts if isinstance(value, str) else ()
             if not value or not value.startswith(prefix) or "\\" in value or any(part in {"", ".", ".."} for part in parts):
                 raise BenchmarkError("Task " + task_id + " has an unsafe " + key + " path.")
-        for key in ("target_test", "regression_test"):
+        language = task.get("language")
+        if language not in SUPPORTED_LANGUAGES:
+            raise BenchmarkError("Task " + task_id + " has an unsupported benchmark language.")
+        for key, phase in (("target_test", "target"), ("regression_test", "regression")):
             value = task.get(key)
-            if not isinstance(value, str) or not re.fullmatch(r"test_[a-z0-9_]+\.py", value):
-                raise BenchmarkError("Task " + task_id + " has an invalid hidden test filename.")
+            if not isinstance(value, str) or value != expected_test_filename(language, phase):
+                raise BenchmarkError("Task " + task_id + " has an invalid hidden test filename for " + language + ".")
         expected = task.get("expected_changed_paths")
-        if not isinstance(expected, list) or not 1 <= len(expected) <= 8:
+        if not isinstance(expected, list) or not 1 <= len(expected) <= 6:
             raise BenchmarkError("Task " + task_id + " must declare expected changed paths.")
         for value in expected:
             if not isinstance(value, str) or not value or "\\" in value or Path(value).is_absolute():
@@ -199,7 +208,10 @@ def collect_sources(workspace: Path) -> list[tuple[str, str]]:
         directories[:] = sorted(name for name in directories if name not in {".git", "__pycache__", ".venv", "venv", "node_modules"} and not (current_path / name).is_symlink())
         for name in sorted(filenames):
             path = current_path / name
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {".py", ".pyi", ".toml", ".md"}:
+            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {
+                ".py", ".pyi", ".toml", ".md", ".json", ".ts", ".tsx", ".mts",
+                ".js", ".mjs", ".go", ".rs", ".mod", ".sum",
+            }:
                 continue
             size = path.stat().st_size
             total += size
@@ -217,7 +229,9 @@ def build_prompt(task: dict[str, Any], source_files: list[tuple[str, str]]) -> s
         "Use only the source files shown below as evidence. Do not assume unseen tests, dependencies, or APIs.",
         "Return exactly one JSON object and no prose or Markdown fences.",
         'Required schema: {"format":"SYNTRA_AGENT_PATCH_V1","summary":"short summary","edits":[{"path":"relative/path.py","find":"exact existing source text","replace":"replacement source text","reason":"why this change is needed"}]}',
-        "Preserve existing interfaces unless required; use exact source anchors; do not edit tests or add files; do not include shell commands.",
+        "Treat the listed source files as one connected repository. Preserve sibling-module imports, generic contracts, concurrency invariants, and lifetimes across files.",
+        "Return every required file edit in this single JSON response. Use one distinct edit per path, exact source anchors, and no partial multi-file changes.",
+        "Do not edit tests, add files, or include shell commands.",
         "", "TASK:", task["goal"].strip(), "", "SOURCE FILES:",
     ]
     for relative, content in source_files:
@@ -241,12 +255,20 @@ def parse_patch_output(raw_output: str) -> dict[str, Any]:
         raise BenchmarkError("Patch summary is invalid.")
     edits = patch["edits"]
     if not isinstance(edits, list) or not 1 <= len(edits) <= 6:
-        raise BenchmarkError("Patch must contain between 1 and 6 file edits.")
+        raise BenchmarkError("Patch must contain between 1 and 6 distinct file edits.")
+    seen_paths = set()
     for index, edit in enumerate(edits):
         if not isinstance(edit, dict) or set(edit) != {"path", "find", "replace", "reason"}:
             raise BenchmarkError("Patch edit " + str(index) + " has an invalid schema.")
         if any(not isinstance(edit.get(key), str) for key in ("path", "find", "replace", "reason")):
             raise BenchmarkError("Patch edit fields must be strings.")
+        relative = edit["path"]
+        pure = PurePosixPath(relative)
+        if not relative or pure.is_absolute() or "\\" in relative or any(part in {"", ".", ".."} for part in pure.parts):
+            raise BenchmarkError("Patch edit paths must be safe relative repository paths.")
+        if relative in seen_paths:
+            raise BenchmarkError("A multi-file patch may edit each path only once.")
+        seen_paths.add(relative)
         if not edit["find"] or len(edit["find"]) > 12_000 or len(edit["replace"]) > 12_000:
             raise BenchmarkError("Exact patch anchors and replacements are limited to 12,000 characters.")
         if len(edit["replace"].encode("utf-8")) > 40 * 1024 or not edit["reason"].strip() or len(edit["reason"]) > 500:
