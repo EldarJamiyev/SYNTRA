@@ -46,38 +46,66 @@ npm run benchmark:model -- --list
 # Evaluate one task
 npm run benchmark:model -- --task python-clamp
 
-# Run all raw-model tasks
+# Evaluate the TypeScript task
+npm run benchmark:model -- --task typescript-object-mapper
+
+# Run the complete 12-task matrix
 npm run benchmark:model
 ```
 
-The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.1.0, and contains eight Python fixtures:
+The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.2.0, and contains 12 held-out fixtures: nine Python, one TypeScript, one Go, and one Rust task.
 
-| Task | Capability | Target behavior |
+| Task | Language | Capability |
 | --- | --- | --- |
-| `python-slugify` | String normalization | Collapse non-ASCII/non-alphanumeric separator runs into one hyphen |
-| `python-clamp` | Numeric boundaries | Clamp below/above range while preserving inclusive in-range values |
-| `python-deep-merge` | Configuration | Recursively merge dictionaries without mutating inputs |
-| `python-duration-format` | Time formatting | Format hours, minutes, and seconds without empty units |
-| `python-array-chunk` | Data structures | Preserve order and split sequences at exact chunk boundaries |
-| `python-safe-path` | Path security | Normalize relative paths and reject traversal, absolute, UNC, and drive paths |
-| `python-header-lookup` | HTTP headers | Casefold header names and preserve first-match ordering |
-| `python-retry-backoff` | Retry control | Apply exponential growth with an upper cap and overflow-safe large attempts |
+| `python-slugify` | Python | Deterministic ASCII slug normalization |
+| `python-clamp` | Python | Inclusive numeric clamping |
+| `python-deep-merge` | Python | Recursive mapping merge without input mutation |
+| `python-duration-format` | Python | Compact elapsed-time formatting |
+| `python-array-chunk` | Python | Ordered fixed-size sequence chunks |
+| `python-safe-path` | Python | Safe relative-path normalization |
+| `python-header-lookup` | Python | Case-insensitive HTTP header lookup |
+| `python-retry-backoff` | Python | Overflow-safe bounded exponential backoff |
+| `typescript-object-mapper` | TypeScript | Multi-file generic key/value constraints and object mapping |
+| `go-channel-sync` | Go | Worker-pool synchronization, cancellation, and race-safe collection |
+| `rust-safe-slice` | Rust | Lifetime-bound UTF-8 byte slicing without panics or allocation |
+| `python-multi-file-stream-state` | Python | Cross-module JSON state parsing and numeric stream clamping |
 
-For every task, the manifest names a fixture workspace, expected changed-path set, hidden target test, and independent hidden regression test. The fixture source is copied into a temporary model workspace. The hidden tests remain under `tests/benchmark_engine/hidden/`, are not copied into the model workspace, and are not included in the prompt. Before generation, the target test must fail with an assertion and the regression test must pass. Invalid baselines are reported as invalid fixtures and are not scored as model failures.
+### Multi-file context and patch contract
 
-The native runtime's `tokenize_text` and `stream_generate` APIs are called directly against the selected checkpoint. Prompts exceeding that checkpoint's context window are rejected rather than silently truncated. Generation is deterministic (greedy decoding). The returned text must be one strict `SYNTRA_AGENT_PATCH_V1` JSON object without trailing prose. Candidate edits pass through SYNTRA's existing `validatePatch` and `writeCandidateChanges` functions, then a Python AST syntax check, target test, and regression test.
+The fixture workspace is copied into a temporary model-visible repository. The runner collects supported source/configuration files recursively, applies bounded file-count, per-file, total-byte, and prompt-byte limits, and presents them together as explicitly labeled files. Connected modules therefore appear in the same prompt; hidden evaluation code never does.
 
-### Isolation and execution
+The model must return one strict `SYNTRA_AGENT_PATCH_V1` JSON object containing all required edits. Each path may appear only once, every path must be a safe relative path, and the production `validatePatch` / `writeCandidateChanges` implementation remains the authority for validating and applying the patch. The resulting changed-path set must exactly equal the manifest's expected paths. A multi-file task is not partially credited when one sibling file is omitted or an unexpected file is touched.
 
-Default execution is Docker-only and requires a pre-existing local `python:3.12-slim` image. The runner does not pull images. Each test container uses `--network none`, a read-only root, read-only workspace/evaluation mounts, a non-root user, dropped Linux capabilities, `no-new-privileges`, and bounded memory, CPU, PIDs, and temporary storage. Docker still trusts the Docker daemon and host kernel; it is not a virtual-machine boundary.
+Before generation, the target test must fail with a recognized assertion/diagnostic and the independent regression test must pass. Invalid baselines are excluded from model-performance denominators. After patch application, the changed files receive language-specific validation and the separate hidden target/regression executions. Python uses AST parsing and Python tests; TypeScript uses the repository's locally installed TypeScript compiler plus runtime assertions; Go uses the Go compiler/test runner; Rust uses offline Cargo checking and Cargo integration tests.
 
-For a trusted local environment only, host execution can be explicitly enabled:
+### Language environments and offline execution
+
+`tests/benchmark_engine/environments.py` defines the runtime matrix:
+
+| Language | Default local image | Validation |
+| --- | --- | --- |
+| Python | `python:3.12-slim` | AST parsing and hidden Python tests |
+| TypeScript | `node:20-slim` | Local TypeScript compiler, then emitted JavaScript tests |
+| Go | `golang:1.22-alpine` | `go test ./...` and hidden Go test programs |
+| Rust | `rust:1.78-slim` | `cargo check --offline --locked` and Cargo integration tests |
+
+The benchmark never pulls an image. All selected images are inspected locally before inference begins; a missing image fails preflight. Optional image-tag overrides are available as `--python-image`, `--node-image`, `--go-image`, and `--rust-image` (the legacy `--docker-image` flag remains an alias for the Python image). TypeScript evaluation mounts the repository-installed `node_modules/typescript` package read-only; it does not install a compiler or download packages in the container.
+
+Each evaluation container uses `--pull=never`, `--network none`, a read-only root filesystem, read-only source/evaluation mounts, a non-root UID, dropped Linux capabilities, `no-new-privileges`, bounded memory/CPU/PIDs, and temporary writable build storage. Go proxy and checksum services are disabled. Cargo is explicitly offline, locked, and uses a disposable target directory. No language runner may download dependencies during evaluation. Cargo tasks with external dependencies will remain unsupported until those dependencies can be supplied and verified locally.
+
+Docker still trusts the Docker daemon and host kernel; it is not a virtual-machine or hardware-isolation boundary. Do not expose an untrusted Docker daemon socket to the benchmark process.
+
+For a trusted development environment only, host execution can be explicitly enabled:
 
 ```bash
 npm run benchmark:model -- --isolation host --allow-host-execution
 ```
 
-Host execution is not sandboxed and runs tests with the current operating-system user's permissions. The command requires both flags so this risk cannot be selected accidentally.
+Host execution is not sandboxed and runs generated code with the current operating-system user's permissions. The command requires both flags so this risk cannot be selected accidentally. Host-mode unit tests validate fixture baselines; a live-model benchmark should use the default Docker isolation.
+
+### Context-window accounting
+
+The native runtime's `tokenize_text` and `stream_generate` APIs are called directly against the selected checkpoint. The runner records each prompt's exact native-tokenizer count, checkpoint context window, and context utilization. A prompt that exceeds the checkpoint context is rejected rather than truncated, and a stream that reports truncation is invalid. The benchmark does not silently shrink, summarize, or drop sibling files to force a task into the window. This makes context pressure measurable, but the 12 fixtures are not a statistically designed context-saturation study; additional large-repository profiles are still needed before drawing conclusions about long-context capability.
 
 ### Direct-model measurements
 
@@ -88,17 +116,18 @@ data/benchmarks/latest_run.json
 ```
 
 The file is intentionally Git-ignored. It records:
-
 - The checkpoint SHA-256, native checkpoint identity, training step, training mode, and selected device.
 - Training and validation loss plus the bounded loss-history points actually saved in checkpoint metadata.
-- Per-task baseline validity, strict patch validity, syntax status, target completion, and regression prevention.
-- Prompt/output token counts, generation tokens per second, and separate generation, patch, syntax, target-test, regression-test, and total timings.
-- Aggregate task-completion, patch-correctness, regression-prevention, and latency statistics.
+- Per-task language, image identity/tag, baseline validity, patch validity, compiler/syntax status, target completion, and regression prevention.
+- Prompt/output tokens, context-window size/utilization, generation tokens per second, and separate generation, patch, syntax, target-test, regression-test, and total timings.
+- Aggregate completion and verification counts per language, alongside the cross-suite task, patch, regression, and latency statistics.
 
-The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` warning triggers only when the saved training loss is at or below the configured threshold (default 1.0), at least three tasks were attempted, and zero target tasks completed. Configure the threshold with `--low-loss-threshold`. This is a warning heuristic, not a statistical diagnosis or proof that overfitting caused poor coding performance. Training-loss history is only recorded from checkpoints produced after history tracking was added; older checkpoints are reported as history-unavailable rather than backfilled.
+The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` warning triggers only when the saved training loss is at or below the configured threshold (default 1.0), at least three baseline-valid tasks were attempted, and zero target tasks completed. Configure the threshold with `--low-loss-threshold`. This is a warning heuristic, not a statistical diagnosis or proof that overfitting caused poor coding performance. Training-loss history is only recorded from checkpoints produced after history tracking was added; older checkpoints are reported as history-unavailable rather than backfilled.
 
 ## Comparability and limitations
 
-Do not combine raw-model results with full-agent results. The direct track currently covers five small Python tasks; it is a first held-out regression suite, not a representative sample of unfamiliar repositories or an industrial capability benchmark. The existing eleven-task agent suite includes JavaScript, Python, Go, and Rust tasks, but those fixtures are still deliberately bounded and do not establish broad language competence.
+Do not combine raw-model results with full-agent results. The direct raw-model suite now has 12 small held-out fixtures across four languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior are each represented by one narrow task; that is not broad language competence.
 
-For meaningful comparisons, retain the same suite version and task IDs, run the same checkpoint on the same hardware and device, and keep system load as similar as practical. Compare exact checkpoint identities and measured outputs. Do not infer skill improvement from training loss alone. Record a real baseline run before and after a training or agent change; the evaluator does not fabricate a score for missing checkpoints or failed tasks.
+GitHub CI installs the required Go/Rust toolchains to validate the fixture baselines and the runner implementation. Actual benchmark execution remains offline: it uses pre-provisioned local Docker images and does not pull images or packages. The benchmark does not fabricate a score when a checkpoint, local image, language runtime, or valid fixture baseline is unavailable.
+
+For meaningful comparisons, retain the same suite version and task IDs, run the same checkpoint on the same hardware and device, and keep system load as similar as practical. Compare exact checkpoint identities and measured outputs. Do not infer skill improvement from training loss alone. Record a real baseline run before and after a training or agent change.
