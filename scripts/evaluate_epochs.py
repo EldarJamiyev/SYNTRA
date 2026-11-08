@@ -259,6 +259,7 @@ def _validate_profile_values(profile: dict[str, Any]) -> None:
     min_lr = _number(pre.get("minimum_learning_rate"))
     weight_decay = _number(pre.get("weight_decay"))
     dropout = _number(pre.get("dropout"))
+    gradient_clip = _number(pre.get("gradient_clip_norm"))
     if base_lr is None or not 1e-6 <= base_lr <= 1e-2:
         raise OrchestrationError("pretraining.learning_rate is outside the supported range.")
     if min_lr is None or not 1e-7 <= min_lr <= base_lr:
@@ -267,6 +268,8 @@ def _validate_profile_values(profile: dict[str, Any]) -> None:
         raise OrchestrationError("pretraining.weight_decay must be between 0 and 1.")
     if dropout is None or not 0 <= dropout < 0.5:
         raise OrchestrationError("pretraining.dropout must be between 0 and 0.5.")
+    if gradient_clip != 1.0:
+        raise OrchestrationError("pretraining.gradient_clip_norm is fixed at 1.0 for this milestone.")
     curriculum = profile["curriculum"]
     _validate_positive_int(curriculum, "max_examples", 4, 10_000)
     _validate_positive_int(curriculum, "max_tokens", 1024, 3_000_000)
