@@ -304,7 +304,7 @@ def _runtime_environment(language: str, workspace: Path, *, in_container: bool) 
     if in_container:
         env = {"HOME": "/tmp", "TMPDIR": "/build"}
         if language == "python":
-            env.update({"PYTHONPATH": "/workspace", "PYTHONDONTWRITEBYTECODE": "1"})
+            env.update({"PYTHONPATH": "/workspace", "PYTHONDONTWRITEBYTECODE": "1", "SYNTRA_BENCHMARK_WORKSPACE": "/workspace"})
         elif language == "typescript":
             env["SYNTRA_TYPESCRIPT_ROOT"] = "/opt/typescript"
         elif language == "go":
@@ -394,7 +394,7 @@ def run_environment_command(
     if language == "typescript":
         command.extend([
             "--mount", f"type=bind,src={TYPESCRIPT_ROOT.resolve()},dst=/opt/typescript,readonly",
-            "--mount", f"type=bind,src={TYPESCRIPT_TEST_RUNNER.resolve()},dst=/benchmark/typescript_test_runner.mjs,readonly",
+            "--mount", f"type=bind,src={TYPESCRIPT_TEST_RUNNER.resolve()},dst=/opt/typescript_test_runner.mjs,readonly",
         ])
     for key, value in _runtime_environment(language, workspace, in_container=True).items():
         command.extend(["--env", key + "=" + value])
@@ -608,7 +608,7 @@ def run_hidden_test(
         return run_environment_command(
             language=language, isolation=isolation, workspace=workspace,
             argv=[
-                "node", "/benchmark/typescript_test_runner.mjs",
+                "node", "/opt/typescript_test_runner.mjs",
                 "/evaluation/" + test_name, "/tmp/syntra-typescript-" + run_id[-8:] + "-" + phase,
             ],
             run_id=run_id, phase=phase, hidden_dir=hidden_root, timeout_seconds=60,
