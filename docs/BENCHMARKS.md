@@ -86,7 +86,7 @@ Before generation, the target test must fail with a recognized assertion/diagnos
 | Language | Default local image | Validation |
 | --- | --- | --- |
 | Python | `python:3.12-slim` | AST parsing and hidden Python tests |
-| JavaScript | `node:20-slim` | `node --check` and hidden `.mjs` test programs (runtime is registered; no dedicated JS task is in v1.2.0) |
+| JavaScript | `node:20-slim` | `node --check` and hidden `.mjs` tests for the v1.3.0 multi-file event-normalizer task |
 | TypeScript | `node:20-slim` | Local TypeScript compiler, then emitted JavaScript tests |
 | Go | `golang:1.22-alpine` | `go test ./...` and hidden Go test programs |
 | Rust | `rust:1.78-slim` | `cargo check --offline --locked` and Cargo integration tests |
@@ -122,7 +122,7 @@ The file is intentionally Git-ignored. It records:
 - Training and validation loss plus the bounded loss-history points actually saved in checkpoint metadata.
 - Per-task language, image identity/tag, baseline validity, patch validity, compiler/syntax status, target completion, and regression prevention.
 - Prompt/output tokens, context-window size/utilization, generation tokens per second, and separate generation, patch, syntax, target-test, regression-test, and total timings.
-- Aggregate completion and verification counts per language, alongside the cross-suite task, patch, regression, and latency statistics.
+- Per-language and cross-suite target-completion, patch-correctness, regression-prevention, and fully verified counts/rates with their denominators; context measured/rejected/near-limit counts and utilization statistics; and latency aggregates.
 
 The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` warning triggers only when the saved training loss is at or below the configured threshold (default 1.0), at least three baseline-valid tasks completed model generation within the checkpoint context, and zero of those generation attempts passed their target tests. Context-rejected tasks remain in the overall end-to-end completion denominator but are excluded from this training/generalization heuristic. Configure the threshold with `--low-loss-threshold`. This is a warning heuristic, not a statistical diagnosis or proof that overfitting caused poor coding performance. Training-loss history is only recorded from checkpoints produced after history tracking was added; older checkpoints are reported as history-unavailable rather than backfilled.
 
