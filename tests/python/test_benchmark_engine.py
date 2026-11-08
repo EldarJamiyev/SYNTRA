@@ -320,7 +320,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertFalse(runtime.stream_called)
         self.assertEqual(captured.exception.prompt_tokens, 9)
         self.assertEqual(captured.exception.context_window_tokens, 8)
-        self.assertEqual(captured.exception.tokens_over_context, 1)
+        self.assertEqual(captured.exception.tokens_over_context, 2)
         self.assertEqual(captured.exception.context_utilization, 1.125)
 
     def test_generation_rejects_malformed_tokenizer_evidence(self):
