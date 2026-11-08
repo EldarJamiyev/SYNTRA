@@ -100,7 +100,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
         with mock.patch.object(runner.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
             runner,
             "run_command",
-            return_value={"returncode": 0, "stdout": image_id + "\\n", "stderr": "", "timed_out": False, "output_limited": False, "elapsed_ms": 1},
+            return_value={"returncode": 0, "stdout": image_id + "\n", "stderr": "", "timed_out": False, "output_limited": False, "elapsed_ms": 1},
         ):
             isolation = runner.prepare_isolation("docker", "node:20-slim")
         self.assertEqual(isolation["image"], "node:20-slim")
@@ -114,7 +114,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
             ), mock.patch.object(
                 runner,
                 "run_command",
-                return_value={"returncode": 0, "stdout": image_id + "\\n", "stderr": "", "timed_out": False, "output_limited": False, "elapsed_ms": 1},
+                return_value={"returncode": 0, "stdout": image_id + "\n", "stderr": "", "timed_out": False, "output_limited": False, "elapsed_ms": 1},
             ):
                 with self.assertRaisesRegex(runner.BenchmarkError, "valid immutable image ID"):
                     runner.prepare_isolation("docker", "node:20-slim")
@@ -124,7 +124,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="syntra-docker-image-id-") as temp:
             workspace = Path(temp)
             isolation = {"mode": "docker-no-network", "image": "node:20-slim", "image_id": image_id}
-            outcome = {"returncode": 0, "timed_out": False, "output_limited": False, "stdout": "v20\\n", "stderr": "", "elapsed_ms": 3}
+            outcome = {"returncode": 0, "timed_out": False, "output_limited": False, "stdout": "v20\n", "stderr": "", "elapsed_ms": 3}
             with mock.patch.object(runner.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
                 runner, "run_command", return_value=outcome
             ) as command_runner:
