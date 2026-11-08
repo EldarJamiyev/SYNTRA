@@ -1128,7 +1128,20 @@ def train(
         requested_config = replace(requested_config, vocab_size=tokenizer.vocab_size)
 
     if requested_config.vocab_size != tokenizer.vocab_size:
-        raise ValueError("Model vocabulary and local tokenizer vocabulary do not match.")
+        raise ValueError("Model vocabulary and local tokenizer vocabularies do not match.")
+
+    # Reuse SYNTRA's conservative device-aware budget guard before materializing
+    # context tensors or allocating model/optimizer state. MPS and CPU use the
+    # system's available unified/physical memory estimate; CUDA uses free VRAM.
+    from syntra_ai.config import ModelConfig as RuntimeModelConfig
+    from syntra_ai.resources import validate_training_memory_budget
+
+    resource_config = RuntimeModelConfig.from_dict(requested_config.to_dict())
+    estimated_training_memory_bytes = validate_training_memory_budget(
+        resource_config,
+        batch_size,
+        device,
+    )
 
     block_size = requested_config.block_size
     remaining_context_tokens = MAX_PACKED_CONTEXT_TOKENS
@@ -1234,6 +1247,7 @@ def train(
             "training_data_format": training_data_format,
             "instruction_example_count": len(instruction_records),
             "training_context_blocks": chunk_count,
+            "estimated_training_memory_bytes": estimated_training_memory_bytes,
             "dataset_files": dataset_files,
             "dataset_bytes": dataset_bytes,
             "training_settings": {
@@ -1277,6 +1291,7 @@ def train(
             "throughput_basis": "supervised_target_tokens",
             "elapsed_seconds": round(elapsed, 2),
             "parameter_count": parameter_count,
+            "estimated_training_memory_bytes": estimated_training_memory_bytes,
             "dataset_files": len(dataset_files),
             "dataset_bytes": dataset_bytes,
             "training_tokens": int((train_targets != -100).sum().item()),
