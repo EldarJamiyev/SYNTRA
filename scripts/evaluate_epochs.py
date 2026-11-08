@@ -878,6 +878,7 @@ def main(argv: list[str] | None = None) -> int:
                 tokenizer_vocab_size=pre["vocab_size"],
                 tokenizer_bytes=pre["tokenizer_bytes"],
                 max_dataset_bytes=pre["max_dataset_bytes"],
+                exclude_dataset_paths=[curriculum_path],
                 evaluation_batches=pre["evaluation_batches"],
                 save_every_steps=evaluation_every,
                 device_name=training_device,
