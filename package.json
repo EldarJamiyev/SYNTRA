@@ -19,7 +19,8 @@
     "benchmark": "node scripts/benchmark-agent.mjs",
     "benchmark:reports": "node scripts/benchmark-report.mjs",
     "test:e2e": "playwright test",
-    "benchmark:model": "python scripts/run_syntra_module.py benchmark-model"
+    "benchmark:model": "python scripts/run_syntra_module.py benchmark-model",
+    "brain:milestone4": "python scripts/evaluate_epochs.py"
   },
   "dependencies": {
     "lucide-react": "^1.65.0",
