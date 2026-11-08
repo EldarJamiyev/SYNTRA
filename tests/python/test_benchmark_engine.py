@@ -253,6 +253,26 @@ class RawModelBenchmarkTests(unittest.TestCase):
             ])
             self.assertTrue(evidence["history_available"])
 
+    def test_generation_rejects_context_overflow_before_streaming_the_model(self):
+        class TokenizerEvidenceOnly:
+            stream_called = False
+
+            def tokenize_text(self, prompt, path=None):
+                return {
+                    "token_count": 9,
+                    "context_window_tokens": 8,
+                    "tokens_over_context": 1,
+                }
+
+            def stream_generate(self, *args, **kwargs):
+                self.stream_called = True
+                raise AssertionError("Generation must not start when the prompt exceeds context.")
+
+        runtime = TokenizerEvidenceOnly()
+        with self.assertRaisesRegex(runner.BenchmarkError, "silent context truncation"):
+            runner._generate_patch(runtime, "oversized prompt", Path("unused-checkpoint"), "cpu", 16)
+        self.assertFalse(runtime.stream_called)
+
     def test_loss_intelligence_divergence_requires_low_loss_and_at_least_three_zero_success_tasks(self):
         checkpoint = {"train_loss": 0.4}
         summary = {"task_count": 5, "task_completion_rate": 0.0}
