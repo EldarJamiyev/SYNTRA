@@ -452,7 +452,8 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
     started = time.perf_counter()
     result = {
         "id": task["id"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
-        "status": "failed", "baseline": {}, "patch_correctness": False, "task_completion": False,
+        "status": "failed", "baseline": {}, "baseline_validated": False,
+        "patch_correctness": False, "task_completion": False,
         "regression_prevention": None, "changed_paths": [], "error": None,
         "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "generated_tokens": 0, "output_tokens_per_second": None},
     }
@@ -470,7 +471,7 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         result["baseline"] = {
             "target_expected_to_fail": _expected_baseline_failure(baseline_target),
             "target_exit_code": baseline_target["returncode"], "target_elapsed_ms": baseline_target["elapsed_ms"],
-            "regression_passed": baseline_regression["returncode"] == 0 and not baseline_regression["timed_out"],
+            "regression_passed": baseline_regression["returncode"] == 0 and not baseline_regression["timed_out"] and not baseline_regression["output_limited"],
             "regression_exit_code": baseline_regression["returncode"], "regression_elapsed_ms": baseline_regression["elapsed_ms"],
         }
         if not result["baseline"]["target_expected_to_fail"]:
@@ -479,11 +480,17 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
         if not result["baseline"]["regression_passed"]:
             result["status"], result["error"] = "invalid-fixture", "Regression test failed before patching."
             return _finish_result(result, started)
+        result["baseline_validated"] = True
 
-        prompt = build_prompt(task, collect_sources(workspace))
-        generation = _generate_patch(runtime, prompt, checkpoint, device, max_new_tokens)
+        try:
+            prompt = build_prompt(task, collect_sources(workspace))
+            generation = _generate_patch(runtime, prompt, checkpoint, device, max_new_tokens)
+        except (BenchmarkError, OSError, RuntimeError, ValueError) as exc:
+            result["status"], result["error"] = "generation-error", str(exc)[:1500]
+            return _finish_result(result, started)
         if generation["prompt_truncated"]:
-            raise BenchmarkError("Native generation reported prompt truncation.")
+            result["status"], result["error"] = "generation-error", "Native generation reported prompt truncation."
+            return _finish_result(result, started)
         result["execution_speed"]["generation_ms"] = generation["generation_ms"]
         result["execution_speed"]["prompt_tokens"] = generation["prompt_tokens"]
         result["execution_speed"]["generated_tokens"] = generation["generated_tokens"]
@@ -496,7 +503,12 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
             return _finish_result(result, started)
 
         patch_started = time.perf_counter()
-        changed = apply_patch(workspace, patch, task["expected_changed_paths"])
+        try:
+            changed = apply_patch(workspace, patch, task["expected_changed_paths"])
+        except (BenchmarkError, OSError, UnicodeError, RuntimeError, ValueError) as exc:
+            result["status"], result["error"] = "patch-rejected", str(exc)[:1500]
+            result["execution_speed"]["patch_apply_ms"] = round((time.perf_counter() - patch_started) * 1000, 2)
+            return _finish_result(result, started)
         result["execution_speed"]["patch_apply_ms"] = round((time.perf_counter() - patch_started) * 1000, 2)
         result["changed_paths"] = changed
         syntax_started = time.perf_counter()
@@ -507,11 +519,15 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
             return _finish_result(result, started)
         result["patch_correctness"] = True
 
-        target_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["target_test"], run_id=run_id, phase="target")
+        try:
+            target_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["target_test"], run_id=run_id, phase="target")
+            regression_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["regression_test"], run_id=run_id, phase="regression")
+        except (BenchmarkError, OSError, RuntimeError, ValueError) as exc:
+            result["status"], result["error"] = "test-execution-error", str(exc)[:1500]
+            return _finish_result(result, started)
         result["execution_speed"]["target_test_ms"] = target_test["elapsed_ms"]
         target_passed = target_test["returncode"] == 0 and not target_test["timed_out"] and not target_test["output_limited"]
         result["task_completion"] = target_passed
-        regression_test = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["regression_test"], run_id=run_id, phase="regression")
         result["execution_speed"]["regression_test_ms"] = regression_test["elapsed_ms"]
         regression_passed = regression_test["returncode"] == 0 and not regression_test["timed_out"] and not regression_test["output_limited"]
         result["regression_prevention"] = regression_passed
@@ -535,37 +551,48 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
 
 def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     count = len(results)
-    completed = sum(item["task_completion"] is True for item in results)
-    full = sum(item["task_completion"] is True and item["regression_prevention"] is True for item in results)
-    patch_count = sum(item["patch_correctness"] is True for item in results)
-    measured = [item for item in results if item["regression_prevention"] is not None]
+    valid = [item for item in results if item.get("baseline_validated") is True]
+    valid_count = len(valid)
+    completed = sum(item["task_completion"] is True for item in valid)
+    full = sum(item["task_completion"] is True and item["regression_prevention"] is True for item in valid)
+    patch_count = sum(item["patch_correctness"] is True for item in valid)
+    measured = [item for item in valid if item["regression_prevention"] is not None]
     regression_count = sum(item["regression_prevention"] is True for item in measured)
-    times = [float(item["execution_speed"]["total_ms"]) for item in results]
-    tokens = sum(int(item["execution_speed"]["generated_tokens"] or 0) for item in results)
-    generation_seconds = sum(float(item["execution_speed"]["generation_ms"]) / 1000 for item in results if item["execution_speed"]["generation_ms"] is not None)
+    times = [float(item["execution_speed"]["total_ms"]) for item in valid]
+    tokens = sum(int(item["execution_speed"]["generated_tokens"] or 0) for item in valid)
+    generation_seconds = sum(float(item["execution_speed"]["generation_ms"]) / 1000 for item in valid if item["execution_speed"]["generation_ms"] is not None)
     return {
-        "task_count": count, "completed_task_count": completed, "task_completion_rate": round(completed / count, 4) if count else 0,
-        "fully_verified_task_count": full, "patch_correct_count": patch_count,
-        "patch_correctness_rate": round(patch_count / count, 4) if count else 0,
-        "regression_measured_count": len(measured), "regression_prevented_count": regression_count,
+        "task_count": count,
+        "baseline_valid_task_count": valid_count,
+        "invalid_fixture_count": count - valid_count,
+        "completed_task_count": completed,
+        "task_completion_rate": round(completed / valid_count, 4) if valid_count else None,
+        "fully_verified_task_count": full,
+        "patch_correct_count": patch_count,
+        "patch_correctness_rate": round(patch_count / valid_count, 4) if valid_count else None,
+        "regression_measured_count": len(measured,
+        "regression_prevented_count": regression_count,
         "regression_prevention_rate": round(regression_count / len(measured), 4) if measured else None,
         "generated_tokens": tokens,
         "aggregate_generation_tokens_per_second": round(tokens / generation_seconds, 2) if generation_seconds > 0 else None,
-        "execution_time_ms": {"mean": round(sum(times) / len(times), 2) if times else 0, "median": round(sorted(times)[len(times) // 2], 2) if times else 0, "max": round(max(times), 2) if times else 0},
+        "execution_time_ms": {"mean": round(sum(times) / len(times), 2) if times else None, "median": round(sorted(times)[len(times) // 2], 2) if times else None, "max": round(max(times), 2) if times else None},
     }
 
 
 def assess_loss_intelligence_divergence(summary: dict[str, Any], checkpoint: dict[str, Any], low_loss_threshold: float = LOW_TRAINING_LOSS_THRESHOLD) -> dict[str, Any]:
     train_loss = checkpoint.get("train_loss")
-    enough = summary.get("task_count", 0) >= 3
+    baseline_valid = summary.get("baseline_valid_task_count", 0)
+    enough = isinstance(baseline_valid, int) and baseline_valid >= 3
     low = isinstance(train_loss, (int, float)) and train_loss <= low_loss_threshold
-    detected = bool(enough and low and summary.get("task_completion_rate") == 0.0)
+    completion_rate = summary.get("task_completion_rate")
+    detected = bool(enough and low and completion_rate == 0.0)
     return {
         "flag": "OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE" if detected else None,
         "detected": detected, "low_training_loss_threshold": low_loss_threshold,
-        "observed_training_loss": train_loss, "held_out_task_completion_rate": summary.get("task_completion_rate"),
-        "minimum_tasks_required": 3,
-        "interpretation": "Low recorded training loss coincides with zero held-out task completion. This is a divergence warning, not proof of causal overfitting." if detected else "No divergence flag was triggered; this does not establish general coding capability.",
+        "observed_training_loss": train_loss, "baseline_valid_task_count": baseline_valid,
+        "held_out_task_completion_rate": completion_rate,
+        "minimum_valid_tasks_required": 3,
+        "interpretation": "Low recorded training loss coincides with zero held-out target completion across at least three baseline-valid tasks. This is a divergence warning, not proof of causal overfitting." if detected else "No divergence flag was triggered; this does not establish general coding capability.",
     }
 
 
@@ -622,7 +649,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             result = {
                 "id": task["id"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
                 "status": "error", "baseline": {}, "patch_correctness": False, "task_completion": False,
-                "regression_prevention": None, "changed_paths": [], "error": str(exc)[:1500],
+                "regression_prevention": None, "baseline_validated": False, "changed_paths": [], "error": str(exc)[:1500],
                 "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "generated_tokens": 0, "output_tokens_per_second": None},
             }
         results.append(result)
@@ -668,7 +695,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     }
     output = write_report(Path(args.output), report)
     print("")
-    print(f"Raw native benchmark: {summary['completed_task_count']}/{summary['task_count']} target tasks completed")
+    print(f"Raw native benchmark: {summary['completed_task_count']}/{summary['baseline_valid_task_count']} baseline-valid target tasks completed (selected: {summary['task_count']}; invalid fixtures: {summary['invalid_fixture_count']})")
     print(f"Patch correctness: {summary['patch_correctness_rate']:.1%}")
     if summary["regression_prevention_rate"] is not None:
         print(f"Regression prevention: {summary['regression_prevention_rate']:.1%}")

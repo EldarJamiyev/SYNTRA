@@ -166,26 +166,31 @@ class RawModelBenchmarkTests(unittest.TestCase):
     def test_loss_intelligence_divergence_requires_low_loss_and_at_least_three_zero_success_tasks(self):
         checkpoint = {"train_loss": 0.4}
         summary = {"task_count": 5, "task_completion_rate": 0.0}
+        summary["baseline_valid_task_count"] = 5
         warning = runner.assess_loss_intelligence_divergence(summary, checkpoint)
         self.assertTrue(warning["detected"])
         self.assertEqual(warning["flag"], "OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE")
         self.assertIn("not proof", warning["interpretation"])
 
         too_small = runner.assess_loss_intelligence_divergence(
-            {"task_count": 2, "task_completion_rate": 0.0}, checkpoint,
+            {"task_count": 2, "baseline_valid_task_count": 2, "task_completion_rate": 0.0}, checkpoint,
         )
         self.assertFalse(too_small["detected"])
         high_loss = runner.assess_loss_intelligence_divergence(
-            {"task_count": 5, "task_completion_rate": 0.0}, {"train_loss": 1.5},
+            {"task_count": 5, "baseline_valid_task_count": 5, "task_completion_rate": 0.0}, {"train_loss": 1.5},
         )
         self.assertFalse(high_loss["detected"])
 
     def test_summary_keeps_target_completion_and_regression_prevention_separate(self):
         results = [
-            {"task_completion": True, "patch_correctness": True, "regression_prevention": False, "execution_speed": {"total_ms": 100, "generation_ms": 50, "generated_tokens": 10}},
-            {"task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 200, "generation_ms": None, "generated_tokens": 0}},
+            {"baseline_validated": True, "task_completion": True, "patch_correctness": True, "regression_prevention": False, "execution_speed": {"total_ms": 100, "generation_ms": 50, "generated_tokens": 10}},
+            {"baseline_validated": True, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 200, "generation_ms": None, "generated_tokens": 0}},
+            {"baseline_validated": False, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 5, "generation_ms": None, "generated_tokens": 0}},
         ]
         summary = runner.summarize(results)
+        self.assertEqual(summary["task_count"], 3)
+        self.assertEqual(summary["baseline_valid_task_count"], 2)
+        self.assertEqual(summary["invalid_fixture_count"], 1)
         self.assertEqual(summary["task_completion_rate"], 0.5)
         self.assertEqual(summary["patch_correctness_rate"], 0.5)
         self.assertEqual(summary["regression_prevention_rate"], 0.0)
