@@ -502,6 +502,7 @@ def synthesize_repository_curriculum(
     root: str | Path | None = None,
     output_path: str | Path | None = None,
     max_examples: int = 240,
+    exclude_paths: Iterable[str | Path] = (),
 ) -> dict[str, Any]:
     """Generate JSONL prompt/completion records from an approved local repository."""
     if type(max_examples) is not int or not 4 <= max_examples <= MAX_INSTRUCTION_EXAMPLES:
@@ -530,7 +531,7 @@ def synthesize_repository_curriculum(
 
     output_root = corpus_roots[0]
     target = resolve_curriculum_output_path(output_path, output_root)
-    corpus = load_corpus(corpus_roots, include_tokens=False)
+    corpus = load_corpus(corpus_roots, include_tokens=False, exclude_paths=exclude_paths)
     if len(corpus.files) != len(corpus.documents):
         raise RuntimeError("The bounded source reader returned inconsistent file/document counts.")
 
