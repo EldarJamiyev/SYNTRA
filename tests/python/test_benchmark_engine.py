@@ -88,6 +88,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
             self.assertEqual(runner.expected_test_filename(language, "target"), "test_target" + extension)
             self.assertEqual(runner.expected_test_filename(language, "regression"), "test_regression" + extension)
         self.assertEqual(runner.resolve_environment("go", {"go": "golang:1.22-alpine"})["image"], "golang:1.22-alpine")
+        self.assertEqual(runner.resolve_environment("javascript", {"javascript": "node:20-slim"})["image"], "node:20-slim")
         with self.assertRaises(ValueError):
             runner.resolve_environment("unknown")
 
