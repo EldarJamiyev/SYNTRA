@@ -910,8 +910,19 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     for item in results:
         language = item.get("language", "unknown")
         entry = language_breakdown.setdefault(language, {
-            "task_count": 0, "baseline_valid_task_count": 0, "completed_task_count": 0,
-            "context_measurement_count": 0, "context_exceeded_task_count": 0,
+            "task_count": 0,
+            "baseline_valid_task_count": 0,
+            "task_completion_count": 0,
+            "patch_correct_count": 0,
+            "regression_prevention_measured_count": 0,
+            "regression_prevented_count": 0,
+            "fully_verified_task_count": 0,
+            "task_completion_rate": None,
+            "patch_correctness_rate": None,
+            "regression_prevention_rate": None,
+            "fully_verified_task_rate": None,
+            "context_measurement_count": 0,
+            "context_exceeded_task_count": 0,
             "max_context_utilization": None,
         })
         entry["task_count"] += 1
@@ -944,8 +955,33 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
             context_exceeded_count += 1
         if item.get("baseline_validated") is True:
             entry["baseline_valid_task_count"] += 1
-            if item.get("task_completion") is True and item.get("regression_prevention") is True:
-                entry["completed_task_count"] += 1
+            if item.get("task_completion") is True:
+                entry["task_completion_count"] += 1
+            if item.get("patch_correctness") is True:
+                entry["patch_correct_count"] += 1
+            regression_result = item.get("regression_prevention")
+            if regression_result is not None:
+                entry["regression_prevention_measured_count"] += 1
+                if regression_result is True:
+                    entry["regression_prevented_count"] += 1
+            if item.get("task_completion") is True and regression_result is True:
+                entry["fully_verified_task_count"] += 1
+    for entry in language_breakdown.values():
+        denominator = entry["baseline_valid_task_count"]
+        measured_regressions = entry["regression_prevention_measured_count"]
+        entry["task_completion_rate"] = (
+            round(entry["task_completion_count"] / denominator, 4) if denominator else None
+        )
+        entry["patch_correctness_rate"] = (
+            round(entry["patch_correct_count"] / denominator, 4) if denominator else None
+        )
+        entry["fully_verified_task_rate"] = (
+            round(entry["fully_verified_task_count"] / denominator, 4) if denominator else None
+        )
+        entry["regression_prevention_rate"] = (
+            round(entry["regression_prevented_count"] / measured_regressions, 4)
+            if measured_regressions else None
+        )
     context_utilizations = [item["utilization"] for item in context_measurements]
     context_evidence = {
         "measured_task_count": len(context_measurements),
