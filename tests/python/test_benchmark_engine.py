@@ -340,19 +340,46 @@ class RawModelBenchmarkTests(unittest.TestCase):
 
     def test_loss_intelligence_divergence_requires_low_loss_and_at_least_three_zero_success_tasks(self):
         checkpoint = {"train_loss": 0.4}
-        summary = {"task_count": 5, "task_completion_rate": 0.0}
-        summary["baseline_valid_task_count"] = 5
+        summary = {
+            "task_count": 5,
+            "baseline_valid_task_count": 5,
+            "task_completion_rate": 0.0,
+            "generation_attempted_task_count": 5,
+            "generation_attempted_task_completion_rate": 0.0,
+        }
         warning = runner.assess_loss_intelligence_divergence(summary, checkpoint)
         self.assertTrue(warning["detected"])
         self.assertEqual(warning["flag"], "OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE")
         self.assertIn("not proof", warning["interpretation"])
 
         too_small = runner.assess_loss_intelligence_divergence(
-            {"task_count": 2, "baseline_valid_task_count": 2, "task_completion_rate": 0.0}, checkpoint,
+            {
+                "baseline_valid_task_count": 2,
+                "generation_attempted_task_count": 2,
+                "generation_attempted_task_completion_rate": 0.0,
+                "task_completion_rate": 0.0,
+            },
+            checkpoint,
         )
         self.assertFalse(too_small["detected"])
+        context_only = runner.assess_loss_intelligence_divergence(
+            {
+                "baseline_valid_task_count": 5,
+                "generation_attempted_task_count": 0,
+                "generation_attempted_task_completion_rate": None,
+                "task_completion_rate": 0.0,
+            },
+            checkpoint,
+        )
+        self.assertFalse(context_only["detected"], "Context-limit rejections are not evidence of failed code generation.")
         high_loss = runner.assess_loss_intelligence_divergence(
-            {"task_count": 5, "baseline_valid_task_count": 5, "task_completion_rate": 0.0}, {"train_loss": 1.5},
+            {
+                "baseline_valid_task_count": 5,
+                "generation_attempted_task_count": 5,
+                "generation_attempted_task_completion_rate": 0.0,
+                "task_completion_rate": 0.0,
+            },
+            {"train_loss": 1.5},
         )
         self.assertFalse(high_loss["detected"])
 
