@@ -37,7 +37,9 @@ def resolve_environment(language: str, image_overrides: dict[str, str] | None = 
         raise ValueError("Unsupported benchmark language: " + str(language))
     spec = dict(ENVIRONMENT_SPECS[language])
     overrides = image_overrides or {}
-    image = overrides.get(language, spec["image"])
+    image = overrides.get(language)
+    if image is None:
+        image = spec["image"]
     if not isinstance(image, str) or not image.strip() or len(image) > 256:
         raise ValueError("A Docker image override must be a non-empty bounded string.")
     spec["language"] = language
