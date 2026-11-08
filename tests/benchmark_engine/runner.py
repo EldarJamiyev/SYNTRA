@@ -885,17 +885,60 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     tokens = sum(int(item["execution_speed"]["generated_tokens"] or 0) for item in valid)
     generation_seconds = sum(float(item["execution_speed"]["generation_ms"]) / 1000 for item in valid if item["execution_speed"]["generation_ms"] is not None)
     language_breakdown = {}
+    context_measurements = []
+    context_exceeded_count = 0
     for item in results:
         language = item.get("language", "unknown")
-        entry = language_breakdown.setdefault(language, {"task_count": 0, "baseline_valid_task_count": 0, "completed_task_count": 0})
+        entry = language_breakdown.setdefault(language, {
+            "task_count": 0, "baseline_valid_task_count": 0, "completed_task_count": 0,
+            "context_measurement_count": 0, "context_exceeded_task_count": 0,
+            "max_context_utilization": None,
+        })
         entry["task_count"] += 1
+        speed = item.get("execution_speed", {})
+        prompt_tokens = speed.get("prompt_tokens")
+        context_window = speed.get("context_window_tokens")
+        utilization = speed.get("context_utilization")
+        if (
+            type(prompt_tokens) is int and prompt_tokens >= 0
+            and type(context_window) is int and context_window >= 2
+            and isinstance(utilization, (int, float)) and not isinstance(utilization, bool)
+            and math.isfinite(float(utilization))
+        ):
+            measurement = {
+                "language": language,
+                "prompt_tokens": prompt_tokens,
+                "context_window_tokens": context_window,
+                "utilization": float(utilization),
+                "status": speed.get("context_status", "measured"),
+            }
+            context_measurements.append(measurement)
+            entry["context_measurement_count"] += 1
+            previous_max = entry["max_context_utilization"]
+            entry["max_context_utilization"] = (
+                measurement["utilization"] if previous_max is None
+                else max(previous_max, measurement["utilization"])
+            )
+        if speed.get("context_status") == "exceeded":
+            entry["context_exceeded_task_count"] += 1
+            context_exceeded_count += 1
         if item.get("baseline_validated") is True:
             entry["baseline_valid_task_count"] += 1
             if item.get("task_completion") is True and item.get("regression_prevention") is True:
                 entry["completed_task_count"] += 1
+    context_utilizations = [item["utilization"] for item in context_measurements]
+    context_evidence = {
+        "measured_task_count": len(context_measurements),
+        "context_exceeded_task_count": context_exceeded_count,
+        "near_limit_task_count": sum(value >= 0.90 for value in context_utilizations),
+        "mean_utilization": round(sum(context_utilizations) / len(context_utilizations), 4) if context_utilizations else None,
+        "maximum_utilization": round(max(context_utilizations), 4) if context_utilizations else None,
+        "measurements": context_measurements,
+    }
     return {
         "task_count": count,
         "language_breakdown": language_breakdown,
+        "context_evidence": context_evidence,
         "baseline_valid_task_count": valid_count,
         "invalid_fixture_count": count - valid_count,
         "completed_task_count": completed,
