@@ -790,6 +790,11 @@ def main(argv: list[str] | None = None) -> int:
         elif isolation == "host" and not args.allow_host_execution:
             raise OrchestrationError("Host execution is unsandboxed and requires --allow-host-execution.")
 
+        baseline_only = args.skip_pretraining and args.skip_sft
+        if baseline_only and args.skip_benchmark:
+            raise OrchestrationError("Skipping both training stages requires benchmark execution; remove --skip-benchmark.")
+        if baseline_only and not checkpoint.is_file():
+            raise OrchestrationError("Baseline-only evaluation requires an existing local checkpoint.")
         if args.resume_pretraining and args.skip_pretraining:
             raise OrchestrationError("--resume-pretraining and --skip-pretraining cannot be used together.")
         if args.resume_pretraining and not checkpoint.is_file():
@@ -937,6 +942,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"validation_loss={_format_metric(sft_result.get('validation_loss'))}",
                 flush=True,
             )
+
+        if baseline_only:
+            if evaluator is None:
+                raise OrchestrationError("Baseline-only execution requires an active benchmark evaluator.")
+            from syntra_ai.runtime import _read_checkpoint
+            _, baseline_payload, _, _ = _read_checkpoint(checkpoint)
+            baseline_step = baseline_payload.get("step")
+            if type(baseline_step) is not int or baseline_step < 0:
+                raise OrchestrationError("The existing checkpoint does not expose a valid measured training step.")
+            snapshot_path, baseline_hash = snapshots.create("baseline", baseline_step)
+            evaluator.launch("baseline", baseline_step, snapshot_path, baseline_hash)
+            training_results["baseline_status"] = "benchmark-launched"
 
         evaluation_results = evaluator.wait_all() if evaluator is not None else []
         training_results["evaluation_count"] = len(evaluation_results)
