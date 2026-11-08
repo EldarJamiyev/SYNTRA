@@ -1014,6 +1014,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     checkpoint_evidence = load_checkpoint_evidence(checkpoint)
     image_overrides = {
         "python": args.python_image,
+        "javascript": args.node_image,
         "typescript": args.node_image,
         "go": args.go_image,
         "rust": args.rust_image,
@@ -1081,7 +1082,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             "Hidden target and regression tests are not copied into the model workspace or included in the model prompt.",
             "Task completion means held-out target-test success; regression prevention is measured independently.",
             "Patch correctness uses SYNTRA's existing validatePatch/writeCandidateChanges implementation and requires the exact expected multi-file changed-path set.",
-            "Python uses AST parsing; TypeScript uses the repository-locked TypeScript compiler; Go uses go test; Rust uses offline cargo check before hidden tests.",
+            "Python uses AST parsing; JavaScript uses Node syntax checks and hidden ESM tests; TypeScript uses the repository-locked TypeScript compiler; Go uses go test; Rust uses offline cargo check before hidden tests.",
             "Every evaluator container uses a pre-existing local image, --pull=never, --network none, read-only workspace/evaluation mounts, and bounded writable build tmpfs.",
             "Prompt token count and context-window utilization are recorded per task; prompts that exceed the checkpoint context are rejected without truncation.",
             "Generation throughput and timings are local measurements affected by hardware and system load.",
