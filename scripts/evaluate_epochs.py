@@ -35,9 +35,26 @@ def _now() -> str:
 
 
 def _inside_root(path: Path) -> Path:
-    resolved = path.expanduser().resolve(strict=False)
+    raw = path.expanduser()
+    if not raw.is_absolute():
+        raw = ROOT / raw
+    lexical = Path(os.path.abspath(raw))
+    root = ROOT.resolve()
     try:
-        resolved.relative_to(ROOT.resolve())
+        relative = lexical.relative_to(root)
+    except ValueError:
+        raise OrchestrationError("All orchestration outputs and checkpoints must stay inside the SYNTRA repository.") from None
+
+    # Check every existing component before resolving: resolving first would
+    # erase the evidence that an in-repository symlink redirected the write.
+    current = root
+    for component in relative.parts:
+        current = current / component
+        if current.is_symlink():
+            raise OrchestrationError("Symbolic-link path components are not allowed for orchestration outputs or checkpoints.")
+    resolved = lexical.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
     except ValueError:
         raise OrchestrationError("All orchestration outputs and checkpoints must stay inside the SYNTRA repository.") from None
     return resolved
@@ -119,6 +136,7 @@ def _hash_regular_file(path: Path) -> str:
 
 
 def _copy_stable_read_only(source: Path, destination: Path) -> str:
+    destination = _inside_root(destination)
     digest_before = _hash_regular_file(source)
     source_stat = source.stat()
     destination.parent.mkdir(parents=True, exist_ok=True)
