@@ -23,6 +23,8 @@ import uuid
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 DEFAULT_CONFIG = ROOT / "configs" / "training" / "phase4_milestone4.json"
 
 
@@ -163,6 +165,38 @@ def _copy_stable_read_only(source: Path, destination: Path) -> str:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def _prepare_inference_companion_for_fresh_pretraining(
+    checkpoint: Path,
+    backup_dir: Path,
+    *,
+    resume: bool,
+    overwrite: bool,
+) -> Path | None:
+    """Prevent an old inference companion from shadowing newly trained weights."""
+    from syntra_ai.training import inference_checkpoint_path
+
+    companion = inference_checkpoint_path(checkpoint)
+    if resume:
+        return companion if companion.is_file() else None
+    if companion.is_symlink():
+        raise OrchestrationError("Inference checkpoint companion must not be a symbolic link.")
+    if not companion.exists():
+        return None
+    if not companion.is_file():
+        raise OrchestrationError("Inference checkpoint companion must be a regular file.")
+    if not overwrite:
+        raise OrchestrationError(
+            "A stale inference companion exists beside the staging checkpoint. "
+            "Use --overwrite-checkpoint to back it up before a fresh pretraining run."
+        )
+    backup_dir = _inside_root(backup_dir)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / companion.name
+    _copy_stable_read_only(companion, backup)
+    companion.unlink()
+    return backup
 
 
 def _number(value: Any) -> float | None:
@@ -808,13 +842,13 @@ def main(argv: list[str] | None = None) -> int:
                 old_sidecar = checkpoint.with_suffix(checkpoint.suffix + ".json")
                 if old_sidecar.is_file() and not old_sidecar.is_symlink():
                     _copy_stable_read_only(old_sidecar, backup_dir / old_sidecar.name)
-                try:
-                    from syntra_ai.training import inference_checkpoint_path
-                    old_companion = inference_checkpoint_path(checkpoint)
-                except (ImportError, OSError, ValueError):
-                    old_companion = None
-                if old_companion is not None and old_companion.is_file() and not old_companion.is_symlink():
-                    _copy_stable_read_only(old_companion, backup_dir / old_companion.name)
+            companion_backup_dir = run_root / "pretraining-backup"
+            _prepare_inference_companion_for_fresh_pretraining(
+                checkpoint,
+                companion_backup_dir,
+                resume=args.resume_pretraining,
+                overwrite=args.overwrite_checkpoint,
+            )
 
             from brain.model import TransformerConfig, select_device
             from brain.train import train as pretrain
