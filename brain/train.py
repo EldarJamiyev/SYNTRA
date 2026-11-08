@@ -361,7 +361,7 @@ def _read_instruction_jsonl_datasets(
         try:
             source = path.resolve(strict=True)
             for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
-                if exclude_paths and str(resolved) in exclude_paths:
+                if _matches_excluded_path(resolved, exclude_paths):
                     continue
                 if resolved.suffix.casefold() != ".jsonl" or resolved in seen:
                     continue
