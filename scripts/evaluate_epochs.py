@@ -178,10 +178,10 @@ def _prepare_inference_companion_for_fresh_pretraining(
     from syntra_ai.training import inference_checkpoint_path
 
     companion = inference_checkpoint_path(checkpoint)
-    if resume:
-        return companion if companion.is_file() else None
     if companion.is_symlink():
         raise OrchestrationError("Inference checkpoint companion must not be a symbolic link.")
+    if resume:
+        return companion if companion.is_file() else None
     if not companion.exists():
         return None
     if not companion.is_file():
