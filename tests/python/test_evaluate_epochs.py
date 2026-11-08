@@ -41,6 +41,12 @@ class Phase4Milestone4ProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "max_parallel"):
             evaluate_epochs._validate_profile_values(invalid_parallel)
 
+    def test_repository_benchmark_runner_loads_without_importing_a_site_packages_tests_package(self):
+        runner = evaluate_epochs._load_benchmark_runner()
+        suite = runner.load_suite()
+        self.assertEqual(suite["version"], "1.3.0")
+        self.assertEqual(len(suite["tasks"]), 13)
+
     def test_profile_paths_cannot_escape_the_repository(self):
         with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "inside the SYNTRA repository"):
             evaluate_epochs._resolve_profile_path("../outside.json")
@@ -159,6 +165,22 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
             snapshots = evaluate_epochs.CheckpointSnapshots(link, root / "snapshots", "symlink-test")
             with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "regular checkpoint"):
                 snapshots.create("pretraining", 1)
+
+    def test_skip_benchmark_callback_does_not_duplicate_model_checkpoints(self):
+        from unittest.mock import Mock
+
+        snapshots = Mock()
+        seen = set()
+        callback = evaluate_epochs._training_callback(
+            "pretraining", snapshots, None, 500, seen
+        )
+        callback({
+            "status": "completed",
+            "step": 5000,
+            "message": "Requested training-step block saved.",
+        })
+        snapshots.create.assert_not_called()
+        self.assertEqual(seen, set())
 
     def test_snapshot_schedule_only_uses_saved_interval_or_stage_completion(self):
         seen = set()
