@@ -11,6 +11,11 @@ ENVIRONMENT_SPECS: dict[str, dict[str, str]] = {
         "test_extension": ".py",
         "runtime": "python",
     },
+    "javascript": {
+        "image": "node:20-slim",
+        "test_extension": ".mjs",
+        "runtime": "node",
+    },
     "typescript": {
         "image": "node:20-slim",
         "test_extension": ".ts",
