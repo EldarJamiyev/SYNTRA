@@ -387,7 +387,9 @@ class BackgroundEvaluator:
             if not executable:
                 raise OrchestrationError("npm is required for npm run benchmark:model.")
             command_line = subprocess.list2cmdline([executable, *args])
-            return ["cmd.exe", "/d", "/s", "/c", command_line]
+            # /s /c strips the outermost quote pair; the inner executable and
+            # argument quotes then survive for paths containing Windows spaces.
+            return ["cmd.exe", "/d", "/s", "/c", f'"{command_line}"']
         executable = shutil.which("npm")
         if not executable:
             raise OrchestrationError("npm is required for npm run benchmark:model.")
