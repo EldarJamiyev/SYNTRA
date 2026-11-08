@@ -916,6 +916,10 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         "rust": args.rust_image,
     }
     selected_languages = sorted({task["language"] for task in selected})
+    if "typescript" in selected_languages and (
+        not TYPESCRIPT_ROOT.is_dir() or not TYPESCRIPT_TEST_RUNNER.is_file()
+    ):
+        raise BenchmarkError("TypeScript tasks require the repository's installed TypeScript package and benchmark harness before offline execution.")
     isolations = {}
     for language in selected_languages:
         environment = resolve_environment(language, image_overrides)
@@ -987,9 +991,20 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     output = write_report(Path(args.output), report)
     print("")
     print(f"Raw native benchmark: {summary['completed_task_count']}/{summary['baseline_valid_task_count']} baseline-valid target tasks completed (selected: {summary['task_count']}; invalid fixtures: {summary['invalid_fixture_count']})")
-    print(f"Patch correctness: {summary['patch_correctness_rate']:.1%}")
+    if summary["patch_correctness_rate"] is None:
+        print("Patch correctness: unavailable (no baseline-valid fixtures)")
+    else:
+        print(f"Patch correctness: {summary['patch_correctness_rate']:.1%}")
     if summary["regression_prevention_rate"] is not None:
         print(f"Regression prevention: {summary['regression_prevention_rate']:.1%}")
+    else:
+        print("Regression prevention: unavailable (no completed regression measurements)")
+    for language, counts in sorted(summary["language_breakdown"].items()):
+        print(
+            "Language " + language + ": " + str(counts["completed_task_count"])
+            + "/" + str(counts["baseline_valid_task_count"]) + " fully verified; "
+            + str(counts["task_count"]) + " selected"
+        )
     print("Generated tokens: " + str(summary["generated_tokens"]))
     print("Loss/intelligence divergence: " + ("DETECTED" if divergence["detected"] else "not detected"))
     print("Report: " + str(output))
