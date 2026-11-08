@@ -1390,6 +1390,17 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(len(full_saved["training_data_sha256"]), 64)
             self.assertIn("rng_state", full_saved)
             self.assertIn("cpu", full_saved["rng_state"])
+            self.assertEqual(len(full_saved["training_history"]), 1)
+            self.assertEqual(full_saved["training_history"][0]["step"], 1)
+            self.assertEqual(full_saved["training_history"][0]["phase"], "causal-source-pretraining")
+            self.assertEqual(inference_saved["training_history"], full_saved["training_history"])
+            metadata = json.loads(checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["training_history"], full_saved["training_history"])
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(checkpoint)}):
+                from syntra_ai.runtime import status
+                model_status = status()
+            self.assertTrue(model_status["training_history_valid"])
+            self.assertEqual(model_status["training_history"], full_saved["training_history"])
 
             source_contents = source.read_text(encoding="utf-8")
             source.write_text(source_contents + "\n# source fingerprint must detect this change\n", encoding="utf-8")
@@ -1442,6 +1453,14 @@ class TransformerTests(unittest.TestCase):
             inference_saved = torch.load(inference_checkpoint, map_location="cpu", weights_only=True)
             self.assertEqual(inference_saved["step"], tuned["step"])
             self.assertNotIn("optimizer_state", inference_saved)
+            self.assertEqual(len(inference_saved["training_history"]), 2)
+            self.assertEqual(
+                [point["phase"] for point in inference_saved["training_history"]],
+                ["causal-source-pretraining", "supervised-instruction-finetuning"],
+            )
+            self.assertEqual([point["step"] for point in inference_saved["training_history"]], [1, 2])
+            updated_metadata = json.loads(checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated_metadata["training_history"], inference_saved["training_history"])
             from syntra_ai.runtime import evaluate
             previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)

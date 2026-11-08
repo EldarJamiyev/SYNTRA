@@ -18,7 +18,8 @@
     "brain:train": "python scripts/run_syntra_module.py brain-train",
     "benchmark": "node scripts/benchmark-agent.mjs",
     "benchmark:reports": "node scripts/benchmark-report.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "benchmark:model": "python scripts/run_syntra_module.py benchmark-model"
   },
   "dependencies": {
     "lucide-react": "^1.65.0",

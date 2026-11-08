@@ -49,6 +49,7 @@ jobs:
       - run: python -c "import numpy, torch; assert torch.version.cuda is None, 'Expected CPU-only PyTorch'; print('NumPy', numpy.__version__, 'PyTorch', torch.__version__, 'CUDA', torch.version.cuda)"
       - run: python -m compileall -q brain syntra_ai tests/python scripts
       - run: python -m unittest discover -s tests/python -v
+      - run: python scripts/run_syntra_module.py benchmark-model --list
       - run: python scripts/run_syntra_module.py cli status
 
   python-lock-windows:
