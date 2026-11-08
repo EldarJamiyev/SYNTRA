@@ -53,7 +53,7 @@ npm run benchmark:model -- --task typescript-object-mapper
 npm run benchmark:model
 ```
 
-The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.2.0, and contains 12 held-out fixtures: nine Python, one TypeScript, one Go, and one Rust task.
+The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.3.0, and contains 13 held-out fixtures: nine Python, one JavaScript, one TypeScript, one Go, and one Rust task.
 
 | Task | Language | Capability |
 | --- | --- | --- |
@@ -65,6 +65,7 @@ The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.2.0, and 
 | `python-safe-path` | Python | Safe relative-path normalization |
 | `python-header-lookup` | Python | Case-insensitive HTTP header lookup |
 | `python-retry-backoff` | Python | Overflow-safe bounded exponential backoff |
+| `javascript-event-normalizer` | JavaScript | Multi-file ESM event normalization, timestamp validation, and deep payload isolation |
 | `typescript-object-mapper` | TypeScript | Multi-file generic key/value constraints and object mapping |
 | `go-channel-sync` | Go | Worker-pool synchronization, cancellation, and race-safe collection |
 | `rust-safe-slice` | Rust | Lifetime-bound UTF-8 byte slicing without panics or allocation |
@@ -106,7 +107,7 @@ Host execution is not sandboxed and runs generated code with the current operati
 
 ### Context-window accounting
 
-The native runtime's `tokenize_text` and `stream_generate` APIs are called directly against the selected checkpoint. The runner records each prompt's exact native-tokenizer count, checkpoint context window, and context utilization. A prompt that exceeds the checkpoint context is rejected rather than truncated, and a stream that reports truncation is invalid. The benchmark does not silently shrink, summarize, or drop sibling files to force a task into the window. This makes context pressure measurable, but the 12 fixtures are not a statistically designed context-saturation study; additional large-repository profiles are still needed before drawing conclusions about long-context capability.
+The native runtime's `tokenize_text` and `stream_generate` APIs are called directly against the selected checkpoint. The runner records each prompt's exact native-tokenizer count, checkpoint context window, and context utilization. A prompt that exceeds the checkpoint context is rejected before generation; the report retains the measured token count, context size, utilization, and overflow-token count. A stream that reports truncation is invalid. The benchmark does not silently shrink, summarize, or drop sibling files to force a task into the window. This makes context pressure and explicit context rejections measurable, but the 13 fixtures are not a statistically designed context-saturation study; additional large-repository profiles are still needed before drawing conclusions about long-context capability.
 
 ### Direct-model measurements
 
@@ -127,7 +128,7 @@ The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` warning triggers only when the sa
 
 ## Comparability and limitations
 
-Do not combine raw-model results with full-agent results. The direct raw-model suite now has 12 small held-out fixtures across four languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior are each represented by one narrow task; that is not broad language competence.
+Do not combine raw-model results with full-agent results. The direct raw-model suite now has 13 small held-out fixtures across five languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior are each represented by one narrow task; that is not broad language competence.
 
 GitHub CI installs the required Go/Rust toolchains to validate the fixture baselines and the runner implementation. Actual benchmark execution remains offline: it uses pre-provisioned local Docker images and does not pull images or packages. The benchmark does not fabricate a score when a checkpoint, local image, language runtime, or valid fixture baseline is unavailable.
 
