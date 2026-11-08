@@ -63,14 +63,14 @@ class RawModelBenchmarkTests(unittest.TestCase):
     def setUpClass(cls):
         cls.suite = runner.load_suite()
 
-    def test_suite_has_twelve_unique_held_out_tasks_across_four_languages(self):
-        self.assertEqual(self.suite["version"], "1.2.0")
-        self.assertEqual(len(self.suite["tasks"]), 12)
-        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 12)
-        self.assertEqual({task["language"] for task in self.suite["tasks"]}, {"python", "typescript", "go", "rust"})
+    def test_suite_has_thirteen_unique_held_out_tasks_across_five_languages(self):
+        self.assertEqual(self.suite["version"], "1.3.0")
+        self.assertEqual(len(self.suite["tasks"]), 13)
+        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 13)
+        self.assertEqual({task["language"] for task in self.suite["tasks"]}, {"python", "javascript", "typescript", "go", "rust"})
         self.assertEqual(
-            {language: sum(task["language"] == language for task in self.suite["tasks"]) for language in {"python", "typescript", "go", "rust"}},
-            {"python": 9, "typescript": 1, "go": 1, "rust": 1},
+            {language: sum(task["language"] == language for task in self.suite["tasks"]) for language in {"python", "javascript", "typescript", "go", "rust"}},
+            {"python": 9, "javascript": 1, "typescript": 1, "go": 1, "rust": 1},
         )
         self.assertTrue(all(task["hidden_evaluation"].startswith("hidden/") for task in self.suite["tasks"]))
 
@@ -126,6 +126,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
             "go-channel-sync": {"go.mod", "syncutil/collector.go"},
             "rust-safe-slice": {"Cargo.toml", "Cargo.lock", "src/lib.rs"},
             "python-multi-file-stream-state": {"src/limits.py", "src/state.py"},
+            "javascript-event-normalizer": {"package.json", "src/schema.mjs", "src/normalize-event.mjs"},
         }
         by_id = {task["id"]: task for task in self.suite["tasks"]}
         for task_id, wanted in expected.items():
@@ -296,9 +297,13 @@ class RawModelBenchmarkTests(unittest.TestCase):
                 raise AssertionError("Generation must not start when the prompt exceeds context.")
 
         runtime = TokenizerEvidenceOnly()
-        with self.assertRaisesRegex(runner.BenchmarkError, "silent context truncation"):
+        with self.assertRaises(runner.ContextWindowExceeded) as captured:
             runner._generate_patch(runtime, "oversized prompt", Path("unused-checkpoint"), "cpu", 16)
         self.assertFalse(runtime.stream_called)
+        self.assertEqual(captured.exception.prompt_tokens, 9)
+        self.assertEqual(captured.exception.context_window_tokens, 8)
+        self.assertEqual(captured.exception.tokens_over_context, 1)
+        self.assertEqual(captured.exception.context_utilization, 1.125)
 
     def test_loss_intelligence_divergence_requires_low_loss_and_at_least_three_zero_success_tasks(self):
         checkpoint = {"train_loss": 0.4}
@@ -320,8 +325,8 @@ class RawModelBenchmarkTests(unittest.TestCase):
 
     def test_summary_keeps_target_completion_and_regression_prevention_separate(self):
         results = [
-            {"baseline_validated": True, "task_completion": True, "patch_correctness": True, "regression_prevention": False, "execution_speed": {"total_ms": 100, "generation_ms": 50, "generated_tokens": 10}},
-            {"baseline_validated": True, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 200, "generation_ms": None, "generated_tokens": 0}},
+            {"baseline_validated": True, "task_completion": True, "patch_correctness": True, "regression_prevention": False, "execution_speed": {"total_ms": 100, "generation_ms": 50, "generated_tokens": 10, "prompt_tokens": 90, "context_window_tokens": 100, "context_utilization": 0.9, "context_status": "within-window"}},
+            {"baseline_validated": True, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 200, "generation_ms": None, "generated_tokens": 0, "prompt_tokens": 110, "context_window_tokens": 100, "context_utilization": 1.1, "context_tokens_over_limit": 11, "context_status": "exceeded"}},
             {"baseline_validated": False, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 5, "generation_ms": None, "generated_tokens": 0}},
         ]
         summary = runner.summarize(results)
@@ -332,6 +337,10 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["patch_correctness_rate"], 0.5)
         self.assertEqual(summary["regression_prevention_rate"], 0.0)
         self.assertEqual(summary["fully_verified_task_count"], 0)
+        self.assertEqual(summary["context_evidence"]["measured_task_count"], 2)
+        self.assertEqual(summary["context_evidence"]["context_exceeded_task_count"], 1)
+        self.assertEqual(summary["context_evidence"]["near_limit_task_count"], 2)
+        self.assertEqual(summary["context_evidence"]["maximum_utilization"], 1.1)
 
 
 if __name__ == "__main__":
