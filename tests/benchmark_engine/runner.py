@@ -877,6 +877,15 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     valid = [item for item in results if item.get("baseline_validated") is True]
     valid_count = len(valid)
     completed = sum(item["task_completion"] is True for item in valid)
+    generation_attempted = [
+        item for item in valid
+        if item.get("execution_speed", {}).get("context_status") == "within-window"
+    ]
+    generation_completed = sum(item["task_completion"] is True for item in generation_attempted)
+    generation_completion_rate = (
+        round(generation_completed / len(generation_attempted), 4)
+        if generation_attempted else None
+    )
     full = sum(item["task_completion"] is True and item["regression_prevention"] is True for item in valid)
     patch_count = sum(item["patch_correctness"] is True for item in valid)
     measured = [item for item in valid if item["regression_prevention"] is not None]
@@ -943,6 +952,9 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "invalid_fixture_count": count - valid_count,
         "completed_task_count": completed,
         "task_completion_rate": round(completed / valid_count, 4) if valid_count else None,
+        "generation_attempted_task_count": len(generation_attempted),
+        "generation_attempted_completed_task_count": generation_completed,
+        "generation_attempted_task_completion_rate": generation_completion_rate,
         "fully_verified_task_count": full,
         "patch_correct_count": patch_count,
         "patch_correctness_rate": round(patch_count / valid_count, 4) if valid_count else None,
@@ -958,17 +970,20 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
 def assess_loss_intelligence_divergence(summary: dict[str, Any], checkpoint: dict[str, Any], low_loss_threshold: float = LOW_TRAINING_LOSS_THRESHOLD) -> dict[str, Any]:
     train_loss = checkpoint.get("train_loss")
     baseline_valid = summary.get("baseline_valid_task_count", 0)
-    enough = isinstance(baseline_valid, int) and baseline_valid >= 3
-    low = isinstance(train_loss, (int, float)) and train_loss <= low_loss_threshold
-    completion_rate = summary.get("task_completion_rate")
+    generation_attempted = summary.get("generation_attempted_task_count", 0)
+    enough = isinstance(generation_attempted, int) and generation_attempted >= 3
+    low = isinstance(train_loss, (int, float)) and not isinstance(train_loss, bool) and math.isfinite(float(train_loss)) and train_loss <= low_loss_threshold
+    completion_rate = summary.get("generation_attempted_task_completion_rate")
     detected = bool(enough and low and completion_rate == 0.0)
     return {
         "flag": "OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE" if detected else None,
         "detected": detected, "low_training_loss_threshold": low_loss_threshold,
         "observed_training_loss": train_loss, "baseline_valid_task_count": baseline_valid,
-        "held_out_task_completion_rate": completion_rate,
-        "minimum_valid_tasks_required": 3,
-        "interpretation": "Low recorded training loss coincides with zero held-out target completion across at least three baseline-valid tasks. This is a divergence warning, not proof of causal overfitting." if detected else "No divergence flag was triggered; this does not establish general coding capability.",
+        "generation_attempted_task_count": generation_attempted,
+        "generation_attempted_task_completion_rate": completion_rate,
+        "held_out_task_completion_rate": summary.get("task_completion_rate"),
+        "minimum_generation_attempts_required": 3,
+        "interpretation": "Low recorded training loss coincides with zero target completions across at least three tasks whose prompts fit the checkpoint context and completed model generation. Context-rejected tasks remain in the overall end-to-end score but are excluded from this divergence heuristic. This is a warning, not proof of causal overfitting." if detected else "No divergence flag was triggered; this does not establish general coding capability.",
     }
 
 
