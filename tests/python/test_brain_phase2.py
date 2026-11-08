@@ -749,6 +749,41 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertGreaterEqual(resumed["gradient_norm_before_clip"], 0.0)
             self.assertGreaterEqual(resumed["learning_rate"], 1e-5)
 
+            boundary_checkpoint = root / "checkpoints" / "epoch-boundary.pt"
+            boundary = train(
+                [dataset],
+                checkpoint_path=boundary_checkpoint,
+                config=self._config(),
+                epochs=1,
+                max_steps=first["steps_per_epoch"],
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+            )
+            boundary_saved = load_checkpoint(boundary_checkpoint)
+            self.assertEqual(boundary["epoch"], 1)
+            self.assertEqual(boundary_saved["epoch"], 1)
+            self.assertIsNone(boundary_saved["epoch_order"])
+            self.assertEqual(boundary_saved["next_batch_index"], 0)
+            boundary_resumed = train(
+                [dataset],
+                checkpoint_path=boundary_checkpoint,
+                config=self._config(),
+                epochs=1,
+                max_steps=1,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+                resume=True,
+            )
+            self.assertEqual(boundary_resumed["step"], boundary["step"] + 1)
+
     def test_source_related_instruction_examples_never_cross_validation_split(self):
         from brain.train import _split_instruction_records
 
