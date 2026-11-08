@@ -789,6 +789,11 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(curriculum_value, str) or not curriculum_value.strip():
             raise OrchestrationError("A local curriculum JSONL destination is required.")
         curriculum_path = _resolve_profile_path(curriculum_value)
+        generated_artifact_roots = [
+            ROOT / "data" / "benchmarks",
+            ROOT / "data" / "curricula",
+            ROOT / "data" / "checkpoints",
+        ]
 
         max_pretrain_steps = pre["max_steps"] if args.max_pretrain_steps is None else args.max_pretrain_steps
         sft_steps = sft["steps"] if args.sft_steps is None else args.sft_steps
@@ -859,6 +864,7 @@ def main(argv: list[str] | None = None) -> int:
                 root=corpus_root,
                 output_path=curriculum_path,
                 max_examples=cur["max_examples"],
+                exclude_paths=generated_artifact_roots,
             )
             if not isinstance(curriculum_result, dict) or not curriculum_result.get("dataset_path"):
                 raise OrchestrationError("Curriculum synthesis did not return a verified output dataset.")
@@ -911,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
                 tokenizer_vocab_size=pre["vocab_size"],
                 tokenizer_bytes=pre["tokenizer_bytes"],
                 max_dataset_bytes=pre["max_dataset_bytes"],
-                exclude_dataset_paths=[curriculum_path],
+                exclude_dataset_paths=[*generated_artifact_roots, curriculum_path],
                 evaluation_batches=pre["evaluation_batches"],
                 save_every_steps=evaluation_every,
                 device_name=training_device,
