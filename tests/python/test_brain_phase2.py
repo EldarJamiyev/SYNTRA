@@ -316,7 +316,10 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["instruction_examples"], 0)
-            self.assertEqual(set(result["dataset_files"]), {str(source.resolve()), str(docs.resolve())})
+            self.assertEqual(result["dataset_files"], 2)
+            from brain.checkpoint import load_checkpoint
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(set(saved["dataset_files"]), {str(source.resolve()), str(docs.resolve())})
 
     def test_structured_jsonl_training_saves_masked_training_format(self):
         from brain.checkpoint import load_checkpoint
