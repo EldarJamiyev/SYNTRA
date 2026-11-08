@@ -363,6 +363,12 @@ def run_command(command: list[str], *, cwd: Path, env: dict[str, str], timeout_s
     if process.poll() is None:
         _terminate_process(process)
         process.wait(timeout=3)
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
     if cleanup_command and (timed_out or limited.is_set()):
         subprocess.run(cleanup_command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
     stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")

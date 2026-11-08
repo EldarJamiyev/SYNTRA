@@ -32,6 +32,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+      - name: Generate an npm lockfile when none is committed
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit
+          fi
+      - name: Install Node dependencies required by the shared production patch validator
+        run: npm ci --ignore-scripts --no-audit
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
