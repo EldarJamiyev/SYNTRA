@@ -210,6 +210,9 @@ npm run brain:milestone4 -- --device mps
 # Use an existing checkpoint for SFT only
 npm run brain:milestone4 -- --skip-pretraining
 
+# Benchmark an existing checkpoint without running either training stage
+npm run brain:milestone4 -- --skip-pretraining --skip-sft
+
 # Train without launching model benchmarks
 npm run brain:milestone4 -- --skip-benchmark
 ```
