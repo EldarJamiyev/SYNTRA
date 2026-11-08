@@ -192,6 +192,35 @@ The default output is `data/curricula/workspace-instructions.jsonl`. Use `--root
 
 Curriculum synthesis and structured instruction training are available in `main`. Generation produces source-grounded examples, not proof of semantic quality or improved coding performance. Review the resulting dataset, run the instruction audit, train a local checkpoint, and compare repeatable task-level benchmark results before concluding that training improved the model.
 
+### Phase 4 local checkpoint optimization and evaluation
+
+The Milestone 4 workflow runs the standalone PyTorch brain trainer against an approved local source corpus, synthesizes the AST-grounded instruction curriculum, audits that JSONL against the checkpoint's actual tokenizer, and fine-tunes response/EOS targets using SYNTRA's existing masked SFT path.
+
+Run from the repository root after installing the documented local dependencies:
+
+```powershell
+# Run local source pretraining -> instruction curriculum SFT -> checkpoint benchmarks
+npm run brain:milestone4 -- --device auto
+
+# Select an explicit supported local accelerator
+npm run brain:milestone4 -- --device cpu
+npm run brain:milestone4 -- --device cuda
+npm run brain:milestone4 -- --device mps
+
+# Use an existing checkpoint for SFT only
+npm run brain:milestone4 -- --skip-pretraining
+
+# Train without launching model benchmarks
+npm run brain:milestone4 -- --skip-benchmark
+```
+
+The checked-in profile is `configs/training/phase4_milestone4.json`. It starts with a conservative local configuration (4 layers, 4 heads, width 128, context 512, batch size 2), a 100-step warmup, cosine decay from `3e-4` to `1e-5`, and a 1.0 gradient-norm clipping threshold. The number of additional pretraining steps defaults to 5,000; SFT defaults to 1,000 steps at `1e-4`. These are initial experiment settings, not claims of optimal hyperparameters. Tune them from actual hardware memory/throughput and task results rather than assuming CPU, CUDA, and Apple MPS have interchangeable performance.
+
+The workflow stages checkpoints under `data/checkpoints/staging/syntra-brain.pt`; it does not overwrite the application's default production checkpoint. Existing staging checkpoints require an explicit exact-resume or backed-up overwrite choice. Each 500-step evaluation uses a checksum-verified, read-only checkpoint snapshot and a separate JSON report. Evaluations run one at a time to limit accelerator contention; the profile defaults the benchmark's inference device to CPU while training selects the requested local device. Docker evaluation requires all five local language images to be pre-provisioned; it never pulls images and uses the benchmark's network-disabled execution. Host evaluation is unsandboxed and requires the explicit `--isolation host --allow-host-execution` acknowledgment.
+
+Each run stores a manifest, checkpoint snapshots, benchmark JSON, subprocess logs, `summary.md`, and `summary.csv` under `data/benchmarks/phase4-milestone4/<run-id>/`. The summaries correlate actual checkpoint loss values with measured held-out target-completion and regression-prevention rates. Failed benchmarks, missing JSON, checkpoint mismatches, and missing metrics are reported as failed or unavailable—not as zero. No training or benchmark run is started by installing this code; the command above starts real local compute when executed on your machine.
+
+
 ## Security and execution boundaries
 
 SYNTRA uses explicit local boundaries, but no local coding agent can make arbitrary project code risk-free.
@@ -241,7 +270,7 @@ The evaluator selects a pre-existing local image per runtime: `python:3.12-slim`
 
 Prompts expose the fixture's bounded multi-file source context as labeled files. The model must return every required edit in one strict `SYNTRA_AGENT_PATCH_V1` object; duplicate paths, missing sibling edits, extra changed files, or context truncation invalidate the task. Reports record checkpoint identity and saved training history, patch/test outcomes per language, prompt tokens, context-window utilization, explicit context-overflow rejections (including overflow-token counts), generation throughput, and phase timings. Older checkpoints are not backfilled with invented loss history. The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` signal is evaluated only across tasks whose prompts fit the checkpoint and completed generation; context-rejected tasks remain in the end-to-end score but are excluded from this heuristic. It remains a qualified warning, not causal proof of overfitting.
 
-The existing `npm run benchmark` remains the separate 11-task full-agent benchmark. The 12 raw-model fixtures are narrow, controlled regression cases—not a representative industry benchmark or evidence of broad language competence. Passing SYNTRA unit tests validates the evaluator; only a real run against the actual local checkpoint produces model-performance evidence.
+The existing `npm run benchmark` remains the separate 11-task full-agent benchmark. The 13 raw-model fixtures are narrow, controlled regression cases—not a representative industry benchmark or evidence of broad language competence. Passing SYNTRA unit tests validates the evaluator; only a real run against the actual local checkpoint produces model-performance evidence.
 
 ## Get started
 
