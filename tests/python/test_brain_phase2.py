@@ -623,7 +623,72 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         self.assertEqual(schedule, first_run + resumed_run)
         self.assertGreater(schedule[0], 0)
         self.assertGreater(schedule[99], schedule[100])
-        self.assertGreaterEqual(min(schedule), base * 0.05)
+        self.assertGreaterEqual(min(schedule), 1e-5)
+        self.assertAlmostEqual(_scheduled_learning_rate(base, 100), base, places=12)
+        self.assertAlmostEqual(_scheduled_learning_rate(base, 10_000), 1e-5, places=12)
+        self.assertEqual(_scheduled_learning_rate(base, 10_001), 1e-5)
+        self.assertAlmostEqual(
+            _scheduled_learning_rate(base, 500, minimum_learning_rate=1e-5, warmup_steps=100, decay_steps=500),
+            1e-5,
+            places=12,
+        )
+
+    def test_exact_max_step_budget_saves_resumable_mid_epoch_checkpoint_and_clips_gradients(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-step-budget-") as temp:
+            root = Path(temp)
+            dataset = root / "dataset.txt"
+            self._dataset(dataset)
+            checkpoint = root / "checkpoints" / "step-budget.pt"
+            original_clip = torch.nn.utils.clip_grad_norm_
+            with patch(
+                "torch.nn.utils.clip_grad_norm_",
+                wraps=original_clip,
+            ) as clip:
+                first = train(
+                    [dataset],
+                    checkpoint_path=checkpoint,
+                    config=self._config(),
+                    epochs=1,
+                    max_steps=3,
+                    batch_size=128,
+                    tokenizer_bytes=1024,
+                    evaluation_batches=1,
+                    save_every_steps=2,
+                    device_name="cpu",
+                    seed=123,
+                )
+            self.assertEqual(first["status"], "completed")
+            self.assertEqual(first["step"], 3)
+            self.assertEqual(clip.call_count, 3)
+            self.assertTrue(all(call.kwargs["max_norm"] == 1.0 for call in clip.call_args_list))
+            self.assertTrue(all(call.kwargs["error_if_nonfinite"] is True for call in clip.call_args_list))
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(saved["step"], 3)
+            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v2")
+            self.assertIsInstance(saved["epoch_order"], torch.Tensor)
+            self.assertGreaterEqual(saved["next_batch_index"], 0)
+
+            resumed = train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                max_steps=2,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+                resume=True,
+            )
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(resumed["step"], 5)
+            self.assertGreaterEqual(resumed["gradient_norm_before_clip"], 0.0)
+            self.assertGreaterEqual(resumed["learning_rate"], 1e-5)
 
     def test_source_related_instruction_examples_never_cross_validation_split(self):
         from brain.train import _split_instruction_records
@@ -682,7 +747,9 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
 
             saved = load_checkpoint(checkpoint)
-            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v1")
+            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v2")
+            self.assertEqual(saved["training_settings"]["minimum_learning_rate"], 1e-5)
+            self.assertEqual(saved["training_settings"]["warmup_steps"], 100)
             self.assertEqual(saved["epoch"], 1)
             uninterrupted_checkpoint = root / "checkpoints" / "uninterrupted.pt"
             uninterrupted = train(
