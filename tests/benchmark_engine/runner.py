@@ -404,6 +404,9 @@ def run_environment_command(
     docker = shutil.which("docker")
     if not docker:
         raise BenchmarkError("Docker disappeared after environment preflight.")
+    image_id = isolation.get("image_id")
+    if not isinstance(image_id, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
+        raise BenchmarkError("Docker execution requires the immutable image ID captured during local preflight.")
     if language == "typescript" and (not TYPESCRIPT_ROOT.is_dir() or not TYPESCRIPT_TEST_RUNNER.is_file()):
         raise BenchmarkError("The local TypeScript compiler and harness must be present before offline evaluation.")
     name = "syntra-bench-" + run_id[-8:] + "-" + language + "-" + phase + "-" + uuid.uuid4().hex[:6]
@@ -428,7 +431,8 @@ def run_environment_command(
         ])
     for key, value in _runtime_environment(language, workspace, in_container=True).items():
         command.extend(["--env", key + "=" + value])
-    command.extend(["--workdir", "/workspace", isolation["image"], *argv])
+    # Execute the exact object inspected during preflight, not a mutable tag.
+    command.extend(["--workdir", "/workspace", image_id, *argv])
     return run_command(
         command, cwd=workspace, env=dict(os.environ), timeout_seconds=timeout_seconds,
         cleanup_command=[docker, "kill", name],
@@ -592,8 +596,8 @@ def prepare_isolation(mode: str, image: str) -> dict[str, Any]:
         raise BenchmarkError("Docker is unavailable. Install Docker or explicitly pass --isolation host --allow-host-execution.")
     inspection = run_command([docker, "image", "inspect", image, "--format", "{{.Id}}"], cwd=REPOSITORY_ROOT, env=dict(os.environ), timeout_seconds=10)
     image_id = inspection["stdout"].strip()
-    if inspection["returncode"] != 0 or not image_id.startswith("sha256:"):
-        raise BenchmarkError("Docker image " + image + " is not present locally. Images are never pulled; explicitly opt into host execution only when you accept its risk.")
+    if inspection["returncode"] != 0 or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
+        raise BenchmarkError("Docker image " + image + " is not present locally or did not resolve to a valid immutable image ID. Images are never pulled; explicitly opt into host execution only when you accept its risk.")
     return {"mode": "docker-no-network", "image": image, "image_id": image_id, "warning": "Docker still trusts the Docker daemon and host kernel; it is not a VM boundary."}
 
 
