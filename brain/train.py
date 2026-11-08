@@ -1065,13 +1065,17 @@ def train(
                 effective_scheduler = LEGACY_TRAINING_SCHEDULER
                 effective_minimum_learning_rate = None
             elif saved_scheduler == TRAINING_SCHEDULER:
-                required_v2 = {"minimum_learning_rate", "warmup_steps", "decay_steps"}
+                required_v2 = {
+                    "minimum_learning_rate", "warmup_steps", "decay_steps",
+                    "gradient_clip_norm",
+                }
                 if not required_v2.issubset(settings):
-                    raise ValueError("The v2 training checkpoint is missing scheduler settings.")
+                    raise ValueError("The v2 training checkpoint is missing scheduler or gradient-clip settings.")
                 expected_v2 = {
                     "minimum_learning_rate": float(minimum_learning_rate),
                     "warmup_steps": warmup_steps,
                     "decay_steps": decay_steps,
+                    "gradient_clip_norm": GRADIENT_CLIP_NORM,
                 }
                 changed_v2 = [
                     name for name, expected in expected_v2.items()
@@ -1233,6 +1237,7 @@ def train(
                 "minimum_learning_rate": effective_minimum_learning_rate,
                 "warmup_steps": effective_warmup_steps,
                 "decay_steps": effective_decay_steps,
+                "gradient_clip_norm": GRADIENT_CLIP_NORM,
             },
             "rng_state": _rng_state(device),
             "parameter_count": parameter_count,
