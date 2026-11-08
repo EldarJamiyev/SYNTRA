@@ -823,8 +823,18 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     times = [float(item["execution_speed"]["total_ms"]) for item in valid]
     tokens = sum(int(item["execution_speed"]["generated_tokens"] or 0) for item in valid)
     generation_seconds = sum(float(item["execution_speed"]["generation_ms"]) / 1000 for item in valid if item["execution_speed"]["generation_ms"] is not None)
+    language_breakdown = {}
+    for item in results:
+        language = item.get("language", "unknown")
+        entry = language_breakdown.setdefault(language, {"task_count": 0, "baseline_valid_task_count": 0, "completed_task_count": 0})
+        entry["task_count"] += 1
+        if item.get("baseline_validated") is True:
+            entry["baseline_valid_task_count"] += 1
+            if item.get("task_completion") is True and item.get("regression_prevention") is True:
+                entry["completed_task_count"] += 1
     return {
         "task_count": count,
+        "language_breakdown": language_breakdown,
         "baseline_valid_task_count": valid_count,
         "invalid_fixture_count": count - valid_count,
         "completed_task_count": completed,
@@ -898,7 +908,17 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     from syntra_ai import runtime
     checkpoint = (Path(args.checkpoint).expanduser() if args.checkpoint else runtime.checkpoint_path()).resolve(strict=True)
     checkpoint_evidence = load_checkpoint_evidence(checkpoint)
-    isolation = prepare_isolation(args.isolation, args.docker_image)
+    image_overrides = {
+        "python": args.python_image,
+        "typescript": args.node_image,
+        "go": args.go_image,
+        "rust": args.rust_image,
+    }
+    selected_languages = sorted({task["language"] for task in selected})
+    isolations = {}
+    for language in selected_languages:
+        environment = resolve_environment(language, image_overrides)
+        isolations[language] = prepare_isolation(args.isolation, environment["image"])
     initial_identity = runtime._checkpoint_identity(checkpoint)
     if initial_identity is None:
         raise BenchmarkError("Native runtime could not establish checkpoint identity.")
@@ -906,11 +926,11 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     for task in selected:
         print("[" + task["id"] + "] Evaluating the actual local SYNTRA checkpoint...")
         try:
-            result = run_task(task, runtime=runtime, checkpoint=checkpoint, device=args.device, max_new_tokens=args.max_new_tokens, isolation=isolation, run_id=run_id)
+            result = run_task(task, runtime=runtime, checkpoint=checkpoint, device=args.device, max_new_tokens=args.max_new_tokens, isolation=isolations[task["language"]], run_id=run_id)
         except (BenchmarkError, OSError, RuntimeError, ValueError) as exc:
             result = {
-                "id": task["id"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
-                "status": "error", "baseline": {}, "patch_correctness": False, "task_completion": False,
+                "id": task["id"], "language": task["language"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
+                "environment_image": isolations[task["language"]].get("image"), "status": "error", "baseline": {}, "patch_correctness": False, "task_completion": False,
                 "regression_prevention": None, "baseline_validated": False, "changed_paths": [], "error": str(exc)[:1500],
                 "execution_speed": {"total_ms": 0, "generation_ms": None, "patch_apply_ms": None, "syntax_check_ms": None, "target_test_ms": None, "regression_test_ms": None, "prompt_tokens": 0, "context_window_tokens": None, "context_utilization": None, "generated_tokens": 0, "output_tokens_per_second": None},
             }
@@ -941,13 +961,21 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             "benchmark_validation_loss": checkpoint_evidence["validation_loss"], "task_completion_rate": summary["task_completion_rate"],
             "divergence": divergence,
         },
-        "isolation": isolation, "summary": summary, "tasks": results,
+        "isolation": {
+            "mode": args.isolation,
+            "environments": isolations,
+            "warning": "Docker execution is networkless and source/evaluation mounts are read-only, but the boundary still trusts the Docker daemon and host kernel. Host mode is not sandboxed.",
+        },
+        "summary": summary, "tasks": results,
         "measurement_notes": [
             "This track calls syntra_ai.runtime.stream_generate directly and does not invoke the repository-aware agent.",
             "The existing 11-task local/benchmark.mjs suite remains the separate end-to-end agent benchmark.",
             "Hidden target and regression tests are not copied into the model workspace or included in the model prompt.",
             "Task completion means held-out target-test success; regression prevention is measured independently.",
-            "Patch correctness uses SYNTRA's existing validatePatch/writeCandidateChanges implementation, exact paths, and Python AST parsing.",
+            "Patch correctness uses SYNTRA's existing validatePatch/writeCandidateChanges implementation and requires the exact expected multi-file changed-path set.",
+            "Python uses AST parsing; TypeScript uses the repository-locked TypeScript compiler; Go uses go test; Rust uses offline cargo check before hidden tests.",
+            "Every evaluator container uses a pre-existing local image, --pull=never, --network none, read-only workspace/evaluation mounts, and bounded writable build tmpfs.",
+            "Prompt token count and context-window utilization are recorded per task; prompts that exceed the checkpoint context are rejected without truncation.",
             "Generation throughput and timings are local measurements affected by hardware and system load.",
             "Docker mode uses an already-present image, disables networking, and mounts workspace and tests read-only; images are never pulled.",
             "Host execution is not sandboxed and requires explicit command-line acknowledgement.",
@@ -974,7 +1002,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--checkpoint", help="Optional explicit native checkpoint path.")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--max-new-tokens", type=int, default=512)
-    parser.add_argument("--docker-image", default=DEFAULT_DOCKER_IMAGE)
+    parser.add_argument("--python-image", "--docker-image", dest="python_image", help="Local Python image tag (legacy --docker-image alias).")
+    parser.add_argument("--node-image", default=None, help="Local Node.js image tag for TypeScript tasks.")
+    parser.add_argument("--go-image", default=None, help="Local Go image tag for Go tasks.")
+    parser.add_argument("--rust-image", default=None, help="Local Rust image tag for Rust tasks.")
     parser.add_argument("--isolation", choices=("docker", "host"), default="docker")
     parser.add_argument("--allow-host-execution", action="store_true", help="Acknowledge that host execution is not sandboxed.")
     parser.add_argument("--low-loss-threshold", type=float, default=LOW_TRAINING_LOSS_THRESHOLD)
@@ -994,7 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.list:
             print("Raw native model benchmark suite " + suite["version"])
             for task in suite["tasks"]:
-                print("  " + task["id"] + " — " + task["title"])
+                print("  " + task["id"] + " [" + task["language"] + "] — " + task["title"])
             return 0
         run_suite(args)
         return 0
