@@ -126,6 +126,56 @@ The file is intentionally Git-ignored. It records:
 
 The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` warning triggers only when the saved training loss is at or below the configured threshold (default 1.0), at least three baseline-valid tasks completed model generation within the checkpoint context, and zero of those generation attempts passed their target tests. Context-rejected tasks remain in the overall end-to-end completion denominator but are excluded from this training/generalization heuristic. Configure the threshold with `--low-loss-threshold`. This is a warning heuristic, not a statistical diagnosis or proof that overfitting caused poor coding performance. Training-loss history is only recorded from checkpoints produced after history tracking was added; older checkpoints are reported as history-unavailable rather than backfilled.
 
+## Checkpoint training and evaluation orchestration
+
+The repository-level Milestone 4 runner is scripts/evaluate_epochs.py, exposed as npm run brain:milestone4. It composes the existing standalone brain.train pretrainer, the repository curriculum generator, syntra_ai.instruction.audit_instruction_dataset, the checkpoint-aware masked SFT trainer, and this raw-model benchmark. It does not introduce another model provider or a second training implementation.
+
+Run from the repository root:
+
+```powershell
+npm run brain:milestone4 -- --device auto
+```
+
+The local profile is configs/training/phase4_milestone4.json. Its initial experiment settings are:
+
+| Setting | Initial value |
+|---|---:|
+| Pretraining learning rate | 3e-4 |
+| Cosine floor | 1e-5 |
+| Warmup | 100 optimizer steps |
+| Cosine decay horizon | 5,000 optimizer steps |
+| Gradient clipping | global norm 1.0, with non-finite norm rejection |
+| Pretraining context / batch | 512 tokens / 2 |
+| Pretraining steps | 5,000 additional steps |
+| SFT learning rate / batch | 1e-4 / 2 |
+| SFT steps | 1,000 |
+| Evaluation interval | 500 saved optimizer steps |
+
+These are conservative starting values for a 4-layer, 4-head, width-128 model, not empirically optimal settings. Device auto selects CUDA, then Apple MPS, then CPU when available. Select --device cpu, cuda, or mps explicitly to compare a supported local backend. Use actual throughput, memory and benchmark measurements when changing the profile.
+
+The source-pretraining checkpoint is staged at data/checkpoints/staging/syntra-brain.pt; the runner refuses to use the application's default production checkpoint as its write target. Existing staging checkpoints require either exact resume with matching dataset/settings or an explicit overwrite that first saves a backup. The SFT stage reads the synthesized JSONL with the checkpoint's actual tokenizer, verifies a prompt/source-group-separated validation split, and uses the existing -100 prompt-label masking path. Only response targets and EOS contribute to supervised loss.
+
+At each configured saved-step boundary, the runner copies the full checkpoint, JSON metadata sidecar, and native inference companion when present. It verifies each artifact's SHA-256, preserves the source modification time for checkpoint-selection behavior, and makes the staged checkpoint artifacts read-only. It then launches npm run benchmark:model as a separate process with an explicit snapshot checkpoint and unique report path. One evaluation runs at a time to limit training/evaluation contention. Docker image preflight is completed for all benchmark languages before training starts; benchmark containers use the existing offline/no-network isolation and never pull images. Host mode is not sandboxed and requires --isolation host --allow-host-execution.
+
+Each run writes a run manifest, immutable checkpoint snapshots, separate benchmark JSON files, evaluation logs, and summary.md / summary.csv under data/benchmarks/phase4-milestone4/<run-id>/. A benchmark result is accepted only if the native-model report identifies the exact staged checkpoint SHA-256. The summary correlates the saved training/validation losses with actual task-completion and regression-prevention rates. Missing reports, checkpoint mismatches, failed runs and absent metrics stay unavailable or failed; they are never converted into zeroes.
+
+Useful options:
+
+```powershell
+# Fine-tune an existing staging checkpoint; pretraining is skipped
+npm run brain:milestone4 -- --skip-pretraining
+
+# Run source pretraining without benchmark subprocesses
+npm run brain:milestone4 -- --skip-benchmark
+
+# Override the step budgets or evaluation interval
+npm run brain:milestone4 -- --max-pretrain-steps 1000 --sft-steps 250 --evaluation-every 250
+```
+
+The orchestration code does not itself install packages, download checkpoints, or call cloud inference services. Training and curriculum construction execute locally; Docker evaluation containers have networking disabled. This does not change the host operating system's global network configuration. Install the repository's locked dependencies and pre-provision the language images before starting a fully offline benchmark run.
+
+A checked-in profile and passing tests are not model-performance measurements. Establish the first real checkpoint baseline on the target machine before evaluating whether any subsequent training change improves coding capability.
+
 ## Comparability and limitations
 
 Do not combine raw-model results with full-agent results. The direct raw-model suite now has 13 small held-out fixtures across five languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. JavaScript event normalization, Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior are each represented by one narrow task; that is not broad language competence.
