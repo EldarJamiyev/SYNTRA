@@ -227,11 +227,15 @@ def status() -> dict:
     path = checkpoint_path()
     metadata_path = path.with_suffix(path.suffix + ".json")
     metadata = {}
+    metadata_error = None
     if metadata_path.exists():
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            if not isinstance(metadata, dict):
+                raise ValueError("Checkpoint metadata must contain a JSON object.")
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
             metadata = {}
+            metadata_error = str(exc)
     checkpoint_exists = path.is_file()
     raw_config = metadata.get("config") or {}
     context_tokens = metadata.get("context_tokens") or raw_config.get("seq_len") or raw_config.get("block_size")
@@ -243,6 +247,8 @@ def status() -> dict:
     except ValueError as exc:
         training_history = []
         history_error = str(exc)
+    if metadata_error is not None and history_error is None:
+        history_error = "Checkpoint metadata is unavailable or malformed: " + metadata_error
     return {
         "service": "SYNTRA native local Transformer",
         "backend": "PyTorch",

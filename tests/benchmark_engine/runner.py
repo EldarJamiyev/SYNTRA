@@ -21,6 +21,8 @@ from typing import Any
 import uuid
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 ENGINE_ROOT = Path(__file__).resolve().parent
 SUITE_PATH = ENGINE_ROOT / "suite.v1.json"
 DEFAULT_OUTPUT = REPOSITORY_ROOT / "data" / "benchmarks" / "latest_run.json"
@@ -570,7 +572,7 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
         "fully_verified_task_count": full,
         "patch_correct_count": patch_count,
         "patch_correctness_rate": round(patch_count / valid_count, 4) if valid_count else None,
-        "regression_measured_count": len(measured,
+        "regression_measured_count": len(measured),
         "regression_prevented_count": regression_count,
         "regression_prevention_rate": round(regression_count / len(measured), 4) if measured else None,
         "generated_tokens": tokens,
