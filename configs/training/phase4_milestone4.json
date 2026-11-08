@@ -25,7 +25,8 @@
     "evaluation_batches": 8,
     "tokenizer_bytes": 100000,
     "max_dataset_bytes": 268435456,
-    "seed": 1337
+    "seed": 1337,
+    "gradient_clip_norm": 1
   },
   "sft": {
     "steps": 1000,
