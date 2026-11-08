@@ -118,6 +118,17 @@ def _read_bounded_regular_file(
             os.close(descriptor)
 
 
+def _matches_excluded_path(path: Path, exclude_paths: set[str] | None) -> bool:
+    """Treat explicit exclusions as file or directory roots, with path-boundary matching."""
+    if not exclude_paths:
+        return False
+    candidate = Path(path).resolve(strict=False)
+    return any(
+        candidate == Path(excluded) or candidate.is_relative_to(Path(excluded))
+        for excluded in exclude_paths
+    )
+
+
 def _is_sensitive_name(name: str) -> bool:
     lower = name.casefold()
     if lower == ".env" or lower.startswith(".env."):
@@ -236,7 +247,7 @@ def _read_local_datasets(
             for resolved, relative_name, explicitly_selected in _iter_local_source_files(source):
                 if source_index > 0:
                     relative_name = f"selected-root-{source_index + 1}/{relative_name}"
-                if exclude_paths and str(resolved) in exclude_paths:
+                if _matches_excluded_path(resolved, exclude_paths):
                     continue
                 if resolved in seen:
                     continue
