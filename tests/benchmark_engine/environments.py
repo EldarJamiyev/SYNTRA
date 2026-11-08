@@ -54,9 +54,13 @@ def resolve_environment(language: str, image_overrides: dict[str, str] | None = 
 
 def expected_test_filename(language: str, phase: str) -> str:
     """Return the only permitted hidden-test filename for a language and phase."""
-    if phase not in {"target", "regression"}:
+    normalized_phase = {
+        "baseline-target": "target",
+        "baseline-regression": "regression",
+    }.get(phase, phase)
+    if normalized_phase not in {"target", "regression"}:
         raise ValueError("Unknown benchmark test phase.")
     spec = ENVIRONMENT_SPECS.get(language)
     if spec is None:
         raise ValueError("Unsupported benchmark language: " + str(language))
-    return "test_" + phase + spec["test_extension"]
+    return "test_" + normalized_phase + spec["test_extension"]
