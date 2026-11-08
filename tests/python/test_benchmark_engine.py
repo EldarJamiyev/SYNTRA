@@ -63,11 +63,38 @@ class RawModelBenchmarkTests(unittest.TestCase):
     def setUpClass(cls):
         cls.suite = runner.load_suite()
 
-    def test_suite_has_eight_unique_held_out_tasks(self):
-        self.assertEqual(self.suite["version"], "1.1.0")
-        self.assertEqual(len(self.suite["tasks"]), 8)
-        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 8)
+    def test_suite_has_twelve_unique_held_out_tasks_across_four_languages(self):
+        self.assertEqual(self.suite["version"], "1.2.0")
+        self.assertEqual(len(self.suite["tasks"]), 12)
+        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 12)
+        self.assertEqual({task["language"] for task in self.suite["tasks"]}, {"python", "typescript", "go", "rust"})
+        self.assertEqual(
+            {language: sum(task["language"] == language for task in self.suite["tasks"]) for language in {"python", "typescript", "go", "rust"}},
+            {"python": 9, "typescript": 1, "go": 1, "rust": 1},
+        )
         self.assertTrue(all(task["hidden_evaluation"].startswith("hidden/") for task in self.suite["tasks"]))
+
+    def test_environment_matrix_uses_pinned_offline_images_and_language_test_extensions(self):
+        expected = {
+            "python": ("python:3.12-slim", ".py"),
+            "typescript": ("node:20-slim", ".ts"),
+            "go": ("golang:1.22-alpine", ".go"),
+            "rust": ("rust:1.78-slim", ".rs"),
+        }
+        for language, (image, extension) in expected.items():
+            environment = runner.resolve_environment(language)
+            self.assertEqual(environment["image"], image)
+            self.assertEqual(runner.expected_test_filename(language, "target"), "test_target" + extension)
+            self.assertEqual(runner.expected_test_filename(language, "regression"), "test_regression" + extension)
+        self.assertEqual(runner.resolve_environment("go", {"go": "golang:1.22-alpine"})["image"], "golang:1.22-alpine")
+        with self.assertRaises(ValueError):
+            runner.resolve_environment("unknown")
+
+    def test_suite_rejects_a_test_extension_that_does_not_match_its_language(self):
+        invalid = copy.deepcopy(self.suite)
+        invalid["tasks"][8]["target_test"] = "test_target.py"
+        with self.assertRaisesRegex(runner.BenchmarkError, "filename for typescript"):
+            runner.validate_suite(invalid)
 
     def test_suite_rejects_hidden_paths_that_escape_the_evaluation_directory(self):
         invalid = copy.deepcopy(self.suite)
@@ -92,6 +119,30 @@ class RawModelBenchmarkTests(unittest.TestCase):
             self.assertTrue((hidden / task["target_test"]).is_file())
             self.assertFalse((workspace / task["target_test"]).exists())
 
+    def test_collect_sources_includes_multi_file_and_polyglot_context(self):
+        expected = {
+            "typescript-object-mapper": {"src/mapper.ts", "src/types.ts", "package.json"},
+            "go-channel-sync": {"go.mod", "syncutil/collector.go"},
+            "rust-safe-slice": {"Cargo.toml", "Cargo.lock", "src/lib.rs"},
+            "python-multi-file-stream-state": {"src/limits.py", "src/state.py"},
+        }
+        by_id = {task["id"]: task for task in self.suite["tasks"]}
+        for task_id, wanted in expected.items():
+            with self.subTest(task=task_id), tempfile.TemporaryDirectory(prefix="syntra-polyglot-context-") as temp:
+                workspace = runner._copy_fixture_workspace(by_id[task_id], Path(temp))
+                paths = {path for path, _ in runner.collect_sources(workspace)}
+                self.assertTrue(wanted.issubset(paths), (task_id, paths))
+
+    def test_build_prompt_exposes_all_sibling_modules_as_connected_context(self):
+        task = next(task for task in self.suite["tasks"] if task["id"] == "python-multi-file-stream-state")
+        with tempfile.TemporaryDirectory(prefix="syntra-multifile-prompt-") as temp:
+            workspace = runner._copy_fixture_workspace(task, Path(temp))
+            prompt = runner.build_prompt(task, runner.collect_sources(workspace))
+            self.assertIn("FILE: src/limits.py", prompt)
+            self.assertIn("FILE: src/state.py", prompt)
+            self.assertIn("single JSON response", prompt)
+            self.assertNotIn("test_target.py", prompt)
+
     def test_every_fixture_has_a_failing_target_and_passing_regression_baseline(self):
         isolation = {"mode": "host-opt-in", "image": None, "image_id": None}
         for task in self.suite["tasks"]:
@@ -100,11 +151,11 @@ class RawModelBenchmarkTests(unittest.TestCase):
                 hidden = (runner.ENGINE_ROOT / task["hidden_evaluation"]).resolve()
                 target = runner.run_hidden_test(
                     isolation=isolation, workspace=workspace, hidden_dir=hidden,
-                    test_name=task["target_test"], run_id="baseline-test", phase="target",
+                    test_name=task["target_test"], run_id="baseline-test", phase="target", language=task["language"],
                 )
                 regression = runner.run_hidden_test(
                     isolation=isolation, workspace=workspace, hidden_dir=hidden,
-                    test_name=task["regression_test"], run_id="baseline-test", phase="regression",
+                    test_name=task["regression_test"], run_id="baseline-test", phase="regression", language=task["language"],
                 )
                 self.assertTrue(runner._expected_baseline_failure(target), target["stdout"] + target["stderr"])
                 self.assertEqual(regression["returncode"], 0, regression["stdout"] + regression["stderr"])
@@ -120,6 +171,20 @@ class RawModelBenchmarkTests(unittest.TestCase):
         }
         parsed = runner.parse_patch_output(json.dumps(valid))
         self.assertEqual(parsed["format"], "SYNTRA_AGENT_PATCH_V1")
+        multi_file = copy.deepcopy(valid)
+        multi_file["edits"].append({
+            "path": "src/sibling.py", "find": "return sibling",
+            "replace": "return sibling + 1", "reason": "Update the dependent sibling.",
+        })
+        self.assertEqual(len(runner.parse_patch_output(json.dumps(multi_file))["edits"]), 2)
+        repeated_path = copy.deepcopy(multi_file)
+        repeated_path["edits"][1]["path"] = "src/module.py"
+        with self.assertRaisesRegex(runner.BenchmarkError, "each path only once"):
+            runner.parse_patch_output(json.dumps(repeated_path))
+        unsafe_path = copy.deepcopy(valid)
+        unsafe_path["edits"][0]["path"] = "../outside.py"
+        with self.assertRaisesRegex(runner.BenchmarkError, "safe relative"):
+            runner.parse_patch_output(json.dumps(unsafe_path))
         with self.assertRaisesRegex(runner.BenchmarkError, "strict JSON"):
             runner.parse_patch_output(json.dumps(valid) + " trailing text")
         with self.assertRaisesRegex(runner.BenchmarkError, "strict JSON"):
@@ -142,6 +207,21 @@ class RawModelBenchmarkTests(unittest.TestCase):
             changed = runner.apply_patch(workspace, patch, ["src/module.py"])
             self.assertEqual(changed, ["src/module.py"])
             self.assertEqual(source.read_text(encoding="utf-8"), "def value():\n    return 2\n")
+
+            sibling = workspace / "src" / "sibling.py"
+            sibling.write_text("def sibling():\n    return 10\n", encoding="utf-8")
+            multi_patch = {
+                "format": "SYNTRA_AGENT_PATCH_V1",
+                "summary": "Update two linked workspace modules.",
+                "edits": [
+                    {"path": "src/module.py", "find": "return 2", "replace": "return 3", "reason": "Update the primary result."},
+                    {"path": "src/sibling.py", "find": "return 10", "replace": "return 11", "reason": "Keep the sibling module contract aligned."},
+                ],
+            }
+            multi_changed = runner.apply_patch(workspace, multi_patch, ["src/module.py", "src/sibling.py"])
+            self.assertEqual(multi_changed, ["src/module.py", "src/sibling.py"])
+            self.assertEqual(source.read_text(encoding="utf-8"), "def value():\n    return 3\n")
+            self.assertEqual(sibling.read_text(encoding="utf-8"), "def sibling():\n    return 11\n")
 
             unsafe = copy.deepcopy(patch)
             unsafe["edits"][0]["path"] = "../outside.py"
