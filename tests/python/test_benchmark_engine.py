@@ -401,6 +401,9 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["context_evidence"]["context_exceeded_task_count"], 1)
         self.assertEqual(summary["context_evidence"]["near_limit_task_count"], 2)
         self.assertEqual(summary["context_evidence"]["maximum_utilization"], 1.1)
+        self.assertEqual(summary["generation_attempted_task_count"], 1)
+        self.assertEqual(summary["generation_attempted_completed_task_count"], 1)
+        self.assertEqual(summary["generation_attempted_task_completion_rate"], 1.0)
 
 
 if __name__ == "__main__":
