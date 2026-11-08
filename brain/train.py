@@ -61,9 +61,12 @@ SENSITIVE_SUFFIXES = frozenset({
     ".keystore", ".sqlite", ".db", ".dump", ".bak", ".log",
 })
 MAX_DATASET_FILES = 20_000
-TRAINING_SCHEDULER = "global-cosine-warmup-v1"
+LEGACY_TRAINING_SCHEDULER = "global-cosine-warmup-v1"
+TRAINING_SCHEDULER = "global-cosine-warmup-v2"
 SCHEDULER_WARMUP_STEPS = 100
 SCHEDULER_DECAY_STEPS = 10_000
+MIN_LEARNING_RATE = 1e-5
+GRADIENT_CLIP_NORM = 1.0
 
 
 def _read_bounded_regular_file(
@@ -734,8 +737,47 @@ def _estimate_validation_loss(
     return weighted_loss / supervised_targets
 
 
-def _scheduled_learning_rate(base_learning_rate: float, global_step: int) -> float:
-    """Return a resume-invariant learning rate based only on checkpointed global step."""
+def _scheduled_learning_rate(
+    base_learning_rate: float,
+    global_step: int,
+    minimum_learning_rate: float = MIN_LEARNING_RATE,
+    warmup_steps: int = SCHEDULER_WARMUP_STEPS,
+    decay_steps: int = SCHEDULER_DECAY_STEPS,
+) -> float:
+    """Warm up from the configured floor, then cosine-decay to that floor."""
+    for name, value in (
+        ("base_learning_rate", base_learning_rate),
+        ("minimum_learning_rate", minimum_learning_rate),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(name + " must be a finite positive number.")
+    if minimum_learning_rate > base_learning_rate:
+        raise ValueError("minimum_learning_rate cannot exceed base_learning_rate.")
+    if type(global_step) is not int or global_step < 1:
+        raise ValueError("global_step must be a positive integer.")
+    if type(warmup_steps) is not int or warmup_steps < 1:
+        raise ValueError("warmup_steps must be a positive integer.")
+    if type(decay_steps) is not int or decay_steps <= warmup_steps:
+        raise ValueError("decay_steps must be greater than warmup_steps.")
+    base = float(base_learning_rate)
+    floor = float(minimum_learning_rate)
+    if global_step <= warmup_steps:
+        return floor + (base - floor) * (global_step / warmup_steps)
+    progress = min(
+        (global_step - warmup_steps) / (decay_steps - warmup_steps),
+        1.0,
+    )
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return floor + (base - floor) * cosine
+
+
+def _legacy_scheduled_learning_rate(base_learning_rate: float, global_step: int) -> float:
+    """Preserve the v1 schedule when resuming an older checkpoint."""
     if (
         isinstance(base_learning_rate, bool)
         or not isinstance(base_learning_rate, (int, float))
@@ -829,8 +871,12 @@ def train(
     checkpoint_path: str | os.PathLike[str] = DEFAULT_CHECKPOINT,
     config: TransformerConfig | None = None,
     epochs: int = 1,
+    max_steps: int | None = None,
     batch_size: int = 4,
     learning_rate: float = 3e-4,
+    minimum_learning_rate: float = MIN_LEARNING_RATE,
+    warmup_steps: int = SCHEDULER_WARMUP_STEPS,
+    decay_steps: int = SCHEDULER_DECAY_STEPS,
     weight_decay: float = 0.1,
     tokenizer_vocab_size: int | None = None,
     tokenizer_bytes: int = 100_000,
@@ -845,10 +891,18 @@ def train(
     """Train or resume a local model, saving complete optimizer/model state."""
     if type(epochs) is not int or not 1 <= epochs <= 100_000:
         raise ValueError("epochs must be an integer between 1 and 100,000.")
+    if max_steps is not None and (type(max_steps) is not int or not 1 <= max_steps <= 1_000_000):
+        raise ValueError("max_steps must be an integer between 1 and 1,000,000 when provided.")
     if type(batch_size) is not int or not 1 <= batch_size <= 256:
         raise ValueError("batch_size must be an integer between 1 and 256.")
-    if not math.isfinite(learning_rate) or not 1e-6 <= learning_rate <= 1e-2:
+    if isinstance(learning_rate, bool) or not isinstance(learning_rate, (int, float)) or not math.isfinite(learning_rate) or not 1e-6 <= learning_rate <= 1e-2:
         raise ValueError("learning_rate must be between 1e-6 and 1e-2.")
+    if isinstance(minimum_learning_rate, bool) or not isinstance(minimum_learning_rate, (int, float)) or not math.isfinite(minimum_learning_rate) or not 1e-7 <= minimum_learning_rate <= learning_rate:
+        raise ValueError("minimum_learning_rate must be finite, positive, and no greater than learning_rate.")
+    if type(warmup_steps) is not int or not 1 <= warmup_steps <= 1_000_000:
+        raise ValueError("warmup_steps must be an integer between 1 and 1,000,000.")
+    if type(decay_steps) is not int or not warmup_steps < decay_steps <= 10_000_000:
+        raise ValueError("decay_steps must be greater than warmup_steps and no greater than 10,000,000.")
     if not math.isfinite(weight_decay) or not 0 <= weight_decay <= 1:
         raise ValueError("weight_decay must be between 0 and 1.")
     if type(evaluation_batches) is not int or not 1 <= evaluation_batches <= 1000:
@@ -942,6 +996,10 @@ def train(
 
     saved: dict | None = None
     saved_training_settings: dict | None = None
+    effective_scheduler = TRAINING_SCHEDULER
+    effective_minimum_learning_rate: float | None = float(minimum_learning_rate)
+    effective_warmup_steps = warmup_steps
+    effective_decay_steps = decay_steps
     if resume:
         saved = load_checkpoint(target)
         if saved["dataset_sha256"] != dataset_hash:
@@ -974,7 +1032,6 @@ def train(
                 "seed": seed,
                 "evaluation_batches": evaluation_batches,
                 "save_every_steps": save_every_steps,
-                "scheduler": TRAINING_SCHEDULER,
             }
             changed_settings = [
                 name for name, expected in expected_settings.items()
@@ -987,6 +1044,35 @@ def train(
                     + ", ".join(changed_settings)
                     + ". Use the original settings or start a new checkpoint."
                 )
+            saved_scheduler = settings.get("scheduler")
+            if saved_scheduler == LEGACY_TRAINING_SCHEDULER:
+                # Preserve the original learning-rate trajectory for old checkpoints.
+                effective_scheduler = LEGACY_TRAINING_SCHEDULER
+                effective_minimum_learning_rate = None
+            elif saved_scheduler == TRAINING_SCHEDULER:
+                required_v2 = {"minimum_learning_rate", "warmup_steps", "decay_steps"}
+                if not required_v2.issubset(settings):
+                    raise ValueError("The v2 training checkpoint is missing scheduler settings.")
+                expected_v2 = {
+                    "minimum_learning_rate": float(minimum_learning_rate),
+                    "warmup_steps": warmup_steps,
+                    "decay_steps": decay_steps,
+                }
+                changed_v2 = [
+                    name for name, expected in expected_v2.items()
+                    if type(settings.get(name)) not in (int, float)
+                    or isinstance(settings.get(name), bool)
+                    or settings.get(name) != expected
+                ]
+                if changed_v2:
+                    raise ValueError(
+                        "Training resume settings differ from the checkpoint: "
+                        + ", ".join(changed_v2)
+                        + ". Use the original settings or start a new checkpoint."
+                    )
+                effective_scheduler = TRAINING_SCHEDULER
+            else:
+                raise ValueError("Checkpoint contains an unsupported training scheduler; start a new run.")
             saved_training_settings = settings
         else:
             # Older checkpoints can be resumed at a clean epoch boundary only.
@@ -1091,8 +1177,11 @@ def train(
     parameter_count = model.parameter_count
     started = perf_counter()
     target_epoch = start_epoch + epochs
+    stop_at_step = start_step + max_steps if max_steps is not None else None
     current_step_in_run = 0
     supervised_tokens_processed = 0
+    last_learning_rate: float | None = None
+    last_gradient_norm: float | None = None
 
     def payload_for_save(completed_epochs: int, order: torch.Tensor | None, next_index: int) -> dict:
         return {
@@ -1109,6 +1198,8 @@ def train(
             "best_validation_loss": best_validation_loss,
             "train_loss": last_train_loss,
             "validation_loss": last_validation_loss,
+            "learning_rate": last_learning_rate,
+            "gradient_norm_before_clip": last_gradient_norm,
             "dataset_sha256": dataset_hash,
             "training_data_format": training_data_format,
             "instruction_example_count": len(instruction_records),
@@ -1123,7 +1214,10 @@ def train(
                 "steps_per_epoch": steps_per_epoch,
                 "evaluation_batches": evaluation_batches,
                 "save_every_steps": save_every_steps,
-                "scheduler": TRAINING_SCHEDULER,
+                "scheduler": effective_scheduler,
+                "minimum_learning_rate": effective_minimum_learning_rate,
+                "warmup_steps": effective_warmup_steps,
+                "decay_steps": effective_decay_steps,
             },
             "rng_state": _rng_state(device),
             "parameter_count": parameter_count,
@@ -1143,6 +1237,10 @@ def train(
             "train_loss": last_train_loss,
             "validation_loss": last_validation_loss,
             "best_validation_loss": best_validation_loss,
+            "learning_rate": last_learning_rate,
+            "gradient_norm_before_clip": last_gradient_norm,
+            "gradient_clip_norm": GRADIENT_CLIP_NORM,
+            "target_step": stop_at_step,
             "tokens_per_second": round(supervised_tokens_processed / elapsed, 2),
             "supervised_tokens_processed": supervised_tokens_processed,
             "throughput_basis": "supervised_target_tokens",
@@ -1169,7 +1267,12 @@ def train(
         "Resuming local model and optimizer state." if saved else "Training a randomly initialized Transformer on local UTF-8 data.",
     )
     model.train()
-    while start_epoch < target_epoch:
+    while True:
+        if stop_at_step is None and start_epoch >= target_epoch:
+            break
+        if stop_at_step is not None and start_step + current_step_in_run >= stop_at_step:
+            break
+        step_limit_reached = False
         if epoch_order is None:
             epoch_order = torch.randperm(chunk_count, device="cpu")
             next_batch_index = 0
@@ -1190,21 +1293,38 @@ def train(
             if loss is None or not torch.isfinite(loss).item():
                 raise RuntimeError("Training loss became non-finite.")
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            gradient_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=GRADIENT_CLIP_NORM,
+                error_if_nonfinite=True,
+            )
+            last_gradient_norm = float(gradient_norm.detach().item())
 
             global_step = start_step + current_step_in_run
-            scheduled_lr = _scheduled_learning_rate(learning_rate, global_step)
+            if effective_scheduler == LEGACY_TRAINING_SCHEDULER:
+                scheduled_lr = _legacy_scheduled_learning_rate(learning_rate, global_step)
+            else:
+                scheduled_lr = _scheduled_learning_rate(
+                    learning_rate,
+                    global_step,
+                    minimum_learning_rate=effective_minimum_learning_rate,
+                    warmup_steps=effective_warmup_steps,
+                    decay_steps=effective_decay_steps,
+                )
+            last_learning_rate = scheduled_lr
             for group in optimizer.param_groups:
                 group["lr"] = scheduled_lr
             optimizer.step()
             last_train_loss = float(loss.detach().item())
             supervised_tokens_processed += batch_supervised_tokens
             next_batch_index = batch_index + 1
+            at_step_limit = stop_at_step is not None and global_step >= stop_at_step
 
             should_evaluate = (
                 global_step == 1
                 or global_step % save_every_steps == 0
                 or next_batch_index == steps_per_epoch
+                or at_step_limit
             )
             if should_evaluate:
                 last_validation_loss = _estimate_validation_loss(
@@ -1222,6 +1342,7 @@ def train(
                 global_step == 1
                 or global_step % save_every_steps == 0
                 or next_batch_index == steps_per_epoch
+                or at_step_limit
             )
             if should_save:
                 save_checkpoint(
@@ -1229,10 +1350,16 @@ def train(
                     payload_for_save(start_epoch, epoch_order, next_batch_index),
                 )
                 report(
-                    "running",
+                    "completed" if at_step_limit else "running",
                     start_epoch,
-                    "Checkpoint saved; training and held-out validation metrics updated.",
+                    "Requested training-step block saved." if at_step_limit else "Checkpoint saved; training and held-out validation metrics updated.",
                 )
+            if at_step_limit:
+                step_limit_reached = True
+                break
+
+        if step_limit_reached:
+            break
 
         start_epoch += 1
         epoch_order = None
@@ -1245,7 +1372,12 @@ def train(
             "Completed one full shuffled pass through the training token blocks.",
         )
 
-    return report("completed", start_epoch, "Training finished. Model, tokenizer, optimizer, progress, and validation metrics are saved locally.")
+    final_message = (
+        "Requested additional training-step block finished; the checkpoint is resumable."
+        if max_steps is not None
+        else "Training finished. Model, tokenizer, optimizer, progress, and validation metrics are saved locally."
+    )
+    return report("completed", start_epoch, final_message)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -1265,6 +1397,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--vocab-size", type=int, default=512)
     parser.add_argument("--tokenizer-bytes", type=int, default=100_000)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--minimum-learning-rate", type=float, default=MIN_LEARNING_RATE)
+    parser.add_argument("--warmup-steps", type=int, default=SCHEDULER_WARMUP_STEPS)
+    parser.add_argument("--decay-steps", type=int, default=SCHEDULER_DECAY_STEPS)
+    parser.add_argument("--max-steps", type=int, default=None, help="Train exactly this many additional optimizer steps and save a resumable mid-epoch cursor.")
     parser.add_argument("--weight-decay", type=float, default=0.1)
     parser.add_argument("--evaluation-batches", type=int, default=8)
     parser.add_argument("--save-every-steps", type=int, default=100)
@@ -1291,8 +1427,12 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint_path=args.checkpoint,
             config=config,
             epochs=args.epochs,
+            max_steps=args.max_steps,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
+            minimum_learning_rate=args.minimum_learning_rate,
+            warmup_steps=args.warmup_steps,
+            decay_steps=args.decay_steps,
             weight_decay=args.weight_decay,
             tokenizer_vocab_size=args.vocab_size,
             tokenizer_bytes=args.tokenizer_bytes,
