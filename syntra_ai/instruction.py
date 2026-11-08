@@ -26,6 +26,7 @@ from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_instruction_d
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
     _atomic_checkpoint, _atomic_json, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
+    append_training_history, validate_training_history,
 )
 
 
@@ -560,6 +561,7 @@ def finetune(
     examples = load_instruction_examples(dataset_path, config.seq_len, tokenizer)
     training_examples, validation_examples, dataset_quality = split_instruction_examples(examples)
     base_step = int(saved.get("step", 0))
+    training_history = validate_training_history(saved.get("training_history"))
     started = monotonic()
     last_train_loss = None
     last_val_loss = None
@@ -581,6 +583,7 @@ def finetune(
             "instruction_dataset_quality": dataset_quality,
             "tokenizer_vocab_size": tokenizer.vocab_size,
             "context_tokens": config.seq_len,
+            "training_history_points": len(training_history),
         }
         if callback:
             callback(value)
@@ -607,6 +610,13 @@ def finetune(
         last_train_loss = float(loss.item())
         if step == base_step + 1 or step % 25 == 0 or step == base_step + steps:
             last_val_loss = _instruction_loss(model, validation_examples, device, batch_size, batches=2)
+            training_history = append_training_history(
+                training_history,
+                step=step,
+                phase="supervised-instruction-finetuning",
+                train_loss=last_train_loss,
+                validation_loss=last_val_loss,
+            )
             payload = {
                 **saved,
                 "format": "syntra-transformer-v1",
@@ -617,6 +627,7 @@ def finetune(
                 "step": step,
                 "training_mode": "supervised-instruction-finetuning",
                 "instruction_examples": dataset_quality["example_count"],
+                "training_history": training_history,
                 "instruction_context_windows": len(examples),
                 "instruction_dataset_quality": dataset_quality,
                 "train_loss": last_train_loss,
@@ -637,6 +648,8 @@ def finetune(
                 "instruction_context_windows": len(examples),
                 "instruction_dataset_quality": dataset_quality,
                 "pretrained_weights": False,
+                "training_history": training_history,
+                "training_history_points": len(training_history),
             }
             _atomic_json(metadata_path, metadata)
             report("running" if step < base_step + steps else "completed", step, "Checkpoint saved with measured supervised validation loss.")
