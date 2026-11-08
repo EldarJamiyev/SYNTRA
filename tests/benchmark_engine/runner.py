@@ -726,6 +726,8 @@ def _expected_baseline_failure(result: dict[str, Any]) -> bool:
 
 def _generate_patch(runtime: Any, prompt: str, checkpoint: Path, device: str, max_new_tokens: int) -> dict[str, Any]:
     prompt_info = runtime.tokenize_text(prompt, path=checkpoint)
+    if not isinstance(prompt_info, dict):
+        raise BenchmarkError("Native tokenizer returned malformed context evidence.")
     prompt_tokens = prompt_info.get("token_count")
     context_window = prompt_info.get("context_window_tokens")
     tokens_over_context = prompt_info.get("tokens_over_context")
@@ -1108,7 +1110,9 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             "Patch correctness uses SYNTRA's existing validatePatch/writeCandidateChanges implementation and requires the exact expected multi-file changed-path set.",
             "Python uses AST parsing; JavaScript uses Node syntax checks and hidden ESM tests; TypeScript uses the repository-locked TypeScript compiler; Go uses go test; Rust uses offline cargo check before hidden tests.",
             "Every evaluator container uses a pre-existing local image, --pull=never, --network none, read-only workspace/evaluation mounts, and bounded writable build tmpfs.",
-            "Prompt token count and context-window utilization are recorded per task; prompts that exceed the checkpoint context are rejected without truncation.",
+            "Prompt token count and context-window utilization are recorded per task; over-context prompts are rejected before generation with their measured overflow retained.",
+            "Context-rejected tasks remain in end-to-end completion scoring but are excluded from the loss/intelligence divergence heuristic, which uses within-context generation attempts only.",
+            "Per-language and aggregate reports separate context-window rejections from completed model-generation attempts.",
             "Generation throughput and timings are local measurements affected by hardware and system load.",
             "Docker mode uses an already-present image, disables networking, and mounts workspace and tests read-only; images are never pulled.",
             "Host execution is not sandboxed and requires explicit command-line acknowledgement.",
