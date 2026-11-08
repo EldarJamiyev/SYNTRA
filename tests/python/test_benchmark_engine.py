@@ -413,9 +413,9 @@ class RawModelBenchmarkTests(unittest.TestCase):
 
     def test_summary_keeps_target_completion_and_regression_prevention_separate(self):
         results = [
-            {"baseline_validated": True, "task_completion": True, "patch_correctness": True, "regression_prevention": False, "execution_speed": {"total_ms": 100, "generation_ms": 50, "generated_tokens": 10, "prompt_tokens": 90, "context_window_tokens": 100, "context_utilization": 0.9, "context_status": "within-window"}},
-            {"baseline_validated": True, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 200, "generation_ms": None, "generated_tokens": 0, "prompt_tokens": 110, "context_window_tokens": 100, "context_utilization": 1.1, "context_tokens_over_limit": 11, "context_status": "exceeded"}},
-            {"baseline_validated": False, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 5, "generation_ms": None, "generated_tokens": 0}},
+            {"id": "js", "language": "javascript", "baseline_validated": True, "task_completion": True, "patch_correctness": True, "regression_prevention": False, "execution_speed": {"total_ms": 100, "generation_ms": 50, "generated_tokens": 10, "prompt_tokens": 90, "context_window_tokens": 100, "context_utilization": 0.9, "context_status": "within-window"}},
+            {"id": "ts", "language": "typescript", "baseline_validated": True, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 200, "generation_ms": None, "generated_tokens": 0, "prompt_tokens": 110, "context_window_tokens": 100, "context_utilization": 1.1, "context_tokens_over_limit": 11, "context_status": "exceeded"}},
+            {"id": "py", "language": "python", "baseline_validated": False, "task_completion": False, "patch_correctness": False, "regression_prevention": None, "execution_speed": {"total_ms": 5, "generation_ms": None, "generated_tokens": 0}},
         ]
         summary = runner.summarize(results)
         self.assertEqual(summary["task_count"], 3)
@@ -432,6 +432,13 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["generation_attempted_task_count"], 1)
         self.assertEqual(summary["generation_attempted_completed_task_count"], 1)
         self.assertEqual(summary["generation_attempted_task_completion_rate"], 1.0)
+        self.assertEqual(summary["language_breakdown"]["javascript"]["task_completion_count"], 1)
+        self.assertEqual(summary["language_breakdown"]["javascript"]["patch_correct_count"], 1)
+        self.assertEqual(summary["language_breakdown"]["javascript"]["regression_prevention_measured_count"], 1)
+        self.assertEqual(summary["language_breakdown"]["javascript"]["regression_prevention_rate"], 0.0)
+        self.assertEqual(summary["language_breakdown"]["typescript"]["context_exceeded_task_count"], 1)
+        self.assertIsNone(summary["language_breakdown"]["typescript"]["regression_prevention_rate"])
+        self.assertEqual(summary["language_breakdown"]["python"]["baseline_valid_task_count"], 0)
 
 
 if __name__ == "__main__":
