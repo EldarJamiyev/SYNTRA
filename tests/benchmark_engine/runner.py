@@ -47,6 +47,22 @@ class BenchmarkError(RuntimeError):
     """A fail-closed benchmark configuration, evidence, or execution error."""
 
 
+class ContextWindowExceeded(BenchmarkError):
+    """A measured prompt exceeded the checkpoint context before generation."""
+
+    def __init__(self, prompt_tokens: int, context_window_tokens: int, tokens_over_context: int):
+        self.prompt_tokens = prompt_tokens
+        self.context_window_tokens = context_window_tokens
+        self.tokens_over_context = tokens_over_context
+        self.context_utilization = round(prompt_tokens / context_window_tokens, 4)
+        super().__init__(
+            "Prompt exceeds checkpoint context by "
+            + str(tokens_over_context) + " tokens ("
+            + str(prompt_tokens) + "/" + str(context_window_tokens)
+            + "; utilization=" + str(self.context_utilization) + ")."
+        )
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -701,8 +717,18 @@ def _expected_baseline_failure(result: dict[str, Any]) -> bool:
 
 def _generate_patch(runtime: Any, prompt: str, checkpoint: Path, device: str, max_new_tokens: int) -> dict[str, Any]:
     prompt_info = runtime.tokenize_text(prompt, path=checkpoint)
-    if prompt_info.get("tokens_over_context", 0) > 0:
-        raise BenchmarkError("Prompt exceeds checkpoint context; silent context truncation is refused.")
+    prompt_tokens = prompt_info.get("token_count")
+    context_window = prompt_info.get("context_window_tokens")
+    tokens_over_context = prompt_info.get("tokens_over_context")
+    if type(prompt_tokens) is not int or prompt_tokens < 0:
+        raise BenchmarkError("Native tokenizer did not return a valid prompt token count.")
+    if type(context_window) is not int or context_window < 2:
+        raise BenchmarkError("Native tokenizer did not return a valid context-window size.")
+    if type(tokens_over_context) is not int or tokens_over_context < 0:
+        raise BenchmarkError("Native tokenizer did not return valid context-overflow evidence.")
+    measured_overflow = max(tokens_over_context, prompt_tokens - (context_window - 1), 0)
+    if measured_overflow > 0:
+        raise ContextWindowExceeded(prompt_tokens, context_window, measured_overflow)
     pieces, terminal = [], None
     started = time.perf_counter()
     for event in runtime.stream_generate(prompt, max_new_tokens=max_new_tokens, temperature=0.0, top_k=1, top_p=1.0, repetition_penalty=1.0, device_name=device, path=checkpoint):
@@ -719,10 +745,6 @@ def _generate_patch(runtime: Any, prompt: str, checkpoint: Path, device: str, ma
     output = "".join(pieces)
     if terminal.get("text") != output:
         raise BenchmarkError("Native model terminal text does not match streamed deltas.")
-    context_window = prompt_info.get("context_window_tokens")
-    if type(context_window) is not int or context_window < 2:
-        raise BenchmarkError("Native tokenizer did not return a valid context-window size.")
-    prompt_tokens = int(prompt_info["token_count"])
     return {
         "text": output, "prompt_tokens": prompt_tokens,
         "context_window_tokens": context_window,
