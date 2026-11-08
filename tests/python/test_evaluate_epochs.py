@@ -49,6 +49,19 @@ class Phase4Milestone4ProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Duplicate JSON key"):
             evaluate_epochs._strict_json('{"step":1,"step":2}')
 
+    def test_in_repository_symlink_components_are_rejected_before_writing(self):
+        with tempfile.TemporaryDirectory(prefix=".syntra-output-symlink-", dir=ROOT) as temp:
+            root = Path(temp)
+            actual = root / "real-directory"
+            actual.mkdir()
+            link = root / "redirected-directory"
+            try:
+                link.symlink_to(actual, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("This filesystem does not support directory symlinks.")
+            with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "Symbolic-link path components"):
+                evaluate_epochs._inside_root(link / "report.json")
+
 
 class Phase4CheckpointEvaluationTests(unittest.TestCase):
     def test_snapshot_copies_checkpoint_sidecar_and_inference_companion_with_hashes(self):
