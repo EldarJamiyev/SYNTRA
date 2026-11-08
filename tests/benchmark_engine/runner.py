@@ -113,9 +113,12 @@ def validate_suite(suite: Any) -> None:
 
 
 def load_checkpoint_evidence(checkpoint: Path) -> dict[str, Any]:
-    target = checkpoint.expanduser().resolve(strict=True)
-    if target.is_symlink() or not target.is_file():
-        raise BenchmarkError("The selected native checkpoint must be a regular, non-symlink file.")
+    requested = checkpoint.expanduser()
+    if requested.is_symlink():
+        raise BenchmarkError("The selected native checkpoint must not be a symbolic link.")
+    target = requested.resolve(strict=True)
+    if not target.is_file():
+        raise BenchmarkError("The selected native checkpoint must be a regular file.")
     digest = hashlib.sha256()
     with target.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -174,7 +177,10 @@ def load_checkpoint_evidence(checkpoint: Path) -> dict[str, Any]:
         "history_available": bool(history), "history_error": history_error, "metadata_error": metadata_error,
     }
 def _copy_fixture_workspace(task: dict[str, Any], parent: Path) -> Path:
-    fixture_root = (ENGINE_ROOT / task["workspace"]).resolve(strict=True)
+    fixture_input = ENGINE_ROOT / task["workspace"]
+    if fixture_input.is_symlink():
+        raise BenchmarkError("Fixture workspace root must not be a symbolic link.")
+    fixture_root = fixture_input.resolve(strict=True)
     fixture_base = (ENGINE_ROOT / "fixtures").resolve(strict=True)
     if not _is_within(fixture_base, fixture_root) or not fixture_root.is_dir():
         raise BenchmarkError("Task fixture is missing or escapes the fixtures directory.")
@@ -378,10 +384,16 @@ def prepare_isolation(mode: str, image: str) -> dict[str, Any]:
 
 
 def run_hidden_test(*, isolation: dict[str, Any], workspace: Path, hidden_dir: Path, test_name: str, run_id: str, phase: str) -> dict[str, Any]:
-    hidden_root = hidden_dir.resolve(strict=True)
-    test_file = (hidden_root / test_name).resolve(strict=True)
+    hidden_input = hidden_dir
+    if hidden_input.is_symlink():
+        raise BenchmarkError("Hidden evaluation directory must not be a symbolic link.")
+    hidden_root = hidden_input.resolve(strict=True)
+    test_input = hidden_root / test_name
+    if test_input.is_symlink():
+        raise BenchmarkError("Hidden evaluation test must not be a symbolic link.")
+    test_file = test_input.resolve(strict=True)
     hidden_base = (ENGINE_ROOT / "hidden").resolve(strict=True)
-    if not _is_within(hidden_base, hidden_root) or not _is_within(hidden_root, test_file) or test_file.is_symlink() or not test_file.is_file():
+    if not _is_within(hidden_base, hidden_root) or not _is_within(hidden_root, test_file) or not test_file.is_file():
         raise BenchmarkError("Hidden test must be a regular file inside its declared hidden directory.")
     if isolation["mode"] == "host-opt-in":
         env = dict(os.environ)
@@ -446,7 +458,13 @@ def run_task(task: dict[str, Any], *, runtime: Any, checkpoint: Path, device: st
     }
     with tempfile.TemporaryDirectory(prefix="syntra-benchmark-" + task["id"] + "-") as temp:
         workspace = _copy_fixture_workspace(task, Path(temp))
-        hidden_dir = (ENGINE_ROOT / task["hidden_evaluation"]).resolve(strict=True)
+        hidden_input = ENGINE_ROOT / task["hidden_evaluation"]
+        if hidden_input.is_symlink():
+            raise BenchmarkError("Hidden evaluation directory must not be a symbolic link.")
+        hidden_dir = hidden_input.resolve(strict=True)
+        hidden_base = (ENGINE_ROOT / "hidden").resolve(strict=True)
+        if not _is_within(hidden_base, hidden_dir) or not hidden_dir.is_dir():
+            raise BenchmarkError("Task hidden evaluation directory is invalid.")
         baseline_target = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["target_test"], run_id=run_id, phase="baseline-target")
         baseline_regression = run_hidden_test(isolation=isolation, workspace=workspace, hidden_dir=hidden_dir, test_name=task["regression_test"], run_id=run_id, phase="baseline-regression")
         result["baseline"] = {

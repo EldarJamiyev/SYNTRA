@@ -1,52 +1,101 @@
 # SYNTRA coding benchmarks
 
-SYNTRA includes a versioned local-model benchmark suite. It evaluates the coding agent through its actual workspace inspection, read-only retrieval, structured-patch, candidate-verification, and proposal-staging workflow.
+SYNTRA maintains two separate benchmark tracks. They answer different questions and their scores must not be combined.
 
-## Run the suite
+## 1. Full coding-agent benchmark
 
-Complete native setup once with `Start-SYNTRA.bat` so the Python environment and trained checkpoint are ready, then run these commands from the repository root:
+The existing Node.js suite measures SYNTRA's repository-aware coding workflow: workspace discovery, read-only source retrieval, planning, structured patch generation, second-pass review, candidate verification, and proposal staging.
 
-- List available tasks: npm run benchmark -- --list
-- Run all tasks: npm run benchmark
-- Run one task: npm run benchmark -- --task utility-clamp
-- Run selected tasks: npm run benchmark -- --task utility-clamp --task string-slugify
-- Choose a report path: npm run benchmark -- --output reports/local-model-run.json
+Run after starting the native service and preparing a trained checkpoint:
 
-The default suite is benchmarks/suite.v1.json, currently version 1.4.0. It contains eight intentionally failing regression fixtures:
+```bash
+npm run benchmark -- --list
+npm run benchmark
+npm run benchmark -- --task utility-clamp
+npm run benchmark:reports -- history
+```
 
-| Task | Capability | Acceptance |
+The versioned manifest is `benchmarks/suite.v1.json` (version 1.3.0) and currently contains 11 deterministic tasks:
+
+| Task | Language / area | Capability |
 | --- | --- | --- |
-| utility-clamp | Add a bounded numeric helper | Exact expected source-file change and passing Node.js assertions |
-| positive-integer | Validate positive integer input | Numeric, boundary, and invalid-type behavior |
-| array-chunk | Split arrays into fixed-size groups | Correct chunk boundaries, empty arrays, and invalid sizes |
-| string-slugify | Correct string normalization | Punctuation/separator behavior and passing Node.js assertions |
-| config-deep-merge | Merge nested configuration | Recursive object merge, array replacement, input immutability |
-| multi-file-request-validation | API request validation | Two-file implementation and invalid/valid payload behavior |
-| python-duration-format | Python utility implementation | Input validation and MM:SS/H:MM:SS formatting through unittest |
-| typescript-contract-consistency | TypeScript API contracts | Aliased imports, interface conformance, and a real tsc noEmit baseline |
+| `utility-clamp` | node-script | Implement a bounded numeric clamp helper |
+| `string-slugify` | node-script | Normalize strings into URL-safe slugs |
+| `config-deep-merge` | node-script | Merge nested configuration objects safely |
+| `positive-integer` | node-script | Validate positive safe integers |
+| `array-chunk` | node-script | Split arrays into fixed-size chunks |
+| `http-header-lookup` | node-script | Implement case-insensitive safe HTTP header lookup |
+| `async-retry` | node-script | Implement bounded asynchronous retry with selective retry policy |
+| `multi-file-cache` | node-script | Implement and export a reusable in-memory cache across modules |
+| `python-slugify` | python-unittest | Implement deterministic Python slug normalization |
+| `go-clamp` | go-test | Implement integer clamp in a Go package |
+| `rust-key-normalize` | rust-test | Implement normalized cache-key handling in Rust |
 
-Each fixture must fail its language-appropriate baseline check (Node.js assertions/import contract, Python unittest, or the installed TypeScript compiler in noEmit mode) before SYNTRA is invoked. Every task declares an `expectedBaselineFailure` diagnostic substring; a nonzero exit code is insufficient. The runner requires that diagnostic in the captured baseline output before invoking the agent, so missing dependencies, malformed test files, runner startup errors, and unrelated failures cannot masquerade as a valid failing fixture. The task report records `baselineValidated`. A task is complete only when the resulting changed-file set exactly matches the declared expected paths and candidate verification passes. Editing checks or package files invalidates the patch score.
+Each fixture must show its expected baseline failure before the agent is invoked. The runner requires a task-specific diagnostic; a generic non-zero exit code is insufficient. A task is complete only when the changed-path set exactly matches the manifest and candidate verification passes. Fixture work happens in disposable copies; the checked-in fixture and selected workspace remain unchanged.
 
-## Measurements
+## 2. Raw native-model benchmark
 
-Each JSON report records native checkpoint identity and context-window size, per-task patch validity and verification status, task completion, end-to-end latency, prompt/output token totals, and peak RSS for the SYNTRA benchmark Node.js process.
+The direct-model track measures the native PyTorch checkpoint without calling the repository-aware agent. It does not include agent planning, repository retrieval, review, correction loops, or proposal orchestration. This separates model-generation capability from agent-system capability.
 
-The aggregate section includes completion, patch-validity and verification-pass rates, mean/median/min/max latency, token totals, and maximum observed process RSS across tasks.
+Run:
 
-## Measurement boundaries
+```bash
+# List tasks without loading PyTorch or a checkpoint
+npm run benchmark:model -- --list
 
-This is not a whole-machine performance test. Peak RSS measures only the Node.js benchmark process; it does not measure the separate native AI service process, GPU memory, or total system memory. Prompt-token counts are taken from SYNTRA's own tokenizer; unavailable measurements are recorded as unavailable rather than presented as exact counts.
+# Evaluate one task
+npm run benchmark:model -- --task python-clamp
 
-The benchmark enables the same model-selected read-only retrieval and second-pass patch review as the normal coding workflow. Review uses the same native checkpoint as generation; it is a second reasoning pass, not independent-model verification.
+# Run all raw-model tasks
+npm run benchmark:model
+```
 
-The benchmark does not call a hosted model API. It uses SYNTRA's native local AI service and trained checkpoint. Each fixture is copied to a temporary directory and removed after its run. Agent changes are staged only inside that temporary copy; the active workspace and checked-in fixtures remain unchanged.
+The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.0.0, and contains five Python fixtures:
 
-Reports are written under benchmark-results by default and are ignored by Git. Run history and report comparison are available locally:
+| Task | Capability | Target behavior |
+| --- | --- | --- |
+| `python-slugify` | String normalization | Collapse non-ASCII/non-alphanumeric separator runs into one hyphen |
+| `python-clamp` | Numeric boundaries | Clamp below/above range while preserving inclusive in-range values |
+| `python-deep-merge` | Configuration | Recursively merge dictionaries without mutating inputs |
+| `python-duration-format` | Time formatting | Format hours, minutes, and seconds without empty units |
+| `python-array-chunk` | Data structures | Preserve order and split sequences at exact chunk boundaries |
 
-- Show report-command usage: npm run benchmark:reports -- --help
-- List the latest saved runs: npm run benchmark:reports -- history
-- List more history entries: npm run benchmark:reports -- history --limit 50
-- Compare two model runs: npm run benchmark:reports -- compare --baseline benchmark-results/<baseline>.json --candidate benchmark-results/<candidate>.json
-- Save a machine-readable comparison: add --output benchmark-results/comparison.json
+For every task, the manifest names a fixture workspace, expected changed-path set, hidden target test, and independent hidden regression test. The fixture source is copied into a temporary model workspace. The hidden tests remain under `tests/benchmark_engine/hidden/`, are not copied into the model workspace, and are not included in the prompt. Before generation, the target test must fail with an assertion and the regression test must pass. Invalid baselines are reported as invalid fixtures and are not scored as model failures.
 
-Comparisons require the same benchmark suite version and the exact same task IDs. They show completion, patch validity, verification, latency, token use, and process RSS changes without collapsing them into an arbitrary weighted score. Runtime and hardware metadata are checked; when the environment differs, latency and RSS are marked incomparable. For meaningful performance comparisons, use the same computer, runtime, suite version, task selection, and as similar system-load conditions as possible.
+The native runtime's `tokenize_text` and `stream_generate` APIs are called directly against the selected checkpoint. Prompts exceeding that checkpoint's context window are rejected rather than silently truncated. Generation is deterministic (greedy decoding). The returned text must be one strict `SYNTRA_AGENT_PATCH_V1` JSON object without trailing prose. Candidate edits pass through SYNTRA's existing `validatePatch` and `writeCandidateChanges` functions, then a Python AST syntax check, target test, and regression test.
+
+### Isolation and execution
+
+Default execution is Docker-only and requires a pre-existing local `python:3.12-slim` image. The runner does not pull images. Each test container uses `--network none`, a read-only root, read-only workspace/evaluation mounts, a non-root user, dropped Linux capabilities, `no-new-privileges`, and bounded memory, CPU, PIDs, and temporary storage. Docker still trusts the Docker daemon and host kernel; it is not a virtual-machine boundary.
+
+For a trusted local environment only, host execution can be explicitly enabled:
+
+```bash
+npm run benchmark:model -- --isolation host --allow-host-execution
+```
+
+Host execution is not sandboxed and runs tests with the current operating-system user's permissions. The command requires both flags so this risk cannot be selected accidentally.
+
+### Direct-model measurements
+
+The machine-readable output is written to:
+
+```text
+data/benchmarks/latest_run.json
+```
+
+The file is intentionally Git-ignored. It records:
+
+- The checkpoint SHA-256, native checkpoint identity, training step, training mode, and selected device.
+- Training and validation loss plus the bounded loss-history points actually saved in checkpoint metadata.
+- Per-task baseline validity, strict patch validity, syntax status, target completion, and regression prevention.
+- Prompt/output token counts, generation tokens per second, and separate generation, patch, syntax, target-test, regression-test, and total timings.
+- Aggregate task-completion, patch-correctness, regression-prevention, and latency statistics.
+
+The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` warning triggers only when the saved training loss is at or below the configured threshold (default 1.0), at least three tasks were attempted, and zero target tasks completed. Configure the threshold with `--low-loss-threshold`. This is a warning heuristic, not a statistical diagnosis or proof that overfitting caused poor coding performance. Training-loss history is only recorded from checkpoints produced after history tracking was added; older checkpoints are reported as history-unavailable rather than backfilled.
+
+## Comparability and limitations
+
+Do not combine raw-model results with full-agent results. The direct track currently covers five small Python tasks; it is a first held-out regression suite, not a representative sample of unfamiliar repositories or an industrial capability benchmark. The existing eleven-task agent suite includes JavaScript, Python, Go, and Rust tasks, but those fixtures are still deliberately bounded and do not establish broad language competence.
+
+For meaningful comparisons, retain the same suite version and task IDs, run the same checkpoint on the same hardware and device, and keep system load as similar as practical. Compare exact checkpoint identities and measured outputs. Do not infer skill improvement from training loss alone. Record a real baseline run before and after a training or agent change; the evaluator does not fabricate a score for missing checkpoints or failed tasks.

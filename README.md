@@ -224,7 +224,22 @@ npm run benchmark -- --task utility-clamp
 npm run benchmark:reports -- history
 ```
 
-The current suite is a small development and regression baseline, not an industry-wide coding benchmark. Results depend on the local checkpoint, machine, runtime, and task set. A passing SYNTRA unit-test suite validates SYNTRA's implementation; it does not demonstrate the coding ability of a live model. Benchmark reports distinguish patch validity, verification, task completion, latency, and measured resource information. Process RSS does not include all native-service memory or GPU memory.
+SYNTRA also has a separate **raw native-model** track. It bypasses agent retrieval, planning, review, and orchestration, sending each held-out task directly to the selected native PyTorch checkpoint:
+
+```bash
+# List direct-model tasks without loading a model checkpoint
+npm run benchmark:model -- --list
+
+# Evaluate one direct-model task or the complete direct-model suite
+npm run benchmark:model -- --task python-clamp
+npm run benchmark:model
+```
+
+The raw-model track currently contains five Python fixtures. Each task is checked for a valid failing target-test baseline and a passing unrelated regression-test baseline before the model is called. Hidden target and regression tests are kept outside the model-visible workspace. The default evaluator uses a pre-existing local Docker image with networking disabled and read-only workspace/evaluation mounts; it never pulls images. Pre-provision the `python:3.12-slim` image in your Docker image cache before using the default isolation mode. Host execution requires the explicit, non-sandboxed opt-in `--isolation host --allow-host-execution`.
+
+Raw-model results are written to `data/benchmarks/latest_run.json`, which is ignored by Git. Reports record checkpoint identity, measured training-loss history when available, patch correctness, target completion, regression prevention, prompt/output token counts, and generation/test timings. Older checkpoints are not backfilled with invented loss history; the report identifies history as unavailable when it was not recorded. The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` signal is a configurable heuristic for low recorded training loss alongside zero held-out target completions across at least three tasks. It is a warning, not causal proof of overfitting.
+
+The existing `npm run benchmark` remains the separate 11-task full-agent benchmark. Neither suite is an industry-wide measure of coding ability. The direct-model suite is currently Python-only, deliberately small, and must be expanded with independently validated cross-language fixtures before broad capability claims are made. Passing SYNTRA unit tests validates SYNTRA's implementation; it does not demonstrate the coding ability of a live model.
 
 ## Get started
 
