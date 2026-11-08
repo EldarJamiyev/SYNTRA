@@ -104,6 +104,16 @@ class RawModelBenchmarkTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.BenchmarkError, "unsafe hidden_evaluation"):
             runner.validate_suite(invalid)
 
+    def test_suite_rejects_noncanonical_and_duplicate_changed_paths(self):
+        noncanonical = copy.deepcopy(self.suite)
+        noncanonical["tasks"][0]["expected_changed_paths"] = ["src//slug.py"]
+        with self.assertRaisesRegex(runner.BenchmarkError, "unsafe changed path"):
+            runner.validate_suite(noncanonical)
+        duplicate = copy.deepcopy(self.suite)
+        duplicate["tasks"][0]["expected_changed_paths"] = ["src/slug.py", "src/slug.py"]
+        with self.assertRaisesRegex(runner.BenchmarkError, "duplicate changed paths"):
+            runner.validate_suite(duplicate)
+
     def test_suite_rejects_a_task_count_that_does_not_match_the_manifest(self):
         invalid = copy.deepcopy(self.suite)
         invalid["task_count"] -= 1
@@ -214,6 +224,11 @@ class RawModelBenchmarkTests(unittest.TestCase):
         unsafe_path["edits"][0]["path"] = "../outside.py"
         with self.assertRaisesRegex(runner.BenchmarkError, "safe relative"):
             runner.parse_patch_output(json.dumps(unsafe_path))
+        for path in ("src//module.py", "src/./module.py", "C:/outside.py"):
+            ambiguous = copy.deepcopy(valid)
+            ambiguous["edits"][0]["path"] = path
+            with self.subTest(path=path), self.assertRaisesRegex(runner.BenchmarkError, "safe relative"):
+                runner.parse_patch_output(json.dumps(ambiguous))
         with self.assertRaisesRegex(runner.BenchmarkError, "strict JSON"):
             runner.parse_patch_output(json.dumps(valid) + " trailing text")
         with self.assertRaisesRegex(runner.BenchmarkError, "strict JSON"):
