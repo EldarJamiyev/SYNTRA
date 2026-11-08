@@ -42,7 +42,7 @@ The current `main` baseline includes the chat application, native model training
 
 The native model starts with randomly initialized weights. The Windows launcher trains a starter checkpoint from the checked-out repository; this makes the application runnable with its own model, but does not establish strong general-purpose coding ability. Model quality still depends on training data and must be measured through repeatable task evaluations.
 
-**Current development focus:** automated repository curriculum synthesis and more structured instruction training. This work is tracked in [PR #47](https://github.com/EldarJamiyev/SYNTRA/pull/47) and is not part of `main` until that pull request is merged. The intended pipeline extracts source-grounded learning examples from approved local repositories; it does not manufacture arbitrary bugs, telemetry, or successful outcomes.
+**Current development focus:** improving the usefulness of SYNTRA's native model through better local corpus curation, repeatable task-level evaluations, and measured coding-agent outcomes. Repository curriculum generation and structured instruction training are now part of `main`; generated data still requires review and evaluation before it can support claims of improved capability.
 
 ## Capabilities
 
@@ -170,9 +170,9 @@ The corpus loader applies size and file limits and excludes common generated, bi
 
 Training loss measures next-token prediction on the selected corpus. It does not establish that generated code is correct, that instruction following is reliable, or that the model generalizes to unfamiliar repositories.
 
-### Repository curriculum work in progress
+### Repository curriculum and instruction training
 
-The current development increment in [PR #47](https://github.com/EldarJamiyev/SYNTRA/pull/47) adds automated repository curriculum synthesis and additional structured-training support. The proposed pipeline:
+SYNTRA includes a local curriculum pipeline that turns approved repository source into structured prompt/completion examples. It uses Python AST extraction for Python modules and bounded declaration-aware extraction for supported source languages. The pipeline:
 
 - Scans the project and explicitly approved local corpus roots.
 - Extracts Python module structure with the standard-library AST and bounded declaration-aware chunks for other supported source files.
@@ -190,7 +190,7 @@ npm run ai:curriculum -- --max-examples 240
 
 The default output is `data/curricula/workspace-instructions.jsonl`. Use `--root` to scan one approved workspace instead of the project-plus-configured-roots set, and `--output` to choose a JSONL filename inside the project or active workspace. Secondary approved roots receive namespaced source paths; repair patches are emitted only for the active workspace because their paths must resolve against the workspace the coding agent can edit. Currently supported repair examples are intentionally narrow: source-verified Python comparisons against `None`.
 
-These capabilities remain branch work until PR #47 is merged. Curriculum generation creates training examples; it does not prove that those examples are semantically useful or that fine-tuning will improve coding performance.
+Curriculum synthesis and structured instruction training are available in `main`. Generation produces source-grounded examples, not proof of semantic quality or improved coding performance. Review the resulting dataset, run the instruction audit, train a local checkpoint, and compare repeatable task-level benchmark results before concluding that training improved the model.
 
 ## Security and execution boundaries
 
