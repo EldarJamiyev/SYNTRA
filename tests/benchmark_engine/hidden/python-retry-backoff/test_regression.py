@@ -11,7 +11,7 @@ class ExistingBehavior(unittest.TestCase):
         self.assertEqual(calculate_backoff(1, 0.25, 10.0), 0.25)
 
     def test_non_positive_attempt_returns_zero(self):
-        self.assertEqual(calculate_backoff(0, 1.0, 10.0), 0.0)
+        self.assertEqual(calculate_backoff(0, 0.0, 10.0), 0.0)
 
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ npm run benchmark:model -- --task python-clamp
 npm run benchmark:model
 ```
 
-The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.0.0, and contains five Python fixtures:
+The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.1.0, and contains eight Python fixtures:
 
 | Task | Capability | Target behavior |
 | --- | --- | --- |

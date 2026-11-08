@@ -59,10 +59,10 @@ class RawModelBenchmarkTests(unittest.TestCase):
     def setUpClass(cls):
         cls.suite = runner.load_suite()
 
-    def test_suite_has_five_unique_held_out_tasks(self):
-        self.assertEqual(self.suite["version"], "1.0.0")
-        self.assertEqual(len(self.suite["tasks"]), 5)
-        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 5)
+    def test_suite_has_eight_unique_held_out_tasks(self):
+        self.assertEqual(self.suite["version"], "1.1.0")
+        self.assertEqual(len(self.suite["tasks"]), 8)
+        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 8)
         self.assertTrue(all(task["hidden_evaluation"].startswith("hidden/") for task in self.suite["tasks"]))
 
     def test_suite_rejects_hidden_paths_that_escape_the_evaluation_directory(self):
