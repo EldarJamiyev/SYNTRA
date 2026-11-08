@@ -85,6 +85,7 @@ Before generation, the target test must fail with a recognized assertion/diagnos
 | Language | Default local image | Validation |
 | --- | --- | --- |
 | Python | `python:3.12-slim` | AST parsing and hidden Python tests |
+| JavaScript | `node:20-slim` | `node --check` and hidden `.mjs` test programs (runtime is registered; no dedicated JS task is in v1.2.0) |
 | TypeScript | `node:20-slim` | Local TypeScript compiler, then emitted JavaScript tests |
 | Go | `golang:1.22-alpine` | `go test ./...` and hidden Go test programs |
 | Rust | `rust:1.78-slim` | `cargo check --offline --locked` and Cargo integration tests |
