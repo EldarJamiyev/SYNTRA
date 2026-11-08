@@ -150,7 +150,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
             workspace = Path(temp)
             source = workspace / "src" / "value.mjs"
             source.parent.mkdir()
-            source.write_text("export function readValue() { return 41; }\\n", encoding="utf-8")
+            source.write_text("export function readValue() { return 41; }", encoding="utf-8")
             syntax = runner.syntax_check(
                 workspace, ["src/value.mjs"], language="javascript",
                 isolation=isolation, run_id="javascript-smoke",
