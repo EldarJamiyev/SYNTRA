@@ -800,6 +800,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             )
             self.assertEqual(first["status"], "completed")
             self.assertEqual(first["epoch"], 1)
+            self.assertGreater(first["estimated_training_memory_bytes"], 0)
             self.assertIsNotNone(first["train_loss"])
             self.assertIsNotNone(first["validation_loss"])
             self.assertTrue(checkpoint.is_file())
