@@ -209,7 +209,7 @@ def collect_sources(workspace: Path) -> list[tuple[str, str]]:
         for name in sorted(filenames):
             path = current_path / name
             if path.is_symlink() or not path.is_file() or path.suffix.lower() not in {
-                ".py", ".pyi", ".toml", ".md", ".json", ".ts", ".tsx", ".mts",
+                ".py", ".pyi", ".toml", ".md", ".json", ".ts", ".tsx", ".mts", ".lock",
                 ".js", ".mjs", ".go", ".rs", ".mod", ".sum",
             }:
                 continue
@@ -311,7 +311,7 @@ def _runtime_environment(language: str, workspace: Path, *, in_container: bool) 
             env.update({
                 "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off",
                 "GOFLAGS": "-mod=readonly", "GOCACHE": "/build/go-cache",
-                "GOTMPDIR": "/build/go-tmp", "GOMODCACHE": "/build/go-mod-cache",
+                "GOTMPDIR": "/build", "GOMODCACHE": "/build/go-mod-cache",
             })
         elif language == "rust":
             env.update({
@@ -340,9 +340,10 @@ def _runtime_environment(language: str, workspace: Path, *, in_container: bool) 
         env.update({
             "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off",
             "GOFLAGS": "-mod=readonly", "GOCACHE": str(runtime_root / "go-cache"),
-            "GOTMPDIR": str(runtime_root / "go-tmp"), "GOMODCACHE": str(runtime_root / "go-mod-cache"),
+            "GOTMPDIR": str(runtime_root), "GOMODCACHE": str(runtime_root / "go-mod-cache"),
         })
     elif language == "rust":
+        env.setdefault("RUSTUP_HOME", os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")))
         (runtime_root / "cargo-home").mkdir(mode=0o700, exist_ok=True)
         (runtime_root / "cargo-target").mkdir(mode=0o700, exist_ok=True)
         env.update({
@@ -374,8 +375,8 @@ def run_environment_command(
     docker = shutil.which("docker")
     if not docker:
         raise BenchmarkError("Docker disappeared after environment preflight.")
-    if language == "typescript" and not TYPESCRIPT_ROOT.is_dir():
-        raise BenchmarkError("The local TypeScript compiler package is unavailable for the isolated Node environment.")
+    if language == "typescript" and (not TYPESCRIPT_ROOT.is_dir() or not TYPESCRIPT_TEST_RUNNER.is_file()):
+        raise BenchmarkError("The local TypeScript compiler and harness must be present before offline evaluation.")
     name = "syntra-bench-" + run_id[-8:] + "-" + language + "-" + phase + "-" + uuid.uuid4().hex[:6]
     command = [
         docker, "run", "--rm", "--pull=never", "--name", name,
