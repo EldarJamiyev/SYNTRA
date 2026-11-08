@@ -83,6 +83,8 @@ def validate_suite(suite: Any) -> None:
     tasks = suite.get("tasks")
     if not isinstance(tasks, list) or not 1 <= len(tasks) <= 100:
         raise BenchmarkError("Benchmark suite must define between 1 and 100 tasks.")
+    if suite.get("task_count") != len(tasks):
+        raise BenchmarkError("Benchmark suite task_count must match the actual task list.")
     ids = set()
     for task in tasks:
         if not isinstance(task, dict):
@@ -137,36 +139,22 @@ def load_checkpoint_evidence(checkpoint: Path) -> dict[str, Any]:
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
             metadata_error, metadata = str(exc), {}
 
-    history, history_error = [], None
-    raw_history = metadata.get("training_history", [])
+    from syntra_ai.training_history import validate_training_history
+    history_error = None
     try:
-        if raw_history is None:
-            raw_history = []
-        if not isinstance(raw_history, list) or len(raw_history) > 100_000:
-            raise ValueError("training_history is not a bounded list")
-        previous = 0
-        for index, point in enumerate(raw_history):
-            if not isinstance(point, dict):
-                raise ValueError("history point is not an object at index " + str(index))
-            step, phase = point.get("step"), point.get("phase")
-            train, validation = point.get("train_loss"), point.get("validation_loss")
-            if type(step) is not int or step < 1 or step <= previous:
-                raise ValueError("history steps are not strictly increasing positive integers")
-            if not isinstance(phase, str) or not phase.strip() or len(phase) > 64:
-                raise ValueError("history phase is invalid at step " + str(step))
-            if isinstance(train, bool) or not isinstance(train, (int, float)) or not math.isfinite(float(train)) or float(train) < 0:
-                raise ValueError("training loss is invalid at step " + str(step))
-            if validation is not None and (isinstance(validation, bool) or not isinstance(validation, (int, float)) or not math.isfinite(float(validation)) or float(validation) < 0):
-                raise ValueError("validation loss is invalid at step " + str(step))
-            history.append({"step": step, "phase": phase, "train_loss": float(train), "validation_loss": None if validation is None else float(validation)})
-            previous = step
-        history = history[-MAX_TRAINING_HISTORY_POINTS:]
-    except (TypeError, ValueError) as exc:
-        history_error, history = str(exc), []
+        history = validate_training_history(metadata.get("training_history"))
+    except ValueError as exc:
+        history, history_error = [], str(exc)
 
     def finite_number(key):
         value = metadata.get(key)
-        return float(value) if not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(float(value)) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        try:
+            normalized = float(value)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        return normalized if math.isfinite(normalized) else None
 
     step = metadata.get("step")
     if type(step) is not int or step < 0:

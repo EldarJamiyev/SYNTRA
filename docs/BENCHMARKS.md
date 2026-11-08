@@ -59,6 +59,9 @@ The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.1.0, and 
 | `python-deep-merge` | Configuration | Recursively merge dictionaries without mutating inputs |
 | `python-duration-format` | Time formatting | Format hours, minutes, and seconds without empty units |
 | `python-array-chunk` | Data structures | Preserve order and split sequences at exact chunk boundaries |
+| `python-safe-path` | Path security | Normalize relative paths and reject traversal, absolute, UNC, and drive paths |
+| `python-header-lookup` | HTTP headers | Casefold header names and preserve first-match ordering |
+| `python-retry-backoff` | Retry control | Apply exponential growth with an upper cap and overflow-safe large attempts |
 
 For every task, the manifest names a fixture workspace, expected changed-path set, hidden target test, and independent hidden regression test. The fixture source is copied into a temporary model workspace. The hidden tests remain under `tests/benchmark_engine/hidden/`, are not copied into the model workspace, and are not included in the prompt. Before generation, the target test must fail with an assertion and the regression test must pass. Invalid baselines are reported as invalid fixtures and are not scored as model failures.
 

@@ -30,6 +30,10 @@ class TrainingHistoryTests(unittest.TestCase):
             validate_training_history([
                 {"step": 1, "phase": "pretrain", "train_loss": float("nan"), "validation_loss": 1.2},
             ])
+        with self.assertRaisesRegex(ValueError, "invalid training loss"):
+            validate_training_history([
+                {"step": 1, "phase": "pretrain", "train_loss": 10 ** 10000, "validation_loss": 1.2},
+            ])
 
     def test_history_appends_measured_points_and_keeps_a_bounded_window(self):
         history = []
@@ -69,6 +73,12 @@ class RawModelBenchmarkTests(unittest.TestCase):
         invalid = copy.deepcopy(self.suite)
         invalid["tasks"][0]["hidden_evaluation"] = "hidden/../fixtures"
         with self.assertRaisesRegex(runner.BenchmarkError, "unsafe hidden_evaluation"):
+            runner.validate_suite(invalid)
+
+    def test_suite_rejects_a_task_count_that_does_not_match_the_manifest(self):
+        invalid = copy.deepcopy(self.suite)
+        invalid["task_count"] -= 1
+        with self.assertRaisesRegex(runner.BenchmarkError, "task_count"):
             runner.validate_suite(invalid)
 
     def test_hidden_tests_are_not_copied_into_the_model_prompt_workspace(self):

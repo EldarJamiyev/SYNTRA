@@ -8,6 +8,18 @@ from typing import Any
 MAX_TRAINING_HISTORY_POINTS = 512
 
 
+def _normalize_loss(value: Any, field: str, index: int) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Training loss history point {index} has an invalid {field}.")
+    try:
+        normalized = float(value)
+    except (OverflowError, TypeError, ValueError):
+        raise ValueError(f"Training loss history point {index} has an invalid {field}.") from None
+    if not math.isfinite(normalized) or normalized < 0:
+        raise ValueError(f"Training loss history point {index} has an invalid {field}.")
+    return normalized
+
+
 def validate_training_history(value: Any) -> list[dict[str, Any]]:
     """Validate and normalize saved loss points without inventing missing history."""
     if value is None:
@@ -28,25 +40,16 @@ def validate_training_history(value: Any) -> list[dict[str, Any]]:
             raise ValueError("Training loss history steps must be positive and strictly increasing.")
         if not isinstance(phase, str) or not phase.strip() or len(phase) > 64:
             raise ValueError(f"Training loss history point {index} has an invalid phase.")
-        if (
-            isinstance(train_loss, bool)
-            or not isinstance(train_loss, (int, float))
-            or not math.isfinite(float(train_loss))
-            or float(train_loss) < 0
-        ):
-            raise ValueError(f"Training loss history point {index} has an invalid training loss.")
-        if validation_loss is not None and (
-            isinstance(validation_loss, bool)
-            or not isinstance(validation_loss, (int, float))
-            or not math.isfinite(float(validation_loss))
-            or float(validation_loss) < 0
-        ):
-            raise ValueError(f"Training loss history point {index} has an invalid validation loss.")
+        normalized_train = _normalize_loss(train_loss, "training loss", index)
+        normalized_validation = (
+            None if validation_loss is None
+            else _normalize_loss(validation_loss, "validation loss", index)
+        )
         points.append({
             "step": step,
             "phase": phase,
-            "train_loss": float(train_loss),
-            "validation_loss": None if validation_loss is None else float(validation_loss),
+            "train_loss": normalized_train,
+            "validation_loss": normalized_validation,
         })
         previous_step = step
 
