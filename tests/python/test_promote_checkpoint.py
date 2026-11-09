@@ -26,6 +26,11 @@ SPEC.loader.exec_module(promoter)
 
 @unittest.skipIf(torch is None, "Install the pinned PyTorch requirements to run checkpoint-promotion tests.")
 class BenchmarkVerifiedPromotionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        BENCHMARK_ROOT.mkdir(parents=True, exist_ok=True)
+        CHECKPOINT_ROOT.mkdir(parents=True, exist_ok=True)
+
     def _write_checkpoint(self, path: Path, seed: int) -> str:
         from syntra_ai.config import ModelConfig
         from syntra_ai.model import SyntraTransformer
@@ -51,7 +56,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _candidate(self, run_root: Path, checkpoint: Path, digest: str) -> Path:
-        snapshot_dir = run_root / "snapshots" / "test-run" / "sft-step-000000020-" + digest[:12]
+        snapshot_dir = run_root / "snapshots" / "test-run" / f"sft-step-000000020-{digest[:12]}"
         snapshot_dir.mkdir(parents=True)
         staged = snapshot_dir / "syntra-brain.pt"
         shutil.copy2(checkpoint, staged)
