@@ -136,6 +136,7 @@ def _python_symbol_quality(
     elif isinstance(node, ast.ClassDef):
         member_count = sum(
             isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and not _is_trivial_python_symbol(item)
             for item in body
         )
         annotation_count = sum(isinstance(item, ast.AnnAssign) and item.annotation is not None for item in body)
