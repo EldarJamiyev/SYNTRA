@@ -556,7 +556,9 @@ def finetune(
     config.validate()
     # Input micro-batches are staged for each accumulated optimizer update.
     # Budget against their combined resident input size before allocating them.
-    validate_training_memory_budget(config, batch_size * gradient_accumulation_steps, device)
+    estimated_training_memory_bytes = validate_training_memory_budget(
+        config, batch_size * gradient_accumulation_steps, device
+    )
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
     if tokenizer.vocab_size != config.vocab_size:
         raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
@@ -598,6 +600,7 @@ def finetune(
             "peak_device_memory_bytes": peak_device_memory_bytes,
             "device_memory_metric": device_memory_metric,
             "gradient_accumulation_steps": gradient_accumulation_steps,
+            "estimated_training_memory_bytes": estimated_training_memory_bytes,
             "message": message,
             "checkpoint": str(checkpoint_path_value),
             "training_mode": "supervised-instruction-finetuning",
