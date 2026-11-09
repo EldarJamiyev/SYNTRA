@@ -641,8 +641,9 @@ def _training_callback(
         )
         telemetry_keys = (
             "tokens_per_second", "supervised_tokens_processed", "step_latency_ms",
-            "mean_step_latency_ms", "peak_rss_bytes", "peak_device_memory_bytes",
+            "mean_step_latency_ms", "peak_rss_bytes", "peak_rss_scope", "peak_device_memory_bytes",
             "device_memory_metric", "estimated_training_memory_bytes", "device",
+            "throughput_basis", "throughput_scope",
             "gradient_accumulation_steps",
         )
         telemetry = {key: progress.get(key) for key in telemetry_keys if progress.get(key) is not None}
@@ -777,9 +778,10 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
         "stage", "step", "status", "checkpoint_sha256", "train_loss", "validation_loss",
         "task_completion_rate", "completed_task_count", "baseline_valid_task_count",
         "regression_prevention_rate", "tokens_per_second", "supervised_tokens_processed",
-        "step_latency_ms", "mean_step_latency_ms", "peak_rss_bytes",
+        "step_latency_ms", "mean_step_latency_ms", "peak_rss_bytes", "peak_rss_scope",
         "peak_device_memory_bytes", "device_memory_metric", "estimated_training_memory_bytes",
-        "device", "gradient_accumulation_steps", "suite_version", "report", "log", "error",
+        "device", "gradient_accumulation_steps", "throughput_basis", "throughput_scope",
+        "suite_version", "report", "log", "error",
     ]
     temporary_csv = csv_path.with_name(csv_path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
