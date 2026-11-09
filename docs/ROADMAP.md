@@ -196,6 +196,15 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Prevent synthesized instruction JSONL from contaminating the source-pretraining corpus; record exact dataset inclusion/exclusion in the checkpoint fingerprint.
 - [x] Stage read-only SHA-256-verified checkpoint/sidecar/inference snapshots and accept benchmark metrics only when the raw-model report confirms the exact staged checkpoint hash.
 - [x] Add a single-checkpoint baseline-only run mode and local Markdown/CSV trend summaries; failed or absent benchmark measurements remain unavailable rather than being imputed as zero.
+**Phase 5 local model operations and hardware baseline extension:**
+
+- [x] Add a CPU smoke profile (50 pretraining optimizer updates and 20 masked SFT updates) that exercises the real checkpoint snapshot and complete offline Docker evaluation handoff.
+- [x] Add low-memory CPU and scaled 8-layer/8-head, width-256, 1024-token GPU training profiles with true gradient accumulation at optimizer-step boundaries.
+- [x] Capture measured supervised tokens/second, optimizer-step latency, process peak RSS, and available CUDA/MPS allocator high-water telemetry in checkpoint-comparison Markdown/CSV and per-run JSON.
+- [x] Add benchmark-report-bound checkpoint promotion: require the complete current 13-task suite, valid hidden baselines, exact staged snapshot SHA-256, and successful native-runtime checkpoint loading.
+- [x] Archive the previous active checkpoint, metadata and inference companion under a timestamped ID; provide hash-verified rollback and rebuild the derived inference companion against the restored checkpoint timestamp.
+- [x] Keep promotion explicit, local and offline; training never auto-promotes or modifies loopback service/network policy.
+
 - [x] Publish a reproducible release checklist and upgrade notes covering CI/CodeQL, the native runtime, isolation, native semantic retrieval, benchmark history and release gates.
 
 **Acceptance:** Release claims are backed by repeatable measurements. The installation path, test results, supported hardware, and model limitations are documented.
