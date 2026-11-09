@@ -306,13 +306,34 @@ def _quality(language: str, symbol: dict[str, Any], source_lines: list[str]) -> 
         if re.search(r"\)\s*:\s*[\w$.[\]<>|&]+", signature):
             typed_parameters += 1
     elif language == "go":
-        match = re.search(r"\((.*)\)", signature)
+        # A receiver method has a receiver parameter list before its name;
+        # score the actual function parameter list, not the receiver.
+        normalized_signature = re.sub(
+            r"^\s*func\s+\([^)]*\)\s*", "func ", signature
+        )
+        match = re.search(
+            r"\bfunc\s+[A-Za-z_]\w*\s*\((?P<parameters>[^)]*)\)",
+            normalized_signature,
+        )
         if match:
-            typed_parameters = sum(
-                1 for item in match.group(1).split(",")
-                if len(_IDENT.findall(item)) >= 2
-            )
-        if re.search(r"\)\s*(?:\([^)]*\)|\*?[A-Za-z_]\w*)", signature):
+            parameter_text = match.group("parameters")
+            segments: list[str] = []
+            start = 0
+            depth = 0
+            for index, char in enumerate(parameter_text):
+                if char in "[({":
+                    depth += 1
+                elif char in "])}":
+                    depth = max(0, depth - 1)
+                elif char == "," and depth == 0:
+                    segments.append(parameter_text[start:index])
+                    start = index + 1
+            segments.append(parameter_text[start:])
+            for segment in segments:
+                names = _IDENT.findall(segment)
+                if len(names) >= 2:
+                    typed_parameters += max(1, len(names) - 1)
+        if re.search(r"\)\s*(?:\([^)]*\)|\*?[A-Za-z_]\w*)", normalized_signature):
             typed_parameters += 1
     elif language == "rust":
         typed_parameters = len(re.findall(r"\b[A-Za-z_]\w*\s*:\s*[^,)=]+", signature))
@@ -461,15 +482,21 @@ def safe_repair_examples(relative_path: str, source: str) -> list[dict[str, str]
     elif language == "rust":
         signature_pattern = re.compile(
             r"\bfn\s+(?P<name>[A-Za-z_]\w*)\s*\((?P<params>[^)]*)\)\s*"
-            r"->\s*Option\s*<\s*&[A-Za-z_]\w*\s*>\s*\{"
+            r"->\s*Option\s*<\s*&(?P<return_type>[A-Za-z_]\w*)\s*>\s*\{"
         )
         for signature in signature_pattern.finditer(source):
             if not code_mask[signature.start()]:
                 continue
             params = signature.group("params")
-            slice_match = re.search(r"\b(?P<slice>[A-Za-z_]\w*)\s*:\s*&\s*\[", params)
+            slice_match = re.search(
+                r"\b(?P<slice>[A-Za-z_]\w*)\s*:\s*&\s*\[\s*(?P<element>[A-Za-z_]\w*)\s*\]",
+                params,
+            )
             index_match = re.search(r"\b(?P<index>[A-Za-z_]\w*)\s*:\s*usize\b", params)
-            if not slice_match or not index_match:
+            if (
+                not slice_match or not index_match
+                or slice_match.group("element") != signature.group("return_type")
+            ):
                 continue
             slice_name = slice_match.group("slice")
             index_name = index_match.group("index")
@@ -479,7 +506,7 @@ def safe_repair_examples(relative_path: str, source: str) -> list[dict[str, str]
                 continue
             body = source[opening + 1:closing]
             if re.search(
-                rf"\bif\s+{re.escape(index_name)}\s*(?:>=|>)\s*{re.escape(slice_name)}\.len\s*\(",
+                rf"\bif\s+{re.escape(index_name)}\s*>=\s*{re.escape(slice_name)}\.len\s*\(",
                 body,
             ):
                 continue
