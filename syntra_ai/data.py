@@ -1,6 +1,7 @@
 """Safe local source corpus discovery and byte-level tokenization."""
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
 from typing import Iterable
 import os
 import stat
@@ -192,7 +193,9 @@ def load_corpus(
             except (OSError, RuntimeError):
                 dirnames[:] = []
                 continue
-            if not is_path_within(base, root):
+            base_norm = os.path.normcase(os.path.normpath(base))
+            root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+            if not (base_norm == root_norm or base_norm.startswith(root_prefix)):
                 dirnames[:] = []
                 continue
 
