@@ -224,6 +224,17 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
     task_ids = [item.get("id") for item in tasks if isinstance(item, dict)]
     if len(task_ids) != task_count or len(set(task_ids)) != task_count or any(not isinstance(item, str) or not item for item in task_ids):
         raise PromotionError("Benchmark task evidence is incomplete or contains duplicate task IDs.")
+    suite = _read_json(ROOT / "tests" / "benchmark_engine" / "suite.v1.json", maximum_bytes=4 * 1024 * 1024)
+    suite_tasks = suite.get("tasks")
+    expected_task_ids = [
+        item.get("id") for item in suite_tasks if isinstance(item, dict)
+    ] if isinstance(suite_tasks, list) else []
+    if (
+        report.get("suite_version") != suite.get("version")
+        or len(expected_task_ids) != task_count
+        or set(task_ids) != set(expected_task_ids)
+    ):
+        raise PromotionError("Promotion requires a complete benchmark from the currently checked-in 13-task polyglot suite, not a partial or stale suite run.")
 
     snapshot_path = _safe_repo_path(checkpoint.parent / "snapshot.json", must_exist=True)
     snapshot = _read_json(snapshot_path, maximum_bytes=1024 * 1024)
