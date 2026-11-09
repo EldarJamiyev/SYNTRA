@@ -237,6 +237,19 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             with self.assertRaisesRegex(promoter.PromotionError, "currently checked-in 13-task"):
                 promoter.verify_benchmark_candidate(report)
 
+    def test_report_trained_step_must_match_snapshot_directory_and_manifest(self):
+        with tempfile.TemporaryDirectory(prefix=".phase5-promotion-step-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 24)
+            staged = self._candidate(run_root, source, digest)
+            report = self._report(run_root, staged, digest)
+            data = json.loads(report.read_text(encoding="utf-8"))
+            data["model"]["trained_steps"] = 21
+            report.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(promoter.PromotionError, "trained_steps"):
+                promoter.verify_benchmark_candidate(report)
+
     def test_host_benchmark_report_cannot_authorize_promotion(self):
         with tempfile.TemporaryDirectory(prefix=".phase5-promotion-host-", dir=BENCHMARK_ROOT) as temp:
             run_root = Path(temp) / "run"
