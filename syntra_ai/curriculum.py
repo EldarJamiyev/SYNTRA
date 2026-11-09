@@ -123,6 +123,7 @@ def _python_symbol_quality(
         body = body[1:]
 
     annotation_count = 0
+    member_count = 0
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         arguments = (
             list(node.args.posonlyargs) + list(node.args.args)
@@ -132,6 +133,12 @@ def _python_symbol_quality(
         annotation_count += int(node.args.vararg is not None and node.args.vararg.annotation is not None)
         annotation_count += int(node.args.kwarg is not None and node.args.kwarg.annotation is not None)
         annotation_count += int(node.returns is not None)
+    elif isinstance(node, ast.ClassDef):
+        member_count = sum(
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for item in body
+        )
+        annotation_count = sum(isinstance(item, ast.AnnAssign) and item.annotation is not None for item in body)
 
     logic_nodes = [
         item for statement in body for item in ast.walk(statement)
@@ -153,6 +160,7 @@ def _python_symbol_quality(
     score = (
         (2 if has_docstring else 0)
         + min(3, annotation_count)
+        + min(2, member_count)
         + (2 if control_flow else 0)
         + (1 if calls else 0)
         + (1 if operations else 0)
@@ -162,6 +170,7 @@ def _python_symbol_quality(
         "score": score,
         "has_docstring": has_docstring,
         "annotation_count": annotation_count,
+        "member_count": member_count,
         "control_flow_count": control_flow,
         "call_count": calls,
         "operation_count": operations,
