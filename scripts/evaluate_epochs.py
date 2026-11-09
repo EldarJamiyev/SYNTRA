@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -301,7 +301,7 @@ class EvaluationJob:
     log_path: Path
     process: subprocess.Popen
     log_handle: Any
-    telemetry: dict[str, Any]
+    telemetry: dict[str, Any] = field(default_factory=dict)
 
 
 class CheckpointSnapshots:
