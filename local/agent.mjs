@@ -524,7 +524,9 @@ async function compressContextPromptInternal(modelRequest, prompt, usableContext
             }))
           }
         };
-        const candidate = replacePromptSectionPayload(current, section, JSON.stringify(compact));
+        const activeSection = locatePromptSection(current, "\nPROJECT:\n");
+        if (!activeSection) break;
+        const candidate = replacePromptSectionPayload(current, activeSection, JSON.stringify(compact));
         const candidateTokens = await exactPromptTokenCount(modelRequest, candidate, timeoutMs, signal);
         current = candidate;
         currentTokens = candidateTokens;
@@ -552,7 +554,9 @@ async function compressContextPromptInternal(modelRequest, prompt, usableContext
           importedBy: Array.isArray(item.importedBy) ? item.importedBy.slice(0, 2) : [],
           source: String(item.source || "").slice(0, sourceChars)
         }));
-        const candidate = replacePromptSectionPayload(current, section, JSON.stringify(compact));
+        const activeSection = locatePromptSection(current, "\nSOURCE EXCERPTS (retrieved and relevance-ranked):");
+        if (!activeSection) break;
+        const candidate = replacePromptSectionPayload(current, activeSection, JSON.stringify(compact));
         const candidateTokens = await exactPromptTokenCount(modelRequest, candidate, timeoutMs, signal);
         current = candidate;
         currentTokens = candidateTokens;
