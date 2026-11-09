@@ -1,8 +1,7 @@
-"""Evidence-grounded repository curriculum synthesis for SYNTRA.
+"""Evidence-grounded, multi-language repository curriculum synthesis for SYNTRA.
 
-Uses the standard library and SYNTRA's bounded local source reader. It never
-calls a hosted model or invents source code. Repair examples are emitted only
-for a narrow, mechanically checked Python rule.
+Uses only the standard library and bounded local source access. Training labels
+are derived from complete local declarations and mechanically verified edits.
 """
 from __future__ import annotations
 
@@ -18,6 +17,12 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .data import load_corpus
+from .polyglot import (
+    SUPPORTED_LANGUAGES,
+    enrich_logical_symbols,
+    language_for_path,
+    safe_repair_examples,
+)
 from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_curriculum_output_path
 
 MAX_INSTRUCTION_EXAMPLES = 10_000
@@ -33,7 +38,7 @@ MIN_AST_SYMBOL_QUALITY_SCORE = 1
 
 _DECLARATION = re.compile(
     r"^\s*(?:(?:export|default|pub|public|async|static|abstract|declare)\s+)*"
-    r"(?:function|class|interface|type|enum|def|fn|fun|func|struct|trait|impl)\s+"
+    r"(?:function|class|interface|type|enum|def|fn|fun|func(?:\s+\([^)]*\))?|struct|trait|impl)\s+"
     r"([A-Za-z_$][A-Za-z0-9_$]*)"
 )
 _IMPORT = re.compile(r"^\s*(?:import\s|from\s.+\simport\s|#include\s|use\s)")
@@ -494,7 +499,11 @@ def _extract_logical_symbols(source: str) -> list[dict[str, Any]]:
         match = _DECLARATION.match(line) or _ARROW_DECLARATION.match(line)
         indentation = len(line) - len(line.lstrip())
         if match:
-            is_member = brace_depth > 0 or indentation > 0
+            is_member = (
+            brace_depth > 0
+            or indentation > 0
+            or bool(re.match(r"^\s*func\s+\(", line))
+        )
             starts.append((index, match.group(1), line.strip(), brace_depth, is_member))
         brace_depth = max(0, brace_depth + brace_deltas[index])
 
@@ -568,7 +577,9 @@ def _module_metadata(relative_path: str, source: str) -> dict[str, Any]:
             1 for line in lines
             if _DECLARATION.match(line) or _ARROW_DECLARATION.match(line)
         )
-        all_symbols = _extract_logical_symbols(source)
+        all_symbols = enrich_logical_symbols(
+            relative_path, source, _extract_logical_symbols(source)
+        )
         imports = all_imports[:MAX_IMPORTS]
         symbols = all_symbols[:MAX_DECLARATIONS]
         raw_docstring = (
@@ -742,10 +753,14 @@ def synthesize_repository_curriculum(
     output_path: str | Path | None = None,
     max_examples: int = 240,
     exclude_paths: Iterable[str | Path] = (),
+    languages: Iterable[str] = SUPPORTED_LANGUAGES,
 ) -> dict[str, Any]:
-    """Generate JSONL prompt/completion records from an approved local repository."""
+    """Generate source-grounded comprehension, implementation and safe repair examples."""
     if type(max_examples) is not int or not 4 <= max_examples <= MAX_INSTRUCTION_EXAMPLES:
         raise ValueError(f"max_examples must be between 4 and {MAX_INSTRUCTION_EXAMPLES:,}.")
+    selected_languages = tuple(sorted(set(languages)))
+    if not selected_languages or any(item not in SUPPORTED_LANGUAGES for item in selected_languages):
+        raise ValueError("languages must select one or more supported SYNTRA curriculum languages.")
 
     if root is None:
         configured_roots = [
@@ -770,7 +785,14 @@ def synthesize_repository_curriculum(
 
     output_root = corpus_roots[0]
     target = resolve_curriculum_output_path(output_path, output_root)
-    corpus = load_corpus(corpus_roots, include_tokens=False, exclude_paths=exclude_paths)
+    # Benchmark hidden targets are evaluation labels, never curriculum data.
+    # Keep caller exclusions and add the known private target tree for every root.
+    scan_exclusions: list[str | Path] = list(exclude_paths)
+    for approved_root in corpus_roots:
+        hidden_targets = approved_root / "tests" / "benchmark_engine" / "hidden"
+        if hidden_targets.exists():
+            scan_exclusions.append(hidden_targets)
+    corpus = load_corpus(corpus_roots, include_tokens=False, exclude_paths=scan_exclusions)
     if len(corpus.files) != len(corpus.documents):
         raise RuntimeError("The bounded source reader returned inconsistent file/document counts.")
 
@@ -807,7 +829,18 @@ def synthesize_repository_curriculum(
         "boilerplate_symbols_skipped": 0,
         "near_duplicate_symbols_skipped": 0,
         "fingerprint_memory_budget_skips": 0,
+        "by_language": {
+            language: {
+                "quality_scored": 0,
+                "low_quality_skipped": 0,
+                "boilerplate_skipped": 0,
+                "near_duplicate_skipped": 0,
+                "repair_candidates": 0,
+            }
+            for language in SUPPORTED_LANGUAGES
+        },
     }
+    repair_candidates_by_language = {language: 0 for language in SUPPORTED_LANGUAGES}
 
     def offer_candidate(
         kind: str,
@@ -908,30 +941,38 @@ def synthesize_repository_curriculum(
             structure,
         )
 
+        language = language_for_path(relative_path)
         symbol_count += len(metadata["symbols"])
         eligible_symbols = []
-        for item in metadata["symbols"]:
+        for item in metadata["symbols"] if language in selected_languages else ():
             if item.get("truncated"):
                 continue
             quality = item.get("quality")
             fingerprint = item.get("structural_fingerprint")
-            if isinstance(quality, dict):
-                quality_statistics["quality_scored_symbols"] += 1
-                if quality.get("boilerplate") is True:
-                    quality_statistics["boilerplate_symbols_skipped"] += 1
+            if not isinstance(quality, dict):
+                # Do not teach unscored declarations as though they passed curation.
+                continue
+            language_stats = quality_statistics["by_language"][language]
+            quality_statistics["quality_scored_symbols"] += 1
+            language_stats["quality_scored"] += 1
+            if quality.get("boilerplate") is True:
+                quality_statistics["boilerplate_symbols_skipped"] += 1
+                language_stats["boilerplate_skipped"] += 1
+                continue
+            score = quality.get("score")
+            if type(score) is not int or score < MIN_AST_SYMBOL_QUALITY_SCORE:
+                quality_statistics["low_quality_symbols_skipped"] += 1
+                language_stats["low_quality_skipped"] += 1
+                continue
+            if isinstance(fingerprint, str) and fingerprint:
+                if fingerprint in seen_structural_symbols:
+                    quality_statistics["near_duplicate_symbols_skipped"] += 1
+                    language_stats["near_duplicate_skipped"] += 1
                     continue
-                score = quality.get("score")
-                if type(score) is not int or score < MIN_AST_SYMBOL_QUALITY_SCORE:
-                    quality_statistics["low_quality_symbols_skipped"] += 1
-                    continue
-                if isinstance(fingerprint, str) and fingerprint:
-                    if fingerprint in seen_structural_symbols:
-                        quality_statistics["near_duplicate_symbols_skipped"] += 1
-                        continue
-                    if len(seen_structural_symbols) < MAX_CURRICULUM_DEDUP_FINGERPRINTS:
-                        seen_structural_symbols.add(fingerprint)
-                    else:
-                        quality_statistics["fingerprint_memory_budget_skips"] += 1
+                if len(seen_structural_symbols) < MAX_CURRICULUM_DEDUP_FINGERPRINTS:
+                    seen_structural_symbols.add(fingerprint)
+                else:
+                    quality_statistics["fingerprint_memory_budget_skips"] += 1
             eligible_symbols.append(item)
         eligible_symbols = sorted(
             eligible_symbols,
@@ -983,8 +1024,12 @@ def synthesize_repository_curriculum(
         # sources; never train a repair action that could target an unrelated
         # same-named file in the active workspace.
         patch_examples = (
-            _safe_none_patch_examples(relative_path, source_text)
-            if is_active_workspace_source
+            (
+                _safe_none_patch_examples(relative_path, source_text)
+                if language == "python"
+                else safe_repair_examples(relative_path, source_text)
+            )
+            if is_active_workspace_source and language in selected_languages
             else []
         )
         for patch in patch_examples:
@@ -992,17 +1037,23 @@ def synthesize_repository_curriculum(
             if file_patch_count >= per_file_patch_limit:
                 continue
             file_patch_count += 1
+            repair_candidates_by_language[language] += 1
+            quality_statistics["by_language"][language]["repair_candidates"] += 1
+            patch_summary = patch.get(
+                "summary", "Use identity comparison when checking the None sentinel."
+            )
+            patch_reason = patch.get(
+                "reason",
+                "None is a singleton sentinel. Python code should use identity comparison (is / is not) for this check.",
+            )
             patch_payload = {
                 "format": "SYNTRA_AGENT_PATCH_V1",
-                "summary": "Use identity comparison when checking the None sentinel.",
+                "summary": patch_summary,
                 "edits": [{
                     "path": relative_path,
                     "find": patch["before"],
                     "replace": patch["after"],
-                    "reason": (
-                        "None is a singleton sentinel. Python code should use identity "
-                        "comparison (is / is not) for this check."
-                    ),
+                    "reason": patch_reason,
                 }],
             }
             offer_candidate(
@@ -1011,8 +1062,9 @@ def synthesize_repository_curriculum(
                 f"none-comparison-line-{patch['line']}",
                 module_split_group,
                 (
-                    "Instruction: Apply a SYNTRA_AGENT_PATCH_V1 change to fix the "
-                    f"non-identity None comparison in {relative_path} at line {patch['line']}.\n"
+                    "Instruction: Apply a verified SYNTRA_AGENT_PATCH_V1 repair to "
+                    f"{relative_path} at line {patch['line']} ({patch.get('rule', 'None-sentinel-identity')}).\n"
+                    f"Repair rationale: {patch_summary}\n"
                     f"Exact source anchor:\n{patch['before']}\n"
                     "Return a structured search/replace patch using the repository-relative path."
                 ),
@@ -1136,6 +1188,8 @@ def synthesize_repository_curriculum(
         "quality_statistics": quality_statistics,
         "minimum_ast_symbol_quality_score": MIN_AST_SYMBOL_QUALITY_SCORE,
         "maximum_ast_dedup_fingerprints": MAX_CURRICULUM_DEDUP_FINGERPRINTS,
+        "supported_languages": list(selected_languages),
+        "repair_candidates_by_language": repair_candidates_by_language,
         "audit": audit,
         "warnings": warnings,
     }
