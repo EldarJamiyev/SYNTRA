@@ -10,6 +10,8 @@ from .data import load_corpus
 from .runtime import evaluate, generate, status, tokenize_text
 from .instruction import audit_instruction_dataset, finetune
 from .curriculum import synthesize_repository_curriculum
+from .polyglot import SUPPORTED_LANGUAGES
+from .reasoning_curriculum import synthesize_multifile_reasoning_curriculum
 from .training import train
 
 
@@ -38,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
 
     curriculum = sub.add_parser(
         "curriculum",
-        help="Generate source-grounded module, symbol, and anchor-patch JSONL examples from approved local repositories.",
+        help="Generate source-grounded module, polyglot symbol, repair and paired reasoning JSONL examples.",
     )
     curriculum.add_argument(
         "--root",
@@ -51,6 +53,24 @@ def _parser() -> argparse.ArgumentParser:
         help="Optional JSONL output path inside the project or selected workspace.",
     )
     curriculum.add_argument("--max-examples", type=int, default=240)
+    curriculum.add_argument(
+        "--mode",
+        choices=("repository", "multifile", "all"),
+        default="all",
+        help="Select repository curation, paired multi-file reasoning traces, or both.",
+    )
+    curriculum.add_argument(
+        "--languages",
+        nargs="+",
+        choices=SUPPORTED_LANGUAGES,
+        default=list(SUPPORTED_LANGUAGES),
+        help="Languages to include in symbol, repair, and paired reasoning examples.",
+    )
+    curriculum.add_argument(
+        "--multifile-output",
+        default="data/curricula/workspace-reasoning.jsonl",
+        help="JSONL destination for paired multi-file reasoning examples.",
+    )
 
     tokenizer_parser = sub.add_parser("tokenize", help="Report real BPE token count and context use for text.")
     tokenizer_parser.add_argument("--text", required=True)
@@ -88,12 +108,22 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "curriculum":
-        result = synthesize_repository_curriculum(
-            root=args.root,
-            output_path=args.output,
-            max_examples=args.max_examples,
-        )
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        results: dict[str, Any] = {}
+        if args.mode in {"repository", "all"}:
+            results["repository"] = synthesize_repository_curriculum(
+                root=args.root,
+                output_path=args.output,
+                max_examples=args.max_examples,
+                languages=args.languages,
+            )
+        if args.mode in {"multifile", "all"}:
+            results["multifile"] = synthesize_multifile_reasoning_curriculum(
+                root=args.root,
+                output_path=args.multifile_output,
+                max_examples=min(args.max_examples, 5_000),
+                languages=args.languages,
+            )
+        print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0
     if args.command == "inspect-data":
         corpus = load_corpus([args.root], max_tokens=args.max_tokens)
