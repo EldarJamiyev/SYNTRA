@@ -144,7 +144,29 @@ class PolyglotCurriculumTests(unittest.TestCase):
                     root=root, output_path=second_output, max_examples=20,
                     languages=("javascript",),
                 )
-            self.assertEqual(first["quality_statistics"]["near_duplicate_symbols_skipped"], 1)
+            if first["quality_statistics"]["near_duplicate_symbols_skipped"] != 1:
+                from syntra_ai.curriculum import _module_metadata
+                from syntra_ai.polyglot import _polyglot_fingerprint
+                diagnostics = {}
+                for filename in ("alpha.mjs", "beta.mjs"):
+                    source = (root / filename).read_text(encoding="utf-8")
+                    metadata = _module_metadata(filename, source)
+                    diagnostics[filename] = [
+                        {
+                            "name": item["name"],
+                            "fingerprint": item.get("structural_fingerprint"),
+                            "recomputed": _polyglot_fingerprint(
+                                "javascript", item["short_name"], item["signature"], item["body"]
+                            ),
+                            "body": item["body"],
+                            "signature": item["signature"],
+                        }
+                        for item in metadata["symbols"]
+                    ]
+                self.fail(
+                    "Expected one cross-file duplicate; fingerprint diagnostics="
+                    + json.dumps(diagnostics, ensure_ascii=False)
+                )
             self.assertEqual(
                 first_output.read_text(encoding="utf-8"),
                 second_output.read_text(encoding="utf-8"),
