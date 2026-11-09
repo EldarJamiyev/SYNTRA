@@ -233,7 +233,7 @@ Start with the short end-to-end smoke profile after provisioning the required lo
 npm run brain:smoke
 ```
 
-It runs 50 source-pretraining optimizer steps and 20 masked SFT optimizer steps, then evaluates both immutable checkpoint snapshots through the 13-task offline Docker matrix. It uses CPU by default and writes to separate smoke-only staging/curriculum/report directories; it does not touch the active application checkpoint.
+It runs 50 source-pretraining optimizer steps and 20 masked SFT optimizer steps, then evaluates both immutable checkpoint snapshots against five representative tasks—one for each supported language—inside the existing offline Docker sandbox. It still preflights all five local language images. It uses CPU by default and writes to separate smoke-only staging/curriculum/report directories; it does not touch the active application checkpoint. Smoke reports are partial-suite evidence and cannot authorize promotion.
 
 Select a hardware profile for longer experiments:
 
