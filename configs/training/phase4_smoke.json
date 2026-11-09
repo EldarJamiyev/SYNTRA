@@ -40,7 +40,14 @@
     "device": "cpu",
     "isolation": "docker",
     "max_parallel": 1,
-    "max_new_tokens": 256
+    "max_new_tokens": 256,
+    "task_ids": [
+      "python-clamp",
+      "typescript-object-mapper",
+      "go-channel-sync",
+      "rust-safe-slice",
+      "javascript-event-normalizer"
+    ]
   },
   "run_directory": "data/benchmarks/phase4-smoke",
   "device": "cpu"
