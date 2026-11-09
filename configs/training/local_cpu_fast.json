@@ -41,5 +41,6 @@
     "max_parallel": 1,
     "max_new_tokens": 384
   },
-  "run_directory": "data/benchmarks/local-cpu-fast"
+  "run_directory": "data/benchmarks/local-cpu-fast",
+  "device": "cpu"
 }
