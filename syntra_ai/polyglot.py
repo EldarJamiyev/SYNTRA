@@ -169,9 +169,19 @@ def _leading_documentation(lines: list[str], start_line: int) -> str:
     return "\n".join(reversed(collected))
 
 
-def _parameter_names(signature: str) -> list[str]:
+def _parameter_names(signature: str, language: str) -> list[str]:
     """Extract uncomplicated parameter identifiers in their declared order."""
-    opening = signature.find("(")
+    if language == "go":
+        go_signature = re.search(
+            r"\bfunc\s+(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\((?P<parameters>[^)]*)\)",
+            signature,
+        )
+        if go_signature is None:
+            return []
+        parameters = go_signature.group("parameters")
+        opening = -1
+    else:
+        opening = signature.find("(")
     if opening < 0:
         return []
     depth = 0
@@ -192,9 +202,10 @@ def _parameter_names(signature: str) -> list[str]:
             if depth == 0:
                 closing = index
                 break
-    if closing < 0:
-        return []
-    parameters = signature[opening + 1:closing]
+    if language != "go":
+        if closing < 0:
+            return []
+        parameters = signature[opening + 1:closing]
     segments: list[str] = []
     start = 0
     depth = 0
@@ -220,8 +231,14 @@ def _parameter_names(signature: str) -> list[str]:
 def _polyglot_fingerprint(language: str, name: str, signature: str, body: str) -> str:
     """Normalize local identifiers while preserving operators, calls and members."""
     source = _strip_comments(body)
-    tokens = [match.group(0) for match in _TOKEN.finditer(source)]
-    names = {value: f"__arg_{index}__" for index, value in enumerate(_parameter_names(signature))}
+    tokens = [
+        match.group(0) for match in _TOKEN.finditer(source)
+        if not match.group(0).isspace()
+    ]
+    names = {
+        value: f"__arg_{index}__"
+        for index, value in enumerate(_parameter_names(signature, language))
+    }
     next_local = len(names)
     normalized: list[str] = []
     for index, token in enumerate(tokens):
@@ -238,7 +255,8 @@ def _polyglot_fingerprint(language: str, name: str, signature: str, body: str) -
             normalized.append(token)
         elif previous in {".", "->"}:
             normalized.append(token)
-        elif following == "(":
+        elif following in {"(", ":"}:
+            # Preserve called APIs, object/struct field labels, and type keys.
             normalized.append(token)
         elif token[:1].isupper():
             normalized.append(token)
