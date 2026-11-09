@@ -8,7 +8,6 @@ import test from "node:test";
 import {
   analyzeCheckFailure,
   buildRepositoryGraph,
-  compressContextPrompt,
   deriveAgentBudget,
   deriveModelContextBudget,
   parsePatchOutput,
