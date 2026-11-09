@@ -240,9 +240,12 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
     if snapshot.get("stage") not in {"pretraining", "sft", "baseline"}:
         raise PromotionError("Checkpoint snapshot stage is not recognized.")
 
-    report_relative = report_file.relative_to(BENCHMARK_ROOT.resolve())
-    checkpoint_relative = checkpoint.relative_to(BENCHMARK_ROOT.resolve())
-    if report_relative.parts[:3] != checkpoint_relative.parts[:3]:
+    common_run_root = Path(os.path.commonpath([str(report_file), str(checkpoint)]))
+    if (
+        not _is_within(common_run_root, BENCHMARK_ROOT.resolve())
+        or common_run_root == BENCHMARK_ROOT.resolve()
+        or len(common_run_root.relative_to(BENCHMARK_ROOT.resolve()).parts) < 2
+    ):
         raise PromotionError("Benchmark report and staged checkpoint are not from the same evaluation run.")
     return {
         "report": report_file,
@@ -272,6 +275,8 @@ def _archive_active(active: Path) -> str | None:
     artifacts = [(kind, path) for kind, path in _active_artifact_paths(active) if path.exists()]
     if not artifacts:
         return None
+    if not any(kind == "checkpoint" for kind, _path in artifacts):
+        raise PromotionError("Orphaned active metadata or inference companion exists without its checkpoint; inspect it before promoting.")
     for _kind, path in artifacts:
         _safe_repo_path(path, must_exist=True)
         if path.is_symlink() or not path.is_file():
