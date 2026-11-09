@@ -511,6 +511,7 @@ def _run_phase7_curriculum(
     *,
     max_examples: int,
     languages: list[str],
+    exclude_paths: list[Path],
 ) -> dict[str, Any]:
     """Invoke the public Phase 7 CLI in all-mode and validate its real outputs."""
     if tuple(languages) != PHASE7_LANGUAGES:
@@ -523,6 +524,7 @@ def _run_phase7_curriculum(
         "--mode", "all",
         "--languages", *languages,
         "--max-examples", str(max_examples),
+        "--exclude", *[str(_inside_root(path)) for path in exclude_paths],
     ]
     try:
         process = subprocess.run(
@@ -1239,6 +1241,12 @@ def main(argv: list[str] | None = None) -> int:
                 reasoning_curriculum_path,
                 max_examples=cur["max_examples"],
                 languages=cur["languages"],
+                exclude_paths=[
+                    *generated_artifact_roots,
+                    curriculum_path,
+                    repository_curriculum_path,
+                    reasoning_curriculum_path,
+                ],
             )
             curriculum_merge = _merge_phase7_curricula(
                 repository_curriculum_path,
