@@ -625,18 +625,22 @@ def finetune(
         step_started = perf_counter()
         optimizer.zero_grad(set_to_none=True)
         weighted_loss_total = 0.0
-        batch_supervised_tokens = 0
-        for _micro_step in range(gradient_accumulation_steps):
-            x, y = _instruction_batch(training_examples, batch_size, device)
-            micro_tokens = int((y != -100).sum().item())
+        micro_batches = [
+            _instruction_batch(training_examples, batch_size, device)
+            for _micro_step in range(gradient_accumulation_steps)
+        ]
+        micro_token_counts = [int((targets != -100).sum().item()) for _inputs, targets in micro_batches]
+        batch_supervised_tokens = sum(micro_token_counts)
+        if batch_supervised_tokens < 1:
+            raise RuntimeError("SFT optimizer step contains no supervised response/EOS targets.")
+        for (x, y), micro_tokens in zip(micro_batches, micro_token_counts):
             if micro_tokens < 1:
                 raise RuntimeError("SFT micro-batch contains no supervised response/EOS targets.")
             _, loss = model(x, y)
             if loss is None or not torch.isfinite(loss):
                 raise RuntimeError("Training loss is invalid; check the instruction dataset.")
             weighted_loss_total += float(loss.detach().item()) * micro_tokens
-            (loss * (micro_tokens / max(1, micro_tokens))).backward()
-            batch_supervised_tokens += micro_tokens
+            (loss * (micro_tokens / batch_supervised_tokens)).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
         optimizer.step()
         last_train_loss = weighted_loss_total / max(1, batch_supervised_tokens)
