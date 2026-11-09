@@ -2,7 +2,7 @@ name: SYNTRA CodeQL
 
 on:
   push:
-    branches: [main, "hardening/**", "feat/engineering-intelligence-upgrade", "feat/phase6-context-recovery-corpus-curation"]
+    branches: [main, "hardening/**", "feat/engineering-intelligence-upgrade"]
   pull_request:
     branches: [main]
   schedule:
