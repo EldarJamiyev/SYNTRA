@@ -1473,9 +1473,17 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(any(token != -100 for token in first["labels"][prompt_tokens:]))
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
-                tuned = finetune(dataset, steps=1, batch_size=1, learning_rate=1e-4,
-                                 device_name="cpu", checkpoint=checkpoint)
+                tuned = finetune(
+                    dataset, steps=1, batch_size=1, gradient_accumulation_steps=2,
+                    learning_rate=1e-4, device_name="cpu", checkpoint=checkpoint,
+                )
             self.assertEqual(tuned["status"], "completed")
+            self.assertEqual(tuned["gradient_accumulation_steps"], 2)
+            self.assertGreater(tuned["tokens_per_second"], 0)
+            self.assertGreater(tuned["step_latency_ms"], 0)
+            self.assertGreater(tuned["mean_step_latency_ms"], 0)
+            self.assertGreater(tuned["peak_rss_bytes"], 0)
+            self.assertEqual(tuned["device_memory_metric"], "cpu_not_applicable")
             inference_saved = torch.load(inference_checkpoint, map_location="cpu", weights_only=True)
             self.assertEqual(inference_saved["step"], tuned["step"])
             self.assertNotIn("optimizer_state", inference_saved)
