@@ -50,10 +50,14 @@ def _safe_repairs(path: str, source: str) -> list[dict[str, str]]:
     return safe_repair_examples(path, source)
 
 
-def _relative_module_candidates(relative_path: str, specifier: str) -> list[str]:
+def _relative_module_candidates(
+    relative_path: str,
+    specifier: str,
+    language: str,
+) -> list[str]:
     parent = posixpath.dirname(relative_path)
     base = posixpath.normpath(posixpath.join(parent, specifier))
-    suffixes = sorted(set().union(*LANGUAGE_SUFFIXES.values()))
+    suffixes = sorted(LANGUAGE_SUFFIXES[language])
     candidates = [base] if PurePosixPath(base).suffix else [base + suffix for suffix in suffixes]
     candidates.extend(posixpath.join(base, "index" + suffix) for suffix in suffixes)
     return candidates
@@ -107,7 +111,9 @@ def _related_targets(path: str, source: str, language: str, same_language_paths:
         for match in _JS_IMPORT.finditer(source):
             if not code_mask[match.start()]:
                 continue
-            for candidate in _relative_module_candidates(path, match.group("specifier")):
+            for candidate in _relative_module_candidates(
+                path, match.group("specifier"), language
+            ):
                 if candidate in same_language_paths and candidate != path:
                     targets.append(candidate)
                     break
