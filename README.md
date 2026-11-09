@@ -255,7 +255,7 @@ A measured full-suite checkpoint can be promoted only by explicitly selecting it
 npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
 
 # Promote after reviewing the dry-run output
-npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json"
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --confirm-sha256 "<exact-sha256-from-dry-run>"
 
 # Restore a previous active checkpoint using the archive ID printed by promotion
 npm run brain:promote -- --rollback "20261109T120000Z-1234abcd"
