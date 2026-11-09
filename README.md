@@ -42,7 +42,7 @@ The current `main` baseline includes the chat application, native model training
 
 The native model starts with randomly initialized weights. The Windows launcher trains a starter checkpoint from the checked-out repository; this makes the application runnable with its own model, but does not establish strong general-purpose coding ability. Model quality still depends on training data and must be measured through repeatable task evaluations.
 
-**Current development focus:** improving the usefulness of SYNTRA's native model through better local corpus curation, repeatable task-level evaluations, and measured coding-agent outcomes. Repository curriculum generation and structured instruction training are now part of `main`; generated data still requires review and evaluation before it can support claims of improved capability.
+**Current development focus:** Phase 6 is merged into `main` with structured HTTP 422 context-overflow reporting and a single tokenizer-measured recovery retry that preserves the full task and output contract. Phase 7 extends repository curriculum generation across Python, JavaScript, TypeScript, Go, and Rust, adds exact source-verified repair examples, and synthesizes paired-file localization traces for masked supervised fine-tuning. These are training-data capabilities—not evidence that the native model has already improved; generated datasets still require auditing and task-level evaluation.
 
 ## Capabilities
 
@@ -172,23 +172,32 @@ Training loss measures next-token prediction on the selected corpus. It does not
 
 ### Repository curriculum and instruction training
 
-SYNTRA includes a local curriculum pipeline that turns approved repository source into structured prompt/completion examples. It uses Python AST extraction for Python modules and bounded declaration-aware extraction for supported source languages. The pipeline:
+SYNTRA includes a local curriculum pipeline that turns approved repository source into structured prompt/completion examples. It uses Python's standard-library AST plus bounded, dependency-free declaration/block parsing for JavaScript, TypeScript, Go, and Rust. Structural quality scoring, boilerplate filtering, and identifier-normalized SHA-256 deduplication are applied across all five benchmark languages. The pipeline:
 
 - Scans the project and explicitly approved local corpus roots.
-- Extracts Python module structure with the standard-library AST and bounded declaration-aware chunks for other supported source files.
-- Generates JSONL examples for module and symbol comprehension, symbol implementation, and narrowly supported source-anchored repair tasks.
-- Emits a repair example only when the relevant source pattern and exact transformation can be verified; unsupported cases are skipped.
+- Extracts Python module structure with the standard-library AST and bounded declaration/block spans for JavaScript, TypeScript, Go, and Rust; incomplete or oversized blocks are never presented as complete implementations.
+- Scores documentation, type information, control flow, calls, meaningful operations, and class/struct members; filters empty stubs, trivial accessors, low-quality declarations, and structurally equivalent implementations.
+- Generates JSONL examples for module and symbol comprehension, symbol implementation, and exact source-anchored repair tasks.
+- Supports only conservative, locally verified repairs: Python `None` identity checks, JavaScript/TypeScript `typeof` strict equality, Go `(result, error)` failure returns, and Rust `Option<&T>` bounds-checked slice access.
+- Excludes the benchmark engine's hidden target directory from curriculum scanning so private evaluation labels cannot leak into training data.
 - Groups related examples when creating train/validation splits to reduce source-module and prompt leakage.
-- Masks prompt tokens from supervised loss while training on response tokens and EOS.
-- Preserves the existing raw-text training path.
+- Builds multi-file examples only from real local import/module/package relationships with a referenced declaration and a separately verified repair anchor in each file.
+- Supervises a compact `<thought>` localization trace, a valid two-file `SYNTRA_AGENT_PATCH_V1` JSON payload, and EOS as completion tokens; the native SFT loader continues to mask prompt targets with `-100`.
+- Preserves the existing raw-text training path and requires no external parser, model provider, model registry, or network service.
 
 Generate the curriculum from the project and every configured approved root with:
 
 ```powershell
-npm run ai:curriculum -- --max-examples 240
+npm run ai:curriculum -- --mode all --languages python javascript typescript go rust --max-examples 240
+
+# Generate only the paired two-file reasoning curriculum
+npm run ai:curriculum -- --mode multifile --languages javascript typescript go rust --max-examples 120
+
+# Generate only regular module/symbol/repair records
+npm run ai:curriculum -- --mode repository --languages python javascript typescript go rust --max-examples 240
 ```
 
-The default output is `data/curricula/workspace-instructions.jsonl`. Use `--root` to scan one approved workspace instead of the project-plus-configured-roots set, and `--output` to choose a JSONL filename inside the project or active workspace. Secondary approved roots receive namespaced source paths; repair patches are emitted only for the active workspace because their paths must resolve against the workspace the coding agent can edit. Currently supported repair examples are intentionally narrow: source-verified Python comparisons against `None`.
+The default outputs are `data/curricula/workspace-instructions.jsonl` and `data/curricula/workspace-reasoning.jsonl`. Use `--root` to scan one approved workspace instead of the project-plus-configured-roots set, and `--output` to choose a JSONL filename inside the project or active workspace. Secondary approved roots receive namespaced source paths; repair patches are emitted only for the active workspace because their paths must resolve against the workspace the coding agent can edit. Use `--mode repository`, `--mode multifile`, or `--mode all` to select the generators. `--languages` controls the language set. The multi-file generator writes `data/curricula/workspace-reasoning.jsonl` by default and does not overwrite an existing file when no verifiable pair is found. The supported repair rules are deliberately narrow and are skipped unless each exact search anchor is unique in its source file.
 
 Curriculum synthesis and structured instruction training are available in `main`. Generation produces source-grounded examples, not proof of semantic quality or improved coding performance. Review the resulting dataset, run the instruction audit, train a local checkpoint, and compare repeatable task-level benchmark results before concluding that training improved the model.
 
