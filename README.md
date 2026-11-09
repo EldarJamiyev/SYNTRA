@@ -225,6 +225,47 @@ Managed generated outputs under `data/benchmarks`, `data/curricula`, and `data/c
 Each run stores a manifest, checkpoint snapshots, benchmark JSON, subprocess logs, `summary.md`, and `summary.csv` under `data/benchmarks/phase4-milestone4/<run-id>/`. The summaries correlate actual checkpoint loss values with measured held-out target-completion and regression-prevention rates. Failed benchmarks, missing JSON, checkpoint mismatches, and missing metrics are reported as failed or unavailable—not as zero. No training or benchmark run is started by installing this code; the command above starts real local compute when executed on your machine.
 
 
+### Phase 5: smoke validation, hardware profiles, and checkpoint promotion
+
+Start with the short end-to-end smoke profile after provisioning the required local Docker images:
+
+```powershell
+npm run brain:smoke
+```
+
+It runs 50 source-pretraining optimizer steps and 20 masked SFT optimizer steps, then evaluates both immutable checkpoint snapshots through the 13-task offline Docker matrix. It uses CPU by default and writes to separate smoke-only staging/curriculum/report directories; it does not touch the active application checkpoint.
+
+Select a hardware profile for longer experiments:
+
+```powershell
+# Low-memory / CPU laptop: physical batch 1 with gradient accumulation
+npm run brain:milestone4 -- --config configs/training/local_cpu_fast.json --device cpu
+
+# Dedicated GPU or sufficient unified/system memory; choose CUDA or MPS explicitly when available
+npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device cuda
+npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device mps
+```
+
+The CPU profile uses a 4-layer, width-64 model with 256-token context, micro-batch 1, and eight-step accumulation. The GPU profile uses an 8-layer/8-head, width-256 model and 1024-token context. These are resource-targeted starting points, not benchmark-proven optima. The trainer reports the estimated working set before allocation and the actual local run's throughput and memory telemetry. CPU reports process peak RSS; CUDA reports allocator peak allocated VRAM; MPS reports the highest sampled driver/allocator memory seen after optimizer steps. Unavailable or inapplicable values remain unavailable, not zero. Token throughput counts supervised target tokens, and step latency measures optimizer-update wall time.
+
+A measured full-suite checkpoint can be promoted only by explicitly selecting its completed evaluation report:
+
+```powershell
+# Verify provenance, snapshot SHA-256 and runtime loadability without modifying the active model
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
+
+# Promote after reviewing the dry-run output
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json"
+
+# Restore a previous active checkpoint using the archive ID printed by promotion
+npm run brain:promote -- --rollback "20261109T120000Z-1234abcd"
+```
+
+Promotion accepts only a complete run of the currently checked-in 13-task raw native-model suite, with valid hidden baselines, a matching SHA-256 in the benchmark report and read-only snapshot manifest, and a checkpoint that the actual SYNTRA runtime can load. It uses the active path selected by `SYNTRA_CHECKPOINT` when set, otherwise SYNTRA's normal default/fallback resolver. Before replacing an active checkpoint it archives the previous full checkpoint and its metadata/inference companion under `data/checkpoints/archive/<timestamp-id>/`; rollback verifies those archive hashes and rebuilds a correctly bound inference companion. Partial task runs, stale suite versions, mismatched artifacts, symlinked paths, and invalid model payloads are rejected.
+
+Promotion is an explicit operator action. Training and benchmarking never auto-promote a model, and no cloud model service or network-enabled benchmark container is introduced.
+
+
 ## Security and execution boundaries
 
 SYNTRA uses explicit local boundaries, but no local coding agent can make arbitrary project code risk-free.
