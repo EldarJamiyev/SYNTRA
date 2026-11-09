@@ -69,13 +69,23 @@ def _resolve_approved_path(value: str | Path, *, expected: str) -> Path:
     if not os.path.isabs(raw):
         raise ValueError(f"The selected {expected} path must be absolute.")
     try:
-        # realpath resolves traversal and symlinks before the containment guard.
+        # Canonicalize untrusted input before the local containment test.
         resolved = os.path.realpath(raw, strict=True)
     except (OSError, RuntimeError):
         raise ValueError(f"The selected {expected} path does not exist or cannot be resolved.") from None
 
-    roots = _approved_roots()
-    if not any(is_path_within(resolved, root) for root in roots):
+    approved = False
+    for trusted_root in _approved_roots():
+        root_real = os.path.realpath(trusted_root, strict=True)
+        candidate_norm = os.path.normcase(os.path.normpath(resolved))
+        root_norm = os.path.normcase(os.path.normpath(root_real))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        # Keep this canonical prefix check local to the path sanitizer so the
+        # validated value remains visibly constrained before any later sink.
+        if candidate_norm == root_norm or candidate_norm.startswith(root_prefix):
+            approved = True
+            break
+    if not approved:
         raise ValueError(
             f"The selected {expected} path is outside the SYNTRA project and approved local data directories."
         )
@@ -84,17 +94,37 @@ def _resolve_approved_path(value: str | Path, *, expected: str) -> Path:
 
 def resolve_corpus_root(value: str | Path) -> Path:
     """Return an existing, approved directory for training or evaluation."""
-    resolved = os.fspath(_resolve_approved_path(value, expected="corpus"))
-    if _is_filesystem_root(resolved) or not os.path.isdir(resolved):
-        raise ValueError("The selected corpus path must be an existing non-root directory.")
+    resolved = os.path.realpath(
+        os.fspath(_resolve_approved_path(value, expected="corpus")), strict=True
+    )
+    candidate_norm = os.path.normcase(os.path.normpath(resolved))
+    approved = False
+    for trusted_root in _approved_roots():
+        root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if candidate_norm == root_norm or candidate_norm.startswith(root_prefix):
+            approved = True
+            break
+    if not approved or _is_filesystem_root(resolved) or not os.path.isdir(resolved):
+        raise ValueError("The selected corpus path must be an existing approved non-root directory.")
     return Path(resolved)
 
 
 def resolve_instruction_dataset(value: str | Path) -> Path:
     """Return an existing, approved JSONL file for supervised fine-tuning."""
-    resolved = os.fspath(_resolve_approved_path(value, expected="fine-tuning dataset"))
-    if not os.path.isfile(resolved):
-        raise ValueError("The fine-tuning dataset must be an existing regular file.")
+    resolved = os.path.realpath(
+        os.fspath(_resolve_approved_path(value, expected="fine-tuning dataset")), strict=True
+    )
+    candidate_norm = os.path.normcase(os.path.normpath(resolved))
+    approved = False
+    for trusted_root in _approved_roots():
+        root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if candidate_norm == root_norm or candidate_norm.startswith(root_prefix):
+            approved = True
+            break
+    if not approved or not os.path.isfile(resolved):
+        raise ValueError("The fine-tuning dataset must be an existing regular file inside an approved root.")
     if os.path.splitext(resolved)[1].lower() != ".jsonl":
         raise ValueError("Fine-tuning datasets must use the .jsonl file extension.")
     return Path(resolved)
@@ -107,10 +137,9 @@ def resolve_curriculum_output_path(
     """Resolve a JSONL output beneath the project or selected workspace only."""
     if value is None:
         default_parent = os.path.join(os.fspath(PROJECT_ROOT), "data", "curricula")
-        os.makedirs(default_parent, exist_ok=True)
-        parent = os.path.realpath(default_parent, strict=True)
         filename = "workspace-instructions.jsonl"
         allowed_roots = (os.fspath(PROJECT_ROOT), os.fspath(workspace_root))
+        parent_input = default_parent
     else:
         raw = os.fspath(value)
         if not raw or len(raw) > _MAX_PATH_CHARS or "\x00" in raw:
@@ -118,29 +147,51 @@ def resolve_curriculum_output_path(
         requested = raw if os.path.isabs(raw) else os.path.join(os.fspath(PROJECT_ROOT), raw)
         filename = os.path.basename(requested)
         parent_input = os.path.dirname(requested) or os.curdir
-        try:
-            # Resolve existing symlinks and traversal while allowing safe new
-            # subdirectories beneath an approved project/workspace root.
-            parent = os.path.realpath(parent_input, strict=False)
-        except (OSError, RuntimeError):
-            raise ValueError("Curriculum output directory cannot be resolved.") from None
         allowed_roots = (os.fspath(PROJECT_ROOT), os.fspath(workspace_root))
 
     if not _OUTPUT_NAME.fullmatch(filename):
         raise ValueError("Curriculum output filename must be a simple .jsonl filename.")
-    trusted_roots = tuple(os.path.realpath(root, strict=True) for root in allowed_roots)
-    if not any(_matches_path_boundary(parent, root) for root in trusted_roots):
-        raise ValueError("Curriculum output directory must be inside the active workspace or SYNTRA project directory.")
     try:
-        os.makedirs(parent, exist_ok=True)
-        parent = os.path.realpath(parent, strict=True)
+        parent = os.path.realpath(parent_input, strict=False)
+        trusted_roots = tuple(
+            os.path.realpath(root, strict=True) for root in allowed_roots
+        )
     except (OSError, RuntimeError):
-        raise ValueError("Curriculum output directory could not be created safely.") from None
-    if not os.path.isdir(parent) or not any(is_path_within(parent, root) for root in trusted_roots):
+        raise ValueError("Curriculum output directory cannot be resolved safely.") from None
+
+    candidate_norm = os.path.normcase(os.path.normpath(parent))
+    approved_roots: list[str] = []
+    for trusted_root in trusted_roots:
+        root_norm = os.path.normcase(os.path.normpath(trusted_root))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if candidate_norm == root_norm or candidate_norm.startswith(root_prefix):
+            approved_roots.append(root_norm)
+    if not approved_roots:
         raise ValueError("Curriculum output directory must be inside the active workspace or SYNTRA project directory.")
 
-    target = os.path.join(parent, filename)
-    # Do not follow a pre-existing output symlink, even when its name is allowed.
-    if os.path.islink(target):
-        raise ValueError("Curriculum output must not be a symbolic link.")
+    # Create only after the canonical parent has been checked against an
+    # explicit trusted root. Resolve and repeat the check after creation to
+    # detect an intervening symlink or directory replacement.
+    os.makedirs(parent, exist_ok=True)
+    parent = os.path.realpath(parent, strict=True)
+    candidate_norm = os.path.normcase(os.path.normpath(parent))
+    still_approved = False
+    for root_norm in approved_roots:
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if candidate_norm == root_norm or candidate_norm.startswith(root_prefix):
+            still_approved = True
+            break
+    if not still_approved or not os.path.isdir(parent):
+        raise ValueError("Curriculum output directory must remain inside an approved root.")
+
+    target = os.path.normpath(os.path.join(parent, filename))
+    target_norm = os.path.normcase(target)
+    target_approved = False
+    for root_norm in approved_roots:
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if target_norm.startswith(root_prefix):
+            target_approved = True
+            break
+    if not target_approved or os.path.islink(target):
+        raise ValueError("Curriculum output must be a simple file inside an approved directory and must not be a symbolic link.")
     return Path(target)
