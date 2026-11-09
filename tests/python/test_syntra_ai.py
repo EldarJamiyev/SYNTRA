@@ -1162,6 +1162,21 @@ class TransformerTests(unittest.TestCase):
         self.assertGreaterEqual(quality["control_flow_count"], 2)
         self.assertGreaterEqual(quality["score"], 7)
 
+        from syntra_ai.curriculum import _python_symbol_fingerprint
+        equivalent_a = ast.parse("def combine(left, right):\n    return left - right\n").body[0]
+        equivalent_b = ast.parse("def merge(first, second):\n    return first - second\n").body[0]
+        different_argument_order = ast.parse("def reverse(first, second):\n    return second - first\n").body[0]
+        self.assertEqual(
+            _python_symbol_fingerprint(equivalent_a),
+            _python_symbol_fingerprint(equivalent_b),
+            "renamed local and parameter identifiers should not prevent equivalent-code deduplication",
+        )
+        self.assertNotEqual(
+            _python_symbol_fingerprint(equivalent_a),
+            _python_symbol_fingerprint(different_argument_order),
+            "argument positions must remain distinct to avoid collapsing different behavior",
+        )
+
     def test_curriculum_filters_getter_setter_and_empty_stub_patterns(self):
         from syntra_ai import curriculum
 
