@@ -7,6 +7,7 @@ for a narrow, mechanically checked Python rule.
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import heapq
 import json
@@ -25,8 +26,10 @@ MAX_MODULE_CHARS = 8_000
 MAX_IMPORTS = 80
 MAX_DECLARATIONS = 120
 MAX_CURRICULUM_CANDIDATE_BYTES = 128 * 1024 * 1024
+MAX_CURRICULUM_DEDUP_FINGERPRINTS = 250_000
 MAX_CURRICULUM_RECORD_BYTES = 1024 * 1024
 MAX_CURRICULUM_OUTPUT_BYTES = 128 * 1024 * 1024
+MIN_AST_SYMBOL_QUALITY_SCORE = 1
 
 _DECLARATION = re.compile(
     r"^\s*(?:(?:export|default|pub|public|async|static|abstract|declare)\s+)*"
@@ -53,6 +56,238 @@ def _line_span(lines: list[str], start: int, end: int) -> str:
     return "\n".join(lines[max(0, start - 1):max(start - 1, end)]).strip()
 
 
+_BUILTIN_CALL_NAMES = {
+    "abs", "all", "any", "bool", "bytes", "dict", "enumerate", "filter",
+    "float", "getattr", "hasattr", "int", "isinstance", "issubclass", "iter",
+    "len", "list", "map", "max", "min", "next", "object", "open", "print",
+    "property", "range", "repr", "reversed", "round", "set", "setattr",
+    "slice", "sorted", "staticmethod", "classmethod", "str", "sum", "super",
+    "tuple", "type", "zip",
+}
+
+
+def _is_trivial_python_symbol(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> bool:
+    """Reject empty stubs and generated property getter/setter boilerplate."""
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        body = body[1:]
+    if not body:
+        return True
+    if isinstance(node, ast.ClassDef):
+        return all(
+            isinstance(item, ast.Pass)
+            or (isinstance(item, ast.Expr) and isinstance(item.value, ast.Constant) and item.value.value is Ellipsis)
+            for item in body
+        )
+    if len(body) != 1:
+        return False
+    statement = body[0]
+    if isinstance(statement, ast.Pass):
+        return True
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant) and statement.value.value is Ellipsis:
+        return True
+    if isinstance(statement, ast.Return) and isinstance(statement.value, ast.Attribute):
+        return (
+            isinstance(statement.value.value, ast.Name)
+            and statement.value.value.id in {"self", "cls"}
+        )
+    if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        value = statement.value
+        argument_names = {
+            argument.arg
+            for argument in (
+                list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                else []
+            )
+        }
+        return (
+            len(targets) == 1
+            and isinstance(targets[0], ast.Attribute)
+            and isinstance(targets[0].value, ast.Name)
+            and targets[0].value.id in {"self", "cls"}
+            and isinstance(value, ast.Name)
+            and value.id in argument_names
+        )
+    return False
+
+
+def _python_symbol_quality(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> dict[str, Any]:
+    """Score documented, typed and logically substantive AST declarations."""
+    body = list(node.body)
+    has_docstring = bool(ast.get_docstring(node, clean=False))
+    if has_docstring and body and isinstance(body[0], ast.Expr):
+        body = body[1:]
+
+    annotation_count = 0
+    member_count = 0
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        arguments = (
+            list(node.args.posonlyargs) + list(node.args.args)
+            + list(node.args.kwonlyargs)
+        )
+        annotation_count = sum(argument.annotation is not None for argument in arguments)
+        annotation_count += int(node.args.vararg is not None and node.args.vararg.annotation is not None)
+        annotation_count += int(node.args.kwarg is not None and node.args.kwarg.annotation is not None)
+        annotation_count += int(node.returns is not None)
+    elif isinstance(node, ast.ClassDef):
+        member_count = sum(
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and not _is_trivial_python_symbol(item)
+            for item in body
+        )
+        annotation_count = sum(isinstance(item, ast.AnnAssign) and item.annotation is not None for item in body)
+
+    logic_nodes = [
+        item for statement in body for item in ast.walk(statement)
+        if not isinstance(item, (ast.Load, ast.Store, ast.Del, ast.Name, ast.Constant, ast.arg, ast.Expr))
+    ]
+    control_flow = sum(
+        isinstance(item, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.Try, ast.With, ast.AsyncWith, ast.Match))
+        for item in logic_nodes
+    )
+    calls = sum(isinstance(item, ast.Call) for item in logic_nodes)
+    operations = sum(
+        isinstance(item, (
+            ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.IfExp,
+            ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+        ))
+        for item in logic_nodes
+    )
+    statement_count = (
+        sum(
+            not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            or not _is_trivial_python_symbol(item)
+            for item in body
+        )
+        if isinstance(node, ast.ClassDef)
+        else len(body)
+    )
+    score = (
+        (2 if has_docstring else 0)
+        + min(3, annotation_count)
+        + min(2, member_count)
+        + (2 if control_flow else 0)
+        + (1 if calls else 0)
+        + (1 if operations else 0)
+        + (1 if statement_count > 1 else 0)
+    )
+    return {
+        "score": score,
+        "has_docstring": has_docstring,
+        "annotation_count": annotation_count,
+        "member_count": member_count,
+        "control_flow_count": control_flow,
+        "call_count": calls,
+        "operation_count": operations,
+        "boilerplate": _is_trivial_python_symbol(node),
+    }
+
+
+class _CanonicalSymbolNames(ast.NodeTransformer):
+    """Normalize local identifiers while retaining parameter order and called APIs."""
+
+    def __init__(self, root_arguments: Iterable[str] = ()) -> None:
+        self.name_map: dict[str, str] = {}
+        self.next_local = 0
+        for index, name in enumerate(root_arguments):
+            self.name_map[name] = f"__arg_{index}__"
+
+    def _visit_function_scope(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
+        previous_map = self.name_map
+        previous_next = self.next_local
+        self.name_map = {}
+        self.next_local = 0
+        arguments = (
+            list(node.args.posonlyargs) + list(node.args.args)
+            + list(node.args.kwonlyargs)
+        )
+        if node.args.vararg is not None:
+            arguments.append(node.args.vararg)
+        if node.args.kwarg is not None:
+            arguments.append(node.args.kwarg)
+        for index, argument in enumerate(arguments):
+            self.name_map[argument.arg] = f"__arg_{index}__"
+        node.name = "__symbol__"
+        self._strip_docstring(node)
+        result = self.generic_visit(node)
+        self.name_map = previous_map
+        self.next_local = previous_next
+        return result
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+        return self._visit_function_scope(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
+        return self._visit_function_scope(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
+        node.name = "__class__"
+        self._strip_docstring(node)
+        return self.generic_visit(node)
+
+    @staticmethod
+    def _strip_docstring(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef) -> None:
+        if node.body and isinstance(node.body[0], ast.Expr):
+            value = node.body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                node.body = node.body[1:]
+
+    def visit_arg(self, node: ast.arg) -> ast.AST:
+        if node.arg not in self.name_map:
+            self.name_map[node.arg] = f"__arg_{self.next_local}__"
+            self.next_local += 1
+        node.arg = self.name_map[node.arg]
+        return node
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if node.id in self.name_map:
+            node.id = self.name_map[node.id]
+        elif node.id not in _BUILTIN_CALL_NAMES and not node.id.isupper() and not node.id.startswith("__"):
+            if node.id not in self.name_map:
+                self.name_map[node.id] = f"__local_{self.next_local}__"
+                self.next_local += 1
+            node.id = self.name_map[node.id]
+        return node
+
+    def visit_Call(self, node: ast.Call) -> ast.AST:
+        if isinstance(node.func, ast.Name):
+            # Retain called API names; they carry behavior, unlike local variable names.
+            node.args = [self.visit(item) for item in node.args]
+            node.keywords = [self.visit(item) for item in node.keywords]
+            return node
+        return self.generic_visit(node)
+
+
+def _python_symbol_fingerprint(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
+) -> str:
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr):
+        value = body[0].value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            body = body[1:]
+    # The normalizer rewrites identifiers in place; never mutate the parsed
+    # module because nested declaration extraction still consumes the original AST.
+    normalized = ast.Module(body=copy.deepcopy(body), type_ignores=[])
+    root_arguments = (
+        [argument.arg for argument in (
+            list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
+        )]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        else []
+    )
+    normalized = _CanonicalSymbolNames(root_arguments).visit(normalized)
+    ast.fix_missing_locations(normalized)
+    structural = ast.dump(normalized, annotate_fields=True, include_attributes=False)
+    return hashlib.sha256(structural.encode("utf-8")).hexdigest()
+
+
 def _python_symbol(
     node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
     lines: list[str],
@@ -69,6 +304,7 @@ def _python_symbol(
     body = _line_span(lines, start_line, end_line) or ast.get_source_segment(source, node) or lines[node.lineno - 1]
     truncated = len(body) > MAX_SYMBOL_CHARS
     name = f"{prefix}.{node.name}" if prefix else node.name
+    quality = _python_symbol_quality(node)
     return {
         "name": name,
         "short_name": node.name,
@@ -80,6 +316,9 @@ def _python_symbol(
         "start_line": start_line,
         "end_line": end_line,
         "docstring": (ast.get_docstring(node, clean=False) or "")[:1200],
+        "quality_score": quality["score"],
+        "quality": quality,
+        "structural_fingerprint": _python_symbol_fingerprint(node),
     }
 
 
@@ -561,6 +800,14 @@ def synthesize_repository_curriculum(
     candidate_pool_bytes = 0
     candidate_sizes: dict[str, int] = {}
     candidate_budget_skips = 0
+    seen_structural_symbols: set[str] = set()
+    quality_statistics = {
+        "quality_scored_symbols": 0,
+        "low_quality_symbols_skipped": 0,
+        "boilerplate_symbols_skipped": 0,
+        "near_duplicate_symbols_skipped": 0,
+        "fingerprint_memory_budget_skips": 0,
+    }
 
     def offer_candidate(
         kind: str,
@@ -662,10 +909,30 @@ def synthesize_repository_curriculum(
         )
 
         symbol_count += len(metadata["symbols"])
-        eligible_symbols = [
-            item for item in metadata["symbols"]
-            if not item.get("truncated")
-        ]
+        eligible_symbols = []
+        for item in metadata["symbols"]:
+            if item.get("truncated"):
+                continue
+            quality = item.get("quality")
+            fingerprint = item.get("structural_fingerprint")
+            if isinstance(quality, dict):
+                quality_statistics["quality_scored_symbols"] += 1
+                if quality.get("boilerplate") is True:
+                    quality_statistics["boilerplate_symbols_skipped"] += 1
+                    continue
+                score = quality.get("score")
+                if type(score) is not int or score < MIN_AST_SYMBOL_QUALITY_SCORE:
+                    quality_statistics["low_quality_symbols_skipped"] += 1
+                    continue
+                if isinstance(fingerprint, str) and fingerprint:
+                    if fingerprint in seen_structural_symbols:
+                        quality_statistics["near_duplicate_symbols_skipped"] += 1
+                        continue
+                    if len(seen_structural_symbols) < MAX_CURRICULUM_DEDUP_FINGERPRINTS:
+                        seen_structural_symbols.add(fingerprint)
+                    else:
+                        quality_statistics["fingerprint_memory_budget_skips"] += 1
+            eligible_symbols.append(item)
         eligible_symbols = sorted(
             eligible_symbols,
             key=lambda item: hashlib.sha256(
@@ -817,6 +1084,22 @@ def synthesize_repository_curriculum(
         warnings.append(
             "Anchor-patch examples are restricted to the active output workspace; additional approved roots contribute read-only comprehension and implementation examples."
         )
+    if quality_statistics["boilerplate_symbols_skipped"]:
+        warnings.append(
+            f"{quality_statistics['boilerplate_symbols_skipped']:,} empty or trivial AST getter/setter/stub symbol(s) were excluded."
+        )
+    if quality_statistics["low_quality_symbols_skipped"]:
+        warnings.append(
+            f"{quality_statistics['low_quality_symbols_skipped']:,} AST symbol(s) below the minimum structural quality score were excluded."
+        )
+    if quality_statistics["near_duplicate_symbols_skipped"]:
+        warnings.append(
+            f"{quality_statistics['near_duplicate_symbols_skipped']:,} structurally equivalent AST symbol(s) were deduplicated across the approved repositories."
+        )
+    if quality_statistics["fingerprint_memory_budget_skips"]:
+        warnings.append(
+            f"AST fingerprint deduplication reached its {MAX_CURRICULUM_DEDUP_FINGERPRINTS:,}-entry memory bound; subsequent novel symbols were retained without adding more fingerprints."
+        )
     if candidate_budget_skips:
         warnings.append(
             f"{candidate_budget_skips:,} candidate(s) were excluded by the "
@@ -850,6 +1133,9 @@ def synthesize_repository_curriculum(
         "example_count": len(records),
         "examples_by_type": counts,
         "selection_strategy": "deterministic-source-ranked-round-robin",
+        "quality_statistics": quality_statistics,
+        "minimum_ast_symbol_quality_score": MIN_AST_SYMBOL_QUALITY_SCORE,
+        "maximum_ast_dedup_fingerprints": MAX_CURRICULUM_DEDUP_FINGERPRINTS,
         "audit": audit,
         "warnings": warnings,
     }

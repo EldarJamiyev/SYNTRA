@@ -422,8 +422,238 @@ function makePatchPrompt(goal, inventory, plan, graph, ranked, feedback, reposit
   ].filter(Boolean).join("\n");
 }
 
-async function modelJson(modelRequest, route, body, timeoutMs = 15000, signal) {
-  return modelRequest("POST", route, body, timeoutMs, { signal });
+const CONTEXT_PROMPT_SECTION_MARKERS = [
+  "\nMODEL-SELECTED READ-ONLY CONTEXT",
+  "\nSOURCE EXCERPTS (retrieved and relevance-ranked):",
+  "\nREPOSITORY OBSERVATIONS",
+  "\nPROJECT:\n",
+  "\nPLAN (operational checklist):",
+  "\nLAST ATTEMPT / VERIFICATION FEEDBACK."
+];
+
+function locatePromptSection(prompt, marker) {
+  const start = prompt.indexOf(marker);
+  if (start < 0) return null;
+  const headerEnd = prompt.indexOf("\n", start + 1);
+  if (headerEnd < 0) return null;
+  const nextSections = CONTEXT_PROMPT_SECTION_MARKERS
+    .map(candidate => prompt.indexOf(candidate, headerEnd + 1))
+    .filter(index => index >= 0 && index > start);
+  const end = nextSections.length ? Math.min(...nextSections) : prompt.length;
+  return { start, payloadStart: headerEnd + 1, end };
+}
+
+function replacePromptSectionPayload(prompt, section, payload) {
+  return prompt.slice(0, section.payloadStart) + payload + prompt.slice(section.end);
+}
+
+function removePromptSection(prompt, section) {
+  return prompt.slice(0, section.start) + prompt.slice(section.end);
+}
+
+async function exactPromptTokenCount(modelRequest, prompt, timeoutMs, signal) {
+  const result = await modelRequest(
+    "POST", "/model/tokenize", { text: prompt }, timeoutMs, { signal }
+  );
+  if (!Number.isInteger(result?.token_count) || result.token_count < 0) {
+    throw new Error("The native tokenizer returned invalid context-recovery evidence.");
+  }
+  return result.token_count;
+}
+
+async function compressContextPromptInternal(modelRequest, prompt, usableContextTokens, timeoutMs, signal) {
+  if (typeof prompt !== "string" || !prompt || !Number.isInteger(usableContextTokens) || usableContextTokens < 1) {
+    throw new Error("The native context-overflow response did not provide a usable compression budget.");
+  }
+  let current = prompt;
+  let currentTokens = await exactPromptTokenCount(modelRequest, current, timeoutMs, signal);
+  const originalTokens = currentTokens;
+  const droppedSections = [];
+
+  if (currentTokens <= usableContextTokens) {
+    return { prompt: current, originalTokens, compressedTokens: currentTokens, droppedSections };
+  }
+
+  // Model-selected retrieval is optional grounding. The user request, system
+  // instructions, task scope and patch schema are never removed or rewritten.
+  let section = locatePromptSection(current, "\nMODEL-SELECTED READ-ONLY CONTEXT");
+  if (section) {
+    current = removePromptSection(current, section);
+    droppedSections.push("model_selected_read_only_context");
+    currentTokens = await exactPromptTokenCount(modelRequest, current, timeoutMs, signal);
+  }
+
+  section = locatePromptSection(current, "\nREPOSITORY OBSERVATIONS");
+  if (section && currentTokens > usableContextTokens) {
+    let payload = {};
+    try { payload = JSON.parse(current.slice(section.payloadStart, section.end)); } catch {}
+    const compact = JSON.stringify({
+      gitStatus: String(payload.gitStatus || "unavailable").slice(0, 180),
+      diffSummary: { workingTree: "omitted during context recovery", index: "omitted during context recovery" }
+    });
+    current = replacePromptSectionPayload(current, section, compact);
+    droppedSections.push("repository_observations");
+    currentTokens = await exactPromptTokenCount(modelRequest, current, timeoutMs, signal);
+  }
+
+  section = locatePromptSection(current, "\nPROJECT:\n");
+  if (section && currentTokens > usableContextTokens) {
+    let project;
+    try { project = JSON.parse(current.slice(section.payloadStart, section.end)); } catch {}
+    if (project && typeof project === "object") {
+      const nodes = Array.isArray(project.graph?.nodes) ? project.graph.nodes : [];
+      const variants = [4, 2, 1, 0];
+      let fitted = false;
+      for (const count of variants) {
+        const compact = {
+          name: project.name,
+          root: project.root,
+          packageManager: project.packageManager,
+          frameworks: Array.isArray(project.frameworks) ? project.frameworks.slice(0, 3) : [],
+          scripts: project.scripts && typeof project.scripts === "object"
+            ? Object.fromEntries(Object.entries(project.scripts).slice(0, 4)) : {},
+          manifests: Array.isArray(project.manifests) ? project.manifests.slice(0, 2) : [],
+          graph: {
+            totalFiles: project.graph?.totalFiles,
+            truncated: project.graph?.truncated,
+            nodes: nodes.slice(0, count).map(node => ({
+              path: node.path,
+              score: node.score,
+              imports: Array.isArray(node.imports) ? node.imports.slice(0, 2) : [],
+              importedBy: Array.isArray(node.importedBy) ? node.importedBy.slice(0, 2) : []
+            }))
+          }
+        };
+        const activeSection = locatePromptSection(current, "\nPROJECT:\n");
+        if (!activeSection) break;
+        const candidate = replacePromptSectionPayload(current, activeSection, JSON.stringify(compact));
+        const candidateTokens = await exactPromptTokenCount(modelRequest, candidate, timeoutMs, signal);
+        current = candidate;
+        currentTokens = candidateTokens;
+        if (currentTokens <= usableContextTokens) { fitted = true; break; }
+      }
+      if (fitted || nodes.length) droppedSections.push("project_graph_metadata");
+    } else {
+      current = removePromptSection(current, section);
+      droppedSections.push("project_metadata");
+      currentTokens = await exactPromptTokenCount(modelRequest, current, timeoutMs, signal);
+    }
+  }
+
+  section = locatePromptSection(current, "\nSOURCE EXCERPTS (retrieved and relevance-ranked):");
+  if (section && currentTokens > usableContextTokens) {
+    let snippets;
+    try { snippets = JSON.parse(current.slice(section.payloadStart, section.end)); } catch {}
+    if (Array.isArray(snippets)) {
+      let fitted = false;
+      for (const [count, sourceChars] of [[8, 1200], [4, 700], [2, 320], [1, 120], [0, 0]]) {
+        const compact = snippets.slice(0, count).map(item => ({
+          path: item.path,
+          sha256: item.sha256,
+          imports: Array.isArray(item.imports) ? item.imports.slice(0, 2) : [],
+          importedBy: Array.isArray(item.importedBy) ? item.importedBy.slice(0, 2) : [],
+          source: String(item.source || "").slice(0, sourceChars)
+        }));
+        const activeSection = locatePromptSection(current, "\nSOURCE EXCERPTS (retrieved and relevance-ranked):");
+        if (!activeSection) break;
+        const candidate = replacePromptSectionPayload(current, activeSection, JSON.stringify(compact));
+        const candidateTokens = await exactPromptTokenCount(modelRequest, candidate, timeoutMs, signal);
+        current = candidate;
+        currentTokens = candidateTokens;
+        if (currentTokens <= usableContextTokens) { fitted = true; break; }
+      }
+      if (fitted || snippets.length) droppedSections.push("source_excerpt_chunks");
+    } else {
+      current = removePromptSection(current, section);
+      droppedSections.push("source_excerpts");
+      currentTokens = await exactPromptTokenCount(modelRequest, current, timeoutMs, signal);
+    }
+  }
+
+  section = locatePromptSection(current, "\nPLAN (operational checklist):");
+  if (section && currentTokens > usableContextTokens) {
+    let steps;
+    try { steps = JSON.parse(current.slice(section.payloadStart, section.end)); } catch {}
+    if (Array.isArray(steps)) {
+      const compact = steps.map(step => ({
+        id: step.id,
+        title: String(step.title || "").slice(0, 80),
+        detail: String(step.detail || "").slice(0, 48)
+      }));
+      current = replacePromptSectionPayload(current, section, JSON.stringify(compact));
+    } else {
+      current = removePromptSection(current, section);
+    }
+    droppedSections.push("plan_details");
+    currentTokens = await exactPromptTokenCount(modelRequest, current, timeoutMs, signal);
+  }
+
+  section = locatePromptSection(current, "\nLAST ATTEMPT / VERIFICATION FEEDBACK.");
+  if (section && currentTokens > usableContextTokens) {
+    const original = current.slice(section.payloadStart, section.end);
+    current = replacePromptSectionPayload(current, section, original.slice(-320));
+    droppedSections.push("older_attempt_feedback");
+    currentTokens = await exactPromptTokenCount(modelRequest, current, timeoutMs, signal);
+  }
+
+  if (currentTokens > usableContextTokens) {
+    const error = new Error(
+      "The native checkpoint context is too small to preserve the complete task and required model instructions after removing optional repository context."
+    );
+    error.code = "context_recovery_budget_insufficient";
+    error.originalPromptTokens = originalTokens;
+    error.compressedPromptTokens = currentTokens;
+    error.usableContextTokens = usableContextTokens;
+    throw error;
+  }
+  return {
+    prompt: current,
+    originalTokens,
+    compressedTokens: currentTokens,
+    droppedSections
+  };
+}
+
+export async function compressContextPrompt(modelRequest, prompt, usableContextTokens, timeoutMs = 30000, signal) {
+  return compressContextPromptInternal(modelRequest, prompt, usableContextTokens, timeoutMs, signal);
+}
+
+
+
+export async function modelJson(modelRequest, route, body, timeoutMs = 15000, signal) {
+  try {
+    return await modelRequest("POST", route, body, timeoutMs, { signal });
+  } catch (error) {
+    if (route !== "/model/generate"
+      || error?.code !== "context_window_exceeded"
+      || !Number.isInteger(error?.usableContextTokens)
+      || typeof body?.prompt !== "string") {
+      throw error;
+    }
+
+    // Exactly one model-generation retry is permitted. Token counting is an
+    // evidence-only request; compression removes low-priority repository
+    // context while preserving the original task and model instructions.
+    const recovery = await compressContextPromptInternal(
+      modelRequest, body.prompt, error.usableContextTokens, timeoutMs, signal
+    );
+    const retried = await modelRequest(
+      "POST", route,
+      { ...body, prompt: recovery.prompt },
+      timeoutMs,
+      { signal }
+    );
+    return {
+      ...retried,
+      context_recovery: {
+        status: "retried_after_compression",
+        original_prompt_tokens: recovery.originalTokens,
+        compressed_prompt_tokens: recovery.compressedTokens,
+        usable_context_tokens: error.usableContextTokens,
+        dropped_sections: recovery.droppedSections
+      }
+    };
+  }
 }
 
 function throwIfAborted(signal) {
@@ -1758,6 +1988,18 @@ export async function runAgentTask({
             });
             continue;
           }
+        }
+
+        if (generated.context_recovery?.status === "retried_after_compression") {
+          observations.push({
+            kind: "native-context-recovery",
+            stage: slice.id + "-generation",
+            status: "recovered",
+            detail: "The native runtime rejected the original prompt; SYNTRA removed low-priority repository context and succeeded on one bounded retry (" +
+              generated.context_recovery.original_prompt_tokens + " → " +
+              generated.context_recovery.compressed_prompt_tokens + " tokens; usable context " +
+              generated.context_recovery.usable_context_tokens + ")."
+          });
         }
 
         let candidate;
