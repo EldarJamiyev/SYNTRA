@@ -218,6 +218,35 @@ def inspect_local_docker_images(
         }
 
     try:
+        context = runner(
+            [executable, "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=15, check=False, shell=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        context = None
+        context_error = str(exc)
+    else:
+        context_error = (context.stderr or context.stdout or "Docker context inspection failed.").strip()
+    endpoint = (context.stdout or "").strip() if context is not None else ""
+    if context is None or context.returncode != 0 or not endpoint.startswith(("unix://", "npipe://")):
+        return {
+            "engine_ready": False,
+            "images_ready": False,
+            "docker_version": None,
+            "docker_endpoint": endpoint or None,
+            "images": [
+                {"image": name, "present": False, "ready": False, "error": "Local Docker endpoint not verified"}
+                for name in REQUIRED_DOCKER_IMAGES
+            ],
+            "error": (
+                "Docker must use a local unix:// socket or npipe:// named pipe; "
+                "remote TCP/SSH endpoints are not accepted. "
+                + (context_error[-1000:] if context_error else "Observed endpoint: " + endpoint)
+            ),
+        }
+
+    try:
         info = runner(
             [executable, "info", "--format", "{{.ServerVersion}}"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -228,6 +257,7 @@ def inspect_local_docker_images(
             "engine_ready": False,
             "images_ready": False,
             "docker_version": None,
+            "docker_endpoint": endpoint,
             "images": [
                 {"image": name, "present": False, "ready": False, "error": "Docker daemon unavailable"}
                 for name in REQUIRED_DOCKER_IMAGES
@@ -284,7 +314,7 @@ def inspect_local_docker_images(
         "images_ready": all(item.get("ready") is True for item in images),
         "docker_version": docker_version,
         "images": images,
-        "operation_policy": "docker info and docker image inspect only; no pull, build, run, or network operation",
+        "operation_policy": "local docker context inspect, docker info, and docker image inspect only; no pull, build, run, or remote endpoint is accepted",
         "error": None,
     }
 
