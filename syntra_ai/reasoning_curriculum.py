@@ -59,10 +59,51 @@ def _relative_module_candidates(relative_path: str, specifier: str) -> list[str]
     return candidates
 
 
+def _python_module_candidates(relative_path: str, module: str | None, level: int) -> list[str]:
+    """Resolve local Python import names to sibling modules without loading them."""
+    current = PurePosixPath(relative_path)
+    parts = list(current.parent.parts)
+    if level:
+        for _ in range(max(0, level - 1)):
+            if not parts:
+                return []
+            parts.pop()
+        module_parts = module.split(".") if module else []
+        base_parts = parts + module_parts
+    else:
+        if not module:
+            return []
+        base_parts = module.split(".")
+    if not base_parts:
+        return []
+    base = posixpath.join(*base_parts)
+    return [base + ".py", base + ".pyi", posixpath.join(base, "__init__.py")]
+
+
 def _related_targets(path: str, source: str, language: str, same_language_paths: set[str]) -> list[str]:
     targets: list[str] = []
     code_mask = _code_mask(source)
-    if language in {"javascript", "typescript"}:
+    if language == "python":
+        try:
+            tree = ast.parse(source, filename=path)
+        except (SyntaxError, ValueError, TypeError):
+            return []
+        for node in ast.walk(tree):
+            candidates: list[str] = []
+            if isinstance(node, ast.ImportFrom):
+                if node.module is None:
+                    for alias in node.names:
+                        candidates.extend(_python_module_candidates(path, alias.name, node.level))
+                else:
+                    candidates.extend(_python_module_candidates(path, node.module, node.level))
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    candidates.extend(_python_module_candidates(path, alias.name, 0))
+            for candidate in candidates:
+                if candidate in same_language_paths and candidate != path:
+                    targets.append(candidate)
+                    break
+    elif language in {"javascript", "typescript"}:
         for match in _JS_IMPORT.finditer(source):
             if not code_mask[match.start()]:
                 continue
@@ -83,7 +124,7 @@ def _related_targets(path: str, source: str, language: str, same_language_paths:
             if code_mask[match.start()]
         ]
         modules.extend(
-            match.group("path").split("::")[-1]
+            match.group("path").split("::")[0]
             for match in _RUST_USE.finditer(source) if code_mask[match.start()]
         )
         for module in modules:
@@ -98,7 +139,41 @@ def _related_targets(path: str, source: str, language: str, same_language_paths:
     return sorted(set(targets))
 
 
-def _referenced_export(exports: list[str], importing_source: str) -> str | None:
+def _referenced_export(
+    exports: list[str],
+    importing_source: str,
+    language: str,
+) -> str | None:
+    if language == "python":
+        try:
+            tree = ast.parse(importing_source)
+        except (SyntaxError, ValueError, TypeError):
+            return None
+        public = set(exports)
+        imported_names: dict[str, str] = {}
+        imported_modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in public:
+                        imported_names[alias.asname or alias.name] = alias.name
+                    elif node.module is None:
+                        imported_modules.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_modules.add(alias.asname or alias.name.split(".")[0])
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id in imported_names:
+                return imported_names[node.id]
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in public
+                and isinstance(node.value, ast.Name)
+                and node.value.id in imported_modules
+            ):
+                return node.attr
+        return None
+
     code_mask = _code_mask(importing_source)
     for name in sorted(set(exports), key=lambda item: (-len(item), item)):
         if not name or name.startswith("_"):
@@ -186,6 +261,11 @@ def synthesize_multifile_reasoning_curriculum(
     records: list[dict[str, str]] = []
     considered_pairs = 0
     for root_index, files in by_root.items():
+        # Patch paths are applied relative to the active workspace (root zero).
+        # Other approved roots are read-only training sources and cannot safely
+        # be represented as edits against a different active workspace.
+        if root_index != 0:
+            continue
         paths = set(files)
         for consumer_path in sorted(paths):
             consumer = files[consumer_path]
@@ -206,7 +286,7 @@ def synthesize_multifile_reasoning_curriculum(
                     ):
                         continue
                 export = _referenced_export(
-                    implementation.get("exports", []), consumer["source"]
+                    implementation.get("exports", []), consumer["source"], language
                 )
                 if export is None:
                     continue
