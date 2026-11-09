@@ -27,6 +27,7 @@ MAX_DECLARATIONS = 120
 MAX_CURRICULUM_CANDIDATE_BYTES = 128 * 1024 * 1024
 MAX_CURRICULUM_RECORD_BYTES = 1024 * 1024
 MAX_CURRICULUM_OUTPUT_BYTES = 128 * 1024 * 1024
+MIN_AST_SYMBOL_QUALITY_SCORE = 1
 
 _DECLARATION = re.compile(
     r"^\s*(?:(?:export|default|pub|public|async|static|abstract|declare)\s+)*"
@@ -738,6 +739,13 @@ def synthesize_repository_curriculum(
     candidate_pool_bytes = 0
     candidate_sizes: dict[str, int] = {}
     candidate_budget_skips = 0
+    seen_structural_symbols: set[str] = set()
+    quality_statistics = {
+        "quality_scored_symbols": 0,
+        "low_quality_symbols_skipped": 0,
+        "boilerplate_symbols_skipped": 0,
+        "near_duplicate_symbols_skipped": 0,
+    }
 
     def offer_candidate(
         kind: str,
@@ -839,10 +847,27 @@ def synthesize_repository_curriculum(
         )
 
         symbol_count += len(metadata["symbols"])
-        eligible_symbols = [
-            item for item in metadata["symbols"]
-            if not item.get("truncated")
-        ]
+        eligible_symbols = []
+        for item in metadata["symbols"]:
+            if item.get("truncated"):
+                continue
+            quality = item.get("quality")
+            fingerprint = item.get("structural_fingerprint")
+            if isinstance(quality, dict):
+                quality_statistics["quality_scored_symbols"] += 1
+                if quality.get("boilerplate") is True:
+                    quality_statistics["boilerplate_symbols_skipped"] += 1
+                    continue
+                score = quality.get("score")
+                if type(score) is not int or score < MIN_AST_SYMBOL_QUALITY_SCORE:
+                    quality_statistics["low_quality_symbols_skipped"] += 1
+                    continue
+                if isinstance(fingerprint, str) and fingerprint:
+                    if fingerprint in seen_structural_symbols:
+                        quality_statistics["near_duplicate_symbols_skipped"] += 1
+                        continue
+                    seen_structural_symbols.add(fingerprint)
+            eligible_symbols.append(item)
         eligible_symbols = sorted(
             eligible_symbols,
             key=lambda item: hashlib.sha256(
@@ -994,6 +1019,18 @@ def synthesize_repository_curriculum(
         warnings.append(
             "Anchor-patch examples are restricted to the active output workspace; additional approved roots contribute read-only comprehension and implementation examples."
         )
+    if quality_statistics["boilerplate_symbols_skipped"]:
+        warnings.append(
+            f"{quality_statistics['boilerplate_symbols_skipped']:,} empty or trivial AST getter/setter/stub symbol(s) were excluded."
+        )
+    if quality_statistics["low_quality_symbols_skipped"]:
+        warnings.append(
+            f"{quality_statistics['low_quality_symbols_skipped']:,} AST symbol(s) below the minimum structural quality score were excluded."
+        )
+    if quality_statistics["near_duplicate_symbols_skipped"]:
+        warnings.append(
+            f"{quality_statistics['near_duplicate_symbols_skipped']:,} structurally equivalent AST symbol(s) were deduplicated across the approved repositories."
+        )
     if candidate_budget_skips:
         warnings.append(
             f"{candidate_budget_skips:,} candidate(s) were excluded by the "
@@ -1027,6 +1064,8 @@ def synthesize_repository_curriculum(
         "example_count": len(records),
         "examples_by_type": counts,
         "selection_strategy": "deterministic-source-ranked-round-robin",
+        "quality_statistics": quality_statistics,
+        "minimum_ast_symbol_quality_score": MIN_AST_SYMBOL_QUALITY_SCORE,
         "audit": audit,
         "warnings": warnings,
     }
