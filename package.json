@@ -20,7 +20,9 @@
     "benchmark:reports": "node scripts/benchmark-report.mjs",
     "test:e2e": "playwright test",
     "benchmark:model": "python scripts/run_syntra_module.py benchmark-model",
-    "brain:milestone4": "python scripts/evaluate_epochs.py"
+    "brain:milestone4": "python scripts/evaluate_epochs.py",
+    "brain:promote": "python scripts/promote_checkpoint.py",
+    "brain:smoke": "python scripts/evaluate_epochs.py --config configs/training/phase4_smoke.json"
   },
   "dependencies": {
     "lucide-react": "^1.65.0",
