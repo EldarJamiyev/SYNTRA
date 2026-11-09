@@ -1148,7 +1148,8 @@ test("model context budgets use only SYNTRA's saved byte-BPE tokenizer and nativ
   assert.equal(native.budgetProfile, "native-tokenizer");
   assert.ok(native.contextBudgetTokens < 8192);
   assert.ok(native.outputBudgetTokens <= 8192);
-  assert.ok(native.contextBudgetTokens + native.outputBudgetTokens + native.safetyMarginTokens <= 8192);
+  assert.ok(native.contextBudgetTokens + native.outputBudgetTokens + native.safetyMarginTokens + 1 <= 8192,
+    "prompt, output, safety reserve and BOS must fit the actual native context");
 
   const unknownTokenizer = deriveModelContextBudget({
     backend: "PyTorch",
@@ -1166,9 +1167,29 @@ test("model context budgets use only SYNTRA's saved byte-BPE tokenizer and nativ
     "native context sizing must never accept a foreign model's larger window");
 
   const tiny = deriveModelContextBudget({ context_tokens: 512 });
-  assert.equal(tiny.contextWindowTokens, 1024);
-  assert.ok(tiny.contextBudgetTokens >= 128);
-  assert.ok(tiny.outputBudgetTokens >= 128);
+  assert.equal(tiny.contextWindowTokens, 512,
+    "agent budgets must respect the actual small checkpoint window");
+  assert.ok(tiny.contextBudgetTokens >= 1);
+  assert.ok(tiny.outputBudgetTokens >= 1);
+  assert.ok(
+    tiny.contextBudgetTokens + tiny.outputBudgetTokens + tiny.safetyMarginTokens + 1 <= 512,
+    "prompt, output, safety reserve and BOS must fit the native checkpoint context"
+  );
+
+  for (const contextTokens of [256, 512, 1024, 8192, 16_384]) {
+    const budget = deriveModelContextBudget({
+      tokenizer: "byte-BPE",
+      context_tokens: contextTokens,
+      config: { seq_len: contextTokens }
+    });
+    assert.equal(budget.contextWindowTokens, contextTokens);
+    assert.ok(budget.contextBudgetTokens >= 1);
+    assert.ok(budget.outputBudgetTokens >= 1);
+    assert.ok(
+      budget.contextBudgetTokens + budget.outputBudgetTokens + budget.safetyMarginTokens + 1 <= contextTokens,
+      `derived prompt/output budget must fit the ${contextTokens}-token checkpoint`
+    );
+  }
 });
 
 test("analyzeCheckFailure classifies verification failures and pinpoints workspace fault locations", () => {

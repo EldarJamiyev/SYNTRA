@@ -263,6 +263,64 @@ class TransformerTests(unittest.TestCase):
             self.assertIn("optimizer_state", recovered,
                           "a corrupted inference companion must fall back to the full checkpoint")
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_inference_companion_cannot_shadow_atomic_source_replacement_with_same_mtime(self):
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import _read_checkpoint
+        from syntra_ai.training import _save_inference_checkpoint, inference_checkpoint_path
+
+        with tempfile.TemporaryDirectory(prefix="syntra-companion-source-identity-") as temp:
+            root = Path(temp)
+            checkpoint = root / "fixture.pt"
+            replacement = root / "staging" / "fixture.pt"
+            replacement.parent.mkdir()
+            config = ModelConfig(vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+            tokenizer = ByteBPETokenizer.empty()
+            initial_model = SyntraTransformer(config)
+            full_payload = {
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
+                "model_state": initial_model.state_dict(),
+                "optimizer_state": {"sentinel": torch.tensor([1])},
+                "step": 9,
+                "training_mode": "causal-source-pretraining",
+            }
+            torch.save(full_payload, checkpoint)
+            companion = _save_inference_checkpoint(checkpoint, full_payload)
+            original_stat = checkpoint.stat()
+
+            replacement_model = SyntraTransformer(config)
+            with torch.no_grad():
+                replacement_model.token_embedding.weight[0, 0].add_(0.75)
+            replacement_payload = dict(full_payload)
+            replacement_payload["model_state"] = replacement_model.state_dict()
+            torch.save(replacement_payload, replacement)
+            self.assertEqual(original_stat.st_size, replacement.stat().st_size)
+            os.utime(replacement, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+            os.replace(replacement, checkpoint)
+
+            replaced_stat = checkpoint.stat()
+            self.assertEqual(original_stat.st_size, replaced_stat.st_size)
+            self.assertEqual(original_stat.st_mtime_ns, replaced_stat.st_mtime_ns)
+            self.assertTrue(companion.stat().st_mtime_ns >= replaced_stat.st_mtime_ns)
+
+            _target, loaded, loaded_config, _loaded_tokenizer = _read_checkpoint(checkpoint)
+            self.assertEqual(loaded_config, config)
+            self.assertIn("optimizer_state", loaded,
+                          "a stale lightweight companion must fall back to the new full checkpoint")
+            torch.testing.assert_close(
+                loaded["model_state"]["token_embedding.weight"],
+                replacement_model.token_embedding.weight,
+            )
+            from syntra_ai.runtime import _file_stat_identity_record
+            old_companion = torch.load(companion, map_location="cpu", weights_only=True)
+            self.assertNotEqual(
+                old_companion["source_checkpoint_identity"],
+                _file_stat_identity_record(checkpoint),
+                "the companion must prove it belongs to this exact source file revision",
+            )
+
     def test_checkpoint_identity_changes_when_native_checkpoint_revision_changes(self):
         from syntra_ai.runtime import _checkpoint_identity
         from syntra_ai.training import inference_checkpoint_path
@@ -365,6 +423,52 @@ class TransformerTests(unittest.TestCase):
                 )
                 _get_resident_bundle(path=checkpoint, device_name="cpu")
                 self.assertTrue(status()["resident_in_memory"])
+                clear_resident_cache()
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_atomic_checkpoint_replacement_invalidates_cache_when_size_and_mtime_match(self):
+        import shutil
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import (
+            _get_resident_bundle, _resident_cache_matches_checkpoint, clear_resident_cache
+        )
+
+        with tempfile.TemporaryDirectory(prefix="syntra-atomic-checkpoint-replacement-") as temp:
+            checkpoint = Path(temp) / "selected-model.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            model = SyntraTransformer(config)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": ByteBPETokenizer.empty().to_dict(),
+                "model_state": model.state_dict(),
+                "step": 1,
+                "training_mode": "causal-source-pretraining",
+            }, checkpoint)
+
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(checkpoint)}):
+                clear_resident_cache()
+                _target, resident_before, *_ = _get_resident_bundle(path=checkpoint, device_name="cpu")
+                self.assertTrue(_resident_cache_matches_checkpoint(checkpoint))
+                original_stat = checkpoint.stat()
+                replacement = checkpoint.with_name("replacement.pt")
+                shutil.copy2(checkpoint, replacement)
+                os.replace(replacement, checkpoint)
+                replaced_stat = checkpoint.stat()
+                self.assertEqual(original_stat.st_size, replaced_stat.st_size)
+                self.assertEqual(original_stat.st_mtime_ns, replaced_stat.st_mtime_ns)
+                self.assertNotEqual(
+                    (original_stat.st_dev, original_stat.st_ino, original_stat.st_ctime_ns),
+                    (replaced_stat.st_dev, replaced_stat.st_ino, replaced_stat.st_ctime_ns),
+                )
+                self.assertFalse(
+                    _resident_cache_matches_checkpoint(checkpoint),
+                    "atomic replacement must invalidate resident state even when size/mtime are preserved",
+                )
+                _target, resident_after, *_ = _get_resident_bundle(path=checkpoint, device_name="cpu")
+                self.assertIsNot(resident_before, resident_after)
                 clear_resident_cache()
 
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):

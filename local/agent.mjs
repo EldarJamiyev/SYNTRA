@@ -1251,19 +1251,31 @@ export function deriveModelContextBudget(modelStatus = {}) {
   // exact only when that tokenizer is the active runtime tokenizer; never infer
   // a context window larger than SYNTRA's own supported native architecture.
   const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
-  const contextWindowTokens = Number.isFinite(rawContext)
-    ? Math.max(1024, Math.min(16_384, Math.floor(rawContext)))
+  // The checkpoint's own sequence length is authoritative. A 256/512-token
+  // CPU checkpoint must never be treated as a 1024-token model.
+  const contextWindowTokens = Number.isFinite(rawContext) && rawContext > 0
+    ? Math.max(16, Math.min(16_384, Math.floor(rawContext)))
     : 4096;
   const exactTokenCount = modelStatus.tokenizer === "byte-BPE";
   const outputCap = Number(modelStatus.max_output_tokens || 1024);
-  const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(128, Math.min(8192, Math.floor(outputCap))) : 1024;
+  const maxOutputTokens = Number.isFinite(outputCap) ? Math.max(1, Math.min(8192, Math.floor(outputCap))) : 1024;
   const promptFraction = exactTokenCount ? 0.76 : 0.64;
   const outputFraction = exactTokenCount ? 0.18 : 0.20;
   const reserveFraction = exactTokenCount ? 0.06 : 0.16;
-  const outputBudgetTokens = Math.max(128, Math.min(maxOutputTokens, Math.floor(contextWindowTokens * outputFraction)));
-  const safetyMarginTokens = Math.max(128, Math.floor(contextWindowTokens * reserveFraction));
-  const promptCapacity = Math.max(128, contextWindowTokens - outputBudgetTokens - safetyMarginTokens);
-  const contextBudgetTokens = Math.max(128, Math.min(
+  // One context position is reserved for BOS. All budgets fit in the remaining
+  // positions, including small supported checkpoints.
+  const usableContextTokens = contextWindowTokens - 1;
+  const safetyMarginTokens = Math.min(
+    Math.max(1, Math.floor(contextWindowTokens * reserveFraction)),
+    Math.max(0, usableContextTokens - 2)
+  );
+  const outputBudgetTokens = Math.min(
+    maxOutputTokens,
+    Math.max(1, Math.floor(contextWindowTokens * outputFraction)),
+    Math.max(1, usableContextTokens - safetyMarginTokens - 1)
+  );
+  const promptCapacity = Math.max(1, usableContextTokens - outputBudgetTokens - safetyMarginTokens);
+  const contextBudgetTokens = Math.max(1, Math.min(
     Math.floor(contextWindowTokens * promptFraction), promptCapacity
   ));
   return {

@@ -99,6 +99,31 @@ class LocalApiSmokeTests(unittest.TestCase):
                 self.assertTrue(generated["is_model_output"])
                 self.assertGreaterEqual(generated["generated_tokens"], 1)
                 self.assertLessEqual(generated["generated_tokens"], 2)
+                self.assertFalse(generated["prompt_truncated"])
+
+                # Both ordinary and streaming APIs must reject overflow before
+                # inference instead of silently discarding the prompt prefix.
+                oversized_prompt = "x" * tokenized["context_window_tokens"]
+                for streaming in (False, True):
+                    connection.request(
+                        "POST",
+                        "/model/generate",
+                        body=json.dumps({
+                            "prompt": oversized_prompt,
+                            "max_new_tokens": 2,
+                            "device": "cpu",
+                            "stream": streaming,
+                        }),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    overflow = json.loads(response.read())
+                    self.assertEqual(response.status, 422)
+                    self.assertEqual(overflow["code"], "context_window_exceeded")
+                    self.assertEqual(overflow["prompt_tokens"], tokenized["context_window_tokens"])
+                    self.assertEqual(overflow["context_window_tokens"], tokenized["context_window_tokens"])
+                    self.assertEqual(overflow["usable_context_tokens"], tokenized["context_window_tokens"] - 1)
+                    self.assertEqual(overflow["tokens_over_context"], 1)
 
                 connection.request(
                     "POST",
