@@ -30,6 +30,25 @@ class Phase4Milestone4ProfileTests(unittest.TestCase):
         self.assertEqual(profile["evaluation"]["isolation"], "docker")
         self.assertEqual(profile["checkpoint"], "data/checkpoints/staging/syntra-brain.pt")
 
+    def test_phase5_checked_in_profiles_cover_smoke_cpu_and_gpu_targets(self):
+        smoke = evaluate_epochs.load_profile(ROOT / "configs" / "training" / "phase4_smoke.json")
+        cpu = evaluate_epochs.load_profile(ROOT / "configs" / "training" / "local_cpu_fast.json")
+        gpu = evaluate_epochs.load_profile(ROOT / "configs" / "training" / "local_gpu_scale.json")
+        for profile in (smoke, cpu, gpu):
+            evaluate_epochs._validate_profile_values(profile)
+            self.assertGreaterEqual(profile["pretraining"]["gradient_accumulation_steps"], 1)
+            self.assertGreaterEqual(profile["sft"]["gradient_accumulation_steps"], 1)
+            self.assertEqual(profile["evaluation"]["isolation"], "docker")
+        self.assertEqual(smoke["pretraining"]["max_steps"], 50)
+        self.assertEqual(smoke["sft"]["steps"], 20)
+        self.assertEqual(smoke["evaluation"]["every_steps"], 50)
+        self.assertEqual(cpu["pretraining"]["batch_size"], 1)
+        self.assertGreaterEqual(cpu["pretraining"]["gradient_accumulation_steps"], 4)
+        self.assertEqual(gpu["pretraining"]["layers"], 8)
+        self.assertEqual(gpu["pretraining"]["heads"], 8)
+        self.assertEqual(gpu["pretraining"]["width"], 256)
+        self.assertEqual(gpu["pretraining"]["block_size"], 1024)
+
     def test_profile_rejects_invalid_decay_and_parallel_benchmarking(self):
         profile = evaluate_epochs.load_profile(evaluate_epochs.DEFAULT_CONFIG)
         invalid_decay = json.loads(json.dumps(profile))
@@ -302,6 +321,68 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
             self.assertEqual(evaluator.results[0]["status"], "failed")
             self.assertIsNone(evaluator.results[0]["task_completion_rate"])
             self.assertIn("does not match", evaluator.results[0]["error"])
+
+    def test_checkpoint_callback_attaches_measured_training_telemetry(self):
+        from unittest.mock import Mock
+
+        snapshots = Mock()
+        snapshots.create.return_value = (ROOT / "data" / "benchmarks" / "snapshot.pt", "a" * 64)
+        evaluator = Mock()
+        callback = evaluate_epochs._training_callback(
+            "pretraining", snapshots, evaluator, 500, set()
+        )
+        callback({
+            "status": "completed",
+            "step": 500,
+            "message": "Requested training-step block saved.",
+            "tokens_per_second": 123.5,
+            "step_latency_ms": 8.2,
+            "mean_step_latency_ms": 9.1,
+            "peak_rss_bytes": 1000,
+            "peak_device_memory_bytes": 2000,
+            "device_memory_metric": "cuda_peak_allocated",
+            "gradient_accumulation_steps": 2,
+        })
+        kwargs = evaluator.launch.call_args.kwargs
+        self.assertEqual(kwargs["telemetry"]["tokens_per_second"], 123.5)
+        self.assertEqual(kwargs["telemetry"]["mean_step_latency_ms"], 9.1)
+        self.assertEqual(kwargs["telemetry"]["peak_device_memory_bytes"], 2000)
+        self.assertEqual(kwargs["telemetry"]["gradient_accumulation_steps"], 2)
+
+    def test_markdown_and_csv_summaries_include_real_hardware_telemetry(self):
+        import csv
+
+        with tempfile.TemporaryDirectory(prefix=".syntra-phase5-summary-", dir=ROOT) as temp:
+            run_root = Path(temp)
+            records = [{
+                "stage": "pretraining", "step": 500, "status": "completed",
+                "checkpoint_sha256": "a" * 64, "train_loss": 1.2, "validation_loss": 1.3,
+                "task_completion_rate": 0.25, "completed_task_count": 3,
+                "baseline_valid_task_count": 12, "regression_prevention_rate": 0.5,
+                "tokens_per_second": 123.5, "supervised_tokens_processed": 6000,
+                "step_latency_ms": 8.2, "mean_step_latency_ms": 9.1,
+                "peak_rss_bytes": 512 * 1024 * 1024,
+                "peak_device_memory_bytes": 1024 * 1024 * 1024,
+                "device_memory_metric": "cuda_peak_allocated",
+                "estimated_training_memory_bytes": 2 * 1024 * 1024 * 1024,
+                "device": "cuda", "gradient_accumulation_steps": 2,
+                "suite_version": "1.3.0", "report": "report.json", "log": "run.log",
+            }]
+            markdown, csv_path = evaluate_epochs.write_summary(
+                run_root, "phase5-telemetry-test", records, {"pretraining_status": "completed"}
+            )
+            summary = markdown.read_text(encoding="utf-8")
+            self.assertIn("Tokens/s", summary)
+            self.assertIn("Mean step ms", summary)
+            self.assertIn("Peak RSS MiB", summary)
+            self.assertIn("Peak device MiB", summary)
+            with csv_path.open("r", newline="", encoding="utf-8") as handle:
+                row = next(csv.DictReader(handle))
+            self.assertEqual(row["tokens_per_second"], "123.5")
+            self.assertEqual(row["step_latency_ms"], "8.2")
+            self.assertEqual(row["peak_rss_bytes"], str(512 * 1024 * 1024))
+            self.assertEqual(row["peak_device_memory_bytes"], str(1024 * 1024 * 1024))
+            self.assertEqual(row["device_memory_metric"], "cuda_peak_allocated")
 
     def test_ascii_trends_do_not_turn_missing_measurements_into_zero(self):
         empty = evaluate_epochs._ascii_plot([], "task_completion_rate", "Completion")
