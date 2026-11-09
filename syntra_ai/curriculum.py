@@ -157,7 +157,15 @@ def _python_symbol_quality(
         ))
         for item in logic_nodes
     )
-    statement_count = len(body)
+    statement_count = (
+        sum(
+            not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            or not _is_trivial_python_symbol(item)
+            for item in body
+        )
+        if isinstance(node, ast.ClassDef)
+        else len(body)
+    )
     score = (
         (2 if has_docstring else 0)
         + min(3, annotation_count)
