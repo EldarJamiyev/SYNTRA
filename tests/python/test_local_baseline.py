@@ -161,6 +161,28 @@ class Phase8SftPipelineTests(unittest.TestCase):
             self.assertIn("SYNTRA_AGENT_PATCH_V1", multi_file["completion"])
             self.assertEqual(multi_file["split_group"], "multi-file:phase8-test-pair")
 
+    def test_curriculum_cli_passes_exclusions_to_both_generators(self):
+        from syntra_ai import cli
+
+        repository_result = {"dataset_path": "repository.jsonl", "example_count": 2}
+        reasoning_result = {"dataset_path": "reasoning.jsonl", "example_count": 1}
+        with patch.object(
+            cli, "synthesize_repository_curriculum", return_value=repository_result
+        ) as repository, patch.object(
+            cli, "synthesize_multifile_reasoning_curriculum", return_value=reasoning_result
+        ):
+            result = cli.main([
+                "curriculum",
+                "--mode", "all",
+                "--languages", "python", "javascript", "typescript", "go", "rust",
+                "--max-examples", "12",
+                "--exclude", "data/benchmarks", "data/curricula", "data/checkpoints",
+            ])
+        self.assertEqual(result, 0)
+        exclusions = ["data/benchmarks", "data/curricula", "data/checkpoints"]
+        self.assertEqual(repository.call_args.kwargs["exclude_paths"], exclusions)
+        self.assertEqual(cli.synthesize_multifile_reasoning_curriculum.call_args.kwargs["exclude_paths"], exclusions)
+
     def test_multifile_context_filter_drops_only_overlong_prompts_and_keeps_full_completion_eos(self):
         with tempfile.TemporaryDirectory(prefix=".syntra-phase8-context-", dir=ROOT) as temp:
             root = Path(temp)
