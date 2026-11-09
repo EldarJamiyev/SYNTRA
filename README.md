@@ -1,22 +1,28 @@
 <div align="center">
   <img src="docs/assets/syntra-hero.svg" alt="SYNTRA — Local intelligence. Real engineering." width="100%" />
 
-  <p><strong>A local-first AI engineering workspace built around SYNTRA's own PyTorch model.</strong></p>
+  <h1>SYNTRA</h1>
+  <p><strong>Native local intelligence for real engineering work.</strong></p>
+  <p>A local-first AI workspace for repository understanding, bounded coding-agent workflows, model training, and practical network diagnostics — powered by SYNTRA's own PyTorch model.</p>
 
   <p>
-    <a href="https://github.com/EldarJamiyev/SYNTRA"><img src="https://img.shields.io/badge/PROJECT-SYNTRA-7BE4CF?style=for-the-badge&labelColor=101827" alt="SYNTRA project" /></a>
-    <img src="https://img.shields.io/badge/INTERFACE-React%20%2B%20TypeScript-8AB8FF?style=for-the-badge&labelColor=101827" alt="React and TypeScript" />
-    <img src="https://img.shields.io/badge/AI-PyTorch%20%7C%20Local-B69BFF?style=for-the-badge&labelColor=101827" alt="Local PyTorch model" />
-    <a href="LICENSE"><img src="https://img.shields.io/badge/LICENSE-MIT-7BE4CF?style=for-the-badge&labelColor=101827" alt="MIT license" /></a>
+    <a href="https://github.com/EldarJamiyev/SYNTRA/actions/workflows/checks.yml"><img src="https://img.shields.io/github/actions/workflow/status/EldarJamiyev/SYNTRA/checks.yml?branch=main&label=CI&logo=githubactions&logoColor=white" alt="CI status" /></a>
+    <a href="https://github.com/EldarJamiyev/SYNTRA/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/EldarJamiyev/SYNTRA/codeql.yml?branch=main&label=CodeQL&logo=github&logoColor=white" alt="CodeQL status" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5B8DEF.svg" alt="MIT License" /></a>
+    <img src="https://img.shields.io/badge/runtime-local--first-16A085.svg" alt="Local first" />
+    <img src="https://img.shields.io/badge/model-native%20PyTorch-EE6A35.svg" alt="Native PyTorch" />
+    <img src="https://img.shields.io/badge/benchmark-Python%20%7C%20JS%20%7C%20TS%20%7C%20Go%20%7C%20Rust-6C63B5.svg" alt="Five-language benchmark coverage" />
   </p>
 
   <p>
-    <a href="#what-is-syntra">Overview</a> &nbsp;·&nbsp;
-    <a href="#current-project-status">Project status</a> &nbsp;·&nbsp;
-    <a href="#capabilities">Capabilities</a> &nbsp;·&nbsp;
-    <a href="#architecture">Architecture</a> &nbsp;·&nbsp;
-    <a href="#get-started">Get started</a> &nbsp;·&nbsp;
-    <a href="#documentation">Documentation</a>
+    <a href="#what-is-syntra">Overview</a> ·
+    <a href="#capabilities">Capabilities</a> ·
+    <a href="#architecture">Architecture</a> ·
+    <a href="#native-model--training">Native model</a> ·
+    <a href="#repository-curriculum">Curriculum</a> ·
+    <a href="#benchmarking--evidence">Benchmarks</a> ·
+    <a href="#get-started">Get started</a> ·
+    <a href="#documentation">Docs</a>
   </p>
 </div>
 
@@ -24,194 +30,304 @@
 
 ## What is SYNTRA?
 
-SYNTRA is a local AI workspace for conversation, repository understanding, bounded coding-agent workflows, and practical network diagnostics. Its application uses a native Python/PyTorch Transformer trained from local data. The model, tokenizer, checkpoints, source retrieval, and inference are managed within the SYNTRA runtime.
+SYNTRA is a local engineering workspace built around a model that the project owns and trains. It combines a focused chat interface, repository-aware investigation, reviewable patch proposals, bounded agent tools, local network diagnostics, and a native Python/PyTorch Transformer.
 
-The project is built around a few engineering principles:
+The product is designed around a strict engineering principle: **an operation must be real, bounded, reviewable, and supported by observable evidence.** SYNTRA does not turn guessed output into telemetry, claim that an untested patch works, or present a generated response as proof of model capability.
 
-- **Local inference:** chat, code generation, self-review, and semantic embeddings use SYNTRA's own checkpoint. There is no Ollama, hosted model API, Hugging Face model download, or external inference-provider fallback.
-- **Real repository context:** the agent searches and reads the selected workspace before proposing changes. Retrieved source is treated as untrusted project content, not as instructions.
-- **Reviewable changes:** code edits are prepared as candidate patches, checked against the request, and staged as proposals. A generated patch is not automatically treated as correct.
-- **Bounded operations:** local tools have explicit inputs and limits. Sensitive operations require approval; the chat does not expose a general-purpose shell.
-- **Evidence over claims:** runtime status, test outcomes, checkpoint identity, and benchmark results are reported from actual local operations.
+### The non-negotiable boundaries
 
-SYNTRA is an actively developed engineering and model-training project. It is not a pretrained frontier coding model, a finished autonomous software engineer, or a production-certified deployment.
+| Principle | Implementation |
+| --- | --- |
+| Native model ownership | Inference, tokenization, training, embeddings, and checkpoints belong to SYNTRA's PyTorch runtime. |
+| No alternate model provider | No Ollama, hosted model API, Hugging Face Hub model download, or external inference fallback. |
+| Local source of truth | Repository context is read from the selected local workspace and treated as untrusted project content. |
+| Review before mutation | Generated edits are structured candidate patches; they are not silently applied as trusted changes. |
+| Bounded execution | Tools have explicit inputs and resource limits. The agent is not given a general-purpose unrestricted shell. |
+| Evidence over claims | Test outcomes, checkpoint identity, training history, diagnostics, and benchmark results must come from real operations. |
 
-## Current project status
+SYNTRA is an actively developed engineering and machine-learning project. The native model starts from random initialization; it is not a pretrained frontier coding model and is not represented as Claude-equivalent. Model progress is measured through repeatable task execution and actual pass/fail outcomes.
 
-The current `main` baseline includes the chat application, native model training and inference, local network diagnostics, repository-aware investigation, patch proposal and review workflows, bounded multi-step orchestration, local semantic retrieval, and a fixture-based coding-agent benchmark.
+## Project status
 
-The native model starts with randomly initialized weights. The Windows launcher trains a starter checkpoint from the checked-out repository; this makes the application runnable with its own model, but does not establish strong general-purpose coding ability. Model quality still depends on training data and must be measured through repeatable task evaluations.
+The current development line builds on the merged Phase 6 context-recovery work and adds Phase 7 curriculum capabilities.
 
-**Current development focus:** Phase 6 is merged into `main` with structured HTTP 422 context-overflow reporting and a single tokenizer-measured recovery retry that preserves the full task and output contract. Phase 7 extends repository curriculum generation across Python, JavaScript, TypeScript, Go, and Rust, adds exact source-verified repair examples, and synthesizes paired-file localization traces for masked supervised fine-tuning. These are training-data capabilities—not evidence that the native model has already improved; generated datasets still require auditing and task-level evaluation.
+| Area | Delivered behavior |
+| --- | --- |
+| Native runtime | Local PyTorch Transformer, corpus-trained BPE tokenizer, checkpoint loading, inference, and supervised fine-tuning. |
+| Context integrity | Full prompts are retained or rejected with a structured context_window_exceeded response (HTTP 422). |
+| Context recovery | One bounded retry can recount with the selected checkpoint tokenizer and compact optional retrieved context while preserving the task and output contract. |
+| Repository agent | Bounded source retrieval, planning, structured patch proposals, review, and project checks. |
+| Curriculum | Python AST extraction plus bounded JavaScript, TypeScript, Go, and Rust declaration/block curation. |
+| Reasoning traces | Source-linked two-file localization tasks with a thought completion and multi-file SYNTRA_AGENT_PATCH_V1 output. |
+| Benchmarking | Separate full-agent and direct-model regression suites with saved reports and explicit limitations. |
+
+Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 
 ## Capabilities
 
 ### Chat-first local workspace
 
 - A focused React and TypeScript chat interface with streamed local model responses.
-- Multiple named conversations with local history and workspace selection.
-- A local model status view that reports the actual checkpoint and available training metadata.
-- Markdown, code, and structured response rendering.
+- Multiple named conversations, local history, and workspace selection.
+- Local checkpoint and training metadata status.
+- Markdown, code, and structured output rendering.
 
-Conversation history and the selected workspace path are stored locally in the browser on that device. They are not a cloud-synchronized account history.
-
-### Local network diagnostics
-
-SYNTRA can run bounded diagnostics from the machine hosting the application:
-
-| Request | Example |
-| --- | --- |
-| ICMP reachability | `ping example.com` |
-| DNS resolution | `DNS lookup for example.com` |
-| One TCP port check | `check port 443 on example.com` |
-
-Ping is limited to a small packet count and a TCP check targets one host and one port. These commands execute real local checks; they are not simulated network telemetry. Network diagnostics do not require a trained language-model checkpoint.
+Conversation history and workspace selection are stored locally in the browser on that device. They are not a cloud-synchronized account history.
 
 ### Repository-aware coding workflow
 
-For a coding request, SYNTRA can:
+For a coding request, SYNTRA can perform a bounded sequence of operations:
 
-1. Inspect the selected project and gather bounded source context.
-2. Search files and symbols, read relevant source ranges, and use the local import/symbol information available for the project.
-3. Build a bounded implementation plan for larger tasks.
-4. Generate structured candidate patches against inspected source.
-5. Run a separate review pass against the request and proposed changes.
-6. Verify the candidate with project checks that SYNTRA can identify and safely run.
-7. Stage a reviewable proposal with diffs, source fingerprints, backups, and local run history.
+1. Inspect the selected workspace and gather relevant source context.
+2. Search files and symbols and read bounded source ranges.
+3. Use the available static import/symbol information to understand local relationships.
+4. Build a structured plan for larger changes.
+5. Generate candidate edits using the versioned SYNTRA_AGENT_PATCH_V1 format.
+6. Review the proposed change against the request and inspected source.
+7. Run project checks that can be identified and safely executed.
+8. Stage a reviewable proposal with diffs, source fingerprints, backups, and local run history.
 
-The agent can perform bounded, iterative read-only repository investigation and persist verified intermediate candidate state so an interrupted multi-step task can be recovered. It does not have unrestricted permission to modify arbitrary workspace files or execute arbitrary shell commands.
+The system can retain verified intermediate candidate state so a multi-step task can be recovered after interruption. Its static repository graph is deliberately bounded; it is not a full language server, compiler, or complete cross-language data-flow engine.
 
-**Important review boundary:** patch review uses the same native checkpoint as generation. It is an additional reasoning pass, not an independent model, external auditor, or guarantee of correctness.
+**Review boundary:** generation and review use the same native checkpoint. Review is an additional model pass, not an independent auditor or a correctness guarantee.
+
+### Local network diagnostics
+
+SYNTRA can perform bounded diagnostics from the machine hosting the application.
+
+| Request | Example | Operation |
+| --- | --- | --- |
+| ICMP reachability | ping example.com | Real bounded ping request |
+| DNS resolution | DNS lookup for example.com | Local resolver lookup |
+| TCP connectivity | check port 443 on example.com | One host / one TCP port check |
+
+These are real local checks, not simulated network telemetry. Diagnostic limits are intentional: for example, ping is constrained to a small packet count and a TCP check targets one host and one port. Network diagnostics do not require a trained model checkpoint.
 
 ### Repository context and memory
 
 - Full-text and symbol-oriented retrieval over the selected workspace.
-- A bounded static import/symbol graph for supported source patterns; this is not a complete language-server or cross-language data-flow analysis.
-- Semantic source retrieval and project-memory embeddings produced by SYNTRA's own trained checkpoint.
-- Deterministic lexical retrieval remains available for supported fallback paths. Semantic quality depends on the model checkpoint and training corpus.
-- Project memory is based on explicitly saved user-authored notes; chat history is not embedded as project memory.
+- A bounded static import/symbol graph for supported source patterns.
+- Local semantic retrieval and project-memory embeddings produced by SYNTRA's own checkpoint.
+- Deterministic lexical retrieval remains available for supported fallback paths.
+- Retrieved source is context, not authority: text inside a repository cannot override the agent's system instructions or safety boundaries.
 
 ### Agent skill library
 
-The repository includes **66 skill folders** under `.agents/skills/`, including upstream engineering playbooks and SYNTRA-specific guidance for local-model boundaries, workspace safety, network evidence, and chat UI consistency.
+SYNTRA includes a curated local skill library for repeatable engineering workflows. Skills provide task procedures and domain guidance; they do not replace source inspection, real execution, or verification.
 
-- `skills-lock.json` records pinned upstream source revisions and skill-folder hashes.
-- Relevant upstream license notices are retained under `.agents/skills/_licenses/`.
-- Skills are instruction assets. They do not install runtime dependencies, add tools, enable external model providers, or grant additional execution permissions.
-- Technology-specific skills are conditional guidance; their presence does not mean that the corresponding framework or service is installed or used by SYNTRA.
+---
 
 ## Architecture
 
-SYNTRA runs as a local application with three cooperating parts:
+SYNTRA separates the user interface, local orchestration, and native model runtime so the agent can gather evidence without granting the language model direct unrestricted system access.
 
-<p align="center">
-  <img src="docs/assets/syntra-architecture.svg" alt="SYNTRA local architecture: React interface, local Node service, native Python model, repository tools and proposal workflow." width="100%" />
-</p>
+| Layer | Location | Responsibility |
+| --- | --- | --- |
+| User interface | src/ | React + TypeScript chat, conversation history, workspace selection, and response rendering. |
+| Local orchestration | local/ | Loopback API, agent workflow, workspace access, tools, diagnostics, session history, and patch proposals. |
+| Native AI service | syntra_ai/ | PyTorch model, tokenizer, training, inference, instruction data, and embeddings. |
+| Standalone training package | brain/ | Separate native Transformer training/generation and checkpoint utilities. |
+| Evaluation | benchmarks/, tests/benchmark_engine/ | Versioned task fixtures, test harnesses, scoring, and reports. |
+| Operational tooling | scripts/ | Environment setup, launcher, CLI bridge, evaluation, and checkpoint management. |
 
-| Component | Responsibility |
-| --- | --- |
-| React + Vite + TypeScript | Chat interface, local sessions, workspace controls, and training/status presentation |
-| Node.js local service | Loopback API, workspace access, diagnostic tools, agent orchestration, proposals, and audit records |
-| Python + PyTorch (`syntra_ai/`) | Native Transformer training, checkpoint loading, inference, tokenization, embeddings, and model status |
-| Standalone `brain/` package | Native Transformer training and generation tools with a checkpoint format supported by the local runtime |
+### Request lifecycle
 
-The local services use loopback endpoints: the web interface is served on port `3000`, the workspace API on `3001`, and the native AI service on `3002`. They are intended for local use, not direct public-internet exposure.
+~~~mermaid
+flowchart TD
+    U[User request] --> UI[React chat interface]
+    UI --> API[Loopback application API]
+    API --> INT[Intent and task orchestration]
+    INT --> CTX[Bounded workspace retrieval]
+    CTX --> MODEL[Native SYNTRA PyTorch model]
+    MODEL --> PATCH[Structured candidate patch]
+    PATCH --> REVIEW[Review and policy checks]
+    REVIEW --> VERIFY[Project checks where supported]
+    VERIFY --> RESULT[Evidence-backed result]
+    RESULT --> UI
+~~~
 
-## Native model and training
+The model proposes language and structure. Local application code controls file access, tool invocation, patch validation, approvals, and verification. This division is intentional: a natural-language response cannot authorize itself to perform an unrestricted operation.
 
-SYNTRA does not download pretrained model weights. It initializes its own decoder-only Transformer and trains it on approved local source data. The native model implementation includes RMSNorm, rotary position embeddings, SwiGLU feed-forward layers, a corpus-trained byte-BPE tokenizer, and cached incremental attention for generation.
+---
 
-The same native checkpoint family supports chat generation, patch generation, patch review, token counting, and dense embeddings. This keeps the application self-contained, but it also means model weaknesses can affect all of those functions.
+## Native model & training
 
-### First-run behavior
+SYNTRA uses its own decoder-only PyTorch Transformer with causal attention, residual MLP blocks, cross-entropy training, AdamW, gradient clipping, atomic checkpoint writes, and checkpoint reload.
 
-On Windows, `Start-SYNTRA.bat`:
+### Model lifecycle
 
-1. Checks for Node.js 20 or newer and Python 3.12 or newer.
-2. Installs the web dependencies from the npm lockfile when needed.
-3. Creates or validates SYNTRA's isolated, hash-locked Python environment with CPU-only PyTorch.
-4. Trains a starter model from the checked-out repository if no valid checkpoint exists. The current launcher target is 1,000 training steps with a 1,024-token context; a smaller context is used only when the source corpus is too small for the larger split.
-5. Validates the checkpoint, starts the local services, and opens the chat interface.
+1. **Local source pretraining** builds a corpus from approved source roots and trains from random initialization.
+2. **Tokenizer persistence** stores the corpus-trained BPE merge table in the checkpoint so training, inference, token counting, and fine-tuning share the same vocabulary.
+3. **Instruction fine-tuning** consumes audited local JSONL prompt/completion records and masks prompt-token loss.
+4. **Evaluation** measures next-token loss and task-level behavior separately.
+5. **Promotion** validates checkpoint provenance, checksum, architecture, and loadability before an explicit promotion step.
 
-The first launch therefore performs real local training and may take substantially longer than later launches. No pretrained model weights are downloaded. Dependency installation may need access to npm and Python package indexes.
+The default model context is determined by the selected checkpoint. The runtime must not silently enlarge a smaller checkpoint's context or discard the beginning of a prompt.
+
+### Phase 6 — context integrity and recovery
+
+The native generation API preserves the complete prompt. When the prompt cannot fit the selected checkpoint's usable context, it returns a structured context_window_exceeded response (HTTP 422) with context and overflow information. It does not truncate away the task or system instructions.
+
+The repository agent can recover once from that specific response:
+
+- Recount tokens with the checkpoint's actual tokenizer.
+- Remove lower-priority retrieved context and optional metadata.
+- Keep the user task, system instructions, and required output contract.
+- Retry generation once.
+- Return an explicit failure when the required context still cannot fit.
+
+The recovery path is bounded. It is not an infinite retry loop or permission to discard required instructions.
+
+### Phase 7 — polyglot structural curation
+
+The curriculum generator applies structural quality scoring, boilerplate filtering, and identifier-normalized structural deduplication to the same five languages exercised by the raw-model benchmark.
+
+| Language | Extraction approach | Repair example family |
+| --- | --- | --- |
+| Python | Standard-library ast | Non-identity comparisons against the None singleton |
+| JavaScript | Bounded declaration/block parser | typeof comparisons using strict equality |
+| TypeScript | Bounded declaration/block parser | typeof comparisons using strict equality |
+| Go | Bounded declaration/block parser | Missing error value in a guarded (result, error) return |
+| Rust | Bounded declaration/block parser | Unchecked slice access where Option<&T> permits .get() |
+
+The JavaScript, TypeScript, Go, and Rust parser uses only Python standard-library text processing. It is intentionally conservative; it is not a compiler, type checker, or complete grammar. Oversized, incomplete, malformed, and unrecognized blocks are not presented as complete implementations.
+
+Quality signals include documentation, type information, control flow, calls, meaningful operations, substantive statements, and container members. The pipeline excludes empty stubs, trivial accessors, low-quality declarations, and structurally equivalent declarations. Fingerprint memory is bounded, and reaching that bound is reported rather than silently treating unseen symbols as duplicates.
+
+Repairs are narrow and mechanically checked. The exact search anchor must be unique in its source file. Unsupported or ambiguous patterns produce no repair example.
+
+### Multi-file reasoning curriculum
+
+The dedicated multi-file generator selects two files only when their relationship is present in local source evidence, such as a relative import, a same-package Go test/implementation relationship, or a Rust module/use relationship. It also checks a referenced declaration and requires a separate supported, unique repair anchor in each file.
+
+Each generated prompt contains the two labeled source files. Its completion contains:
+
+1. A deterministic thought localization trace that describes how to locate the implementation, consumer, and exact anchors.
+2. A two-edit SYNTRA_AGENT_PATCH_V1 JSON payload using repository-relative paths.
+3. The terminal EOS token added by the existing SFT tokenizer path.
+
+The thought trace is a source-derived training target, not a hidden transcript from a model. If the generator cannot prove the file relationship and both repairs, it emits no record and does not fabricate a patch.
+
+### Supervised loss and prompt masking
+
+The instruction loader tokenizes each record as:
+
+~~~text
+BOS + prompt + completion + EOS
+~~~
+
+Prompt target positions are masked with -100. Completion tokens remain supervised. For multi-file examples this means the thought trace, patch JSON, and EOS contribute to SFT loss, while the prompt does not. Long responses use overlapping context windows; repeated overlap targets are masked so the same completion token is not counted twice.
 
 ### Training and model commands
 
-Run these commands from the repository root:
+Run these from the repository root:
 
-```powershell
-# Show the actual local checkpoint and training status
+~~~powershell
+# Report actual local checkpoint and training metadata
 npm run ai:cli -- status
 
-# Inspect a repository corpus without starting training
+# Inspect a local corpus without training
 npm run ai:cli -- inspect-data --root "C:\Projects\SYNTRA"
 
-# Train or continue the native application model from an approved source root
+# Train or continue the native model from an approved source root
 npm run ai:cli -- train --root "C:\Projects\SYNTRA" --seq-len 1024 --steps 1000
 
-# Validate a structured instruction dataset before fine-tuning
-npm run ai:cli -- audit-instructions --dataset "D:\Datasets\instructions.jsonl" --seq-len 1024
-
-# Fine-tune the existing native checkpoint on an audited prompt/completion JSONL dataset
-npm run ai:cli -- finetune --dataset "D:\Datasets\instructions.jsonl" --steps 1000
-
-# Generate repository-grounded instruction examples from the project and approved roots
-npm run ai:curriculum -- --max-examples 240
-```
-
-External training data must be in an explicitly approved absolute directory. In PowerShell, configure the approved root before using it:
-
-```powershell
-$env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\Datasets"
-npm run ai:cli -- inspect-data --root "D:\Datasets\MySource"
-```
-
-The corpus loader applies size and file limits and excludes common generated, binary, and likely-secret paths. These checks are defensive heuristics, not a guarantee that every secret can be found. Review training data yourself and do not include credentials, private keys, customer information, or data you are not authorized to use.
-
-Training loss measures next-token prediction on the selected corpus. It does not establish that generated code is correct, that instruction following is reliable, or that the model generalizes to unfamiliar repositories.
-
-### Repository curriculum and instruction training
-
-SYNTRA includes a local curriculum pipeline that turns approved repository source into structured prompt/completion examples. It uses Python's standard-library AST plus bounded, dependency-free declaration/block parsing for JavaScript, TypeScript, Go, and Rust. Structural quality scoring, boilerplate filtering, and identifier-normalized SHA-256 deduplication are applied across all five benchmark languages. The pipeline:
-
-- Scans the project and explicitly approved local corpus roots.
-- Extracts Python module structure with the standard-library AST and bounded declaration/block spans for JavaScript, TypeScript, Go, and Rust; incomplete or oversized blocks are never presented as complete implementations.
-- Scores documentation, type information, control flow, calls, meaningful operations, and class/struct members; filters empty stubs, trivial accessors, low-quality declarations, and structurally equivalent implementations.
-- Generates JSONL examples for module and symbol comprehension, symbol implementation, and exact source-anchored repair tasks.
-- Supports only conservative, locally verified repairs: Python `None` identity checks, JavaScript/TypeScript `typeof` strict equality, Go `(result, error)` failure returns, and Rust `Option<&T>` bounds-checked slice access.
-- Excludes the benchmark engine's hidden target directory from curriculum scanning so private evaluation labels cannot leak into training data.
-- Groups related examples when creating train/validation splits to reduce source-module and prompt leakage.
-- Builds multi-file examples only from real local import/module/package relationships with a referenced declaration and a separately verified repair anchor in each file.
-- Supervises a compact `<thought>` localization trace, a valid two-file `SYNTRA_AGENT_PATCH_V1` JSON payload, and EOS as completion tokens; the native SFT loader continues to mask prompt targets with `-100`.
-- Preserves the existing raw-text training path and requires no external parser, model provider, model registry, or network service.
-
-Generate the curriculum from the project and every configured approved root with:
-
-```powershell
+# Generate repository-grounded curriculum records for all five languages
 npm run ai:curriculum -- --mode all --languages python javascript typescript go rust --max-examples 240
 
-# Generate only the paired two-file reasoning curriculum
+# Generate only the regular module/symbol/repair dataset
+npm run ai:curriculum -- --mode repository --languages python javascript typescript go rust --max-examples 240
+
+# Generate only paired multi-file reasoning examples
 npm run ai:curriculum -- --mode multifile --languages javascript typescript go rust --max-examples 120
 
-# Generate only regular module/symbol/repair records
-npm run ai:curriculum -- --mode repository --languages python javascript typescript go rust --max-examples 240
-```
+# Audit a generated instruction dataset before training
+npm run ai:cli -- audit-instructions --dataset "data/curricula/workspace-instructions.jsonl" --seq-len 1024
 
-The default outputs are `data/curricula/workspace-instructions.jsonl` and `data/curricula/workspace-reasoning.jsonl`. Use `--root` to scan one approved workspace instead of the project-plus-configured-roots set, and `--output` to choose a JSONL filename inside the project or active workspace. Secondary approved roots receive namespaced source paths; repair patches are emitted only for the active workspace because their paths must resolve against the workspace the coding agent can edit. Use `--mode repository`, `--mode multifile`, or `--mode all` to select the generators. `--languages` controls the language set. The multi-file generator writes `data/curricula/workspace-reasoning.jsonl` by default and does not overwrite an existing file when no verifiable pair is found. The supported repair rules are deliberately narrow and are skipped unless each exact search anchor is unique in its source file.
+# Fine-tune the local checkpoint on an audited dataset
+npm run ai:cli -- finetune --dataset "data/curricula/workspace-instructions.jsonl" --steps 1000
+~~~
 
-Curriculum synthesis and structured instruction training are available in `main`. Generation produces source-grounded examples, not proof of semantic quality or improved coding performance. Review the resulting dataset, run the instruction audit, train a local checkpoint, and compare repeatable task-level benchmark results before concluding that training improved the model.
+Curriculum output defaults to:
 
-### Phase 4 local checkpoint optimization and evaluation
+- data/curricula/workspace-instructions.jsonl
+- data/curricula/workspace-reasoning.jsonl
 
-The Milestone 4 workflow runs the standalone PyTorch brain trainer against an approved local source corpus, synthesizes the AST-grounded instruction curriculum, audits that JSONL against the checkpoint's actual tokenizer, and fine-tunes response/EOS targets using SYNTRA's existing masked SFT path.
+Use --root to scan one approved repository instead of the project plus configured roots. Use --output or --multifile-output to choose output paths inside the project or selected workspace. --languages selects the source languages, and --mode selects repository, multifile, or all.
 
-Run from the repository root after installing the documented local dependencies:
+External corpus roots must be explicitly approved. In PowerShell:
 
-```powershell
-# Run local source pretraining -> instruction curriculum SFT -> checkpoint benchmarks
+~~~powershell
+$env:SYNTRA_ALLOWED_CORPUS_ROOTS = "D:\Datasets"
+npm run ai:cli -- inspect-data --root "D:\Datasets\MySource"
+~~~
+
+The corpus loader enforces canonical path containment, regular-file checks, symlink rejection, file-size/count/token limits, generated-directory exclusions, and likely-secret path exclusions. These are defensive controls, not a guarantee that every secret can be found. Review data before training and do not include credentials, private keys, customer information, or material you are not authorized to use.
+
+**Training loss is not coding accuracy.** A low next-token loss on training data does not prove that generated patches are correct, that an agent can complete unfamiliar tasks, or that fine-tuning improved held-out performance.
+
+### First-run behavior
+
+On first launch, the Windows startup path prepares the local environments and trains or validates a starter checkpoint from the checked-out repository. No pretrained model weights are downloaded. Dependency installation may require access to npm and Python package indexes; after the required packages and checkpoints are present, inference can run locally.
+
+---
+
+## Security & execution boundaries
+
+SYNTRA is designed for local use with explicit trust boundaries.
+
+- **Loopback services:** application APIs bind to 127.0.0.1; the native API is not intended to be exposed directly to a network.
+- **Approved corpus roots:** caller-provided paths are canonicalized and checked against the project or explicitly configured local roots at the filesystem boundary.
+- **Filesystem safety:** corpus reads reject symlink escapes and verify regular-file identity and metadata before and after reading. Curriculum output paths are revalidated before writing.
+- **Hidden benchmark isolation:** tests/benchmark_engine/hidden is excluded from curriculum scanning. Private evaluation targets are not valid training labels.
+- **Patch safety:** candidate patch paths and exact source anchors are validated by the local patch pipeline. A model-generated diff is not trusted solely because it is valid JSON.
+- **Tool limits:** diagnostics and project checks use bounded parameters. The agent does not have a general-purpose unrestricted shell.
+- **Checkpoint safety:** checkpoint loading uses PyTorch's weights_only=True path where supported by the native runtime. Checkpoint identity is tracked so stale inference companions cannot shadow a replacement checkpoint.
+
+No single path filter or secret scanner can guarantee that a corpus contains no sensitive data. Users remain responsible for approving the data they select.
+
+---
+
+## Benchmarking & evidence
+
+SYNTRA maintains separate benchmark layers because they answer different questions.
+
+| Evaluation | Measures | Does not establish |
+| --- | --- | --- |
+| Unit and integration tests | Application behavior, API contracts, parser behavior, path controls, and regressions | Model coding ability |
+| Full-agent benchmark (npm run benchmark) | End-to-end agent behavior across versioned workspace tasks | Broad real-world engineering competence |
+| Raw-model benchmark (npm run benchmark:model) | Direct checkpoint patch output on controlled fixtures across Python, JavaScript, TypeScript, Go, and Rust | Generalization to arbitrary repositories |
+| Loss evaluation (npm run ai:cli -- evaluate) | Next-token prediction loss on a selected local corpus | Patch correctness or independent generalization when the corpus overlaps training data |
+
+Useful commands:
+
+~~~powershell
+# Run the full agent benchmark
+npm run benchmark
+
+# List direct-model tasks without loading a checkpoint
+npm run ai:cli -- benchmark-model --list
+
+# Run the direct-model suite against the selected local checkpoint
+npm run benchmark:model
+
+# Produce benchmark reports
+npm run benchmark:reports
+~~~
+
+The raw-model evaluator uses pre-existing local runtime images, disables network access in Docker mode, and does not pull images during evaluation. Host execution is unsandboxed and requires the explicit --isolation host --allow-host-execution opt-in. Pre-provision the required images and locked dependencies before Docker-mode evaluation.
+
+Benchmark fixtures are narrow, controlled regression cases. They are not an industry-wide benchmark, and the test harness passing does not mean the model has passed those tasks. Only a real run against the actual local checkpoint creates model-performance evidence. Reports record checkpoint identity, task outcomes, and relevant generation/context metrics; missing historical model metrics are not invented or backfilled.
+
+### Phase 4 and Phase 5 workflows
+
+The standalone training/evaluation workflow and checkpoint promotion tools remain available:
+
+~~~powershell
+# Run the Phase 4 local checkpoint workflow
 npm run brain:milestone4 -- --device auto
 
-# Select an explicit supported local accelerator
+# Train with a selected local accelerator
 npm run brain:milestone4 -- --device cpu
 npm run brain:milestone4 -- --device cuda
 npm run brain:milestone4 -- --device mps
@@ -219,171 +335,95 @@ npm run brain:milestone4 -- --device mps
 # Use an existing checkpoint for SFT only
 npm run brain:milestone4 -- --skip-pretraining
 
-# Benchmark an existing checkpoint without running either training stage
+# Benchmark an existing checkpoint without pretraining or SFT
 npm run brain:milestone4 -- --skip-pretraining --skip-sft
 
-# Train without launching model benchmarks
-npm run brain:milestone4 -- --skip-benchmark
-```
+# Validate checkpoint provenance and loadability before promotion
+npm run brain:promote -- --dry-run
 
-The checked-in profile is `configs/training/phase4_milestone4.json`. It starts with a conservative local configuration (4 layers, 4 heads, width 128, context 512, batch size 2), a 100-step warmup, cosine decay from `3e-4` to `1e-5`, and a 1.0 gradient-norm clipping threshold. The number of additional pretraining steps defaults to 5,000; SFT defaults to 1,000 steps at `1e-4`. These are initial experiment settings, not claims of optimal hyperparameters. Before materializing training tensors, the trainer estimates the device working set and rejects configurations exceeding its 70% available-memory safety budget where the platform exposes a reliable measurement; the estimate is saved in checkpoint metadata. CPU and MPS use the host's available-memory estimate, while CUDA uses free VRAM. This is a conservative guardrail rather than a precise profiler or an OOM guarantee. Tune the profile from actual hardware memory/throughput and task results rather than assuming CPU, CUDA, and Apple MPS have interchangeable performance.
+# Review and explicitly promote after validation
+npm run brain:promote
+~~~
 
-The workflow stages checkpoints under `data/checkpoints/staging/syntra-brain.pt`; it does not overwrite the application's default production checkpoint. Existing staging checkpoints require an explicit exact-resume or backed-up overwrite choice. Each 500-step evaluation uses a checksum-verified, read-only checkpoint snapshot and a separate JSON report. Evaluations run one at a time to limit accelerator contention; the profile defaults the benchmark's inference device to CPU while training selects the requested local device. Docker evaluation requires all five local language images to be pre-provisioned; it never pulls images and uses the benchmark's network-disabled execution. Host evaluation is unsandboxed and requires the explicit `--isolation host --allow-host-execution` acknowledgment.
-Managed generated outputs under `data/benchmarks`, `data/curricula`, and `data/checkpoints` are explicitly excluded from source-corpus ingestion in both the AST curriculum scan and raw pretraining scan. The trainer also fingerprints the selected corpus after exclusions, so a changed source/artifact boundary cannot silently resume against a different training set.
+These workflows use separate staging/checkpoint paths and should be run with the corresponding documented configuration. Review the generated reports and actual local hardware measurements rather than assuming a profile is optimal for every CPU, CUDA, or MPS device.
 
-Each run stores a manifest, checkpoint snapshots, benchmark JSON, subprocess logs, `summary.md`, and `summary.csv` under `data/benchmarks/phase4-milestone4/<run-id>/`. The summaries correlate actual checkpoint loss values with measured held-out target-completion and regression-prevention rates. Failed benchmarks, missing JSON, checkpoint mismatches, and missing metrics are reported as failed or unavailable—not as zero. No training or benchmark run is started by installing this code; the command above starts real local compute when executed on your machine.
-
-
-### Phase 5: smoke validation, hardware profiles, and checkpoint promotion
-
-Start with the short end-to-end smoke profile after provisioning the required local Docker images:
-
-```powershell
-npm run brain:smoke
-```
-
-It runs 50 source-pretraining optimizer steps and 20 masked SFT optimizer steps, then evaluates both immutable checkpoint snapshots against five representative tasks—one for each supported language—inside the existing offline Docker sandbox. It still preflights all five local language images. It uses CPU by default and writes to separate smoke-only staging/curriculum/report directories; it does not touch the active application checkpoint. Smoke reports are partial-suite evidence and cannot authorize promotion.
-
-Select a hardware profile for longer experiments:
-
-```powershell
-# Low-memory / CPU laptop: physical batch 1 with gradient accumulation
-npm run brain:milestone4 -- --config configs/training/local_cpu_fast.json --device cpu
-
-# Dedicated GPU or sufficient unified/system memory; choose CUDA or MPS explicitly when available
-npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device cuda
-npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device mps
-```
-
-The CPU profile uses a 4-layer, width-64 model with 256-token context, micro-batch 1, and eight-step accumulation. The GPU profile uses an 8-layer/8-head, width-256 model and 1024-token context. These are resource-targeted starting points, not benchmark-proven optima. The trainer reports the estimated working set before allocation and the actual local run's throughput and memory telemetry. CPU reports process peak RSS; CUDA reports allocator peak allocated VRAM; MPS reports the highest sampled driver/allocator memory seen after optimizer steps. Unavailable or inapplicable values remain unavailable, not zero. Token throughput counts supervised target tokens, and step latency measures optimizer-update wall time.
-
-A measured full-suite checkpoint can be promoted only by explicitly selecting its completed evaluation report:
-
-```powershell
-# Verify provenance, snapshot SHA-256 and runtime loadability without modifying the active model
-npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
-
-# Promote after reviewing the dry-run output
-npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --confirm-sha256 "<exact-sha256-from-dry-run>"
-
-# Restore a previous active checkpoint using the archive ID printed by promotion
-npm run brain:promote -- --rollback "20261109T120000Z-1234abcd"
-```
-
-Promotion accepts only a complete run of the currently checked-in 13-task raw native-model suite, with valid hidden baselines, a matching SHA-256 in the benchmark report and read-only snapshot manifest, and a checkpoint that the actual SYNTRA runtime can load. It uses the active path selected by `SYNTRA_CHECKPOINT` when set, otherwise SYNTRA's normal default/fallback resolver. Before replacing an active checkpoint it archives the previous full checkpoint and its metadata/inference companion under `data/checkpoints/archive/<timestamp-id>/`; rollback verifies those archive hashes and rebuilds a correctly bound inference companion. Partial task runs, stale suite versions, mismatched artifacts, symlinked paths, and invalid model payloads are rejected.
-
-Promotion is an explicit operator action. Training and benchmarking never auto-promote a model, and no cloud model service or network-enabled benchmark container is introduced.
-
-
-## Security and execution boundaries
-
-SYNTRA uses explicit local boundaries, but no local coding agent can make arbitrary project code risk-free.
-
-- Application and AI services bind to loopback. The local API validates host/origin information and uses a process-scoped session token.
-- Workspace operations are scoped to the selected project and apply canonical path, traversal, symlink, and exclusion checks.
-- Model-selected repository investigation is restricted to bounded read-only tools.
-- Privileged operations use short-lived, single-use approval capabilities rather than trusting a caller-supplied approval flag.
-- Project verification is disabled by default. When enabled with Docker isolation, checks run against a temporary candidate workspace in a restricted container with no network, a read-only container root, dropped capabilities, and resource limits.
-- Host verification requires explicit opt-in. It runs repository-defined scripts with the current user's operating-system permissions and is **not sandboxed**.
-- The Docker engine and selected image remain part of the trusted computing base. Docker isolation is not a virtual machine boundary.
-
-Do not expose the local services to an untrusted network, do not run untrusted repositories with host verification enabled, and keep SYNTRA and its dependencies patched. See the [operating security model](docs/OPERATING_SECURITY.md) for residual risks and configuration details.
-
-## Benchmarking and evidence
-
-SYNTRA includes a versioned, fixture-based coding-agent benchmark. It exercises the actual local workflow: repository inspection, read-only retrieval, structured patch generation, candidate verification, and proposal staging.
-
-Run it after the native services and a trained checkpoint are available:
-
-```bash
-npm run benchmark
-```
-
-Useful options:
-
-```bash
-npm run benchmark -- --list
-npm run benchmark -- --task utility-clamp
-npm run benchmark:reports -- history
-```
-
-SYNTRA also has a separate **raw native-model** track. It bypasses agent retrieval, planning, review, and orchestration, sending each held-out task directly to the selected native PyTorch checkpoint:
-
-```bash
-# List direct-model tasks without loading a model checkpoint
-npm run benchmark:model -- --list
-
-# Evaluate one direct-model task or the complete direct-model suite
-npm run benchmark:model -- --task python-clamp
-npm run benchmark:model
-```
-
-The raw-model suite is now version 1.3.0 with 13 held-out fixtures across Python (nine tasks), JavaScript, TypeScript, Go, and Rust. It includes coordinated multi-file patches, ESM event normalization, generic type constraints, cancellation-aware concurrency, safe UTF-8 slicing, and cross-module stream-state validation. Every fixture must demonstrate a failing target baseline and passing independent regression baseline before inference. Hidden tests remain outside the model-visible workspace.
-
-The evaluator selects a pre-existing local image per runtime: `python:3.12-slim`, `node:20-slim` (JavaScript and TypeScript), `golang:1.22-alpine`, and `rust:1.78-slim`. JavaScript syntax/test execution is registered, while the v1.2.0 held-out suite currently includes a TypeScript task rather than a separate JavaScript-only task. It inspects the required images before inference, uses `--pull=never` and `--network none`, and does not install packages inside evaluation containers. TypeScript uses the repository's already-installed compiler mounted read-only. Go proxying and Cargo networking are disabled. Pre-provision all images and the repository's locked npm dependencies before using Docker mode. Host execution requires the explicit, non-sandboxed opt-in `--isolation host --allow-host-execution`.
-
-Prompts expose the fixture's bounded multi-file source context as labeled files. The model must return every required edit in one strict `SYNTRA_AGENT_PATCH_V1` object; duplicate paths, missing sibling edits, extra changed files, or context truncation invalidate the task. Reports record checkpoint identity and saved training history, patch/test outcomes per language, prompt tokens, context-window utilization, explicit context-overflow rejections (including overflow-token counts), generation throughput, and phase timings. Older checkpoints are not backfilled with invented loss history. The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` signal is evaluated only across tasks whose prompts fit the checkpoint and completed generation; context-rejected tasks remain in the end-to-end score but are excluded from this heuristic. It remains a qualified warning, not causal proof of overfitting.
-
-The existing `npm run benchmark` remains the separate 11-task full-agent benchmark. The 13 raw-model fixtures are narrow, controlled regression cases—not a representative industry benchmark or evidence of broad language competence. Passing SYNTRA unit tests validates the evaluator; only a real run against the actual local checkpoint produces model-performance evidence.
+---
 
 ## Get started
 
-### Windows
+### Windows — one-click launch
 
-**Requirements:** Windows PowerShell, Node.js 20 or newer, and Python 3.12 or newer.
+**Requirements:** Windows, PowerShell, Node.js 20 or newer, and Python 3.12 or newer.
 
-```powershell
+~~~powershell
 git clone https://github.com/EldarJamiyev/SYNTRA.git
 cd SYNTRA
-```
+~~~
 
-Double-click `Start-SYNTRA.bat`. The launcher prepares the local environments, trains or validates the native checkpoint, starts the services, and opens:
+Double-click Start-SYNTRA.bat or run:
+
+~~~powershell
+.\Start-SYNTRA.bat
+~~~
+
+The launcher prepares the local environments, validates or trains the native checkpoint, starts the required services, and opens:
 
 **http://127.0.0.1:3000**
 
-Keep the service windows open while using SYNTRA. On later launches, use the same batch file; a valid checkpoint is reused rather than retrained from scratch.
+Keep the service windows open while using SYNTRA. On later launches, the same launcher reuses a valid checkpoint instead of retraining from scratch.
 
-### Development checks
+### Development
 
-From the repository root:
+Install the locked Node dependencies and run the application checks:
 
-```bash
+~~~bash
 npm ci
 npm run lint
 npm run build
 npm test
 npm run test:e2e
-```
+~~~
 
-The full local application also needs the native Python service and the Node workspace service. The Windows launcher is the maintained one-click startup path; consult the architecture and release documentation when running or validating services separately.
+The application also requires the native Python service and the Node workspace service. The Windows launcher is the maintained one-click startup path; use the architecture and operating documentation when starting services separately.
+
+---
 
 ## Project structure
 
-```text
+~~~text
 SYNTRA/
-├── src/                 # React chat interface
-├── local/               # Node API, diagnostics, repository agent and workspace tools
-├── syntra_ai/           # Native PyTorch model, training, inference and embeddings
-├── brain/               # Standalone Transformer training and generation package
-├── .agents/skills/      # Curated agent skill library
-├── benchmarks/          # Versioned local coding-agent fixtures
-├── scripts/             # Setup, startup, CLI bridge, tests and benchmark utilities
-├── tests/               # Node and Python tests
-├── e2e/                 # Browser end-to-end tests
-└── docs/                # Architecture, security, model, benchmark and roadmap notes
-```
+├── src/                         # React + TypeScript chat interface
+├── local/                       # Node API, agent, workspace and diagnostics
+├── syntra_ai/                   # Native PyTorch model, data, training and inference
+├── brain/                       # Standalone native Transformer training package
+├── .agents/skills/              # Curated local agent skill library
+├── benchmarks/                  # Versioned public benchmark fixtures
+├── tests/benchmark_engine/      # Raw-model harness and isolated hidden targets
+├── scripts/                     # Setup, launcher, CLI bridge and evaluation tools
+├── tests/                       # Python, Node and integration tests
+├── e2e/                          # Browser end-to-end tests
+└── docs/                         # Architecture, security, model and benchmark docs
+~~~
 
 ## Documentation
 
 | Document | Scope |
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime components, request flow, agent orchestration, and recovery |
-| [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, and residual risks |
+| [Native model runtime](docs/NATIVE_MODEL.md) | PyTorch model, tokenizer, context integrity, training, and inference |
+| [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
+| [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
 | [Model capabilities](docs/MODEL_CAPABILITIES.md) | Native inference, self-review, benchmark evidence, and limits |
 | [Benchmarks](docs/BENCHMARKS.md) | Fixture suite, scoring, report history, and measurement boundaries |
 | [Data and hardware](docs/DATA_AND_HARDWARE.md) | Local corpus handling, checkpoint limits, memory estimates, and hardware notes |
 | [Product roadmap](docs/ROADMAP.md) | Delivered baseline, remaining phases, and acceptance criteria |
 | [Release checklist](docs/RELEASE_CHECKLIST.md) | Repeatable CI, local runtime, security, and release gates |
+
+## Contributing
+
+Changes should preserve the local-model boundary, existing product scope, and real-operation guarantees. New tools must have bounded inputs and observable outcomes. New model or agent capabilities must be backed by tests against real code and must not rely on fabricated telemetry or placeholder responses.
+
+Before proposing a change, run the relevant Python and Node tests. For model-related work, include the checkpoint identity, dataset provenance, and actual benchmark outcomes needed to reproduce the claim. For security-sensitive changes, add a regression test for the underlying boundary, not just the reported alert.
 
 ## License
 
@@ -391,4 +431,7 @@ SYNTRA is released under the [MIT License](LICENSE). Third-party skill and asset
 
 ---
 
-Developed by [Eldar Jamiyev](https://github.com/EldarJamiyev).
+<div align="center">
+  <strong>Local intelligence. Real engineering.</strong><br />
+  Developed by <a href="https://github.com/EldarJamiyev">Eldar Jamiyev</a>.
+</div>
