@@ -6,7 +6,15 @@
   "curriculum": {
     "dataset": "data/curricula/smoke/workspace-instructions.jsonl",
     "max_examples": 48,
-    "max_tokens": 250000
+    "max_tokens": 250000,
+    "mode": "all",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript",
+      "go",
+      "rust"
+    ]
   },
   "pretraining": {
     "max_steps": 50,
