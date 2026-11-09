@@ -348,7 +348,10 @@ def _restore_archive(active: Path, archive_id: str, *, archive_current: bool = T
     current_archive = _archive_active(active) if archive_current else None
     destinations = dict(_active_artifact_paths(active))
     try:
-        for kind in ("checkpoint", "metadata", "inference_companion"):
+        # The inference companion embeds source_checkpoint_mtime_ns. Verify its
+        # archived bytes above, but rebuild it against the restored checkpoint's
+        # new filesystem timestamp rather than restoring a necessarily stale binding.
+        for kind in ("checkpoint", "metadata"):
             destination = destinations[kind]
             verified = verified_sources.get(kind)
             if verified is None:
@@ -359,7 +362,13 @@ def _restore_archive(active: Path, archive_id: str, *, archive_current: bool = T
                 continue
             source, digest = verified
             _atomic_copy_verified(source, destination, digest)
+        companion_destination = destinations["inference_companion"]
+        if companion_destination.exists() or companion_destination.is_symlink():
+            companion_destination.unlink()
         from syntra_ai import runtime
+        from syntra_ai.training import _save_inference_checkpoint
+        _target, payload, _config, _tokenizer = runtime._read_checkpoint(active)
+        _save_inference_checkpoint(active, payload)
         runtime._get_resident_bundle(path=active, device_name="cpu")
     except Exception as exc:
         if current_archive:
