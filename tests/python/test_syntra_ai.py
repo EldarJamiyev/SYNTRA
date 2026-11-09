@@ -453,6 +453,32 @@ class TransformerTests(unittest.TestCase):
             self.assertNotIn("checkpoints", joined_paths)
             self.assertNotIn("wandb", joined_paths)
 
+    def test_corpus_loader_excludes_explicit_managed_output_roots(self):
+        from syntra_ai.data import load_corpus
+
+        with tempfile.TemporaryDirectory(prefix="syntra-managed-exclusions-") as temp:
+            root = Path(temp)
+            (root / "src").mkdir()
+            benchmarks = root / "data" / "benchmarks"
+            curricula = root / "data" / "curricula"
+            benchmarks.mkdir(parents=True)
+            curricula.mkdir(parents=True)
+            (root / "src" / "module.py").write_text("def useful_source(): return 42\\n", encoding="utf-8")
+            (benchmarks / "latest.json").write_text('{"task_completion_rate":1.0}', encoding="utf-8")
+            (curricula / "summary.md").write_text("# Generated training summary\\n", encoding="utf-8")
+
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                corpus = load_corpus(
+                    [root],
+                    max_tokens=1024,
+                    include_tokens=False,
+                    exclude_paths=[benchmarks, curricula],
+                )
+            self.assertEqual(len(corpus.files), 1)
+            self.assertTrue(corpus.files[0].endswith("module.py"))
+            self.assertNotIn("task_completion_rate", "\\n".join(corpus.documents))
+            self.assertNotIn("Generated training summary", "\\n".join(corpus.documents))
+
     def test_instruction_dataset_loader_bounds_examples_records_and_token_memory(self):
         from syntra_ai.instruction import (
             MAX_INSTRUCTION_EXAMPLES,
@@ -1390,6 +1416,17 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(len(full_saved["training_data_sha256"]), 64)
             self.assertIn("rng_state", full_saved)
             self.assertIn("cpu", full_saved["rng_state"])
+            self.assertEqual(len(full_saved["training_history"]), 1)
+            self.assertEqual(full_saved["training_history"][0]["step"], 1)
+            self.assertEqual(full_saved["training_history"][0]["phase"], "causal-source-pretraining")
+            self.assertEqual(inference_saved["training_history"], full_saved["training_history"])
+            metadata = json.loads(checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["training_history"], full_saved["training_history"])
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(checkpoint)}):
+                from syntra_ai.runtime import status
+                model_status = status()
+            self.assertTrue(model_status["training_history_valid"])
+            self.assertEqual(model_status["training_history"], full_saved["training_history"])
 
             source_contents = source.read_text(encoding="utf-8")
             source.write_text(source_contents + "\n# source fingerprint must detect this change\n", encoding="utf-8")
@@ -1436,12 +1473,28 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(any(token != -100 for token in first["labels"][prompt_tokens:]))
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
-                tuned = finetune(dataset, steps=1, batch_size=1, learning_rate=1e-4,
-                                 device_name="cpu", checkpoint=checkpoint)
+                tuned = finetune(
+                    dataset, steps=1, batch_size=1, gradient_accumulation_steps=2,
+                    learning_rate=1e-4, device_name="cpu", checkpoint=checkpoint,
+                )
             self.assertEqual(tuned["status"], "completed")
+            self.assertEqual(tuned["gradient_accumulation_steps"], 2)
+            self.assertGreater(tuned["tokens_per_second"], 0)
+            self.assertGreater(tuned["step_latency_ms"], 0)
+            self.assertGreater(tuned["mean_step_latency_ms"], 0)
+            self.assertGreater(tuned["peak_rss_bytes"], 0)
+            self.assertEqual(tuned["device_memory_metric"], "cpu_not_applicable")
             inference_saved = torch.load(inference_checkpoint, map_location="cpu", weights_only=True)
             self.assertEqual(inference_saved["step"], tuned["step"])
             self.assertNotIn("optimizer_state", inference_saved)
+            self.assertEqual(len(inference_saved["training_history"]), 2)
+            self.assertEqual(
+                [point["phase"] for point in inference_saved["training_history"]],
+                ["causal-source-pretraining", "supervised-instruction-finetuning"],
+            )
+            self.assertEqual([point["step"] for point in inference_saved["training_history"]], [1, 2])
+            updated_metadata = json.loads(checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated_metadata["training_history"], inference_saved["training_history"])
             from syntra_ai.runtime import evaluate
             previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)

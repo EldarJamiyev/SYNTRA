@@ -142,6 +142,10 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Enforce note-count, file-size, title, body, and tag limits; reject known credential patterns and refuse symlink or invalid stores.
 - [x] Add workspace-specific relative glob exclusions for discovery, full-text search, symbol indexing, direct reads, and proposal access; store settings locally with optimistic-concurrency protection and reject invalid or symlinked configuration.
 - [x] Add an on-demand, audited workspace secret scanner for common private-key and credential patterns. It respects path exclusions and scan limits, and returns only finding metadata; matched values and source lines are never returned or written to audit logs.
+- [x] Add a local model-training smoke profile that runs bounded source pretraining and masked SFT, then executes representative Python, JavaScript, TypeScript, Go, and Rust tasks through the existing offline Docker benchmark path.
+- [x] Capture measured supervised tokens/second, optimizer-step latency, process peak RSS, CUDA allocator peak or sampled MPS high-water, estimated working-set size, and gradient-accumulation factor in checkpoint-matched Markdown/CSV evaluation trends.
+- [x] Add low-memory CPU and 1024-token GPU architecture profiles, with true optimizer-step gradient accumulation that keeps only one micro-batch of activations on the selected device at a time.
+- [x] Add explicit checkpoint promotion and rollback. Promotion verifies complete current-suite benchmark evidence, hidden baseline validity, immutable snapshot manifest, SHA-256 identity, and runtime loadability; it archives the previous active checkpoint and reconstructs its inference companion on rollback.
 - [ ] Expand secret-pattern coverage and add optional allowlists with safe, explicit review. Pattern scanning remains best-effort and is not a substitute for a secret manager.
 
 **Acceptance:** Context selection is explainable, reproducible, workspace-scoped, and covered by tests for stale-index invalidation, explicit memory approval, audit redaction, workspace isolation, and best-effort secret detection.
@@ -182,7 +186,29 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Harden Docker check containers with init, private IPC, bounded swap and an open-file limit; retain no-network, read-only root, dropped capabilities, no-new-privileges and candidate-only write mount.
 - [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
 - [x] Add checkpoint-aware context sizing with output caps and safety reserves; derive exact prompt counts from SYNTRA's saved tokenizer.
-- [ ] Build a cross-language empirical model capability matrix from repeatable runs across the available JavaScript, Python, Go and Rust fixtures.
+- [ ] Build a cross-language empirical model capability matrix from repeatable live-checkpoint runs across the available TypeScript, Python, Go and Rust fixtures. Implementation and fixture baselines are not a substitute for measured model outcomes.
+- [x] Expand the raw native-model suite from its initial Python-only baseline to version 1.3.0 with 13 independently validated held-out fixtures: nine Python tasks plus standalone JavaScript, TypeScript, Go and Rust tasks.
+- [x] Add coordinated multi-file tasks in Python and JavaScript; present connected modules together and require one exact, non-duplicated changed-path set.
+- [x] Add language-specific offline runtime selection, compiler/test validation, local-image-only Docker preflight, and per-language score breakdowns without combining the direct-model track with the full-agent suite.
+- [x] Record exact prompt-token count and context-window utilization per task; retain overflow-token evidence for context-rejected prompts and reject context overflow or truncated generation streams rather than silently dropping source context.
+- [ ] Establish a repeatable raw-checkpoint benchmark baseline on target hardware before comparing training/curriculum changes; do not use training loss as a substitute for task-level outcomes.
+- [x] Add bounded, validated training-loss history to native source pretraining and instruction fine-tuning checkpoints, including inference sidecars and model status.
+- [x] Add a direct native-model benchmark track that calls the checkpoint streaming runtime, hides target/regression tests from model context, reuses SYNTRA's production patch validator, and separates patch validity, target completion, and regression prevention.
+- [x] Correlate actual saved checkpoint loss metadata/history with raw-model task outcomes and emit a clearly qualified loss/intelligence divergence warning.
+- [x] Add a local Milestone 4 runner that executes bounded source pretraining, audits AST-derived curriculum JSONL with the checkpoint tokenizer, and then performs response/EOS-only masked SFT.
+- [x] Add the v2 resumable warmup/cosine scheduler with an explicit 1e-5 floor, exact optimizer-step blocks, non-finite gradient rejection, and a persisted 1.0 gradient-clipping policy while retaining legacy v1 resume behavior.
+- [x] Prevent synthesized instruction JSONL from contaminating the source-pretraining corpus; record exact dataset inclusion/exclusion in the checkpoint fingerprint.
+- [x] Stage read-only SHA-256-verified checkpoint/sidecar/inference snapshots and accept benchmark metrics only when the raw-model report confirms the exact staged checkpoint hash.
+- [x] Add a single-checkpoint baseline-only run mode and local Markdown/CSV trend summaries; failed or absent benchmark measurements remain unavailable rather than being imputed as zero.
+**Phase 5 local model operations and hardware baseline extension:**
+
+- [x] Add a CPU smoke profile (50 pretraining optimizer updates and 20 masked SFT updates) that exercises the real checkpoint snapshot and complete offline Docker evaluation handoff.
+- [x] Add low-memory CPU and scaled 8-layer/8-head, width-256, 1024-token GPU training profiles with true gradient accumulation at optimizer-step boundaries.
+- [x] Capture measured supervised tokens/second, optimizer-step latency, process peak RSS, and available CUDA/MPS allocator high-water telemetry in checkpoint-comparison Markdown/CSV and per-run JSON.
+- [x] Add benchmark-report-bound checkpoint promotion: require the complete current 13-task suite, valid hidden baselines, exact staged snapshot SHA-256, and successful native-runtime checkpoint loading.
+- [x] Archive the previous active checkpoint, metadata and inference companion under a timestamped ID; provide hash-verified rollback and rebuild the derived inference companion against the restored checkpoint timestamp.
+- [x] Keep promotion explicit, local and offline; training never auto-promotes or modifies loopback service/network policy.
+
 - [x] Publish a reproducible release checklist and upgrade notes covering CI/CodeQL, the native runtime, isolation, native semantic retrieval, benchmark history and release gates.
 
 **Acceptance:** Release claims are backed by repeatable measurements. The installation path, test results, supported hardware, and model limitations are documented.

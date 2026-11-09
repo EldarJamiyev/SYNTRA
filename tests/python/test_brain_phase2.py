@@ -262,6 +262,65 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(set(raw_files), {str(first_source.resolve()), str(second_source.resolve())})
             self.assertEqual(raw_bytes, first_source.stat().st_size + second_source.stat().st_size)
 
+    def test_excluded_curriculum_jsonl_is_omitted_from_both_raw_and_structured_pretraining(self):
+        from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets, train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-curriculum-exclusion-") as temp:
+            root = Path(temp)
+            source = root / "source.py"
+            docs = root / "README.md"
+            curriculum = root / "workspace-instructions.jsonl"
+            source.write_text("def source_function(value):\\n    return value + 3\\n" * 100, encoding="utf-8")
+            docs.write_text("# Repository corpus\\n" + ("source documentation and design notes\\n" * 500), encoding="utf-8")
+            curriculum.write_text(
+                "\\n".join(json.dumps({
+                    "prompt": f"Implement repository function number {index}.",
+                    "completion": f"def generated_{index}(value): return value + {index}",
+                    "split_group": f"module:{index}",
+                }) for index in range(6)),
+                encoding="utf-8",
+            )
+            benchmark_artifacts = root / "data" / "benchmarks"
+            benchmark_artifacts.mkdir(parents=True)
+            (benchmark_artifacts / "old-run.json").write_text(
+                json.dumps({"model": {"checkpoint_sha256": "not-source-code"}}),
+                encoding="utf-8",
+            )
+            excluded = {str(curriculum.resolve()), str(benchmark_artifacts.resolve())}
+
+            records, names, _size, _digest, _scan, _count, fallbacks = _read_instruction_jsonl_datasets(
+                [root], 4 * 1024 * 1024, exclude_paths=excluded
+            )
+            self.assertEqual(records, [])
+            self.assertNotIn(str(curriculum.resolve()), names)
+            self.assertNotIn(str(curriculum.resolve()), fallbacks)
+
+            train_text, validation_text, raw_names, _raw_size, _raw_digest = _read_local_datasets(
+                [root], 4 * 1024 * 1024, exclude_paths=excluded
+            )
+            self.assertNotIn("Implement repository function number", train_text + validation_text)
+            self.assertNotIn(str(curriculum.resolve()), raw_names)
+
+            checkpoint = root / "checkpoint.pt"
+            result = train(
+                [root],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                exclude_dataset_paths=[curriculum, benchmark_artifacts],
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["instruction_examples"], 0)
+            self.assertEqual(result["dataset_files"], 2)
+            from brain.checkpoint import load_checkpoint
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(set(saved["dataset_files"]), {str(source.resolve()), str(docs.resolve())})
+
     def test_structured_jsonl_training_saves_masked_training_format(self):
         from brain.checkpoint import load_checkpoint
         from brain.train import train
@@ -623,7 +682,161 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         self.assertEqual(schedule, first_run + resumed_run)
         self.assertGreater(schedule[0], 0)
         self.assertGreater(schedule[99], schedule[100])
-        self.assertGreaterEqual(min(schedule), base * 0.05)
+        self.assertGreaterEqual(min(schedule), 1e-5)
+        self.assertAlmostEqual(_scheduled_learning_rate(base, 100), base, places=12)
+        self.assertAlmostEqual(_scheduled_learning_rate(base, 10_000), 1e-5, places=12)
+        self.assertEqual(_scheduled_learning_rate(base, 10_001), 1e-5)
+        self.assertAlmostEqual(
+            _scheduled_learning_rate(base, 500, minimum_learning_rate=1e-5, warmup_steps=100, decay_steps=500),
+            1e-5,
+            places=12,
+        )
+
+    def test_gradient_accumulation_counts_optimizer_steps_and_emits_hardware_telemetry(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-accumulation-") as temp:
+            root = Path(temp)
+            dataset = root / "dataset.txt"
+            self._dataset(dataset)
+            checkpoint = root / "checkpoints" / "accumulated.pt"
+            from brain.train import _scheduled_learning_rate
+
+            original_step = torch.optim.AdamW.step
+            observed_learning_rates = []
+
+            def capture_optimizer_lr(optimizer, *args, **kwargs):
+                observed_learning_rates.append(optimizer.param_groups[0]["lr"])
+                return original_step(optimizer, *args, **kwargs)
+
+            with patch.object(torch.optim.AdamW, "step", new=capture_optimizer_lr):
+                result = train(
+                    [dataset],
+                    checkpoint_path=checkpoint,
+                    config=self._config(),
+                    epochs=1,
+                    max_steps=2,
+                    batch_size=1,
+                    gradient_accumulation_steps=2,
+                    tokenizer_bytes=1024,
+                    evaluation_batches=1,
+                    save_every_steps=1,
+                    device_name="cpu",
+                    seed=321,
+                )
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["step"], 2, "steps count optimizer updates, not micro-batches")
+            self.assertEqual(result["gradient_accumulation_steps"], 2)
+            self.assertEqual(saved["training_settings"]["gradient_accumulation_steps"], 2)
+            self.assertEqual(saved["step"], 2)
+            self.assertEqual(
+                observed_learning_rates,
+                [
+                    _scheduled_learning_rate(3e-4, 1, minimum_learning_rate=1e-5, warmup_steps=100, decay_steps=5000),
+                    _scheduled_learning_rate(3e-4, 2, minimum_learning_rate=1e-5, warmup_steps=100, decay_steps=5000),
+                ],
+            )
+            self.assertGreater(result["tokens_per_second"], 0)
+            self.assertGreater(result["step_latency_ms"], 0)
+            self.assertGreater(result["mean_step_latency_ms"], 0)
+            self.assertIsInstance(result["peak_rss_bytes"], int)
+            self.assertGreater(result["peak_rss_bytes"], 0)
+            self.assertIsNone(result["peak_device_memory_bytes"])
+            self.assertEqual(result["device_memory_metric"], "cpu_not_applicable")
+
+    def test_exact_max_step_budget_saves_resumable_mid_epoch_checkpoint_and_clips_gradients(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-step-budget-") as temp:
+            root = Path(temp)
+            dataset = root / "dataset.txt"
+            self._dataset(dataset)
+            checkpoint = root / "checkpoints" / "step-budget.pt"
+            original_clip = torch.nn.utils.clip_grad_norm_
+            with patch(
+                "torch.nn.utils.clip_grad_norm_",
+                wraps=original_clip,
+            ) as clip:
+                first = train(
+                    [dataset],
+                    checkpoint_path=checkpoint,
+                    config=self._config(),
+                    epochs=1,
+                    max_steps=3,
+                    batch_size=128,
+                    tokenizer_bytes=1024,
+                    evaluation_batches=1,
+                    save_every_steps=2,
+                    device_name="cpu",
+                    seed=123,
+                )
+            self.assertEqual(first["status"], "completed")
+            self.assertEqual(first["step"], 3)
+            self.assertEqual(clip.call_count, 3)
+            self.assertTrue(all(call.kwargs["max_norm"] == 1.0 for call in clip.call_args_list))
+            self.assertTrue(all(call.kwargs["error_if_nonfinite"] is True for call in clip.call_args_list))
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(saved["step"], 3)
+            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v2")
+            self.assertIsInstance(saved["epoch_order"], torch.Tensor)
+            self.assertGreaterEqual(saved["next_batch_index"], 0)
+
+            resumed = train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                max_steps=2,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+                resume=True,
+            )
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(resumed["step"], 5)
+            self.assertGreaterEqual(resumed["gradient_norm_before_clip"], 0.0)
+            self.assertGreaterEqual(resumed["learning_rate"], 1e-5)
+
+            boundary_checkpoint = root / "checkpoints" / "epoch-boundary.pt"
+            boundary = train(
+                [dataset],
+                checkpoint_path=boundary_checkpoint,
+                config=self._config(),
+                epochs=1,
+                max_steps=first["steps_per_epoch"],
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+            )
+            boundary_saved = load_checkpoint(boundary_checkpoint)
+            self.assertEqual(boundary["epoch"], 1)
+            self.assertEqual(boundary_saved["epoch"], 1)
+            self.assertIsNone(boundary_saved["epoch_order"])
+            self.assertEqual(boundary_saved["next_batch_index"], 0)
+            boundary_resumed = train(
+                [dataset],
+                checkpoint_path=boundary_checkpoint,
+                config=self._config(),
+                epochs=1,
+                max_steps=1,
+                batch_size=128,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=2,
+                device_name="cpu",
+                seed=123,
+                resume=True,
+            )
+            self.assertEqual(boundary_resumed["step"], boundary["step"] + 1)
 
     def test_source_related_instruction_examples_never_cross_validation_split(self):
         from brain.train import _split_instruction_records
@@ -676,13 +889,16 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             )
             self.assertEqual(first["status"], "completed")
             self.assertEqual(first["epoch"], 1)
+            self.assertGreater(first["estimated_training_memory_bytes"], 0)
             self.assertIsNotNone(first["train_loss"])
             self.assertIsNotNone(first["validation_loss"])
             self.assertTrue(checkpoint.is_file())
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
 
             saved = load_checkpoint(checkpoint)
-            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v1")
+            self.assertEqual(saved["training_settings"]["scheduler"], "global-cosine-warmup-v2")
+            self.assertEqual(saved["training_settings"]["minimum_learning_rate"], 1e-5)
+            self.assertEqual(saved["training_settings"]["warmup_steps"], 100)
             self.assertEqual(saved["epoch"], 1)
             uninterrupted_checkpoint = root / "checkpoints" / "uninterrupted.pt"
             uninterrupted = train(

@@ -192,6 +192,80 @@ The default output is `data/curricula/workspace-instructions.jsonl`. Use `--root
 
 Curriculum synthesis and structured instruction training are available in `main`. Generation produces source-grounded examples, not proof of semantic quality or improved coding performance. Review the resulting dataset, run the instruction audit, train a local checkpoint, and compare repeatable task-level benchmark results before concluding that training improved the model.
 
+### Phase 4 local checkpoint optimization and evaluation
+
+The Milestone 4 workflow runs the standalone PyTorch brain trainer against an approved local source corpus, synthesizes the AST-grounded instruction curriculum, audits that JSONL against the checkpoint's actual tokenizer, and fine-tunes response/EOS targets using SYNTRA's existing masked SFT path.
+
+Run from the repository root after installing the documented local dependencies:
+
+```powershell
+# Run local source pretraining -> instruction curriculum SFT -> checkpoint benchmarks
+npm run brain:milestone4 -- --device auto
+
+# Select an explicit supported local accelerator
+npm run brain:milestone4 -- --device cpu
+npm run brain:milestone4 -- --device cuda
+npm run brain:milestone4 -- --device mps
+
+# Use an existing checkpoint for SFT only
+npm run brain:milestone4 -- --skip-pretraining
+
+# Benchmark an existing checkpoint without running either training stage
+npm run brain:milestone4 -- --skip-pretraining --skip-sft
+
+# Train without launching model benchmarks
+npm run brain:milestone4 -- --skip-benchmark
+```
+
+The checked-in profile is `configs/training/phase4_milestone4.json`. It starts with a conservative local configuration (4 layers, 4 heads, width 128, context 512, batch size 2), a 100-step warmup, cosine decay from `3e-4` to `1e-5`, and a 1.0 gradient-norm clipping threshold. The number of additional pretraining steps defaults to 5,000; SFT defaults to 1,000 steps at `1e-4`. These are initial experiment settings, not claims of optimal hyperparameters. Before materializing training tensors, the trainer estimates the device working set and rejects configurations exceeding its 70% available-memory safety budget where the platform exposes a reliable measurement; the estimate is saved in checkpoint metadata. CPU and MPS use the host's available-memory estimate, while CUDA uses free VRAM. This is a conservative guardrail rather than a precise profiler or an OOM guarantee. Tune the profile from actual hardware memory/throughput and task results rather than assuming CPU, CUDA, and Apple MPS have interchangeable performance.
+
+The workflow stages checkpoints under `data/checkpoints/staging/syntra-brain.pt`; it does not overwrite the application's default production checkpoint. Existing staging checkpoints require an explicit exact-resume or backed-up overwrite choice. Each 500-step evaluation uses a checksum-verified, read-only checkpoint snapshot and a separate JSON report. Evaluations run one at a time to limit accelerator contention; the profile defaults the benchmark's inference device to CPU while training selects the requested local device. Docker evaluation requires all five local language images to be pre-provisioned; it never pulls images and uses the benchmark's network-disabled execution. Host evaluation is unsandboxed and requires the explicit `--isolation host --allow-host-execution` acknowledgment.
+Managed generated outputs under `data/benchmarks`, `data/curricula`, and `data/checkpoints` are explicitly excluded from source-corpus ingestion in both the AST curriculum scan and raw pretraining scan. The trainer also fingerprints the selected corpus after exclusions, so a changed source/artifact boundary cannot silently resume against a different training set.
+
+Each run stores a manifest, checkpoint snapshots, benchmark JSON, subprocess logs, `summary.md`, and `summary.csv` under `data/benchmarks/phase4-milestone4/<run-id>/`. The summaries correlate actual checkpoint loss values with measured held-out target-completion and regression-prevention rates. Failed benchmarks, missing JSON, checkpoint mismatches, and missing metrics are reported as failed or unavailable—not as zero. No training or benchmark run is started by installing this code; the command above starts real local compute when executed on your machine.
+
+
+### Phase 5: smoke validation, hardware profiles, and checkpoint promotion
+
+Start with the short end-to-end smoke profile after provisioning the required local Docker images:
+
+```powershell
+npm run brain:smoke
+```
+
+It runs 50 source-pretraining optimizer steps and 20 masked SFT optimizer steps, then evaluates both immutable checkpoint snapshots against five representative tasks—one for each supported language—inside the existing offline Docker sandbox. It still preflights all five local language images. It uses CPU by default and writes to separate smoke-only staging/curriculum/report directories; it does not touch the active application checkpoint. Smoke reports are partial-suite evidence and cannot authorize promotion.
+
+Select a hardware profile for longer experiments:
+
+```powershell
+# Low-memory / CPU laptop: physical batch 1 with gradient accumulation
+npm run brain:milestone4 -- --config configs/training/local_cpu_fast.json --device cpu
+
+# Dedicated GPU or sufficient unified/system memory; choose CUDA or MPS explicitly when available
+npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device cuda
+npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device mps
+```
+
+The CPU profile uses a 4-layer, width-64 model with 256-token context, micro-batch 1, and eight-step accumulation. The GPU profile uses an 8-layer/8-head, width-256 model and 1024-token context. These are resource-targeted starting points, not benchmark-proven optima. The trainer reports the estimated working set before allocation and the actual local run's throughput and memory telemetry. CPU reports process peak RSS; CUDA reports allocator peak allocated VRAM; MPS reports the highest sampled driver/allocator memory seen after optimizer steps. Unavailable or inapplicable values remain unavailable, not zero. Token throughput counts supervised target tokens, and step latency measures optimizer-update wall time.
+
+A measured full-suite checkpoint can be promoted only by explicitly selecting its completed evaluation report:
+
+```powershell
+# Verify provenance, snapshot SHA-256 and runtime loadability without modifying the active model
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
+
+# Promote after reviewing the dry-run output
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --confirm-sha256 "<exact-sha256-from-dry-run>"
+
+# Restore a previous active checkpoint using the archive ID printed by promotion
+npm run brain:promote -- --rollback "20261109T120000Z-1234abcd"
+```
+
+Promotion accepts only a complete run of the currently checked-in 13-task raw native-model suite, with valid hidden baselines, a matching SHA-256 in the benchmark report and read-only snapshot manifest, and a checkpoint that the actual SYNTRA runtime can load. It uses the active path selected by `SYNTRA_CHECKPOINT` when set, otherwise SYNTRA's normal default/fallback resolver. Before replacing an active checkpoint it archives the previous full checkpoint and its metadata/inference companion under `data/checkpoints/archive/<timestamp-id>/`; rollback verifies those archive hashes and rebuilds a correctly bound inference companion. Partial task runs, stale suite versions, mismatched artifacts, symlinked paths, and invalid model payloads are rejected.
+
+Promotion is an explicit operator action. Training and benchmarking never auto-promote a model, and no cloud model service or network-enabled benchmark container is introduced.
+
+
 ## Security and execution boundaries
 
 SYNTRA uses explicit local boundaries, but no local coding agent can make arbitrary project code risk-free.
@@ -224,7 +298,24 @@ npm run benchmark -- --task utility-clamp
 npm run benchmark:reports -- history
 ```
 
-The current suite is a small development and regression baseline, not an industry-wide coding benchmark. Results depend on the local checkpoint, machine, runtime, and task set. A passing SYNTRA unit-test suite validates SYNTRA's implementation; it does not demonstrate the coding ability of a live model. Benchmark reports distinguish patch validity, verification, task completion, latency, and measured resource information. Process RSS does not include all native-service memory or GPU memory.
+SYNTRA also has a separate **raw native-model** track. It bypasses agent retrieval, planning, review, and orchestration, sending each held-out task directly to the selected native PyTorch checkpoint:
+
+```bash
+# List direct-model tasks without loading a model checkpoint
+npm run benchmark:model -- --list
+
+# Evaluate one direct-model task or the complete direct-model suite
+npm run benchmark:model -- --task python-clamp
+npm run benchmark:model
+```
+
+The raw-model suite is now version 1.3.0 with 13 held-out fixtures across Python (nine tasks), JavaScript, TypeScript, Go, and Rust. It includes coordinated multi-file patches, ESM event normalization, generic type constraints, cancellation-aware concurrency, safe UTF-8 slicing, and cross-module stream-state validation. Every fixture must demonstrate a failing target baseline and passing independent regression baseline before inference. Hidden tests remain outside the model-visible workspace.
+
+The evaluator selects a pre-existing local image per runtime: `python:3.12-slim`, `node:20-slim` (JavaScript and TypeScript), `golang:1.22-alpine`, and `rust:1.78-slim`. JavaScript syntax/test execution is registered, while the v1.2.0 held-out suite currently includes a TypeScript task rather than a separate JavaScript-only task. It inspects the required images before inference, uses `--pull=never` and `--network none`, and does not install packages inside evaluation containers. TypeScript uses the repository's already-installed compiler mounted read-only. Go proxying and Cargo networking are disabled. Pre-provision all images and the repository's locked npm dependencies before using Docker mode. Host execution requires the explicit, non-sandboxed opt-in `--isolation host --allow-host-execution`.
+
+Prompts expose the fixture's bounded multi-file source context as labeled files. The model must return every required edit in one strict `SYNTRA_AGENT_PATCH_V1` object; duplicate paths, missing sibling edits, extra changed files, or context truncation invalidate the task. Reports record checkpoint identity and saved training history, patch/test outcomes per language, prompt tokens, context-window utilization, explicit context-overflow rejections (including overflow-token counts), generation throughput, and phase timings. Older checkpoints are not backfilled with invented loss history. The `OVERFITTING_LOSS_INTELLIGENCE_DIVERGENCE` signal is evaluated only across tasks whose prompts fit the checkpoint and completed generation; context-rejected tasks remain in the end-to-end score but are excluded from this heuristic. It remains a qualified warning, not causal proof of overfitting.
+
+The existing `npm run benchmark` remains the separate 11-task full-agent benchmark. The 13 raw-model fixtures are narrow, controlled regression cases—not a representative industry benchmark or evidence of broad language competence. Passing SYNTRA unit tests validates the evaluator; only a real run against the actual local checkpoint produces model-performance evidence.
 
 ## Get started
 

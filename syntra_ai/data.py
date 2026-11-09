@@ -125,9 +125,19 @@ def load_corpus(
     max_file_bytes: int = 256 * 1024,
     max_tokens: int = 5_000_000,
     include_tokens: bool = True,
+    exclude_paths: Iterable[str | os.PathLike[str]] = (),
 ) -> Corpus:
     if type(include_tokens) is not bool:
         raise ValueError("include_tokens must be a boolean.")
+    try:
+        excluded_paths = []
+        for value in exclude_paths:
+            raw_exclusion = os.fspath(value)
+            if not os.path.isabs(raw_exclusion):
+                raise ValueError("Corpus exclusion paths must be absolute.")
+            excluded_paths.append(os.path.normcase(os.path.realpath(raw_exclusion, strict=False)))
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("Corpus exclusion paths are invalid: " + str(exc)) from None
     tokens: list[int] = []
     token_count = 0
     files: list[str] = []
@@ -189,6 +199,15 @@ def load_corpus(
                 if len(files) >= max_files or token_count >= max_tokens:
                     break
                 candidate = os.path.join(base, filename)
+                try:
+                    candidate_real = os.path.realpath(candidate, strict=True)
+                except (OSError, RuntimeError):
+                    skipped += 1
+                    continue
+                normalized_candidate = os.path.normcase(candidate_real)
+                if any(is_path_within(normalized_candidate, excluded) for excluded in excluded_paths):
+                    skipped += 1
+                    continue
                 result = _read_safe_file(candidate, root, max_file_bytes)
                 if result is None:
                     skipped += 1

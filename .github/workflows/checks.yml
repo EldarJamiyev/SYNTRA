@@ -32,6 +32,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+      - name: Generate an npm lockfile when none is committed
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit
+          fi
+      - name: Install Node dependencies required by the shared production patch validator
+        run: npm ci --ignore-scripts --no-audit
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.22.x"
+          cache: false
+      - uses: dtolnay/rust-toolchain@1.78.0
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -49,6 +64,7 @@ jobs:
       - run: python -c "import numpy, torch; assert torch.version.cuda is None, 'Expected CPU-only PyTorch'; print('NumPy', numpy.__version__, 'PyTorch', torch.__version__, 'CUDA', torch.version.cuda)"
       - run: python -m compileall -q brain syntra_ai tests/python scripts
       - run: python -m unittest discover -s tests/python -v
+      - run: python scripts/run_syntra_module.py benchmark-model --list
       - run: python scripts/run_syntra_module.py cli status
 
   python-lock-windows:

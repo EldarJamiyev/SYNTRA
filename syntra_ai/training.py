@@ -21,6 +21,7 @@ from .config import ModelConfig
 from .data import MAX_CORPUS_TOKENS, load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
+from .training_history import append_training_history, validate_training_history
 
 ProgressCallback = Callable[[dict], None]
 
@@ -195,7 +196,7 @@ def _atomic_json(path: Path, payload: dict) -> None:
 INFERENCE_CHECKPOINT_FIELDS = (
     "format", "config", "tokenizer", "model_state", "step", "created_by",
     "device_at_training", "corpus_files", "corpus_tokens", "train_loss",
-    "validation_loss", "training_mode", "instruction_examples"
+    "validation_loss", "training_mode", "instruction_examples", "training_history"
 )
 
 
@@ -331,6 +332,7 @@ def train(
         corpus = load_corpus(roots, max_tokens=max_tokens)
     token_ids = _encode_documents(corpus.documents, tokenizer, max_tokens=max_tokens)
     training_data_sha256 = _training_data_fingerprint(corpus, max_tokens, config, tokenizer)
+    training_history = validate_training_history(saved.get("training_history") if saved is not None else None)
     if saved is not None:
         if saved.get("training_mode") != "causal-source-pretraining":
             raise ValueError(
@@ -407,6 +409,7 @@ def train(
             "tokenizer": "byte-BPE",
             "vocabulary_size": tokenizer.vocab_size,
             "context_tokens": config.seq_len,
+            "training_history_points": len(training_history),
         }
         if callback:
             callback(current)
@@ -435,6 +438,13 @@ def train(
 
         if step == start_step + 1 or step % 25 == 0 or step == start_step + steps:
             last_val_loss = _estimate_loss(model, val_data, batch_size, config.seq_len, device, batches=4)
+            training_history = append_training_history(
+                training_history,
+                step=step,
+                phase="causal-source-pretraining",
+                train_loss=last_train_loss,
+                validation_loss=last_val_loss,
+            )
             payload = {
                 "format": "syntra-transformer-v1",
                 "config": config.to_dict(),
@@ -458,6 +468,7 @@ def train(
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
                 "training_mode": "causal-source-pretraining",
+                "training_history": training_history,
             }
             _atomic_checkpoint(checkpoint_path, payload)
             _save_inference_checkpoint(checkpoint_path, payload)
@@ -475,6 +486,8 @@ def train(
                 "context_tokens": config.seq_len,
                 "created_by": "SYNTRA from-scratch trainer",
                 "pretrained_weights": False,
+                "training_history": training_history,
+                "training_history_points": len(training_history),
             }
             metadata_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".json")
             _atomic_json(metadata_path, metadata)

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "profile": "phase4-milestone4-local-balanced",
+  "corpus_root": ".",
+  "checkpoint": "data/checkpoints/staging/syntra-brain.pt",
+  "curriculum": {
+    "dataset": "data/curricula/workspace-instructions.jsonl",
+    "max_examples": 240,
+    "max_tokens": 3000000
+  },
+  "pretraining": {
+    "max_steps": 5000,
+    "batch_size": 2,
+    "block_size": 512,
+    "layers": 4,
+    "heads": 4,
+    "width": 128,
+    "vocab_size": 1024,
+    "dropout": 0.1,
+    "learning_rate": 0.0003,
+    "minimum_learning_rate": 0.00001,
+    "warmup_steps": 100,
+    "decay_steps": 5000,
+    "weight_decay": 0.1,
+    "evaluation_batches": 8,
+    "tokenizer_bytes": 100000,
+    "max_dataset_bytes": 268435456,
+    "seed": 1337,
+    "gradient_clip_norm": 1,
+    "gradient_accumulation_steps": 1
+  },
+  "sft": {
+    "steps": 1000,
+    "batch_size": 2,
+    "learning_rate": 0.0001,
+    "gradient_accumulation_steps": 1
+  },
+  "evaluation": {
+    "every_steps": 500,
+    "device": "cpu",
+    "isolation": "docker",
+    "max_parallel": 1,
+    "max_new_tokens": 512
+  },
+  "run_directory": "data/benchmarks/phase4-milestone4"
+}

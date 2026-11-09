@@ -227,15 +227,28 @@ def status() -> dict:
     path = checkpoint_path()
     metadata_path = path.with_suffix(path.suffix + ".json")
     metadata = {}
+    metadata_error = None
     if metadata_path.exists():
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            if not isinstance(metadata, dict):
+                raise ValueError("Checkpoint metadata must contain a JSON object.")
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
             metadata = {}
+            metadata_error = str(exc)
     checkpoint_exists = path.is_file()
     raw_config = metadata.get("config") or {}
     context_tokens = metadata.get("context_tokens") or raw_config.get("seq_len") or raw_config.get("block_size")
     vocab_size = metadata.get("tokenizer_vocab_size") or metadata.get("vocab_size") or raw_config.get("vocab_size")
+    history_error = None
+    try:
+        from .training_history import validate_training_history
+        training_history = validate_training_history(metadata.get("training_history"))
+    except ValueError as exc:
+        training_history = []
+        history_error = str(exc)
+    if metadata_error is not None and history_error is None:
+        history_error = "Checkpoint metadata is unavailable or malformed: " + metadata_error
     return {
         "service": "SYNTRA native local Transformer",
         "backend": "PyTorch",
@@ -248,6 +261,10 @@ def status() -> dict:
         "train_loss": metadata.get("train_loss"),
         "validation_loss": metadata.get("validation_loss"),
         "best_validation_loss": metadata.get("best_validation_loss"),
+        "training_history": training_history,
+        "training_history_points": len(training_history),
+        "training_history_valid": history_error is None,
+        "training_history_error": history_error,
         "corpus_files": metadata.get("corpus_files", len(metadata.get("dataset_files", [])) if isinstance(metadata.get("dataset_files"), list) else 0),
         "corpus_tokens": metadata.get("corpus_tokens", 0),
         "tokenizer": metadata.get("tokenizer", "byte-BPE" if checkpoint_exists else None),

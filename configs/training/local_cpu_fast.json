@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "profile": "local-cpu-fast-low-memory",
+  "corpus_root": ".",
+  "checkpoint": "data/checkpoints/staging/cpu-fast/syntra-brain.pt",
+  "curriculum": {
+    "dataset": "data/curricula/cpu-fast/workspace-instructions.jsonl",
+    "max_examples": 160,
+    "max_tokens": 1000000
+  },
+  "pretraining": {
+    "max_steps": 5000,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 8,
+    "block_size": 256,
+    "layers": 4,
+    "heads": 4,
+    "width": 64,
+    "vocab_size": 1024,
+    "dropout": 0.1,
+    "learning_rate": 0.0002,
+    "minimum_learning_rate": 0.00001,
+    "warmup_steps": 100,
+    "decay_steps": 5000,
+    "weight_decay": 0.1,
+    "evaluation_batches": 4,
+    "tokenizer_bytes": 75000,
+    "max_dataset_bytes": 134217728,
+    "seed": 1337,
+    "gradient_clip_norm": 1
+  },
+  "sft": {
+    "steps": 1000,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 0.00005
+  },
+  "evaluation": {
+    "every_steps": 500,
+    "device": "cpu",
+    "isolation": "docker",
+    "max_parallel": 1,
+    "max_new_tokens": 384
+  },
+  "run_directory": "data/benchmarks/local-cpu-fast",
+  "device": "cpu"
+}
