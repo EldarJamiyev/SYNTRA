@@ -225,6 +225,8 @@ def _polyglot_fingerprint(language: str, name: str, signature: str, body: str) -
     next_local = len(names)
     normalized: list[str] = []
     for index, token in enumerate(tokens):
+        if token.isspace():
+            continue
         if not _IDENT.fullmatch(token):
             normalized.append(token)
             continue
@@ -310,6 +312,16 @@ def _quality(language: str, symbol: dict[str, Any], source_lines: list[str]) -> 
         typed_parameters = len(re.findall(r"\b[A-Za-z_]\w*\s*:\s*[^,)=]+", signature))
         if re.search(r"\)\s*->\s*[^({]+", signature):
             typed_parameters += 1
+    if language in {"typescript", "rust"}:
+        typed_parameters += len(re.findall(
+            r"(?m)^\s*[A-Za-z_$][A-Za-z0-9_$]*\??\s*:\s*[^;{},\n]+[;,]?",
+            code,
+        ))
+    elif language == "go":
+        typed_parameters += len(re.findall(
+            r"(?m)^\s*[A-Za-z_]\w*\s+[\w*.\[\]]+\s*$",
+            code,
+        ))
     member_count = 0
     if symbol.get("is_container") or symbol.get("kind") in {"class", "interface", "struct", "trait", "impl"}:
         member_count = len(re.findall(
