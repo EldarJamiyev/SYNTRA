@@ -554,7 +554,9 @@ def finetune(
     saved = _normalize_checkpoint_payload(raw_saved)
     config = ModelConfig.from_dict(saved["config"])
     config.validate()
-    validate_training_memory_budget(config, batch_size, device)
+    # Input micro-batches are staged for each accumulated optimizer update.
+    # Budget against their combined resident input size before allocating them.
+    validate_training_memory_budget(config, batch_size * gradient_accumulation_steps, device)
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
     if tokenizer.vocab_size != config.vocab_size:
         raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
