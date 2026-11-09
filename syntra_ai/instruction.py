@@ -481,9 +481,9 @@ def audit_instruction_dataset(
     }
 
 
-def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
-    indices = torch.randint(0, len(examples), (batch_size,)).tolist()
-    chosen = [examples[index] for index in indices]
+def _instruction_batch_from_examples(chosen: list[dict], device: Any):
+    if not chosen:
+        raise ValueError("An instruction micro-batch must contain at least one example.")
     length = max(len(example["input_ids"]) for example in chosen)
     inputs, targets = [], []
     for example in chosen:
@@ -491,6 +491,20 @@ def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
         inputs.append(example["input_ids"] + [EOS_ID] * padding)
         targets.append(example["labels"] + [-100] * padding)
     return torch.tensor(inputs, dtype=torch.long, device=device), torch.tensor(targets, dtype=torch.long, device=device)
+
+
+def _sample_instruction_examples(examples: list[dict], batch_size: int) -> list[dict]:
+    if not examples:
+        raise ValueError("Instruction training requires at least one example.")
+    indices = torch.randint(0, len(examples), (batch_size,)).tolist()
+    return [examples[index] for index in indices]
+
+
+def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
+    return _instruction_batch_from_examples(
+        _sample_instruction_examples(examples, batch_size),
+        device,
+    )
 
 
 def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int, batches: int = 4) -> float:
@@ -554,10 +568,10 @@ def finetune(
     saved = _normalize_checkpoint_payload(raw_saved)
     config = ModelConfig.from_dict(saved["config"])
     config.validate()
-    # Input micro-batches are staged for each accumulated optimizer update.
-    # Budget against their combined resident input size before allocating them.
+    # Accumulation keeps only one physical micro-batch and its activations on
+    # the device at a time; do not budget it as one combined physical batch.
     estimated_training_memory_bytes = validate_training_memory_budget(
-        config, batch_size * gradient_accumulation_steps, device
+        config, batch_size, device
     )
     tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
     if tokenizer.vocab_size != config.vocab_size:
@@ -630,22 +644,30 @@ def finetune(
         step_started = perf_counter()
         optimizer.zero_grad(set_to_none=True)
         weighted_loss_total = 0.0
-        micro_batches = [
-            _instruction_batch(training_examples, batch_size, device)
+        # Keep only Python token lists for the accumulation group in host memory.
+        # Materialize each tensor pair on the selected device immediately before
+        # forward/backward, then release it before allocating the next micro-batch.
+        sampled_micro_batches = [
+            _sample_instruction_examples(training_examples, batch_size)
             for _micro_step in range(gradient_accumulation_steps)
         ]
-        micro_token_counts = [int((targets != -100).sum().item()) for _inputs, targets in micro_batches]
+        micro_token_counts = [
+            sum(sum(token != -100 for token in example["labels"]) for example in chosen)
+            for chosen in sampled_micro_batches
+        ]
         batch_supervised_tokens = sum(micro_token_counts)
         if batch_supervised_tokens < 1:
             raise RuntimeError("SFT optimizer step contains no supervised response/EOS targets.")
-        for (x, y), micro_tokens in zip(micro_batches, micro_token_counts):
+        for chosen, micro_tokens in zip(sampled_micro_batches, micro_token_counts):
             if micro_tokens < 1:
                 raise RuntimeError("SFT micro-batch contains no supervised response/EOS targets.")
+            x, y = _instruction_batch_from_examples(chosen, device)
             _, loss = model(x, y)
             if loss is None or not torch.isfinite(loss):
                 raise RuntimeError("Training loss is invalid; check the instruction dataset.")
             weighted_loss_total += float(loss.detach().item()) * micro_tokens
             (loss * (micro_tokens / batch_supervised_tokens)).backward()
+            del x, y, loss
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
         optimizer.step()
         last_train_loss = weighted_loss_total / max(1, batch_supervised_tokens)
