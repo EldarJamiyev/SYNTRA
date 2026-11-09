@@ -49,6 +49,29 @@ class Phase4Milestone4ProfileTests(unittest.TestCase):
         self.assertEqual(gpu["pretraining"]["width"], 256)
         self.assertEqual(gpu["pretraining"]["block_size"], 1024)
 
+    def test_smoke_profile_selects_one_task_for_each_local_benchmark_runtime(self):
+        profile = evaluate_epochs.load_profile(ROOT / "configs" / "training" / "phase4_smoke.json")
+        task_ids = profile["evaluation"]["task_ids"]
+        runner = evaluate_epochs._load_benchmark_runner()
+        suite = runner.load_suite()
+        by_id = {task["id"]: task for task in suite["tasks"]}
+        selected = [by_id[item] for item in task_ids]
+        self.assertEqual(len(selected), 5)
+        self.assertEqual({task["language"] for task in selected}, {"python", "javascript", "typescript", "go", "rust"})
+        preflight_languages = {task["language"] for task in suite["tasks"]}
+        self.assertEqual(preflight_languages, {"python", "javascript", "typescript", "go", "rust"})
+
+    def test_profile_rejects_duplicate_or_unknown_task_ids(self):
+        profile = evaluate_epochs.load_profile(ROOT / "configs" / "training" / "phase4_smoke.json")
+        duplicate = json.loads(json.dumps(profile))
+        duplicate["evaluation"]["task_ids"].append(duplicate["evaluation"]["task_ids"][0])
+        with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "unique list"):
+            evaluate_epochs._validate_profile_values(duplicate)
+
+        unknown = ["does-not-exist"]
+        with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "unknown raw benchmark task ID"):
+            evaluate_epochs._preflight_benchmark("docker", False, unknown)
+
     def test_profile_rejects_invalid_decay_and_parallel_benchmarking(self):
         profile = evaluate_epochs.load_profile(evaluate_epochs.DEFAULT_CONFIG)
         invalid_decay = json.loads(json.dumps(profile))
@@ -321,6 +344,32 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
             self.assertEqual(evaluator.results[0]["status"], "failed")
             self.assertIsNone(evaluator.results[0]["task_completion_rate"])
             self.assertIn("does not match", evaluator.results[0]["error"])
+
+    def test_background_evaluator_passes_selected_tasks_to_real_benchmark_command(self):
+        from unittest.mock import Mock, patch
+
+        with tempfile.TemporaryDirectory(prefix=".syntra-selected-tasks-", dir=ROOT) as temp:
+            root = Path(temp)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"snapshot")
+            evaluator = evaluate_epochs.BackgroundEvaluator(
+                root / "run", "selected-tasks", device="cpu", isolation="docker",
+                allow_host_execution=False,
+                task_ids=["python-clamp", "rust-safe-slice"],
+            )
+            process = Mock()
+            with patch.object(evaluator, "_npm_command", side_effect=lambda args: ["npm", *args]) as command, patch.object(
+                evaluate_epochs.subprocess, "Popen", return_value=process
+            ):
+                evaluator.launch("pretraining", 50, checkpoint, "a" * 64)
+            args = command.call_args.args[0]
+            self.assertEqual(
+                [args[index + 1] for index, value in enumerate(args[:-1]) if value == "--task"],
+                ["python-clamp", "rust-safe-slice"],
+            )
+            self.assertFalse(any(value in {"--network", "pull"} for value in args))
+            for job in evaluator.active:
+                job.log_handle.close()
 
     def test_checkpoint_callback_attaches_measured_training_telemetry(self):
         from unittest.mock import Mock
