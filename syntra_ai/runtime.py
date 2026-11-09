@@ -155,10 +155,6 @@ def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelC
         saved, config, tokenizer = load_validated(target)
 
     if load_target != target:
-        try:
-            source_mtime = target.stat().st_mtime_ns
-        except OSError:
-            source_mtime = -1
         # An mtime-only binding is insufficient: atomic promotion can replace
         # the source inode while preserving its size and mtime. Legacy companion
         # files without the full identity deliberately fall back to source weights.
