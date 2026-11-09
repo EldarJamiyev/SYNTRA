@@ -8,7 +8,9 @@ import os
 import time
 
 from .config import ModelConfig
-from .runtime import embed_texts, evaluate, generate, status, stream_generate, tokenize_text
+from .runtime import (
+    ContextWindowExceededError, embed_texts, evaluate, generate, status, stream_generate, tokenize_text,
+)
 from .training import train
 from .instruction import finetune, synthesize_repository_curriculum
 from .safe_paths import resolve_corpus_root, resolve_instruction_dataset
@@ -261,6 +263,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "Route not found."})
         except FileNotFoundError as exc:
             self._send(409, {"error": str(exc)})
+        except ContextWindowExceededError as exc:
+            self._send(422, {
+                "error": str(exc),
+                "code": "context_window_exceeded",
+                "prompt_tokens": exc.prompt_tokens,
+                "context_window_tokens": exc.context_window_tokens,
+                "usable_context_tokens": exc.usable_context_tokens,
+                "tokens_over_context": exc.tokens_over_context,
+            })
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             self._send(400, {"error": str(exc)})
         except Exception as exc:
