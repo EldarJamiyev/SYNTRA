@@ -1081,7 +1081,7 @@ def train(
             elif saved_scheduler == TRAINING_SCHEDULER:
                 required_v2 = {
                     "minimum_learning_rate", "warmup_steps", "decay_steps",
-                    "gradient_clip_norm", "gradient_accumulation_steps",
+                    "gradient_clip_norm",
                 }
                 if not required_v2.issubset(settings):
                     raise ValueError("The v2 training checkpoint is missing scheduler or gradient-clip settings.")
@@ -1094,9 +1094,11 @@ def train(
                 }
                 changed_v2 = [
                     name for name, expected in expected_v2.items()
-                    if type(settings.get(name)) not in (int, float)
-                    or isinstance(settings.get(name), bool)
-                    or settings.get(name) != expected
+                    if (
+                        type(settings.get(name, 1 if name == "gradient_accumulation_steps" else None)) not in (int, float)
+                        or isinstance(settings.get(name, 1 if name == "gradient_accumulation_steps" else None), bool)
+                        or settings.get(name, 1 if name == "gradient_accumulation_steps" else None) != expected
+                    )
                 ]
                 if changed_v2:
                     raise ValueError(
