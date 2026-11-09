@@ -41,5 +41,6 @@
     "max_parallel": 1,
     "max_new_tokens": 512
   },
-  "run_directory": "data/benchmarks/local-gpu-scale"
+  "run_directory": "data/benchmarks/local-gpu-scale",
+  "device": "auto"
 }
