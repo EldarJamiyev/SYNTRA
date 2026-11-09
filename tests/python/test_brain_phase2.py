@@ -692,6 +692,43 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             places=12,
         )
 
+    def test_gradient_accumulation_counts_optimizer_steps_and_emits_hardware_telemetry(self):
+        from brain.checkpoint import load_checkpoint
+        from brain.train import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-brain-accumulation-") as temp:
+            root = Path(temp)
+            dataset = root / "dataset.txt"
+            self._dataset(dataset)
+            checkpoint = root / "checkpoints" / "accumulated.pt"
+            result = train(
+                [dataset],
+                checkpoint_path=checkpoint,
+                config=self._config(),
+                epochs=1,
+                max_steps=2,
+                batch_size=1,
+                gradient_accumulation_steps=2,
+                tokenizer_bytes=1024,
+                evaluation_batches=1,
+                save_every_steps=1,
+                device_name="cpu",
+                seed=321,
+            )
+            saved = load_checkpoint(checkpoint)
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["step"], 2, "steps count optimizer updates, not micro-batches")
+            self.assertEqual(result["gradient_accumulation_steps"], 2)
+            self.assertEqual(saved["training_settings"]["gradient_accumulation_steps"], 2)
+            self.assertEqual(saved["step"], 2)
+            self.assertGreater(result["tokens_per_second"], 0)
+            self.assertGreater(result["step_latency_ms"], 0)
+            self.assertGreater(result["mean_step_latency_ms"], 0)
+            self.assertIsInstance(result["peak_rss_bytes"], int)
+            self.assertGreater(result["peak_rss_bytes"], 0)
+            self.assertIsNone(result["peak_device_memory_bytes"])
+            self.assertEqual(result["device_memory_metric"], "cpu_not_applicable")
+
     def test_exact_max_step_budget_saves_resumable_mid_epoch_checkpoint_and_clips_gradients(self):
         from brain.checkpoint import load_checkpoint
         from brain.train import train
