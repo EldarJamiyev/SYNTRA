@@ -38,6 +38,25 @@ _CACHE_LOCK = RLock()
 _RESIDENT_CACHE: dict[str, tuple[tuple[Any, ...], Any, dict, ModelConfig, ByteBPETokenizer, Any]] = {}
 
 
+class ContextWindowExceededError(ValueError):
+    """A prompt cannot be preserved inside the selected checkpoint context."""
+
+    def __init__(self, prompt_tokens: int, context_window_tokens: int):
+        self.prompt_tokens = prompt_tokens
+        self.context_window_tokens = context_window_tokens
+        self.usable_context_tokens = max(0, context_window_tokens - 1)
+        self.tokens_over_context = max(0, prompt_tokens - self.usable_context_tokens)
+        super().__init__(
+            f"Prompt requires {prompt_tokens} tokens, but checkpoint context "
+            f"{context_window_tokens} can preserve at most {self.usable_context_tokens} prompt tokens."
+        )
+
+
+def _file_stat_identity(path: Path) -> tuple[int, int, int, int, int]:
+    info = path.stat()
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
 def checkpoint_path() -> Path:
     configured = os.environ.get("SYNTRA_CHECKPOINT")
     if configured:
@@ -140,18 +159,17 @@ def _get_resident_bundle(path: str | Path | None = None, device_name: str = "aut
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
     load_target = select_inference_checkpoint(target)
     try:
-        stat = target.stat()
-        load_stat = load_target.stat() if load_target != target else stat
+        # Include device, inode, size, mtime and ctime for both the resumable
+        # checkpoint and selected inference companion. Promotion uses atomic
+        # replacement, which can preserve size/mtime while changing file identity.
         signature = (
-            stat.st_mtime_ns,
-            stat.st_size,
+            _file_stat_identity(target),
             str(load_target),
-            load_stat.st_mtime_ns,
-            load_stat.st_size,
+            _file_stat_identity(load_target),
             str(device_name),
         )
     except OSError:
-        signature = (-1, -1, str(load_target), -1, -1, str(device_name))
+        signature = ((-1, -1, -1, -1, -1), str(load_target), (-1, -1, -1, -1, -1), str(device_name))
 
     cache_key = str(target)
     with _CACHE_LOCK:
@@ -190,7 +208,7 @@ def _checkpoint_identity(path: str | Path | None = None) -> str | None:
         for candidate in dict.fromkeys((source, selected)):
             info = candidate.stat()
             parts.append(
-                f"{candidate}\0{info.st_dev}\0{info.st_ino}\0{info.st_size}\0{info.st_mtime_ns}"
+                f"{candidate}\0{info.st_dev}\0{info.st_ino}\0{info.st_size}\0{info.st_mtime_ns}\0{info.st_ctime_ns}"
             )
     except OSError:
         return None
@@ -202,8 +220,8 @@ def _resident_cache_matches_checkpoint(path: str | Path) -> bool:
     target = Path(path).expanduser().resolve()
     try:
         selected = select_inference_checkpoint(target)
-        source_stat = target.stat()
-        selected_stat = selected.stat()
+        source_identity = _file_stat_identity(target)
+        selected_identity = _file_stat_identity(selected)
     except OSError:
         return False
 
@@ -213,14 +231,8 @@ def _resident_cache_matches_checkpoint(path: str | Path) -> bool:
         return False
 
     signature = cached[0]
-    current_files = (
-        source_stat.st_mtime_ns,
-        source_stat.st_size,
-        str(selected),
-        selected_stat.st_mtime_ns,
-        selected_stat.st_size,
-    )
-    return isinstance(signature, tuple) and signature[:5] == current_files
+    current_files = (source_identity, str(selected), selected_identity)
+    return isinstance(signature, tuple) and signature[:3] == current_files
 
 
 def status() -> dict:
@@ -346,6 +358,17 @@ def embed_texts(
     }
 
 
+def _encode_prompt_within_context(
+    prompt: str, tokenizer: ByteBPETokenizer, config: ModelConfig
+) -> list[int]:
+    """Encode the complete prompt or fail; never silently discard source context."""
+    token_ids = tokenizer.encode(prompt)
+    usable_context_tokens = config.seq_len - 1  # one position is consumed by BOS
+    if len(token_ids) > usable_context_tokens:
+        raise ContextWindowExceededError(len(token_ids), config.seq_len)
+    return token_ids
+
+
 def _token_bytes_table(tokenizer: ByteBPETokenizer) -> list[bytes]:
     table = [bytes((token_id,)) for token_id in range(256)] + [b"", b""]
     for left, right in tokenizer.merges:
@@ -376,9 +399,8 @@ def stream_generate(
     if not 0.0 <= temperature <= 2.0:
         raise ValueError("temperature must be between 0.0 and 2.0.")
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
-    full_prompt_ids = tokenizer.encode(prompt)
-    prompt_limit = config.seq_len - 1
-    prompt_ids = full_prompt_ids[-prompt_limit:] if len(full_prompt_ids) > prompt_limit else full_prompt_ids
+    full_prompt_ids = _encode_prompt_within_context(prompt, tokenizer, config)
+    prompt_ids = full_prompt_ids
     tokens = torch.tensor([[BOS_ID, *prompt_ids]], dtype=torch.long, device=device)
     token_bytes = _token_bytes_table(tokenizer)
     decoder = getincrementaldecoder("utf-8")("replace")
@@ -482,10 +504,8 @@ def generate(
     if len(prompt.encode("utf-8")) > 200_000:
         raise ValueError("Prompt exceeds 200 KB.")
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
-    full_prompt_ids = tokenizer.encode(prompt)
-    # Keep BOS plus the most recent prompt context; report truncation rather than hiding it.
-    prompt_limit = config.seq_len - 1
-    prompt_ids = full_prompt_ids[-prompt_limit:] if len(full_prompt_ids) > prompt_limit else full_prompt_ids
+    full_prompt_ids = _encode_prompt_within_context(prompt, tokenizer, config)
+    prompt_ids = full_prompt_ids
     tokens = torch.tensor([[BOS_ID, *prompt_ids]], dtype=torch.long, device=device)
     effective_top_k = max(1, min(int(top_k), config.vocab_size))
     output = model.generate(
