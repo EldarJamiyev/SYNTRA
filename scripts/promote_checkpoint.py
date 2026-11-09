@@ -224,6 +224,14 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
     task_ids = [item.get("id") for item in tasks if isinstance(item, dict)]
     if len(task_ids) != task_count or len(set(task_ids)) != task_count or any(not isinstance(item, str) or not item for item in task_ids):
         raise PromotionError("Benchmark task evidence is incomplete or contains duplicate task IDs.")
+    if any(item.get("baseline_validated") is not True for item in tasks if isinstance(item, dict)):
+        raise PromotionError("Every benchmark task must pass its hidden baseline validation before promotion.")
+    measured_completed = sum(
+        1 for item in tasks
+        if isinstance(item, dict) and item.get("task_completion") is True
+    )
+    if measured_completed != completed_count:
+        raise PromotionError("Benchmark completion count does not match per-task completion evidence.")
     suite = _read_json(ROOT / "tests" / "benchmark_engine" / "suite.v1.json", maximum_bytes=4 * 1024 * 1024)
     suite_tasks = suite.get("tasks")
     expected_task_ids = [
@@ -251,13 +259,21 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
     if snapshot.get("stage") not in {"pretraining", "sft", "baseline"}:
         raise PromotionError("Checkpoint snapshot stage is not recognized.")
 
-    common_run_root = Path(os.path.commonpath([str(report_file), str(checkpoint)]))
+    report_relative = report_file.relative_to(BENCHMARK_ROOT.resolve())
+    checkpoint_relative = checkpoint.relative_to(BENCHMARK_ROOT.resolve())
     if (
-        not _is_within(common_run_root, BENCHMARK_ROOT.resolve())
-        or common_run_root == BENCHMARK_ROOT.resolve()
-        or len(common_run_root.relative_to(BENCHMARK_ROOT.resolve()).parts) < 2
+        len(report_relative.parts) != 4
+        or report_relative.parts[2] != "evaluations"
+        or len(checkpoint_relative.parts) != 6
+        or checkpoint_relative.parts[2] != "snapshots"
+        or checkpoint_relative.parts[3] != report_relative.parts[1]
+        or checkpoint_relative.parts[1] != report_relative.parts[1]
+        or checkpoint.parents[2].name != "snapshots"
+        or checkpoint.parents[3] != report_file.parent.parent
     ):
-        raise PromotionError("Benchmark report and staged checkpoint are not from the same evaluation run.")
+        raise PromotionError("Benchmark report and staged checkpoint are not from the same structured evaluation run.")
+    if report.get("isolation", {}).get("mode") != "docker":
+        raise PromotionError("Checkpoint promotion requires a completed network-disabled Docker benchmark, not host execution.")
     return {
         "report": report_file,
         "checkpoint": checkpoint,
