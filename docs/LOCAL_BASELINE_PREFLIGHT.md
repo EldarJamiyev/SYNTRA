@@ -52,8 +52,9 @@ A tag without a repository digest is not accepted as a fully verified offline be
 
 ## Network and Docker safety
 
-This command is intentionally read-only. It invokes the local Docker client for:
+This command is intentionally read-only. It first checks the active Docker context endpoint and accepts only a local unix:// socket or Windows npipe:// named pipe. Remote tcp://, ssh://, and other remote endpoints are rejected so the readiness gate cannot silently inspect a remote daemon. It then invokes the local Docker client for:
 
+- docker context inspect --format {{.Endpoints.docker.Host}}
 - docker info
 - docker image inspect <required-tag>
 
