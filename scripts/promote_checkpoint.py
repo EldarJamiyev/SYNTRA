@@ -258,6 +258,14 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         raise PromotionError("Checkpoint snapshot manifest does not authenticate this staging artifact.")
     if snapshot.get("stage") not in {"pretraining", "sft", "baseline"}:
         raise PromotionError("Checkpoint snapshot stage is not recognized.")
+    snapshot_step = snapshot.get("global_step")
+    if type(snapshot_step) is not int or snapshot_step < 0:
+        raise PromotionError("Checkpoint snapshot does not contain a valid global step.")
+    if model.get("trained_steps") != snapshot_step:
+        raise PromotionError("Benchmark report trained_steps does not match the checkpoint snapshot global step.")
+    expected_snapshot_directory = f"{snapshot['stage']}-step-{snapshot_step:09d}-{expected_hash[:12]}"
+    if checkpoint.parent.name != expected_snapshot_directory:
+        raise PromotionError("Checkpoint snapshot directory name does not match its stage, step, and digest.")
 
     report_relative = report_file.relative_to(BENCHMARK_ROOT.resolve())
     checkpoint_relative = checkpoint.relative_to(BENCHMARK_ROOT.resolve())
@@ -322,7 +330,7 @@ def _archive_active(active: Path) -> str | None:
         for kind, source in artifacts:
             digest = _sha256(source)
             target = archive_dir / source.name
-            shutil.copy2(source, target)
+            _atomic_copy_verified(source, target, digest)
             if _sha256(target) != digest:
                 raise PromotionError("Previous active checkpoint archive failed SHA-256 verification.")
             entries[kind] = {"file": target.name, "sha256": digest}
