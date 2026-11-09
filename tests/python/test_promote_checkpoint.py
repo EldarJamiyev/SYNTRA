@@ -56,7 +56,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _candidate(self, run_root: Path, checkpoint: Path, digest: str) -> Path:
-        snapshot_dir = run_root / "snapshots" / "test-run" / f"sft-step-000000020-{digest[:12]}"
+        snapshot_dir = run_root / "snapshots" / run_root.name / f"sft-step-000000020-{digest[:12]}"
         snapshot_dir.mkdir(parents=True)
         staged = snapshot_dir / "syntra-brain.pt"
         shutil.copy2(checkpoint, staged)
@@ -92,6 +92,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
                 "checkpoint_sha256": digest,
                 "trained_steps": 20,
             },
+            "isolation": {"mode": "docker", "environments": {}},
             "summary": {
                 "task_count": len(task_ids),
                 "baseline_valid_task_count": len(task_ids),
