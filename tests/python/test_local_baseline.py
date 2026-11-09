@@ -303,6 +303,10 @@ class LocalBaselinePreflightTests(unittest.TestCase):
 
         def fake_runner(command, **kwargs):
             commands.append(list(command))
+            if command[1:3] == ["context", "inspect"]:
+                return subprocess.CompletedProcess(
+                    command, 0, stdout="unix:///var/run/docker.sock\n", stderr=""
+                )
             if command[1:3] == ["info", "--format"]:
                 return subprocess.CompletedProcess(command, 0, stdout="27.3.1\n", stderr="")
             if command[1:3] == ["image", "inspect"]:
@@ -326,9 +330,24 @@ class LocalBaselinePreflightTests(unittest.TestCase):
             {item["image"] for item in result["images"]},
             set(run_local_baseline.REQUIRED_DOCKER_IMAGES),
         )
-        self.assertEqual(len(commands), 1 + len(run_local_baseline.REQUIRED_DOCKER_IMAGES))
+        self.assertEqual(len(commands), 2 + len(run_local_baseline.REQUIRED_DOCKER_IMAGES))
         self.assertTrue(all("pull" not in command and "build" not in command and "run" not in command for command in commands))
-        self.assertTrue(all(command[1:3] in (["info", "--format"], ["image", "inspect"]) for command in commands))
+        self.assertTrue(all(command[1:3] in (
+            ["context", "inspect"], ["info", "--format"], ["image", "inspect"]
+        ) for command in commands))
+
+    def test_docker_preflight_rejects_remote_tcp_or_ssh_contexts(self):
+        def fake_runner(command, **kwargs):
+            return subprocess.CompletedProcess(
+                command, 0, stdout="tcp://10.0.0.2:2376\n", stderr=""
+            )
+
+        with patch.object(run_local_baseline.shutil, "which", return_value="/usr/bin/docker"):
+            result = run_local_baseline.inspect_local_docker_images(fake_runner)
+        self.assertFalse(result["engine_ready"])
+        self.assertFalse(result["images_ready"])
+        self.assertEqual(result["docker_endpoint"], "tcp://10.0.0.2:2376")
+        self.assertIn("remote TCP/SSH endpoints", result["error"])
 
     def test_preflight_reports_no_go_when_a_required_image_has_no_repository_digest(self):
         with patch.object(run_local_baseline, "_load_profile", return_value={
