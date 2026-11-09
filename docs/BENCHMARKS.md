@@ -178,6 +178,48 @@ The orchestration code does not itself install packages, download checkpoints, o
 
 A checked-in profile and passing tests are not model-performance measurements. Establish the first real checkpoint baseline on the target machine before evaluating whether any subsequent training change improves coding capability.
 
+## Phase 5 local hardware telemetry and checkpoint promotion
+
+The local orchestration runner captures training-side measurements at the same saved checkpoint boundaries used for raw native-model evaluation. The evaluation result JSON, Markdown trend report, and CSV table retain:
+
+- Supervised target tokens per second (measured over the current training invocation).
+- Last and mean optimizer-step latency in milliseconds.
+- Process peak resident set size in bytes.
+- Peak device memory in bytes where the backend exposes it, plus the metric source: CUDA allocator peak, sampled MPS driver/allocator high-water, or CPU-not-applicable.
+- Gradient accumulation factor and the trainer's estimated pre-allocation working-set size.
+
+CPU RSS uses the operating system's process high-water metric. CUDA memory uses PyTorch's peak allocated allocator counter, reset before the training loop. MPS memory is a sampled high-water because the public PyTorch API does not expose an equivalent resettable peak allocator counter. A CPU memory-device value or unavailable platform reading stays blank/unavailable; it is not written as zero. The throughput basis is supervised target tokens, not raw corpus bytes.
+
+### Hardware profiles
+
+`configs/training/phase4_smoke.json` performs 50 source-pretraining optimizer updates and 20 response/EOS-masked SFT updates, then sends each staged snapshot through the existing complete offline Docker benchmark. Run it with:
+
+```powershell
+npm run brain:smoke
+```
+
+The profile is intentionally small and CPU-selected for predictable portability. It remains an integration smoke test, not evidence of model quality or a timing guarantee; Docker image availability and benchmark task execution still determine total duration.
+
+`configs/training/local_cpu_fast.json` targets low-memory CPU machines with a 4-layer/width-64 model, 256-token context, physical batch 1, and gradient accumulation. `configs/training/local_gpu_scale.json` uses 8 layers, 8 heads, width 256 and 1024-token context for suitable dedicated GPU or high-memory unified-memory systems. Both keep micro-batches distinct from optimizer steps. Accumulation normalizes gradients by actual supervised-token counts and clips once per optimizer update. Select the backend explicitly to avoid silently using CPU on a machine where GPU acceleration was intended.
+
+```powershell
+npm run brain:milestone4 -- --config configs/training/local_cpu_fast.json --device cpu
+npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device cuda
+npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --device mps
+```
+
+### Verified checkpoint promotion and rollback
+
+A benchmark report is selected explicitly. The promotion tool authenticates the report's exact staged checkpoint by SHA-256, checks the adjacent read-only snapshot manifest, requires the entire current 13-task suite with valid hidden baselines, and loads the candidate through SYNTRA's actual runtime before it can replace the active checkpoint.
+
+```powershell
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json"
+npm run brain:promote -- --rollback "<archive-id-returned-by-promotion>"
+```
+
+The active checkpoint target is resolved using the same `SYNTRA_CHECKPOINT` override and default/fallback resolver as the application. The previous active checkpoint, JSON metadata, and inference companion are archived under `data/checkpoints/archive/<timestamp-id>/` before replacement. Rollback validates those hashes, restores the previous full checkpoint, and regenerates the derived inference companion so its embedded source modification time matches the restored checkpoint. Promotion is explicit and never triggered automatically by training. All file operations are local; Docker benchmark execution remains `--pull=never` and `--network none`.
+
 ## Comparability and limitations
 
 Do not combine raw-model results with full-agent results. The direct raw-model suite now has 13 small held-out fixtures across five languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. JavaScript event normalization, Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior are each represented by one narrow task; that is not broad language competence.
