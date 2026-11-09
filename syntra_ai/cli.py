@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import Any
 
 from .config import ModelConfig
 from .data import load_corpus
