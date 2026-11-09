@@ -16,7 +16,7 @@ Examples:
     npm run ai:curriculum -- --mode repository --languages python javascript typescript go rust --max-examples 240
     npm run ai:curriculum -- --mode multifile --languages javascript typescript go rust --max-examples 120
 
-The default repository dataset is data/curricula/workspace-instructions.jsonl; the paired reasoning dataset is data/curricula/workspace-instructions.jsonl. Use --root to select one approved local source root, --output for the repository dataset, and --multifile-output for paired examples. External roots must be included in SYNTRA_ALLOWED_CORPUS_ROOTS. The existing corpus reader continues to apply canonical-path, symlink, size, file-count and sensitive-path controls.
+The default repository dataset is data/curricula/workspace-instructions.jsonl; the paired reasoning dataset is data/curricula/workspace-reasoning.jsonl. Use --root to select one approved local source root, --output for the repository dataset, and --multifile-output for paired examples. External roots must be included in SYNTRA_ALLOWED_CORPUS_ROOTS. The --exclude option accepts additional absolute file or directory paths and applies each exclusion to both generators. The existing corpus reader continues to apply canonical-path, symlink, size, file-count and sensitive-path controls.
 
 The curriculum scanner adds tests/benchmark_engine/hidden to the exclusion list for every approved root. Hidden benchmark targets are evaluation-only material and are not valid training labels.
 
