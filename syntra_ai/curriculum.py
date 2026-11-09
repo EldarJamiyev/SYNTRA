@@ -23,7 +23,10 @@ from .polyglot import (
     language_for_path,
     safe_repair_examples,
 )
-from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_curriculum_output_path
+from .safe_paths import (
+    PROJECT_ROOT, _approved_roots, resolve_corpus_root,
+    resolve_curriculum_output_path,
+)
 
 MAX_INSTRUCTION_EXAMPLES = 10_000
 MAX_SYMBOL_CHARS = 12_000
@@ -705,7 +708,40 @@ def _fsync_output_directory(path: Path) -> None:
 
 def _write_jsonl_atomically(target: Path, records: list[dict[str, str]]) -> None:
     """Write a size-bounded JSONL dataset atomically and durably."""
+    # Revalidate the final destination at the actual write boundary. The
+    # path resolver enforces the public policy; this local canonical-prefix
+    # guard ensures that even direct library calls cannot redirect writes.
+    parent_real = os.path.realpath(os.fspath(target.parent), strict=True)
+    parent_norm = os.path.normcase(os.path.normpath(parent_real))
+    approved_output_parent = False
+    for trusted_root in _approved_roots():
+        root_norm = os.path.normcase(os.path.normpath(
+            os.path.realpath(trusted_root, strict=True)
+        ))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if parent_norm == root_norm or parent_norm.startswith(root_prefix):
+            approved_output_parent = True
+            break
+    if not approved_output_parent:
+        raise ValueError("Curriculum output parent is outside approved local roots.")
+    target = Path(parent_real) / target.name
+    if target.is_symlink():
+        raise ValueError("Curriculum output must not be a symbolic link.")
     target.parent.mkdir(parents=True, exist_ok=True)
+    parent_after_create = os.path.realpath(os.fspath(target.parent), strict=True)
+    parent_after_norm = os.path.normcase(os.path.normpath(parent_after_create))
+    parent_still_approved = False
+    for trusted_root in _approved_roots():
+        root_norm = os.path.normcase(os.path.normpath(
+            os.path.realpath(trusted_root, strict=True)
+        ))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if parent_after_norm == root_norm or parent_after_norm.startswith(root_prefix):
+            parent_still_approved = True
+            break
+    if not parent_still_approved:
+        raise ValueError("Curriculum output parent escaped approved local roots during creation.")
+    target = Path(parent_after_create) / target.name
     if target.is_symlink():
         raise ValueError("Curriculum output must not be a symbolic link.")
     temporary_path: str | None = None
@@ -900,18 +936,22 @@ def synthesize_repository_curriculum(
         key=lambda item: os.path.normcase(item[0]),
     )
     for source_path, source_text in source_documents:
-        resolved = Path(source_path).resolve()
+        # Canonicalize each discovered path and check it against the approved
+        # root immediately before deriving its repository-relative identity.
+        source_real = os.path.realpath(os.fspath(source_path), strict=True)
+        source_norm = os.path.normcase(os.path.normpath(source_real))
         relative_path = None
         source_root: Path | None = None
         source_root_index: int | None = None
         for root_index, approved_root in enumerate(corpus_roots):
-            try:
-                relative_path = resolved.relative_to(approved_root).as_posix()
-                source_root = approved_root
+            root_real = os.path.realpath(os.fspath(approved_root), strict=True)
+            root_norm = os.path.normcase(os.path.normpath(root_real))
+            root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+            if source_norm == root_norm or source_norm.startswith(root_prefix):
+                relative_path = Path(os.path.relpath(source_real, root_real)).as_posix()
+                source_root = Path(root_real)
                 source_root_index = root_index
                 break
-            except ValueError:
-                continue
         if relative_path is None or source_root is None or source_root_index is None:
             raise ValueError("A source file escaped all approved curriculum roots.")
         is_active_workspace_source = (
