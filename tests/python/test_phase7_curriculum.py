@@ -301,6 +301,63 @@ class PolyglotCurriculumTests(unittest.TestCase):
                 )
                 self.assertGreater(encoded[0]["completion_tokens"], 0)
 
+    def test_python_multifile_curriculum_follows_relative_imports(self):
+        from syntra_ai.reasoning_curriculum import synthesize_multifile_reasoning_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-phase7-python-pair-") as temp:
+            root = Path(temp)
+            package = root / "src" / "pkg"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "normalize.py").write_text(
+                '"""Normalize values before use."""\n'
+                "def normalize_value(value):\n"
+                "    cleaned = value.strip()\n"
+                "    if cleaned:\n"
+                "        return cleaned\n"
+                "    return value\n"
+                "\n"
+                "def is_missing(value):\n"
+                "    return value == None\n",
+                encoding="utf-8",
+            )
+            (package / "consumer.py").write_text(
+                '"""Validate a normalized value."""\n'
+                "from .normalize import normalize_value\n"
+                "\n"
+                "def validate_value(value):\n"
+                "    normalized = normalize_value(value)\n"
+                "    return normalized == None\n",
+                encoding="utf-8",
+            )
+            output = root / "reasoning.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_multifile_reasoning_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=8,
+                    languages=("python",),
+                )
+
+            self.assertEqual(result["example_count"], 1, result)
+            record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(record["kind"], "multi_file_reasoning")
+            self.assertIn("src/pkg/normalize.py", record["prompt"])
+            self.assertIn("src/pkg/consumer.py", record["prompt"])
+            completion = record["completion"]
+            self.assertIn("<thought>", completion)
+            self.assertIn("</thought>", completion)
+            payload = json.loads(completion.split("</thought>\n", 1)[1])
+            self.assertEqual(payload["format"], "SYNTRA_AGENT_PATCH_V1")
+            self.assertEqual(
+                {edit["path"] for edit in payload["edits"]},
+                {"src/pkg/normalize.py", "src/pkg/consumer.py"},
+            )
+            self.assertEqual(
+                [edit["replace"] for edit in payload["edits"]],
+                ["value is None", "normalized is None"],
+            )
+
     def test_multifile_generator_does_not_emit_unrelated_or_unverified_file_pairs(self):
         from syntra_ai.reasoning_curriculum import synthesize_multifile_reasoning_curriculum
 
