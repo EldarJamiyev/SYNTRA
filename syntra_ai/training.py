@@ -225,7 +225,15 @@ def _save_inference_checkpoint(checkpoint: str | Path, payload: dict) -> Path:
         for key in INFERENCE_CHECKPOINT_FIELDS
         if key in payload
     }
-    inference_payload["source_checkpoint_mtime_ns"] = target.stat().st_mtime_ns
+    source_stat = target.stat()
+    inference_payload["source_checkpoint_mtime_ns"] = source_stat.st_mtime_ns
+    inference_payload["source_checkpoint_identity"] = {
+        "device": source_stat.st_dev,
+        "inode": source_stat.st_ino,
+        "size": source_stat.st_size,
+        "mtime_ns": source_stat.st_mtime_ns,
+        "ctime_ns": source_stat.st_ctime_ns,
+    }
     _atomic_checkpoint(companion, inference_payload)
     return companion
 
