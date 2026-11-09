@@ -112,7 +112,16 @@ async function aiRequest(method, route, body, timeoutMs = undefined, options = {
     return finalPayload || { text: fullText, is_model_output: true };
   }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "SYNTRA AI request failed with HTTP " + response.status);
+  if (!response.ok) {
+    const error = new Error(payload.error || "SYNTRA AI request failed with HTTP " + response.status);
+    error.status = response.status;
+    error.code = typeof payload.code === "string" ? payload.code : undefined;
+    error.promptTokens = Number.isInteger(payload.prompt_tokens) ? payload.prompt_tokens : undefined;
+    error.contextWindowTokens = Number.isInteger(payload.context_window_tokens) ? payload.context_window_tokens : undefined;
+    error.usableContextTokens = Number.isInteger(payload.usable_context_tokens) ? payload.usable_context_tokens : undefined;
+    error.tokensOverContext = Number.isInteger(payload.tokens_over_context) ? payload.tokens_over_context : undefined;
+    throw error;
+  }
   return payload;
 }
 
