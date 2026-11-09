@@ -192,7 +192,7 @@ CPU RSS uses the operating system's process high-water metric. CUDA memory uses 
 
 ### Hardware profiles
 
-`configs/training/phase4_smoke.json` performs 50 source-pretraining optimizer updates and 20 response/EOS-masked SFT updates, then sends each staged snapshot through the existing complete offline Docker benchmark. Run it with:
+`configs/training/phase4_smoke.json` performs 50 source-pretraining optimizer updates and 20 response/EOS-masked SFT updates, then sends each staged snapshot through five representative offline Docker tasks covering all supported languages. Run it with:
 
 ```powershell
 npm run brain:smoke
