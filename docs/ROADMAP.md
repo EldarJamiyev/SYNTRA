@@ -142,6 +142,10 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Enforce note-count, file-size, title, body, and tag limits; reject known credential patterns and refuse symlink or invalid stores.
 - [x] Add workspace-specific relative glob exclusions for discovery, full-text search, symbol indexing, direct reads, and proposal access; store settings locally with optimistic-concurrency protection and reject invalid or symlinked configuration.
 - [x] Add an on-demand, audited workspace secret scanner for common private-key and credential patterns. It respects path exclusions and scan limits, and returns only finding metadata; matched values and source lines are never returned or written to audit logs.
+- [x] Add a local model-training smoke profile that runs bounded source pretraining and masked SFT, then executes representative Python, JavaScript, TypeScript, Go, and Rust tasks through the existing offline Docker benchmark path.
+- [x] Capture measured supervised tokens/second, optimizer-step latency, process peak RSS, CUDA allocator peak or sampled MPS high-water, estimated working-set size, and gradient-accumulation factor in checkpoint-matched Markdown/CSV evaluation trends.
+- [x] Add low-memory CPU and 1024-token GPU architecture profiles, with true optimizer-step gradient accumulation that keeps only one micro-batch of activations on the selected device at a time.
+- [x] Add explicit checkpoint promotion and rollback. Promotion verifies complete current-suite benchmark evidence, hidden baseline validity, immutable snapshot manifest, SHA-256 identity, and runtime loadability; it archives the previous active checkpoint and reconstructs its inference companion on rollback.
 - [ ] Expand secret-pattern coverage and add optional allowlists with safe, explicit review. Pattern scanning remains best-effort and is not a substitute for a secret manager.
 
 **Acceptance:** Context selection is explainable, reproducible, workspace-scoped, and covered by tests for stale-index invalidation, explicit memory approval, audit redaction, workspace isolation, and best-effort secret detection.
