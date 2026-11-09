@@ -701,26 +701,43 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             dataset = root / "dataset.txt"
             self._dataset(dataset)
             checkpoint = root / "checkpoints" / "accumulated.pt"
-            result = train(
-                [dataset],
-                checkpoint_path=checkpoint,
-                config=self._config(),
-                epochs=1,
-                max_steps=2,
-                batch_size=1,
-                gradient_accumulation_steps=2,
-                tokenizer_bytes=1024,
-                evaluation_batches=1,
-                save_every_steps=1,
-                device_name="cpu",
-                seed=321,
-            )
+            from brain.train import _scheduled_learning_rate
+
+            original_step = torch.optim.AdamW.step
+            observed_learning_rates = []
+
+            def capture_optimizer_lr(optimizer, *args, **kwargs):
+                observed_learning_rates.append(optimizer.param_groups[0]["lr"])
+                return original_step(optimizer, *args, **kwargs)
+
+            with patch.object(torch.optim.AdamW, "step", new=capture_optimizer_lr):
+                result = train(
+                    [dataset],
+                    checkpoint_path=checkpoint,
+                    config=self._config(),
+                    epochs=1,
+                    max_steps=2,
+                    batch_size=1,
+                    gradient_accumulation_steps=2,
+                    tokenizer_bytes=1024,
+                    evaluation_batches=1,
+                    save_every_steps=1,
+                    device_name="cpu",
+                    seed=321,
+                )
             saved = load_checkpoint(checkpoint)
             self.assertEqual(result["status"], "completed")
             self.assertEqual(result["step"], 2, "steps count optimizer updates, not micro-batches")
             self.assertEqual(result["gradient_accumulation_steps"], 2)
             self.assertEqual(saved["training_settings"]["gradient_accumulation_steps"], 2)
             self.assertEqual(saved["step"], 2)
+            self.assertEqual(
+                observed_learning_rates,
+                [
+                    _scheduled_learning_rate(3e-4, 1, minimum_learning_rate=1e-5, warmup_steps=100, decay_steps=5000),
+                    _scheduled_learning_rate(3e-4, 2, minimum_learning_rate=1e-5, warmup_steps=100, decay_steps=5000),
+                ],
+            )
             self.assertGreater(result["tokens_per_second"], 0)
             self.assertGreater(result["step_latency_ms"], 0)
             self.assertGreater(result["mean_step_latency_ms"], 0)
