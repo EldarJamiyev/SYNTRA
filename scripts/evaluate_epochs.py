@@ -679,8 +679,8 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
         "",
         "## Checkpoint comparison",
         "",
-        "| Stage | Step | Benchmark | Train loss | Validation loss | Completion | Verified | Regression | Tokens/s | Mean step ms | Peak RSS MiB | Peak device MiB |",
-        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Stage | Step | Benchmark | Train loss | Validation loss | Completion | Verified | Regression | Tokens/s | Mean step ms | Peak RSS MiB | Peak device MiB | Device metric |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for record in ordered:
         tasks = "unavailable"
@@ -690,7 +690,7 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
         if _number(record.get("task_completion_rate")) is not None:
             completion = f"{100 * float(record['task_completion_rate']):.1f}%"
         lines.append(
-            "| {stage} | {step} | {status} | {train} | {val} | {completion} | {tasks} | {regression} | {tps} | {latency} | {rss} | {device_memory} |".format(
+            "| {stage} | {step} | {status} | {train} | {val} | {completion} | {tasks} | {regression} | {tps} | {latency} | {rss} | {device_memory} | {device_metric} |".format(
                 stage=record.get("stage", "unknown"),
                 step=record.get("step", "—"),
                 status=record.get("status", "unknown"),
@@ -709,6 +709,7 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
                     None if _number(record.get("peak_device_memory_bytes")) is None else float(record["peak_device_memory_bytes"]) / (1024 ** 2),
                     5,
                 ),
+                device_metric=record.get("device_memory_metric", "unavailable"),
             )
         )
     lines.extend([
