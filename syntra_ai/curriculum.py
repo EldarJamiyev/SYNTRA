@@ -7,6 +7,7 @@ for a narrow, mechanically checked Python rule.
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import heapq
 import json
@@ -270,7 +271,9 @@ def _python_symbol_fingerprint(
         value = body[0].value
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             body = body[1:]
-    normalized = ast.Module(body=body, type_ignores=[])
+    # The normalizer rewrites identifiers in place; never mutate the parsed
+    # module because nested declaration extraction still consumes the original AST.
+    normalized = ast.Module(body=copy.deepcopy(body), type_ignores=[])
     root_arguments = (
         [argument.arg for argument in (
             list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
