@@ -150,7 +150,10 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             rollback = promoter._restore_archive(active, result["archive_id"])
             self.assertEqual(promoter._sha256(active), old_digest)
             self.assertTrue(rollback["archive_created_for_replaced_checkpoint"])
-            self.assertFalse(active.with_name("syntra.inference.pt").exists())
+            self.assertTrue(active.with_name("syntra.inference.pt").is_file())
+            from syntra_ai import runtime
+            _path, restored_payload, _config, _tokenizer = runtime._read_checkpoint(active)
+            self.assertEqual(restored_payload["step"], 3)
 
             shutil.rmtree(active_root, ignore_errors=True)
 
