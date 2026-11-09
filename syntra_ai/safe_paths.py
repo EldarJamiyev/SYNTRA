@@ -135,10 +135,27 @@ def resolve_curriculum_output_path(
     workspace_root: str | Path,
 ) -> Path:
     """Resolve a JSONL output beneath the project or selected workspace only."""
+    try:
+        workspace_real = os.path.realpath(os.fspath(workspace_root), strict=True)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        raise ValueError("Curriculum workspace root does not exist or cannot be resolved.") from None
+    workspace_norm = os.path.normcase(os.path.normpath(workspace_real))
+    approved_workspace = False
+    for trusted_root in _approved_roots():
+        root_norm = os.path.normcase(os.path.normpath(
+            os.path.realpath(trusted_root, strict=True)
+        ))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if workspace_norm == root_norm or workspace_norm.startswith(root_prefix):
+            approved_workspace = True
+            break
+    if not approved_workspace or _is_filesystem_root(workspace_real):
+        raise ValueError("Curriculum workspace root must be inside an approved non-root directory.")
+
     if value is None:
         default_parent = os.path.join(os.fspath(PROJECT_ROOT), "data", "curricula")
         filename = "workspace-instructions.jsonl"
-        allowed_roots = (os.fspath(PROJECT_ROOT), os.fspath(workspace_root))
+        allowed_roots = (os.fspath(PROJECT_ROOT), workspace_real)
         parent_input = default_parent
     else:
         raw = os.fspath(value)
@@ -147,7 +164,7 @@ def resolve_curriculum_output_path(
         requested = raw if os.path.isabs(raw) else os.path.join(os.fspath(PROJECT_ROOT), raw)
         filename = os.path.basename(requested)
         parent_input = os.path.dirname(requested) or os.curdir
-        allowed_roots = (os.fspath(PROJECT_ROOT), os.fspath(workspace_root))
+        allowed_roots = (os.fspath(PROJECT_ROOT), workspace_real)
 
     if not _OUTPUT_NAME.fullmatch(filename):
         raise ValueError("Curriculum output filename must be a simple .jsonl filename.")
