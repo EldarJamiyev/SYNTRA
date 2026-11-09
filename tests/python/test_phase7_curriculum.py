@@ -420,9 +420,9 @@ class PolyglotCurriculumTests(unittest.TestCase):
             (source_dir / "store_test.go").write_text(
                 "package store\n"
                 "import \"testing\"\n"
-                "func loadRecordFixture(key string, err error) (*Record, error) {\n"
+                "func loadRecordFixture(key string, err error, record *Record) (*Record, error) {\n"
                 "  if err != nil { return nil }\n"
-                "  return nil, nil\n"
+                "  return record, err\n"
                 "}\n"
                 "func TestLoadRecord(t *testing.T) {\n"
                 "  _, _ = LoadRecord(\"fixture\")\n"
