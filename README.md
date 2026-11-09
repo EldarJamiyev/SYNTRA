@@ -198,7 +198,7 @@ Repairs are narrow and mechanically checked. The exact search anchor must be uni
 
 ### Multi-file reasoning curriculum
 
-The dedicated multi-file generator selects two files only when their relationship is present in local source evidence, such as a relative import, a same-package Go test/implementation relationship, or a Rust module/use relationship. It also checks a referenced declaration and requires a separate supported, unique repair anchor in each file.
+The dedicated multi-file generator selects two files only when their relationship is present in local source evidence: Python AST imports, JavaScript/TypeScript local relative imports, same-package Go test/implementation relationships, or Rust module/use relationships. It also checks a referenced declaration and requires a separate supported, unique repair anchor in each file.
 
 Each generated prompt contains the two labeled source files. Its completion contains:
 
@@ -206,7 +206,7 @@ Each generated prompt contains the two labeled source files. Its completion cont
 2. A two-edit SYNTRA_AGENT_PATCH_V1 JSON payload using repository-relative paths.
 3. The terminal EOS token added by the existing SFT tokenizer path.
 
-The thought trace is a source-derived training target, not a hidden transcript from a model. If the generator cannot prove the file relationship and both repairs, it emits no record and does not fabricate a patch.
+The thought trace is a source-derived training target, not a hidden transcript from a model. Paired patch examples are emitted only from the active output workspace (the first selected root); additional approved roots remain read-only and are not encoded as edit targets for a different workspace. If the generator cannot prove the file relationship and both repairs, it emits no record and does not fabricate a patch.
 
 ### Supervised loss and prompt masking
 
