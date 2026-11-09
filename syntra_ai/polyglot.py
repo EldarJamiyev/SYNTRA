@@ -251,7 +251,11 @@ def _polyglot_fingerprint(language: str, name: str, signature: str, body: str) -
 
 
 def _is_trivial_block(body: str) -> bool:
-    code = re.sub(r"\s+", "", _strip_comments(body)).strip("{};")
+    code_source = _strip_comments(body)
+    block = re.search(r"\{(.*)\}\s*$", code_source, re.DOTALL)
+    if block:
+        code_source = block.group(1)
+    code = re.sub(r"\s+", "", code_source).strip("{};")
     if not code:
         return True
     if re.fullmatch(
