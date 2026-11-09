@@ -243,6 +243,7 @@ def _validate_profile_values(profile: dict[str, Any]) -> None:
     pre = profile["pretraining"]
     _validate_positive_int(pre, "max_steps", 1, 1_000_000)
     _validate_positive_int(pre, "batch_size", 1, 256)
+    _validate_positive_int(pre, "gradient_accumulation_steps", 1, 128)
     _validate_positive_int(pre, "block_size", 16, 16_384)
     _validate_positive_int(pre, "layers", 1, 24)
     _validate_positive_int(pre, "heads", 1, 16)
@@ -276,6 +277,7 @@ def _validate_profile_values(profile: dict[str, Any]) -> None:
     sft = profile["sft"]
     _validate_positive_int(sft, "steps", 1, 1_000_000)
     _validate_positive_int(sft, "batch_size", 1, 128)
+    _validate_positive_int(sft, "gradient_accumulation_steps", 1, 128)
     sft_lr = _number(sft.get("learning_rate"))
     if sft_lr is None or not 1e-6 <= sft_lr <= 1e-2:
         raise OrchestrationError("sft.learning_rate is outside the supported range.")
@@ -299,6 +301,7 @@ class EvaluationJob:
     log_path: Path
     process: subprocess.Popen
     log_handle: Any
+    telemetry: dict[str, Any]
 
 
 class CheckpointSnapshots:
@@ -416,6 +419,7 @@ class BackgroundEvaluator:
             "baseline_valid_task_count": None,
             "suite_version": None,
             "regression_prevention_rate": None,
+            **job.telemetry,
             "error": None,
         }
         if return_code != 0:
@@ -463,7 +467,10 @@ class BackgroundEvaluator:
         except OSError:
             return ""
 
-    def launch(self, stage: str, step: int, checkpoint: Path, checkpoint_hash: str) -> None:
+    def launch(
+        self, stage: str, step: int, checkpoint: Path, checkpoint_hash: str,
+        telemetry: dict[str, Any] | None = None,
+    ) -> None:
         while len(self.active) >= self.max_parallel:
             self._wait_one()
         name = f"{stage}-step-{step:09d}-{checkpoint_hash[:12]}"
@@ -506,6 +513,7 @@ class BackgroundEvaluator:
             stage=stage, step=step, checkpoint_sha256=checkpoint_hash,
             checkpoint_path=checkpoint, report_path=report_path, log_path=log_path,
             process=process, log_handle=handle,
+            telemetry=dict(telemetry or {}),
         )
         self.jobs.append(job)
         self.active.append(job)
@@ -604,8 +612,15 @@ def _training_callback(
             f"validation_loss={_format_metric(progress.get('validation_loss'))}",
             flush=True,
         )
+        telemetry_keys = (
+            "tokens_per_second", "supervised_tokens_processed", "step_latency_ms",
+            "mean_step_latency_ms", "peak_rss_bytes", "peak_device_memory_bytes",
+            "device_memory_metric", "estimated_training_memory_bytes", "device",
+            "gradient_accumulation_steps",
+        )
+        telemetry = {key: progress.get(key) for key in telemetry_keys if progress.get(key) is not None}
         if evaluator is not None:
-            evaluator.launch(stage, step, snapshot_path, checkpoint_hash)
+            evaluator.launch(stage, step, snapshot_path, checkpoint_hash, telemetry=telemetry)
 
     return callback
 
@@ -664,8 +679,8 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
         "",
         "## Checkpoint comparison",
         "",
-        "| Stage | Global step | Benchmark | Train loss | Validation loss | Target completion | Verified tasks | Regression prevention |",
-        "|---|---:|---|---:|---:|---:|---:|---:|",
+        "| Stage | Step | Benchmark | Train loss | Validation loss | Completion | Verified | Regression | Tokens/s | Mean step ms | Peak RSS MiB | Peak device MiB |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for record in ordered:
         tasks = "unavailable"
@@ -675,7 +690,7 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
         if _number(record.get("task_completion_rate")) is not None:
             completion = f"{100 * float(record['task_completion_rate']):.1f}%"
         lines.append(
-            "| {stage} | {step} | {status} | {train} | {val} | {completion} | {tasks} | {regression} |".format(
+            "| {stage} | {step} | {status} | {train} | {val} | {completion} | {tasks} | {regression} | {tps} | {latency} | {rss} | {device_memory} |".format(
                 stage=record.get("stage", "unknown"),
                 step=record.get("step", "—"),
                 status=record.get("status", "unknown"),
@@ -684,6 +699,16 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
                 completion=completion,
                 tasks=tasks,
                 regression=_format_metric(record.get("regression_prevention_rate")),
+                tps=_format_metric(record.get("tokens_per_second"), 5),
+                latency=_format_metric(record.get("mean_step_latency_ms"), 5),
+                rss=_format_metric(
+                    None if _number(record.get("peak_rss_bytes")) is None else float(record["peak_rss_bytes"]) / (1024 ** 2),
+                    5,
+                ),
+                device_memory=_format_metric(
+                    None if _number(record.get("peak_device_memory_bytes")) is None else float(record["peak_device_memory_bytes"]) / (1024 ** 2),
+                    5,
+                ),
             )
         )
     lines.extend([
@@ -723,7 +748,10 @@ def write_summary(run_root: Path, run_id: str, records: list[dict[str, Any]], tr
     columns = [
         "stage", "step", "status", "checkpoint_sha256", "train_loss", "validation_loss",
         "task_completion_rate", "completed_task_count", "baseline_valid_task_count",
-        "regression_prevention_rate", "suite_version", "report", "log", "error",
+        "regression_prevention_rate", "tokens_per_second", "supervised_tokens_processed",
+        "step_latency_ms", "mean_step_latency_ms", "peak_rss_bytes",
+        "peak_device_memory_bytes", "device_memory_metric", "estimated_training_memory_bytes",
+        "device", "gradient_accumulation_steps", "suite_version", "report", "log", "error",
     ]
     temporary_csv = csv_path.with_name(csv_path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
@@ -916,6 +944,7 @@ def main(argv: list[str] | None = None) -> int:
                 epochs=1,
                 max_steps=max_pretrain_steps,
                 batch_size=pre["batch_size"],
+                gradient_accumulation_steps=pre["gradient_accumulation_steps"],
                 learning_rate=pre["learning_rate"],
                 minimum_learning_rate=pre["minimum_learning_rate"],
                 warmup_steps=pre["warmup_steps"],
@@ -970,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
                 dataset_path=curriculum_path,
                 steps=sft_steps,
                 batch_size=sft["batch_size"],
+                gradient_accumulation_steps=sft["gradient_accumulation_steps"],
                 learning_rate=sft["learning_rate"],
                 device_name=training_device,
                 checkpoint=checkpoint,
