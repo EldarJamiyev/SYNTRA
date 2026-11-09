@@ -1075,7 +1075,13 @@ def train(
                 )
             saved_scheduler = settings.get("scheduler")
             if saved_scheduler == LEGACY_TRAINING_SCHEDULER:
-                # Preserve the original learning-rate trajectory for old checkpoints.
+                # Preserve both the original learning-rate and one-micro-batch trajectory.
+                saved_accumulation = settings.get("gradient_accumulation_steps", 1)
+                if type(saved_accumulation) is not int or saved_accumulation != gradient_accumulation_steps:
+                    raise ValueError(
+                        "Training resume settings differ from the checkpoint: gradient_accumulation_steps. "
+                        "Use the original settings or start a new checkpoint."
+                    )
                 effective_scheduler = LEGACY_TRAINING_SCHEDULER
                 effective_minimum_learning_rate = None
             elif saved_scheduler == TRAINING_SCHEDULER:
