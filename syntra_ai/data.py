@@ -1,12 +1,13 @@
 """Safe local source corpus discovery and byte-level tokenization."""
 from dataclasses import dataclass
 from hashlib import sha256
+from pathlib import Path
 from typing import Iterable
 import os
 import stat
 
 from .tokenizer import BOS_ID, EOS_ID
-from .safe_paths import is_path_within, resolve_corpus_root
+from .safe_paths import _approved_roots, resolve_corpus_root
 
 MAX_CORPUS_FILES = 10_000
 MAX_CORPUS_FILE_BYTES = 1024 * 1024
@@ -59,14 +60,20 @@ def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, byt
     except (OSError, RuntimeError, ValueError):
         return None
 
-    # The candidate must resolve beneath the already-approved root. Comparing
-    # abspath to realpath also rejects file or parent symlinks.
-    if not is_path_within(resolved, root):
+    # Canonicalize both paths and perform the containment comparison in
+    # this function, immediately before file-system access. This rejects
+    # traversal and symlinks without depending on a custom sanitizer call.
+    root_real = os.path.realpath(root, strict=True)
+    candidate_norm = os.path.normcase(os.path.normpath(resolved))
+    root_norm = os.path.normcase(os.path.normpath(root_real))
+    root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+    if not (candidate_norm == root_norm or candidate_norm.startswith(root_prefix)):
         return None
     if os.path.normcase(absolute) != os.path.normcase(resolved):
         return None
 
-    relative_parts = os.path.relpath(resolved, root).split(os.sep)
+    # The path has passed the canonical root-prefix guard above.
+    relative_parts = os.path.relpath(resolved, root_real).split(os.sep)
     name = os.path.basename(resolved).lower()
     if any(part.lower() in SENSITIVE_DIRS for part in relative_parts[:-1]):
         return None
@@ -154,10 +161,23 @@ def load_corpus(
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
 
     for raw_root in roots:
-        # Canonicalize and approve the root before traversal. os.walk and all
-        # descendant paths are derived from this bounded, trusted directory.
+        # resolve_corpus_root applies the application policy; repeat the
+        # canonical approved-root containment check here at the traversal sink.
         root_path = resolve_corpus_root(raw_root)
-        root = os.fspath(root_path)
+        root = os.path.realpath(os.fspath(root_path), strict=True)
+        root_norm = os.path.normcase(os.path.normpath(root))
+        approved_root = False
+        for trusted_root in _approved_roots():
+            trusted_norm = os.path.normcase(os.path.normpath(
+                os.path.realpath(trusted_root, strict=True)
+            ))
+            trusted_prefix = trusted_norm if trusted_norm.endswith(os.sep) else trusted_norm + os.sep
+            if root_norm == trusted_norm or root_norm.startswith(trusted_prefix):
+                approved_root = True
+                break
+        if not approved_root:
+            raise ValueError("Refusing to scan a corpus root outside approved directories.")
+        root_path = Path(root)
         root_parts = {part.casefold() for part in root_path.parts}
         root_name = root_path.name.casefold()
         if (
@@ -173,7 +193,9 @@ def load_corpus(
             except (OSError, RuntimeError):
                 dirnames[:] = []
                 continue
-            if not is_path_within(base, root):
+            base_norm = os.path.normcase(os.path.normpath(base))
+            root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+            if not (base_norm == root_norm or base_norm.startswith(root_prefix)):
                 dirnames[:] = []
                 continue
 
@@ -186,9 +208,13 @@ def load_corpus(
                 try:
                     child_absolute = os.path.abspath(child)
                     child_real = os.path.realpath(child, strict=True)
-                    if (os.path.normcase(child_absolute) != os.path.normcase(child_real)
-                        or not is_path_within(child_real, root)
-                        or not os.path.isdir(child_real)):
+                    child_norm = os.path.normcase(os.path.normpath(child_real))
+                    root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+                    if (
+                        os.path.normcase(child_absolute) != os.path.normcase(child_real)
+                        or not (child_norm == root_norm or child_norm.startswith(root_prefix))
+                        or not os.path.isdir(child_real)
+                    ):
                         continue
                 except (OSError, RuntimeError, ValueError):
                     continue
@@ -204,8 +230,15 @@ def load_corpus(
                 except (OSError, RuntimeError):
                     skipped += 1
                     continue
-                normalized_candidate = os.path.normcase(candidate_real)
-                if any(is_path_within(normalized_candidate, excluded) for excluded in excluded_paths):
+                normalized_candidate = os.path.normcase(os.path.normpath(candidate_real))
+                excluded_candidate = False
+                for excluded in excluded_paths:
+                    excluded_norm = os.path.normcase(os.path.normpath(excluded))
+                    excluded_prefix = excluded_norm if excluded_norm.endswith(os.sep) else excluded_norm + os.sep
+                    if normalized_candidate == excluded_norm or normalized_candidate.startswith(excluded_prefix):
+                        excluded_candidate = True
+                        break
+                if excluded_candidate:
                     skipped += 1
                     continue
                 result = _read_safe_file(candidate, root, max_file_bytes)

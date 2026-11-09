@@ -2,7 +2,7 @@ name: SYNTRA dependency audit
 
 on:
   push:
-    branches: [main, "hardening/**", "feat/engineering-intelligence-upgrade"]
+    branches: [main, "hardening/**", "feat/**"]
   pull_request:
     branches: [main]
   schedule:

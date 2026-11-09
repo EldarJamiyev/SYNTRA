@@ -97,7 +97,12 @@ class LocalApiSmokeTests(unittest.TestCase):
                 generated = json.loads(response.read())
                 self.assertEqual(response.status, 200)
                 self.assertTrue(generated["is_model_output"])
-                self.assertGreaterEqual(generated["generated_tokens"], 1)
+                # The native generator may stop on EOS immediately. EOS is not
+                # included in generated_tokens, so zero decoded completion
+                # tokens is a valid real model outcome rather than a fake result.
+                self.assertIsInstance(generated["text"], str)
+                self.assertIs(type(generated["generated_tokens"]), int)
+                self.assertGreaterEqual(generated["generated_tokens"], 0)
                 self.assertLessEqual(generated["generated_tokens"], 2)
                 self.assertFalse(generated["prompt_truncated"])
 

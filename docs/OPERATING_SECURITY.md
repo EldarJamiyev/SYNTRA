@@ -20,6 +20,15 @@ The regression-test launcher sets the host opt-in only in its child test process
 
 The native Python API does not treat an arbitrary absolute path supplied in an HTTP request as trusted. Training and evaluation roots, plus fine-tuning JSONL files, must resolve inside the repository root or an explicitly approved directory in `SYNTRA_ALLOWED_CORPUS_ROOTS`. The environment variable is a platform-separated list of existing directories (`;` on Windows, `:` on Linux/macOS). Resolution occurs before containment checks; filesystem-root inputs, traversal outside an approved directory, missing paths, and non-JSONL fine-tuning files are rejected. Keep approved directories as narrow as practical rather than allowing an entire home or system directory.
 
+
+## Native corpus and curriculum filesystem boundaries
+
+Native source discovery re-canonicalizes each selected root and each discovered file at the point of use. The canonical candidate must be equal to, or a path-component descendant of, an explicitly approved root. Corpus reads additionally reject paths whose absolute spelling differs from their resolved path, use no-follow file opening where the platform supports it, require a regular file, and compare device/inode/size/mtime/ctime before and after reading. Directory traversal repeats containment checks for each visited directory and child directory; exclusions are compared as canonical path components rather than unchecked string fragments.
+
+Instruction JSONL loading repeats the approved-root containment check immediately before opening the file, then verifies the opened file's identity and metadata before parsing its bounded UTF-8 content. Curriculum output resolution requires the selected workspace itself to be approved. Output parents are checked before directory creation and checked again after creation; the atomic writer repeats the root check at the write boundary and rejects symbolic-link destinations. These repeated checks reduce path substitution risk but do not replace operating-system isolation against an attacker who can concurrently modify the trusted directory tree.
+
+Curriculum generation excludes `tests/benchmark_engine/hidden` beneath every approved root. Multi-file reasoning examples are emitted only for source relationships and unique patch anchors verified within the active output workspace (the first selected root). Additional approved roots remain read-only source material and are not used to create edits that would target a different workspace.
+
 ## Data retention
 
 Chat sessions are held in the browser's local storage and are not encrypted at rest. Sessions older than 30 days are pruned when history is loaded. Avoid putting passwords, API keys, private keys, or other credentials in chat. Workspace audit logs are bounded to a 5 MiB active file plus five rotated archives; individual records are capped.

@@ -22,7 +22,10 @@ from .config import ModelConfig
 from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
 from .runtime import _normalize_checkpoint_payload, checkpoint_path, clear_resident_cache
-from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_instruction_dataset, resolve_curriculum_output_path
+from .safe_paths import (
+    PROJECT_ROOT, _approved_roots, resolve_corpus_root,
+    resolve_instruction_dataset, resolve_curriculum_output_path,
+)
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
     _atomic_checkpoint, _atomic_json, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
@@ -53,7 +56,24 @@ def load_instruction_examples(
 ) -> list[dict]:
     # Direct library callers receive the same approved-root protection as HTTP
     # and CLI entry points; a caller cannot bypass the dataset path boundary.
-    path = os.fspath(resolve_instruction_dataset(dataset_path))
+    path = os.path.realpath(
+        os.fspath(resolve_instruction_dataset(dataset_path)), strict=True
+    )
+    # Keep a local canonical-root guard adjacent to the file-open sink. The
+    # resolver already enforces policy; this repeat check makes the constraint
+    # explicit where this function opens user-selected JSONL data.
+    path_norm = os.path.normcase(os.path.normpath(path))
+    approved_dataset = False
+    for trusted_root in _approved_roots():
+        root_norm = os.path.normcase(os.path.normpath(
+            os.path.realpath(trusted_root, strict=True)
+        ))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if path_norm.startswith(root_prefix):
+            approved_dataset = True
+            break
+    if not approved_dataset:
+        raise ValueError("The instruction dataset must remain inside an approved local root.")
     if type(seq_len) is not int or seq_len < 16 or seq_len > 16384:
         raise ValueError("Instruction context must be between 16 and 16,384 tokens.")
     if type(max_examples) is not int or max_examples < 2 or max_examples > MAX_INSTRUCTION_EXAMPLES:

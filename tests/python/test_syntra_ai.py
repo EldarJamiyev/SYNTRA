@@ -1452,16 +1452,17 @@ class TransformerTests(unittest.TestCase):
                 "split_group": "module:module.py",
             }]
 
-            with patch.object(curriculum, "MAX_CURRICULUM_RECORD_BYTES", 16):
-                with self.assertRaisesRegex(ValueError, "record limit"):
-                    curriculum._write_jsonl_atomically(output, records)
-            self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with patch.object(curriculum, "MAX_CURRICULUM_RECORD_BYTES", 16):
+                    with self.assertRaisesRegex(ValueError, "record limit"):
+                        curriculum._write_jsonl_atomically(output, records)
+                self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
 
-            with patch.object(curriculum, "MAX_CURRICULUM_OUTPUT_BYTES", 32):
-                with self.assertRaisesRegex(ValueError, "dataset limit"):
-                    curriculum._write_jsonl_atomically(output, records)
-            self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
-            self.assertEqual(list(root.glob(".syntra-curriculum-*.tmp")), [])
+                with patch.object(curriculum, "MAX_CURRICULUM_OUTPUT_BYTES", 32):
+                    with self.assertRaisesRegex(ValueError, "dataset limit"):
+                        curriculum._write_jsonl_atomically(output, records)
+                self.assertEqual(output.read_text(encoding="utf-8"), "previous complete dataset\n")
+                self.assertEqual(list(root.glob(".syntra-curriculum-*.tmp")), [])
 
     def test_curriculum_candidate_reservoir_respects_its_memory_budget(self):
         from syntra_ai import curriculum
