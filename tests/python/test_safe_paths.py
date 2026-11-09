@@ -118,6 +118,10 @@ class ApprovedCorpusPathTests(unittest.TestCase):
             self.assertTrue(nested.is_dir())
             with self.assertRaisesRegex(ValueError, "inside the active workspace"):
                 resolve_curriculum_output_path(outside / "escape.jsonl", workspace)
+            with self.assertRaisesRegex(ValueError, "workspace root must be inside an approved"):
+                resolve_curriculum_output_path(outside / "untrusted.jsonl", outside)
+            with self.assertRaisesRegex(ValueError, "workspace root must be inside an approved"):
+                resolve_curriculum_output_path(None, outside)
             with self.assertRaisesRegex(ValueError, "simple .jsonl filename"):
                 resolve_curriculum_output_path(workspace / ".." / "outside" / "bad name.jsonl", workspace)
 
