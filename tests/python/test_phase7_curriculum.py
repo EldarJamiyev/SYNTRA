@@ -430,6 +430,25 @@ class PolyglotCurriculumTests(unittest.TestCase):
                 encoding="utf-8",
             )
             output = root / "reasoning.jsonl"
+            from syntra_ai.polyglot import safe_repair_examples
+            from syntra_ai.curriculum import _module_metadata
+            from syntra_ai.reasoning_curriculum import _related_targets, _referenced_export
+
+            implementation_source = (source_dir / "store.go").read_text(encoding="utf-8")
+            consumer_source = (source_dir / "store_test.go").read_text(encoding="utf-8")
+            self.assertEqual(len(safe_repair_examples("store/store.go", implementation_source)), 1)
+            self.assertEqual(len(safe_repair_examples("store/store_test.go", consumer_source)), 1)
+            exports = _module_metadata("store/store.go", implementation_source)["exports"]
+            self.assertIn("LoadRecord", exports, exports)
+            self.assertEqual(
+                _related_targets(
+                    "store/store_test.go", consumer_source, "go",
+                    {"store/store.go", "store/store_test.go"},
+                ),
+                ["store/store.go"],
+            )
+            self.assertEqual(_referenced_export(exports, consumer_source, "go"), "LoadRecord")
+
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 result = synthesize_multifile_reasoning_curriculum(
                     root=root, output_path=output, max_examples=8, languages=("go",)
