@@ -104,11 +104,17 @@ class Phase8SftPipelineTests(unittest.TestCase):
                 "def use(item): return item == None\n"
             )
 
+            exclusions = [root / "previous-runs", root / "generated-curricula"]
             def fake_subprocess(command, **kwargs):
                 args = list(command)
                 self.assertIn("run", args)
                 self.assertIn("ai:curriculum", args)
                 self.assertEqual(args[args.index("--mode") + 1], "all")
+                exclude_start = args.index("--exclude") + 1
+                self.assertEqual(
+                    args[exclude_start:exclude_start + len(exclusions)],
+                    [str(path) for path in exclusions],
+                )
                 language_start = args.index("--languages") + 1
                 self.assertEqual(args[language_start:language_start + 5], languages)
                 self.assertEqual(args[args.index("--max-examples") + 1], "20")
@@ -132,7 +138,7 @@ class Phase8SftPipelineTests(unittest.TestCase):
             ) as command:
                 generated = evaluate_epochs._run_phase7_curriculum(
                     root, repository_output, reasoning_output,
-                    max_examples=20, languages=languages,
+                    max_examples=20, languages=languages, exclude_paths=exclusions,
                 )
             self.assertEqual(generated["mode"], "all")
             self.assertEqual(generated["languages"], languages)
