@@ -160,7 +160,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             active = active_root / "syntra.pt"
             old_digest = self._write_checkpoint(active, 3)
             old_metadata_digest, old_companion_digest = self._write_active_metadata_and_companion(active)
-            result = promoter.promote(report, active_checkpoint=active)
+            result = promoter.promote(report, active_checkpoint=active, confirm_sha256=digest)
 
             self.assertTrue(result["promoted"])
             self.assertEqual(result["checkpoint_sha256"], digest)
@@ -187,6 +187,23 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             _path, restored_payload, _config, _tokenizer = runtime._read_checkpoint(active)
             self.assertEqual(restored_payload["step"], 3)
 
+            shutil.rmtree(active_root, ignore_errors=True)
+
+    def test_promotion_requires_exact_digest_acknowledgement(self):
+        with tempfile.TemporaryDirectory(prefix=".phase5-promotion-ack-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 21)
+            staged = self._candidate(run_root, source, digest)
+            report = self._report(run_root, staged, digest)
+            active_root = CHECKPOINT_ROOT / (".phase5-ack-" + uuid.uuid4().hex)
+            active = active_root / "syntra.pt"
+            self._write_checkpoint(active, 22)
+            with self.assertRaisesRegex(promoter.PromotionError, "requires --confirm-sha256"):
+                promoter.promote(report, active_checkpoint=active)
+            with self.assertRaisesRegex(promoter.PromotionError, "requires --confirm-sha256"):
+                promoter.promote(report, active_checkpoint=active, confirm_sha256="0" * 64)
+            self.assertNotEqual(promoter._sha256(active), digest)
             shutil.rmtree(active_root, ignore_errors=True)
 
     def test_dry_run_validates_loadability_without_changing_active_checkpoint(self):
