@@ -6,7 +6,15 @@
   "curriculum": {
     "dataset": "data/curricula/gpu-scale/workspace-instructions.jsonl",
     "max_examples": 480,
-    "max_tokens": 3000000
+    "max_tokens": 3000000,
+    "mode": "all",
+    "languages": [
+      "python",
+      "javascript",
+      "typescript",
+      "go",
+      "rust"
+    ]
   },
   "pretraining": {
     "max_steps": 10000,
