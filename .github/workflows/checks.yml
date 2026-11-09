@@ -5,7 +5,7 @@ permissions:
 
 on:
   push:
-    branches: [main, "hardening/**", "feat/engineering-intelligence-upgrade"]
+    branches: [main, "hardening/**", "feat/engineering-intelligence-upgrade", "feat/phase6-context-recovery-corpus-curation"]
   pull_request:
     branches: [main]
 
