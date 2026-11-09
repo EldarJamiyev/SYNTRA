@@ -206,7 +206,7 @@ def inference_checkpoint_path(checkpoint: str | Path) -> Path:
 
 
 def select_inference_checkpoint(checkpoint: str | Path) -> Path:
-    """Use the lightweight companion only if it was written after the full checkpoint."""
+    """Select a recent companion candidate; runtime validates its source-file identity."""
     target = Path(checkpoint).expanduser().resolve()
     companion = inference_checkpoint_path(target)
     try:
