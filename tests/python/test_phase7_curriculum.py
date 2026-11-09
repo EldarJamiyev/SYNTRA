@@ -324,6 +324,25 @@ class PolyglotCurriculumTests(unittest.TestCase):
                 )
                 self.assertGreater(encoded[0]["completion_tokens"], 0)
 
+    def test_relative_import_resolution_is_language_specific(self):
+        from syntra_ai.reasoning_curriculum import _related_targets
+
+        paths = {
+            "src/guards.js",
+            "src/guards.ts",
+            "src/guards.mjs",
+            "src/guards.mts",
+        }
+        source = 'import { normalize } from "./guards";\n'
+        self.assertEqual(
+            _related_targets("src/consumer.ts", source, "typescript", paths),
+            ["src/guards.ts"],
+        )
+        self.assertEqual(
+            _related_targets("src/consumer.mjs", source, "javascript", paths),
+            ["src/guards.js"],
+        )
+
     def test_python_multifile_curriculum_follows_relative_imports(self):
         from syntra_ai.reasoning_curriculum import synthesize_multifile_reasoning_curriculum
 
