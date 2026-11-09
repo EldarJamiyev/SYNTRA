@@ -400,6 +400,95 @@ class PolyglotCurriculumTests(unittest.TestCase):
                 ["value is None", "normalized is None"],
             )
 
+    def test_go_multifile_reasoning_pairs_same_package_test_and_implementation(self):
+        from syntra_ai.reasoning_curriculum import synthesize_multifile_reasoning_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-phase7-go-pair-") as temp:
+            root = Path(temp)
+            source_dir = root / "store"
+            source_dir.mkdir()
+            (source_dir / "store.go").write_text(
+                "package store\n"
+                "type Record struct { Name string }\n"
+                "func LoadRecord(key string) (*Record, error) {\n"
+                "  record, err := readRecord(key)\n"
+                "  if err != nil { return nil }\n"
+                "  return record, nil\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (source_dir / "store_test.go").write_text(
+                "package store\n"
+                "import \"testing\"\n"
+                "func loadRecordFixture(key string, err error) (*Record, error) {\n"
+                "  if err != nil { return nil }\n"
+                "  return nil, nil\n"
+                "}\n"
+                "func TestLoadRecord(t *testing.T) {\n"
+                "  _, _ = LoadRecord(\"fixture\")\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            output = root / "reasoning.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_multifile_reasoning_curriculum(
+                    root=root, output_path=output, max_examples=8, languages=("go",)
+                )
+            self.assertEqual(result["example_count"], 1, result)
+            record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+            payload = json.loads(record["completion"].split("</thought>\n", 1)[1])
+            self.assertEqual(payload["format"], "SYNTRA_AGENT_PATCH_V1")
+            self.assertEqual(
+                {edit["path"] for edit in payload["edits"]},
+                {"store/store.go", "store/store_test.go"},
+            )
+            self.assertEqual(
+                {edit["replace"] for edit in payload["edits"]},
+                {"return nil, err"},
+            )
+
+    def test_rust_multifile_reasoning_follows_local_mod_and_use(self):
+        from syntra_ai.reasoning_curriculum import synthesize_multifile_reasoning_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-phase7-rust-pair-") as temp:
+            root = Path(temp)
+            source_dir = root / "src"
+            source_dir.mkdir()
+            (source_dir / "store.rs").write_text(
+                "pub fn item_at(values: &[String], index: usize) -> Option<&String> {\n"
+                "    Some(&values[index])\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (source_dir / "lib.rs").write_text(
+                "pub mod store;\n"
+                "use crate::store::item_at;\n"
+                "pub fn lookup(values: &[String], index: usize) -> Option<&String> {\n"
+                "    Some(&values[index])\n"
+                "}\n"
+                "pub fn lookup_from_module(values: &[String], index: usize) -> Option<&String> {\n"
+                "    item_at(values, index)\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            output = root / "reasoning.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = synthesize_multifile_reasoning_curriculum(
+                    root=root, output_path=output, max_examples=8, languages=("rust",)
+                )
+            self.assertEqual(result["example_count"], 1, result)
+            record = json.loads(output.read_text(encoding="utf-8").splitlines()[0])
+            payload = json.loads(record["completion"].split("</thought>\n", 1)[1])
+            self.assertEqual(payload["format"], "SYNTRA_AGENT_PATCH_V1")
+            self.assertEqual(
+                {edit["path"] for edit in payload["edits"]},
+                {"src/store.rs", "src/lib.rs"},
+            )
+            self.assertEqual(
+                {edit["replace"] for edit in payload["edits"]},
+                {"values.get(index)"},
+            )
+
     def test_multifile_generator_does_not_emit_unrelated_or_unverified_file_pairs(self):
         from syntra_ai.reasoning_curriculum import synthesize_multifile_reasoning_curriculum
 
