@@ -170,7 +170,7 @@ class Phase8SftPipelineTests(unittest.TestCase):
             cli, "synthesize_repository_curriculum", return_value=repository_result
         ) as repository, patch.object(
             cli, "synthesize_multifile_reasoning_curriculum", return_value=reasoning_result
-        ):
+        ) as reasoning:
             result = cli.main([
                 "curriculum",
                 "--mode", "all",
@@ -181,7 +181,7 @@ class Phase8SftPipelineTests(unittest.TestCase):
         self.assertEqual(result, 0)
         exclusions = ["data/benchmarks", "data/curricula", "data/checkpoints"]
         self.assertEqual(repository.call_args.kwargs["exclude_paths"], exclusions)
-        self.assertEqual(cli.synthesize_multifile_reasoning_curriculum.call_args.kwargs["exclude_paths"], exclusions)
+        self.assertEqual(reasoning.call_args.kwargs["exclude_paths"], exclusions)
 
     def test_multifile_context_filter_drops_only_overlong_prompts_and_keeps_full_completion_eos(self):
         with tempfile.TemporaryDirectory(prefix=".syntra-phase8-context-", dir=ROOT) as temp:
