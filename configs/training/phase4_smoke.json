@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "profile": "phase4-smoke-local",
+  "corpus_root": ".",
+  "checkpoint": "data/checkpoints/staging/smoke/syntra-brain.pt",
+  "curriculum": {
+    "dataset": "data/curricula/smoke/workspace-instructions.jsonl",
+    "max_examples": 48,
+    "max_tokens": 250000
+  },
+  "pretraining": {
+    "max_steps": 50,
+    "batch_size": 2,
+    "gradient_accumulation_steps": 1,
+    "block_size": 512,
+    "layers": 4,
+    "heads": 4,
+    "width": 128,
+    "vocab_size": 1024,
+    "dropout": 0.1,
+    "learning_rate": 0.0003,
+    "minimum_learning_rate": 0.00001,
+    "warmup_steps": 5,
+    "decay_steps": 50,
+    "weight_decay": 0.1,
+    "evaluation_batches": 2,
+    "tokenizer_bytes": 50000,
+    "max_dataset_bytes": 67108864,
+    "seed": 1337
+  },
+  "sft": {
+    "steps": 20,
+    "batch_size": 2,
+    "gradient_accumulation_steps": 1,
+    "learning_rate": 0.0001
+  },
+  "evaluation": {
+    "every_steps": 50,
+    "device": "cpu",
+    "isolation": "docker",
+    "max_parallel": 1,
+    "max_new_tokens": 256
+  },
+  "run_directory": "data/benchmarks/phase4-smoke"
+}
