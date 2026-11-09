@@ -1148,7 +1148,8 @@ test("model context budgets use only SYNTRA's saved byte-BPE tokenizer and nativ
   assert.equal(native.budgetProfile, "native-tokenizer");
   assert.ok(native.contextBudgetTokens < 8192);
   assert.ok(native.outputBudgetTokens <= 8192);
-  assert.ok(native.contextBudgetTokens + native.outputBudgetTokens + native.safetyMarginTokens <= 8192);
+  assert.ok(native.contextBudgetTokens + native.outputBudgetTokens + native.safetyMarginTokens + 1 <= 8192,
+    "prompt, output, safety reserve and BOS must fit the actual native context");
 
   const unknownTokenizer = deriveModelContextBudget({
     backend: "PyTorch",
