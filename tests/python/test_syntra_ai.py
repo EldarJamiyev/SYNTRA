@@ -1125,6 +1125,140 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(result["audit"]["valid"])
             self.assertGreaterEqual(result["example_count"], 4)
 
+    def test_ast_curriculum_quality_scores_documentation_annotations_and_logic(self):
+        import ast
+        from syntra_ai.curriculum import _python_symbol_quality
+
+        source = (
+            "class Record:\n"
+            "    def value(self):\n"
+            "        return self._value\n\n"
+            "    def set_value(self, value):\n"
+            "        self._value = value\n\n"
+            "def empty_stub():\n"
+            "    pass\n\n"
+            "def calculate_total(values: list[int]) -> int:\n"
+            '    """Return a checked total for all values."""\n'
+            "    total = 0\n"
+            "    for value in values:\n"
+            "        if value < 0:\n"
+            "            raise ValueError(value)\n"
+            "        total += value\n"
+            "    return total\n"
+        )
+        tree = ast.parse(source)
+        record = next(item for item in tree.body if isinstance(item, ast.ClassDef))
+        getter, setter = record.body
+        stub = next(item for item in tree.body if getattr(item, "name", "") == "empty_stub")
+        calculate = next(item for item in tree.body if getattr(item, "name", "") == "calculate_total")
+
+        self.assertTrue(_python_symbol_quality(getter)["boilerplate"])
+        self.assertTrue(_python_symbol_quality(setter)["boilerplate"])
+        self.assertTrue(_python_symbol_quality(stub)["boilerplate"])
+        quality = _python_symbol_quality(calculate)
+        self.assertFalse(quality["boilerplate"])
+        self.assertTrue(quality["has_docstring"])
+        self.assertGreaterEqual(quality["annotation_count"], 2)
+        self.assertGreaterEqual(quality["control_flow_count"], 2)
+        self.assertGreaterEqual(quality["score"], 7)
+
+    def test_curriculum_filters_getter_setter_and_empty_stub_patterns(self):
+        from syntra_ai import curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-quality-filter-") as temp:
+            root = Path(temp)
+            (root / "quality.py").write_text(
+                "class Record:\n"
+                "    def value(self):\n"
+                "        return self._value\n\n"
+                "    def set_value(self, value):\n"
+                "        self._value = value\n\n"
+                "def empty_stub():\n"
+                "    pass\n\n"
+                "def increment(value):\n"
+                "    return value + 1\n\n"
+                "def normalize(value: str) -> str:\n"
+                '    """Normalize external text."""\n'
+                "    return value.strip()\n",
+                encoding="utf-8",
+            )
+            output = root / "quality.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                result = curriculum.synthesize_repository_curriculum(
+                    root=root,
+                    output_path=output,
+                    max_examples=40,
+                )
+
+            records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+            symbol_records = [
+                item for item in records
+                if item["kind"] in {"symbol_implementation", "symbol_comprehension"}
+            ]
+            prompts = "\n".join(item["prompt"] for item in symbol_records)
+            self.assertIn("increment", prompts)
+            self.assertIn("normalize", prompts)
+            self.assertNotIn("value(self)", prompts)
+            self.assertNotIn("set_value", prompts)
+            self.assertNotIn("empty_stub", prompts)
+            self.assertGreaterEqual(result["quality_statistics"]["quality_scored_symbols"], 6)
+            self.assertGreaterEqual(result["quality_statistics"]["boilerplate_symbols_skipped"], 3)
+            self.assertGreaterEqual(result["quality_statistics"]["low_quality_symbols_skipped"], 1)
+
+    def test_curriculum_deduplicates_equivalent_ast_symbols_across_local_repositories_deterministically(self):
+        from syntra_ai import curriculum, safe_paths
+
+        with tempfile.TemporaryDirectory(prefix="syntra-curriculum-cross-repo-dedup-") as temp:
+            root = Path(temp)
+            first = root / "repo-a"
+            second = root / "repo-b"
+            first.mkdir()
+            second.mkdir()
+            source_a = (
+                "def normalize_primary(value):\n"
+                '    """Normalize a display value."""\n'
+                "    return value.strip()\n"
+            )
+            source_b = (
+                "def normalize_secondary(item):\n"
+                '    """Normalize an input value."""\n'
+                "    return item.strip()\n"
+            )
+            (first / "text_utils.py").write_text(source_a, encoding="utf-8")
+            (second / "text_utils.py").write_text(source_b, encoding="utf-8")
+            output = first / "curated.jsonl"
+
+            with patch.object(curriculum, "PROJECT_ROOT", first):
+                with patch.object(safe_paths, "PROJECT_ROOT", first):
+                    with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(second)}):
+                        first_result = curriculum.synthesize_repository_curriculum(
+                            output_path=output,
+                            max_examples=40,
+                        )
+                        first_bytes = output.read_bytes()
+                        second_result = curriculum.synthesize_repository_curriculum(
+                            output_path=output,
+                            max_examples=40,
+                        )
+                        second_bytes = output.read_bytes()
+
+            records = [json.loads(line) for line in first_bytes.splitlines()]
+            implementation_records = [
+                item for item in records if item["kind"] == "symbol_implementation"
+            ]
+            self.assertEqual(len(implementation_records), 1,
+                             "equivalent AST implementations from separate roots must produce one sample")
+            self.assertIn("normalize_primary", implementation_records[0]["prompt"])
+            self.assertEqual(first_bytes, second_bytes,
+                             "cross-repository filtering and reservoir order must be deterministic")
+            self.assertEqual(
+                first_result["quality_statistics"]["near_duplicate_symbols_skipped"], 1
+            )
+            self.assertEqual(
+                first_result["quality_statistics"], second_result["quality_statistics"]
+            )
+            self.assertEqual(first_result["example_count"], second_result["example_count"])
+
     def test_module_exports_exclude_class_methods_and_include_module_values(self):
         from syntra_ai.curriculum import _module_metadata
 
