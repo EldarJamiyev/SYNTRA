@@ -289,6 +289,14 @@ def _validate_profile_values(profile: dict[str, Any]) -> None:
         raise OrchestrationError("evaluation.device must be auto, cpu, cuda, or mps.")
     if evaluation.get("isolation") not in {"docker", "host"}:
         raise OrchestrationError("evaluation.isolation must be docker or host.")
+    task_ids = evaluation.get("task_ids")
+    if task_ids is not None and (
+        not isinstance(task_ids, list)
+        or not 1 <= len(task_ids) <= 13
+        or any(not isinstance(item, str) or not item.strip() for item in task_ids)
+        or len(set(task_ids)) != len(task_ids)
+    ):
+        raise OrchestrationError("evaluation.task_ids must be a unique list of one to thirteen benchmark task IDs.")
 
 
 @dataclass
@@ -368,6 +376,7 @@ class BackgroundEvaluator:
         allow_host_execution: bool,
         max_parallel: int = 1,
         max_new_tokens: int = 512,
+        task_ids: list[str] | None = None,
     ):
         self.run_root = _inside_root(run_root)
         self.run_id = run_id
@@ -376,6 +385,7 @@ class BackgroundEvaluator:
         self.allow_host_execution = allow_host_execution
         self.max_parallel = max_parallel
         self.max_new_tokens = max_new_tokens
+        self.task_ids = list(task_ids) if task_ids is not None else None
         self.jobs: list[EvaluationJob] = []
         self.results: list[dict[str, Any]] = []
         self.active: list[EvaluationJob] = []
@@ -486,6 +496,8 @@ class BackgroundEvaluator:
             "--output", str(report_path),
             "--isolation", self.isolation,
         ]
+        for task_id in self.task_ids or []:
+            command_args.extend(["--task", task_id])
         if self.isolation == "host":
             if not self.allow_host_execution:
                 raise OrchestrationError("Host benchmark execution requires explicit --allow-host-execution.")
@@ -553,19 +565,34 @@ def _load_benchmark_runner():
     return module
 
 
-def _preflight_benchmark(isolation: str, allow_host_execution: bool) -> dict[str, Any]:
+def _preflight_benchmark(
+    isolation: str,
+    allow_host_execution: bool,
+    task_ids: list[str] | None = None,
+) -> dict[str, Any]:
     if isolation == "host" and not allow_host_execution:
         raise OrchestrationError("Host execution is unsandboxed and requires --allow-host-execution.")
     try:
         benchmark_runner = _load_benchmark_runner()
         suite = benchmark_runner.load_suite()
+        known_tasks = {task["id"]: task for task in suite["tasks"]}
+        selected_tasks = (
+            [known_tasks[item] for item in task_ids]
+            if task_ids is not None and all(item in known_tasks for item in task_ids)
+            else suite["tasks"] if task_ids is None else None
+        )
+        if selected_tasks is None:
+            raise OrchestrationError("Evaluation profile references an unknown raw benchmark task ID.")
         environments = {}
+        # Preflight every language image even when the smoke task selection is small.
         for language in sorted({task["language"] for task in suite["tasks"]}):
             environment = benchmark_runner.resolve_environment(language)
             environments[language] = benchmark_runner.prepare_isolation(isolation, environment["image"])
         return {
             "suite_version": suite["version"],
             "task_count": len(suite["tasks"]),
+            "selected_task_ids": [task["id"] for task in selected_tasks],
+            "selected_task_count": len(selected_tasks),
             "languages": environments,
         }
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
@@ -853,11 +880,15 @@ def main(argv: list[str] | None = None) -> int:
         if not args.skip_benchmark:
             if args.skip_pretraining and not checkpoint.is_file():
                 raise OrchestrationError("--skip-pretraining requires an existing native checkpoint.")
-            benchmark_preflight = _preflight_benchmark(isolation, args.allow_host_execution)
+            selected_task_ids = evaluation.get("task_ids")
+            benchmark_preflight = _preflight_benchmark(
+                isolation, args.allow_host_execution, selected_task_ids
+            )
             evaluator = BackgroundEvaluator(
                 run_root, run_id, device=evaluation_device,
                 isolation=isolation, allow_host_execution=args.allow_host_execution,
                 max_parallel=evaluation["max_parallel"], max_new_tokens=evaluation["max_new_tokens"],
+                task_ids=selected_task_ids,
             )
         baseline_only = args.skip_pretraining and args.skip_sft
         if baseline_only and args.skip_benchmark:
