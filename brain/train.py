@@ -1396,12 +1396,6 @@ def train(
             )
             last_gradient_norm = float(gradient_norm.detach().item())
             last_train_loss = weighted_loss_total / batch_supervised_tokens
-            optimizer.step()
-            last_step_latency_ms = (perf_counter() - step_started) * 1000.0
-            step_latency_total_ms += last_step_latency_ms
-            sampled_memory, device_memory_metric = device_memory_sample(device, torch)
-            if sampled_memory is not None:
-                peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
 
             global_step = start_step + current_step_in_run
             if effective_scheduler == LEGACY_TRAINING_SCHEDULER:
@@ -1417,6 +1411,12 @@ def train(
             last_learning_rate = scheduled_lr
             for group in optimizer.param_groups:
                 group["lr"] = scheduled_lr
+            optimizer.step()
+            last_step_latency_ms = (perf_counter() - step_started) * 1000.0
+            step_latency_total_ms += last_step_latency_ms
+            sampled_memory, device_memory_metric = device_memory_sample(device, torch)
+            if sampled_memory is not None:
+                peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
             supervised_tokens_processed += batch_supervised_tokens
             next_batch_index = batch_index + 1
             at_step_limit = stop_at_step is not None and global_step >= stop_at_step
