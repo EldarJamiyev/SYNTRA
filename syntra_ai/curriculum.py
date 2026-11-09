@@ -26,6 +26,7 @@ MAX_MODULE_CHARS = 8_000
 MAX_IMPORTS = 80
 MAX_DECLARATIONS = 120
 MAX_CURRICULUM_CANDIDATE_BYTES = 128 * 1024 * 1024
+MAX_CURRICULUM_DEDUP_FINGERPRINTS = 250_000
 MAX_CURRICULUM_RECORD_BYTES = 1024 * 1024
 MAX_CURRICULUM_OUTPUT_BYTES = 128 * 1024 * 1024
 MIN_AST_SYMBOL_QUALITY_SCORE = 1
@@ -805,6 +806,7 @@ def synthesize_repository_curriculum(
         "low_quality_symbols_skipped": 0,
         "boilerplate_symbols_skipped": 0,
         "near_duplicate_symbols_skipped": 0,
+        "fingerprint_memory_budget_skips": 0,
     }
 
     def offer_candidate(
@@ -926,7 +928,10 @@ def synthesize_repository_curriculum(
                     if fingerprint in seen_structural_symbols:
                         quality_statistics["near_duplicate_symbols_skipped"] += 1
                         continue
-                    seen_structural_symbols.add(fingerprint)
+                    if len(seen_structural_symbols) < MAX_CURRICULUM_DEDUP_FINGERPRINTS:
+                        seen_structural_symbols.add(fingerprint)
+                    else:
+                        quality_statistics["fingerprint_memory_budget_skips"] += 1
             eligible_symbols.append(item)
         eligible_symbols = sorted(
             eligible_symbols,
@@ -1091,6 +1096,10 @@ def synthesize_repository_curriculum(
         warnings.append(
             f"{quality_statistics['near_duplicate_symbols_skipped']:,} structurally equivalent AST symbol(s) were deduplicated across the approved repositories."
         )
+    if quality_statistics["fingerprint_memory_budget_skips"]:
+        warnings.append(
+            f"AST fingerprint deduplication reached its {MAX_CURRICULUM_DEDUP_FINGERPRINTS:,}-entry memory bound; subsequent novel symbols were retained without adding more fingerprints."
+        )
     if candidate_budget_skips:
         warnings.append(
             f"{candidate_budget_skips:,} candidate(s) were excluded by the "
@@ -1126,6 +1135,7 @@ def synthesize_repository_curriculum(
         "selection_strategy": "deterministic-source-ranked-round-robin",
         "quality_statistics": quality_statistics,
         "minimum_ast_symbol_quality_score": MIN_AST_SYMBOL_QUALITY_SCORE,
+        "maximum_ast_dedup_fingerprints": MAX_CURRICULUM_DEDUP_FINGERPRINTS,
         "audit": audit,
         "warnings": warnings,
     }
