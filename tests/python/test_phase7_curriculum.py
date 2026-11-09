@@ -110,6 +110,29 @@ class PolyglotCurriculumTests(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertNotEqual(a, c)
 
+        # Whitespace must not change token adjacency: API calls and member names
+        # remain semantic identifiers even when source formatting adds spaces.
+        spaced = (
+            "function format ( value ) {\n"
+            "  const result = value . trim ( ) ;\n"
+            "  if ( result . length > 1 ) return result . toLowerCase ( ) ;\n"
+            "  return result ;\n"
+            "}\n"
+        )
+        spaced_fingerprint = _polyglot_fingerprint(
+            "javascript", "format", "format ( value )", spaced
+        )
+        self.assertEqual(b, spaced_fingerprint)
+
+        go_first = "func (cache *Cache) Get(value int) int"
+        go_second = "func (store *Store) Lookup(count int) int"
+        go_body_first = "func Get(value int) int { if value > 0 { return cache.base + value }; return 0 }"
+        go_body_second = "func Lookup(count int) int { if count > 0 { return store.base + count }; return 0 }"
+        self.assertEqual(
+            _polyglot_fingerprint("go", "Get", go_first, go_body_first),
+            _polyglot_fingerprint("go", "Lookup", go_second, go_body_second),
+        )
+
     def test_repository_curriculum_deduplicates_polyglot_declarations_deterministically(self):
         from syntra_ai.curriculum import synthesize_repository_curriculum
 
