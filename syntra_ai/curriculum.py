@@ -188,17 +188,41 @@ def _python_symbol_quality(
 
 
 class _CanonicalSymbolNames(ast.NodeTransformer):
-    """Normalize local identifiers while retaining operators, attributes and called APIs."""
+    """Normalize local identifiers while retaining parameter order and called APIs."""
+
+    def __init__(self, root_arguments: Iterable[str] = ()) -> None:
+        self.name_map: dict[str, str] = {}
+        self.next_local = 0
+        for index, name in enumerate(root_arguments):
+            self.name_map[name] = f"__arg_{index}__"
+
+    def _visit_function_scope(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.AST:
+        previous_map = self.name_map
+        previous_next = self.next_local
+        self.name_map = {}
+        self.next_local = 0
+        arguments = (
+            list(node.args.posonlyargs) + list(node.args.args)
+            + list(node.args.kwonlyargs)
+        )
+        if node.args.vararg is not None:
+            arguments.append(node.args.vararg)
+        if node.args.kwarg is not None:
+            arguments.append(node.args.kwarg)
+        for index, argument in enumerate(arguments):
+            self.name_map[argument.arg] = f"__arg_{index}__"
+        node.name = "__symbol__"
+        self._strip_docstring(node)
+        result = self.generic_visit(node)
+        self.name_map = previous_map
+        self.next_local = previous_next
+        return result
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
-        node.name = "__symbol__"
-        self._strip_docstring(node)
-        return self.generic_visit(node)
+        return self._visit_function_scope(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
-        node.name = "__symbol__"
-        self._strip_docstring(node)
-        return self.generic_visit(node)
+        return self._visit_function_scope(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
         node.name = "__class__"
@@ -213,12 +237,20 @@ class _CanonicalSymbolNames(ast.NodeTransformer):
                 node.body = node.body[1:]
 
     def visit_arg(self, node: ast.arg) -> ast.AST:
-        node.arg = "__arg__"
+        if node.arg not in self.name_map:
+            self.name_map[node.arg] = f"__arg_{self.next_local}__"
+            self.next_local += 1
+        node.arg = self.name_map[node.arg]
         return node
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
-        if node.id not in _BUILTIN_CALL_NAMES and not node.id.isupper() and not node.id.startswith("__"):
-            node.id = "__name__"
+        if node.id in self.name_map:
+            node.id = self.name_map[node.id]
+        elif node.id not in _BUILTIN_CALL_NAMES and not node.id.isupper() and not node.id.startswith("__"):
+            if node.id not in self.name_map:
+                self.name_map[node.id] = f"__local_{self.next_local}__"
+                self.next_local += 1
+            node.id = self.name_map[node.id]
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -239,7 +271,14 @@ def _python_symbol_fingerprint(
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
             body = body[1:]
     normalized = ast.Module(body=body, type_ignores=[])
-    normalized = _CanonicalSymbolNames().visit(normalized)
+    root_arguments = (
+        [argument.arg for argument in (
+            list(node.args.posonlyargs) + list(node.args.args) + list(node.args.kwonlyargs)
+        )]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        else []
+    )
+    normalized = _CanonicalSymbolNames(root_arguments).visit(normalized)
     ast.fix_missing_locations(normalized)
     structural = ast.dump(normalized, annotate_fields=True, include_attributes=False)
     return hashlib.sha256(structural.encode("utf-8")).hexdigest()
