@@ -887,6 +887,7 @@ def train(
     epochs: int = 1,
     max_steps: int | None = None,
     batch_size: int = 4,
+    gradient_accumulation_steps: int = 1,
     learning_rate: float = 3e-4,
     minimum_learning_rate: float = MIN_LEARNING_RATE,
     warmup_steps: int = SCHEDULER_WARMUP_STEPS,
@@ -910,6 +911,8 @@ def train(
         raise ValueError("max_steps must be an integer between 1 and 1,000,000 when provided.")
     if type(batch_size) is not int or not 1 <= batch_size <= 256:
         raise ValueError("batch_size must be an integer between 1 and 256.")
+    if type(gradient_accumulation_steps) is not int or not 1 <= gradient_accumulation_steps <= 128:
+        raise ValueError("gradient_accumulation_steps must be an integer between 1 and 128.")
     if isinstance(learning_rate, bool) or not isinstance(learning_rate, (int, float)) or not math.isfinite(learning_rate) or not 1e-6 <= learning_rate <= 1e-2:
         raise ValueError("learning_rate must be between 1e-6 and 1e-2.")
     if isinstance(minimum_learning_rate, bool) or not isinstance(minimum_learning_rate, (int, float)) or not math.isfinite(minimum_learning_rate) or not 1e-7 <= minimum_learning_rate <= learning_rate:
@@ -1078,7 +1081,7 @@ def train(
             elif saved_scheduler == TRAINING_SCHEDULER:
                 required_v2 = {
                     "minimum_learning_rate", "warmup_steps", "decay_steps",
-                    "gradient_clip_norm",
+                    "gradient_clip_norm", "gradient_accumulation_steps",
                 }
                 if not required_v2.issubset(settings):
                     raise ValueError("The v2 training checkpoint is missing scheduler or gradient-clip settings.")
@@ -1087,6 +1090,7 @@ def train(
                     "warmup_steps": warmup_steps,
                     "decay_steps": decay_steps,
                     "gradient_clip_norm": GRADIENT_CLIP_NORM,
+                    "gradient_accumulation_steps": gradient_accumulation_steps,
                 }
                 changed_v2 = [
                     name for name, expected in expected_v2.items()
@@ -1177,7 +1181,7 @@ def train(
     chunk_count = train_inputs.shape[0]
     if chunk_count < 1:
         raise ValueError("The training corpus does not contain a supervised context block.")
-    steps_per_epoch = math.ceil(chunk_count / batch_size)
+    steps_per_epoch = math.ceil(chunk_count / (batch_size * gradient_accumulation_steps))
     if saved_training_settings is not None:
         saved_steps_per_epoch = saved_training_settings.get("steps_per_epoch")
         if type(saved_steps_per_epoch) is not int or saved_steps_per_epoch != steps_per_epoch:
@@ -1218,13 +1222,22 @@ def train(
         )
 
     parameter_count = model.parameter_count
+    from syntra_ai.hardware_telemetry import (
+        device_memory_sample, process_peak_rss_bytes, reset_device_peak_stats,
+    )
+
     started = perf_counter()
+    reset_device_peak_stats(device, torch)
     target_epoch = start_epoch + epochs
     stop_at_step = start_step + max_steps if max_steps is not None else None
     current_step_in_run = 0
     supervised_tokens_processed = 0
     last_learning_rate: float | None = None
     last_gradient_norm: float | None = None
+    last_step_latency_ms: float | None = None
+    step_latency_total_ms = 0.0
+    peak_device_memory_bytes: int | None = None
+    device_memory_metric = "not_sampled"
 
     def payload_for_save(completed_epochs: int, order: torch.Tensor | None, next_index: int) -> dict:
         return {
@@ -1263,6 +1276,7 @@ def train(
                 "warmup_steps": effective_warmup_steps,
                 "decay_steps": effective_decay_steps,
                 "gradient_clip_norm": GRADIENT_CLIP_NORM,
+                "gradient_accumulation_steps": gradient_accumulation_steps,
             },
             "rng_state": _rng_state(device),
             "parameter_count": parameter_count,
@@ -1286,6 +1300,12 @@ def train(
             "gradient_norm_before_clip": last_gradient_norm,
             "gradient_clip_norm": GRADIENT_CLIP_NORM,
             "target_step": stop_at_step,
+            "step_latency_ms": last_step_latency_ms,
+            "mean_step_latency_ms": round(step_latency_total_ms / current_step_in_run, 3) if current_step_in_run else None,
+            "peak_rss_bytes": process_peak_rss_bytes(),
+            "peak_device_memory_bytes": peak_device_memory_bytes,
+            "device_memory_metric": device_memory_metric,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
             "tokens_per_second": round(supervised_tokens_processed / elapsed, 2),
             "supervised_tokens_processed": supervised_tokens_processed,
             "throughput_basis": "supervised_target_tokens",
@@ -1324,27 +1344,50 @@ def train(
             next_batch_index = 0
 
         for batch_index in range(next_batch_index, steps_per_epoch):
-            begin = batch_index * batch_size
-            indices = epoch_order[begin : begin + batch_size]
+            begin = batch_index * batch_size * gradient_accumulation_steps
+            indices = epoch_order[begin : begin + batch_size * gradient_accumulation_steps]
             if indices.numel() == 0:
                 continue
-            x, y = _batch(train_inputs, indices, block_size, device, train_targets)
-            batch_supervised_tokens = int((y != -100).sum().item())
+
+            micro_batches = [
+                indices[offset : offset + batch_size]
+                for offset in range(0, int(indices.numel()), batch_size)
+            ]
+            micro_token_counts = [
+                int((train_targets.index_select(0, micro_indices) != -100).sum().item())
+                for micro_indices in micro_batches
+            ]
+            batch_supervised_tokens = sum(micro_token_counts)
             if batch_supervised_tokens < 1:
-                raise RuntimeError("Training batch contains no supervised target tokens.")
+                raise RuntimeError("Training optimizer step contains no supervised target tokens.")
 
             current_step_in_run += 1
+            step_started = perf_counter()
             optimizer.zero_grad(set_to_none=True)
-            _, loss = model(x, y)
-            if loss is None or not torch.isfinite(loss).item():
-                raise RuntimeError("Training loss became non-finite.")
-            loss.backward()
+            weighted_loss_total = 0.0
+            for micro_indices, micro_tokens in zip(micro_batches, micro_token_counts):
+                if micro_tokens < 1:
+                    raise RuntimeError("Training micro-batch contains no supervised target tokens.")
+                x, y = _batch(train_inputs, micro_indices, block_size, device, train_targets)
+                _, loss = model(x, y)
+                if loss is None or not torch.isfinite(loss).item():
+                    raise RuntimeError("Training loss became non-finite.")
+                weighted_loss_total += float(loss.detach().item()) * micro_tokens
+                (loss * (micro_tokens / batch_supervised_tokens)).backward()
+
             gradient_norm = torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 max_norm=GRADIENT_CLIP_NORM,
                 error_if_nonfinite=True,
             )
             last_gradient_norm = float(gradient_norm.detach().item())
+            last_train_loss = weighted_loss_total / batch_supervised_tokens
+            optimizer.step()
+            last_step_latency_ms = (perf_counter() - step_started) * 1000.0
+            step_latency_total_ms += last_step_latency_ms
+            sampled_memory, device_memory_metric = device_memory_sample(device, torch)
+            if sampled_memory is not None:
+                peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
 
             global_step = start_step + current_step_in_run
             if effective_scheduler == LEGACY_TRAINING_SCHEDULER:
@@ -1360,8 +1403,6 @@ def train(
             last_learning_rate = scheduled_lr
             for group in optimizer.param_groups:
                 group["lr"] = scheduled_lr
-            optimizer.step()
-            last_train_loss = float(loss.detach().item())
             supervised_tokens_processed += batch_supervised_tokens
             next_batch_index = batch_index + 1
             at_step_limit = stop_at_step is not None and global_step >= stop_at_step
@@ -1444,6 +1485,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint", default=str(DEFAULT_CHECKPOINT), help="Local checkpoint output path.")
     parser.add_argument("--epochs", type=int, default=1, help="Additional full passes through shuffled training blocks.")
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--block-size", type=int, default=256)
     parser.add_argument("--layers", type=int, default=4)
     parser.add_argument("--heads", type=int, default=4)
@@ -1485,6 +1527,7 @@ def main(argv: list[str] | None = None) -> int:
             epochs=args.epochs,
             max_steps=args.max_steps,
             batch_size=args.batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
             minimum_learning_rate=args.minimum_learning_rate,
             warmup_steps=args.warmup_steps,
