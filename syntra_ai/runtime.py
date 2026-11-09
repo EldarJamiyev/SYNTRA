@@ -57,6 +57,17 @@ def _file_stat_identity(path: Path) -> tuple[int, int, int, int, int]:
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
+def _file_stat_identity_record(path: Path) -> dict[str, int]:
+    device, inode, size, modified_ns, changed_ns = _file_stat_identity(path)
+    return {
+        "device": device,
+        "inode": inode,
+        "size": size,
+        "mtime_ns": modified_ns,
+        "ctime_ns": changed_ns,
+    }
+
+
 def checkpoint_path() -> Path:
     configured = os.environ.get("SYNTRA_CHECKPOINT")
     if configured:
