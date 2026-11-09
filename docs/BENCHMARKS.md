@@ -182,10 +182,10 @@ A checked-in profile and passing tests are not model-performance measurements. E
 
 The local orchestration runner captures training-side measurements at the same saved checkpoint boundaries used for raw native-model evaluation. The evaluation result JSON, Markdown trend report, and CSV table retain:
 
-- Supervised target tokens per second (measured over the current training invocation).
-- Last and mean optimizer-step latency in milliseconds.
-- Process peak resident set size in bytes.
-- Peak device memory in bytes where the backend exposes it, plus the metric source: CUDA allocator peak, sampled MPS driver/allocator high-water, or CPU-not-applicable.
+- Supervised target tokens per second, calculated over the stage wall clock including validation and checkpoint I/O (not a kernel-only throughput estimate).
+- Last and mean optimizer-step latency in milliseconds, measured around the accumulated forward/backward/optimizer update.
+- Process peak resident set size in bytes. This is the operating-system process-lifetime high-water; because pretraining and SFT run in one orchestration process, the SFT value includes an earlier pretraining peak and is not stage-isolated.
+- Peak device memory in bytes where the backend exposes it, plus the metric source: CUDA allocator peak reset at the start of each stage, maximum sampled MPS driver/allocator memory while micro-batch activations are live, or CPU-not-applicable.
 - Gradient accumulation factor and the trainer's estimated pre-allocation working-set size.
 
 CPU RSS uses the operating system's process high-water metric. CUDA memory uses PyTorch's peak allocated allocator counter, reset before the training loop. MPS memory is a sampled high-water because the public PyTorch API does not expose an equivalent resettable peak allocator counter. A CPU memory-device value or unavailable platform reading stays blank/unavailable; it is not written as zero. The throughput basis is supervised target tokens, not raw corpus bytes.
