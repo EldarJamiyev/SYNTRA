@@ -16,7 +16,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from .data import load_corpus
-from .polyglot import LANGUAGE_SUFFIXES, SUPPORTED_LANGUAGES, language_for_path, safe_repair_examples
+from .polyglot import (
+    LANGUAGE_SUFFIXES, SUPPORTED_LANGUAGES, _code_mask, language_for_path,
+    safe_repair_examples,
+)
 from .safe_paths import PROJECT_ROOT, resolve_corpus_root, resolve_curriculum_output_path
 from .curriculum import _safe_none_patch_examples, _write_jsonl_atomically, _module_metadata
 
@@ -58,8 +61,11 @@ def _relative_module_candidates(relative_path: str, specifier: str) -> list[str]
 
 def _related_targets(path: str, source: str, language: str, same_language_paths: set[str]) -> list[str]:
     targets: list[str] = []
+    code_mask = _code_mask(source)
     if language in {"javascript", "typescript"}:
         for match in _JS_IMPORT.finditer(source):
+            if not code_mask[match.start()]:
+                continue
             for candidate in _relative_module_candidates(path, match.group("specifier")):
                 if candidate in same_language_paths and candidate != path:
                     targets.append(candidate)
@@ -72,8 +78,14 @@ def _related_targets(path: str, source: str, language: str, same_language_paths:
                 if candidate != path and candidate.startswith(prefix) and not _GO_TEST.search(candidate):
                     targets.append(candidate)
     elif language == "rust":
-        modules = [match.group("module") for match in _RUST_MOD.finditer(source)]
-        modules.extend(match.group("path").split("::")[-1] for match in _RUST_USE.finditer(source))
+        modules = [
+            match.group("module") for match in _RUST_MOD.finditer(source)
+            if code_mask[match.start()]
+        ]
+        modules.extend(
+            match.group("path").split("::")[-1]
+            for match in _RUST_USE.finditer(source) if code_mask[match.start()]
+        )
         for module in modules:
             candidates = [
                 posixpath.join(posixpath.dirname(path), module + ".rs"),
@@ -87,11 +99,13 @@ def _related_targets(path: str, source: str, language: str, same_language_paths:
 
 
 def _referenced_export(exports: list[str], importing_source: str) -> str | None:
+    code_mask = _code_mask(importing_source)
     for name in sorted(set(exports), key=lambda item: (-len(item), item)):
         if not name or name.startswith("_"):
             continue
-        if re.search(rf"\b{re.escape(name)}\b", importing_source):
-            return name
+        for match in re.finditer(rf"\b{re.escape(name)}\b", importing_source):
+            if code_mask[match.start()]:
+                return name
     return None
 
 
@@ -192,7 +206,7 @@ def synthesize_multifile_reasoning_curriculum(
                 export = _referenced_export(
                     implementation.get("exports", []), consumer["source"]
                 )
-                if language in {"javascript", "typescript"} and export is None:
+                if export is None:
                     continue
                 considered_pairs += 1
                 left_repair = sorted(
