@@ -41,5 +41,6 @@
     "max_parallel": 1,
     "max_new_tokens": 256
   },
-  "run_directory": "data/benchmarks/phase4-smoke"
+  "run_directory": "data/benchmarks/phase4-smoke",
+  "device": "cpu"
 }
