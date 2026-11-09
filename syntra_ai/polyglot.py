@@ -265,6 +265,8 @@ def _is_trivial_block(body: str) -> bool:
         return True
     if re.fullmatch(r"return(?:this|self|[A-Za-z_]\w*)\.[A-Za-z_$]\w*;?", code):
         return True
+    if re.fullmatch(r"return[A-Za-z_$][A-Za-z0-9_$]*;?", code):
+        return True
     if re.fullmatch(
         r"(?:this|self|[A-Za-z_]\w*)\.[A-Za-z_$]\w*=[A-Za-z_$]\w*;?",
         code,
