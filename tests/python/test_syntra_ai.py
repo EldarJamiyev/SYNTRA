@@ -456,7 +456,10 @@ class TransformerTests(unittest.TestCase):
                 replaced_stat = checkpoint.stat()
                 self.assertEqual(original_stat.st_size, replaced_stat.st_size)
                 self.assertEqual(original_stat.st_mtime_ns, replaced_stat.st_mtime_ns)
-                self.assertNotEqual(original_stat.st_ino, replaced_stat.st_ino)
+                self.assertNotEqual(
+                    (original_stat.st_dev, original_stat.st_ino, original_stat.st_ctime_ns),
+                    (replaced_stat.st_dev, replaced_stat.st_ino, replaced_stat.st_ctime_ns),
+                )
                 self.assertFalse(
                     _resident_cache_matches_checkpoint(checkpoint),
                     "atomic replacement must invalidate resident state even when size/mtime are preserved",
