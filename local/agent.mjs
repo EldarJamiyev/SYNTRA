@@ -1986,6 +1986,18 @@ export async function runAgentTask({
           }
         }
 
+        if (generated.context_recovery?.status === "retried_after_compression") {
+          observations.push({
+            kind: "native-context-recovery",
+            stage: slice.id + "-generation",
+            status: "recovered",
+            detail: "The native runtime rejected the original prompt; SYNTRA removed low-priority repository context and succeeded on one bounded retry (" +
+              generated.context_recovery.original_prompt_tokens + " → " +
+              generated.context_recovery.compressed_prompt_tokens + " tokens; usable context " +
+              generated.context_recovery.usable_context_tokens + ")."
+          });
+        }
+
         let candidate;
         let patchPayload;
         try {
