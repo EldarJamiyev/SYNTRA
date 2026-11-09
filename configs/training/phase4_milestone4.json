@@ -26,12 +26,14 @@
     "tokenizer_bytes": 100000,
     "max_dataset_bytes": 268435456,
     "seed": 1337,
-    "gradient_clip_norm": 1
+    "gradient_clip_norm": 1,
+    "gradient_accumulation_steps": 1
   },
   "sft": {
     "steps": 1000,
     "batch_size": 2,
-    "learning_rate": 0.0001
+    "learning_rate": 0.0001,
+    "gradient_accumulation_steps": 1
   },
   "evaluation": {
     "every_steps": 500,
