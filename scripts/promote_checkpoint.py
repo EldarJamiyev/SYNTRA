@@ -272,14 +272,19 @@ def _active_artifact_paths(active: Path) -> list[tuple[str, Path]]:
 
 
 def _archive_active(active: Path) -> str | None:
-    artifacts = [(kind, path) for kind, path in _active_artifact_paths(active) if path.exists()]
+    artifacts = []
+    for kind, path in _active_artifact_paths(active):
+        if path.is_symlink():
+            raise PromotionError("Active checkpoint artifact must not be a symbolic link: " + str(path))
+        if path.exists():
+            artifacts.append((kind, path))
     if not artifacts:
         return None
     if not any(kind == "checkpoint" for kind, _path in artifacts):
         raise PromotionError("Orphaned active metadata or inference companion exists without its checkpoint; inspect it before promoting.")
     for _kind, path in artifacts:
         _safe_repo_path(path, must_exist=True)
-        if path.is_symlink() or not path.is_file():
+        if not path.is_file():
             raise PromotionError("Active checkpoint artifact must be a regular file: " + str(path))
     archive_id = _now_id()
     archive_dir = _safe_repo_path(ARCHIVE_ROOT / archive_id)
@@ -309,38 +314,71 @@ def _archive_active(active: Path) -> str | None:
 def _restore_archive(active: Path, archive_id: str, *, archive_current: bool = True) -> dict[str, Any]:
     if ARCHIVE_ID_RE.fullmatch(archive_id) is None:
         raise PromotionError("Rollback requires a valid archive ID returned by brain:promote.")
+    active = _safe_repo_path(active)
     archive_dir = _safe_repo_path(ARCHIVE_ROOT / archive_id, must_exist=True)
     manifest = _read_json(archive_dir / "archive.json", maximum_bytes=1024 * 1024)
     if manifest.get("schema_version") != 1 or manifest.get("archive_id") != archive_id:
         raise PromotionError("Rollback archive manifest is invalid.")
+    archived_active = manifest.get("active_checkpoint")
+    if not isinstance(archived_active, str) or _safe_repo_path(archived_active) != active:
+        raise PromotionError("Rollback archive was created for a different active checkpoint path.")
     entries = manifest.get("artifacts")
     if not isinstance(entries, dict) or "checkpoint" not in entries:
         raise PromotionError("Rollback archive has no previous active checkpoint.")
+
+    # Verify the complete archive before touching the current active files.
+    verified_sources: dict[str, tuple[Path, str]] = {}
+    for kind in ("checkpoint", "metadata", "inference_companion"):
+        entry = entries.get(kind)
+        if entry is None:
+            continue
+        if not isinstance(entry, dict):
+            raise PromotionError("Rollback archive contains a malformed artifact entry.")
+        filename = entry.get("file")
+        digest = entry.get("sha256")
+        if not isinstance(filename, str) or Path(filename).name != filename or not isinstance(digest, str):
+            raise PromotionError("Rollback archive contains an unsafe artifact entry.")
+        source = _safe_repo_path(archive_dir / filename, must_exist=True)
+        if _sha256(source) != digest:
+            raise PromotionError("Rollback archive SHA-256 verification failed for " + filename)
+        verified_sources[kind] = (source, digest)
+    if "checkpoint" not in verified_sources:
+        raise PromotionError("Rollback archive is missing the verified checkpoint payload.")
+
     current_archive = _archive_active(active) if archive_current else None
+    destinations = dict(_active_artifact_paths(active))
     try:
         for kind in ("checkpoint", "metadata", "inference_companion"):
-            entry = entries.get(kind)
-            destination = dict(_active_artifact_paths(active)).get(kind)
-            if not isinstance(entry, dict) or destination is None:
-                if destination is not None and destination.exists():
+            destination = destinations[kind]
+            verified = verified_sources.get(kind)
+            if verified is None:
+                if destination.exists() or destination.is_symlink():
+                    if destination.is_dir() and not destination.is_symlink():
+                        raise PromotionError("Refusing to remove a directory at an active checkpoint artifact path.")
                     destination.unlink()
                 continue
-            filename = entry.get("file")
-            digest = entry.get("sha256")
-            if not isinstance(filename, str) or Path(filename).name != filename or not isinstance(digest, str):
-                raise PromotionError("Rollback archive contains an unsafe artifact entry.")
-            source = _safe_repo_path(archive_dir / filename, must_exist=True)
-            if _sha256(source) != digest:
-                raise PromotionError("Rollback archive SHA-256 verification failed for " + filename)
+            source, digest = verified
             _atomic_copy_verified(source, destination, digest)
         from syntra_ai import runtime
         runtime._get_resident_bundle(path=active, device_name="cpu")
-    except Exception:
+    except Exception as exc:
         if current_archive:
-            # Keep the just-created archive; the operator can restore it manually.
-            pass
-        raise
-    return {"rollback_archive_id": archive_id, "archive_created_for_replaced_checkpoint": current_archive, "active_checkpoint": str(active)}
+            try:
+                _restore_archive(active, current_archive, archive_current=False)
+            except Exception as restore_error:
+                raise PromotionError(
+                    "Rollback failed and automatic restoration of the previous active files also failed; "
+                    + str(exc) + "; recovery error: " + str(restore_error)
+                    + ". The safety archive is " + current_archive
+                ) from None
+        if isinstance(exc, PromotionError):
+            raise
+        raise PromotionError("Rollback failed; previous active files were restored where possible: " + str(exc)) from None
+    return {
+        "rollback_archive_id": archive_id,
+        "archive_created_for_replaced_checkpoint": current_archive,
+        "active_checkpoint": str(active),
+    }
 
 
 def _validate_runtime_checkpoint(path: Path) -> None:
@@ -363,15 +401,17 @@ def promote(report_path: str | Path, active_checkpoint: str | Path | None = None
     if dry_run:
         return {**candidate, "active_checkpoint": active, "dry_run": True, "archive_id": None}
 
-    archive_id = _archive_active(active)
     metadata_source = candidate["checkpoint"].with_suffix(candidate["checkpoint"].suffix + ".json")
     expected_metadata_hash = None
     snapshot = _read_json(candidate["snapshot"], maximum_bytes=1024 * 1024)
     artifact_hashes = snapshot["artifacts"]
-    if metadata_source.is_file() and not metadata_source.is_symlink():
+    if metadata_source.is_symlink():
+        raise PromotionError("Staged checkpoint metadata must not be a symbolic link.")
+    if metadata_source.is_file():
         expected_metadata_hash = artifact_hashes.get(metadata_source.name)
         if expected_metadata_hash != _sha256(metadata_source):
             raise PromotionError("Staged checkpoint metadata is not covered by its snapshot manifest.")
+    archive_id = _archive_active(active)
 
     companion = _active_artifact_paths(active)[2][1]
     try:
