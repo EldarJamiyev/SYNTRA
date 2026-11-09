@@ -1382,6 +1382,10 @@ def train(
                     raise RuntimeError("Training loss became non-finite.")
                 weighted_loss_total += float(loss.detach().item()) * micro_tokens
                 (loss * (micro_tokens / batch_supervised_tokens)).backward()
+                sampled_memory, device_memory_metric = device_memory_sample(device, torch)
+                if sampled_memory is not None:
+                    peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
+                del x, y, loss
 
             gradient_norm = torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
