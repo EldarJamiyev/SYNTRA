@@ -367,6 +367,49 @@ class TransformerTests(unittest.TestCase):
                 self.assertTrue(status()["resident_in_memory"])
                 clear_resident_cache()
 
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_atomic_checkpoint_replacement_invalidates_cache_when_size_and_mtime_match(self):
+        import shutil
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import (
+            _get_resident_bundle, _resident_cache_matches_checkpoint, clear_resident_cache
+        )
+
+        with tempfile.TemporaryDirectory(prefix="syntra-atomic-checkpoint-replacement-") as temp:
+            checkpoint = Path(temp) / "selected-model.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            model = SyntraTransformer(config)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": ByteBPETokenizer.empty().to_dict(),
+                "model_state": model.state_dict(),
+                "step": 1,
+                "training_mode": "causal-source-pretraining",
+            }, checkpoint)
+
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(checkpoint)}):
+                clear_resident_cache()
+                _target, resident_before, *_ = _get_resident_bundle(path=checkpoint, device_name="cpu")
+                self.assertTrue(_resident_cache_matches_checkpoint(checkpoint))
+                original_stat = checkpoint.stat()
+                replacement = checkpoint.with_name("replacement.pt")
+                shutil.copy2(checkpoint, replacement)
+                os.replace(replacement, checkpoint)
+                replaced_stat = checkpoint.stat()
+                self.assertEqual(original_stat.st_size, replaced_stat.st_size)
+                self.assertEqual(original_stat.st_mtime_ns, replaced_stat.st_mtime_ns)
+                self.assertNotEqual(original_stat.st_ino, replaced_stat.st_ino)
+                self.assertFalse(
+                    _resident_cache_matches_checkpoint(checkpoint),
+                    "atomic replacement must invalidate resident state even when size/mtime are preserved",
+                )
+                _target, resident_after, *_ = _get_resident_bundle(path=checkpoint, device_name="cpu")
+                self.assertIsNot(resident_before, resident_after)
+                clear_resident_cache()
+
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):
         from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
 
