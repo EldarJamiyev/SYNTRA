@@ -26,6 +26,10 @@ from .curriculum import _safe_none_patch_examples, _write_jsonl_atomically, _mod
 MAX_REASONING_EXAMPLES = 5_000
 MAX_PAIRED_SOURCE_CHARS = 12_000
 MAX_REASONING_SCAN_FILES = 10_000
+_PREFERRED_SUFFIXES = {
+    "javascript": (".js", ".jsx", ".mjs", ".cjs"),
+    "typescript": (".ts", ".tsx", ".mts", ".cts"),
+}
 _JS_IMPORT = re.compile(
     r"""(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*["'](?P<specifier>\.{1,2}/[^"']+)["']"""
 )
@@ -57,7 +61,7 @@ def _relative_module_candidates(
 ) -> list[str]:
     parent = posixpath.dirname(relative_path)
     base = posixpath.normpath(posixpath.join(parent, specifier))
-    suffixes = sorted(LANGUAGE_SUFFIXES[language])
+    suffixes = _PREFERRED_SUFFIXES[language]
     candidates = [base] if PurePosixPath(base).suffix else [base + suffix for suffix in suffixes]
     candidates.extend(posixpath.join(base, "index" + suffix) for suffix in suffixes)
     return candidates
@@ -299,11 +303,15 @@ def synthesize_multifile_reasoning_curriculum(
                 considered_pairs += 1
                 left_repair = sorted(
                     implementation["repairs"],
-                    key=lambda item: (item["line"], item["rule"], item["before"]),
+                    key=lambda item: (
+                        item["line"], item.get("rule", "python-none-sentinel"), item["before"]
+                    ),
                 )[0]
                 right_repair = sorted(
                     consumer["repairs"],
-                    key=lambda item: (item["line"], item["rule"], item["before"]),
+                    key=lambda item: (
+                        item["line"], item.get("rule", "python-none-sentinel"), item["before"]
+                    ),
                 )[0]
                 pair_paths = sorted((implementation_path, consumer_path))
                 pair_id = hashlib.sha256(
