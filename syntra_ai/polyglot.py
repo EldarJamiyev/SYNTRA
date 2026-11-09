@@ -179,33 +179,32 @@ def _parameter_names(signature: str, language: str) -> list[str]:
         if go_signature is None:
             return []
         parameters = go_signature.group("parameters")
-        opening = -1
     else:
         opening = signature.find("(")
-    if opening < 0:
-        return []
-    depth = 0
-    quote: str | None = None
-    closing = -1
-    for index in range(opening, len(signature)):
-        char = signature[index]
-        if quote is not None:
-            if char == quote and (index == 0 or signature[index - 1] != "\\"):
-                quote = None
-            continue
-        if char in ("'", '"', chr(96)):
-            quote = char
-        elif char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            if depth == 0:
-                closing = index
-                break
-    if language != "go":
+        if opening < 0:
+            return []
+        depth = 0
+        quote: str | None = None
+        closing = -1
+        for index in range(opening, len(signature)):
+            char = signature[index]
+            if quote is not None:
+                if char == quote and (index == 0 or signature[index - 1] != "\\"):
+                    quote = None
+                continue
+            if char in ("'", '"', chr(96)):
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    closing = index
+                    break
         if closing < 0:
             return []
         parameters = signature[opening + 1:closing]
+
     segments: list[str] = []
     start = 0
     depth = 0
