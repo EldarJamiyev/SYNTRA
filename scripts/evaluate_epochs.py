@@ -1231,18 +1231,27 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         if not args.skip_sft:
-            from syntra_ai.curriculum import synthesize_repository_curriculum
-            curriculum_result = synthesize_repository_curriculum(
-                root=corpus_root,
-                output_path=curriculum_path,
+            repository_curriculum_path = run_root / "curriculum" / "repository.jsonl"
+            reasoning_curriculum_path = run_root / "curriculum" / "reasoning.jsonl"
+            curriculum_generation = _run_phase7_curriculum(
+                corpus_root,
+                repository_curriculum_path,
+                reasoning_curriculum_path,
                 max_examples=cur["max_examples"],
-                exclude_paths=generated_artifact_roots,
+                languages=cur["languages"],
             )
-            if not isinstance(curriculum_result, dict) or not curriculum_result.get("dataset_path"):
-                raise OrchestrationError("Curriculum synthesis did not return a verified output dataset.")
-            if Path(curriculum_result["dataset_path"]).resolve() != curriculum_path.resolve():
-                raise OrchestrationError("Curriculum synthesis output path differs from the requested local dataset path.")
-            manifest["curriculum_result"] = curriculum_result
+            curriculum_merge = _merge_phase7_curricula(
+                repository_curriculum_path,
+                reasoning_curriculum_path,
+                curriculum_path,
+                max_examples_per_generator=cur["max_examples"],
+            )
+            if Path(curriculum_merge["dataset_path"]).resolve() != curriculum_path.resolve():
+                raise OrchestrationError("Merged Phase 7 SFT dataset differs from the configured curriculum path.")
+            manifest["curriculum_result"] = {
+                "generation": curriculum_generation,
+                "merge": curriculum_merge,
+            }
             _write_json_atomic(run_root / "run_manifest.json", manifest)
 
         if not args.skip_pretraining:
@@ -1314,11 +1323,19 @@ def main(argv: list[str] | None = None) -> int:
             from syntra_ai.instruction import audit_instruction_dataset, finetune
             from syntra_ai.runtime import _read_checkpoint
             _, _, checkpoint_config, checkpoint_tokenizer = _read_checkpoint(checkpoint)
+            context_filter = _filter_multifile_prompts_to_checkpoint_context(
+                curriculum_path,
+                checkpoint_tokenizer,
+                checkpoint_config.seq_len,
+            )
+            training_results["curriculum_context_filter"] = context_filter
+            manifest["curriculum_context_filter"] = context_filter
+            _write_json_atomic(run_root / "run_manifest.json", manifest)
             audit = audit_instruction_dataset(
                 curriculum_path,
                 seq_len=checkpoint_config.seq_len,
                 tokenizer=checkpoint_tokenizer,
-                max_examples=cur["max_examples"],
+                max_examples=2 * cur["max_examples"],
                 max_tokens=cur["max_tokens"],
             )
             training_results["curriculum_audit"] = audit
@@ -1329,7 +1346,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(
                 f"[sft] audited {audit.get('example_count')} source records and "
-                f"{audit.get('context_window_count')} checkpoint-tokenized contexts.",
+                f"{audit.get('context_window_count')} checkpoint-tokenized contexts; "
+                f"kept {context_filter['multi_file_records_kept']}/{context_filter['multi_file_candidates']} "
+                f"multi-file prompts within {context_filter['multi_file_prompt_token_limit']} tokens "
+                f"(dropped {context_filter['multi_file_records_dropped_prompt_overflow']} over-context prompts).",
                 flush=True,
             )
             sft_result = finetune(
