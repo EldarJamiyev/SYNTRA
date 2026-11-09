@@ -272,7 +272,8 @@ class TransformerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="syntra-companion-source-identity-") as temp:
             root = Path(temp)
             checkpoint = root / "fixture.pt"
-            replacement = root / "replacement.pt"
+            replacement = root / "staging" / "fixture.pt"
+            replacement.parent.mkdir()
             config = ModelConfig(vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
             tokenizer = ByteBPETokenizer.empty()
             initial_model = SyntraTransformer(config)
@@ -312,10 +313,12 @@ class TransformerTests(unittest.TestCase):
                 loaded["model_state"]["token_embedding.weight"],
                 replacement_model.token_embedding.weight,
             )
+            from syntra_ai.runtime import _file_stat_identity_record
             old_companion = torch.load(companion, map_location="cpu", weights_only=True)
             self.assertNotEqual(
-                loaded["source_checkpoint_identity"],
                 old_companion["source_checkpoint_identity"],
+                _file_stat_identity_record(checkpoint),
+                "the companion must prove it belongs to this exact source file revision",
             )
 
     def test_checkpoint_identity_changes_when_native_checkpoint_revision_changes(self):
