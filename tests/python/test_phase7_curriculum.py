@@ -84,7 +84,7 @@ class PolyglotCurriculumTests(unittest.TestCase):
         by_name = {item["name"]: item for item in metadata["symbols"]}
         self.assertTrue(by_name["getName"]["quality"]["boilerplate"])
         self.assertTrue(by_name["setName"]["quality"]["boilerplate"])
-        self.assertEqual(by_name["notImplemented"]["quality_score"], 0)
+        self.assertTrue(by_name["notImplemented"]["quality"]["boilerplate"])
 
     def test_polyglot_fingerprint_normalizes_identifiers_but_keeps_behavior(self):
         from syntra_ai.polyglot import _polyglot_fingerprint
