@@ -338,11 +338,19 @@ def synthesize_multifile_reasoning_curriculum(
                     "edits": [
                         {
                             "path": implementation_path, "find": left_repair["before"],
-                            "replace": left_repair["after"], "reason": left_repair["reason"],
+                            "replace": left_repair["after"],
+                            "reason": left_repair.get(
+                                "reason",
+                                "Use identity comparison when checking the Python None singleton.",
+                            ),
                         },
                         {
                             "path": consumer_path, "find": right_repair["before"],
-                            "replace": right_repair["after"], "reason": right_repair["reason"],
+                            "replace": right_repair["after"],
+                            "reason": right_repair.get(
+                                "reason",
+                                "Use identity comparison when checking the Python None singleton.",
+                            ),
                         },
                     ],
                 }
