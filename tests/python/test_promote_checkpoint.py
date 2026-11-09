@@ -74,13 +74,15 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         return staged
 
     def _report(self, run_root: Path, staged: Path, digest: str) -> Path:
+        suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
+        task_ids = [task["id"] for task in suite["tasks"]]
         report_dir = run_root / "evaluations"
         report_dir.mkdir(parents=True)
         report_path = report_dir / "sft-step-000000020.json"
         report = {
             "schema_version": 1,
             "benchmark_track": "raw-native-model",
-            "suite_version": "1.3.0",
+            "suite_version": suite["version"],
             "run_id": "raw-model-phase5-test",
             "started_at": "2026-11-09T10:01:00Z",
             "completed_at": "2026-11-09T10:02:00Z",
@@ -91,13 +93,13 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
                 "trained_steps": 20,
             },
             "summary": {
-                "task_count": 1,
-                "baseline_valid_task_count": 1,
+                "task_count": len(task_ids),
+                "baseline_valid_task_count": len(task_ids),
                 "invalid_fixture_count": 0,
-                "completed_task_count": 1,
+                "completed_task_count": len(task_ids),
                 "task_completion_rate": 1.0,
             },
-            "tasks": [{"id": "python-test", "baseline_validated": True, "task_completion": True}],
+            "tasks": [{"id": task_id, "baseline_validated": True, "task_completion": True} for task_id in task_ids],
         }
         report_path.write_text(json.dumps(report), encoding="utf-8")
         return report_path
