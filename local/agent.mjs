@@ -461,7 +461,7 @@ async function exactPromptTokenCount(modelRequest, prompt, timeoutMs, signal) {
   return result.token_count;
 }
 
-async function compressContextPrompt(modelRequest, prompt, usableContextTokens, timeoutMs, signal) {
+async function compressContextPromptInternal(modelRequest, prompt, usableContextTokens, timeoutMs, signal) {
   if (typeof prompt !== "string" || !prompt || !Number.isInteger(usableContextTokens) || usableContextTokens < 1) {
     throw new Error("The native context-overflow response did not provide a usable compression budget.");
   }
@@ -614,9 +614,7 @@ export async function compressContextPrompt(modelRequest, prompt, usableContextT
   return compressContextPromptInternal(modelRequest, prompt, usableContextTokens, timeoutMs, signal);
 }
 
-async function compressContextPromptInternal(modelRequest, prompt, usableContextTokens, timeoutMs, signal) {
-  return compressContextPrompt(modelRequest, prompt, usableContextTokens, timeoutMs, signal);
-}
+
 
 export async function modelJson(modelRequest, route, body, timeoutMs = 15000, signal) {
   try {
