@@ -214,7 +214,7 @@ A benchmark report is selected explicitly. The promotion tool authenticates the 
 
 ```powershell
 npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
-npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json"
+npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --confirm-sha256 "<exact-sha256-from-dry-run>"
 npm run brain:promote -- --rollback "<archive-id-returned-by-promotion>"
 ```
 
