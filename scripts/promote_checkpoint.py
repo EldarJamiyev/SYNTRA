@@ -426,8 +426,19 @@ def _validate_runtime_checkpoint(path: Path) -> None:
         raise PromotionError("SYNTRA runtime rejected the staged checkpoint: " + str(exc)) from None
 
 
-def promote(report_path: str | Path, active_checkpoint: str | Path | None = None, *, dry_run: bool = False) -> dict[str, Any]:
+def promote(
+    report_path: str | Path,
+    active_checkpoint: str | Path | None = None,
+    *,
+    dry_run: bool = False,
+    confirm_sha256: str | None = None,
+) -> dict[str, Any]:
     candidate = verify_benchmark_candidate(report_path)
+    if not dry_run and confirm_sha256 != candidate["checkpoint_sha256"]:
+        raise PromotionError(
+            "Promotion requires --confirm-sha256 with the exact verified checkpoint digest: "
+            + candidate["checkpoint_sha256"]
+        )
     from syntra_ai import runtime
     active = _safe_repo_path(active_checkpoint or runtime.checkpoint_path())
     if active == candidate["checkpoint"]:
@@ -497,6 +508,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     group.add_argument("--rollback", metavar="ARCHIVE_ID", help="Restore a previous active checkpoint from data/checkpoints/archive/.")
     parser.add_argument("--active-checkpoint", help="Optional active checkpoint override; it must remain inside the repository.")
     parser.add_argument("--dry-run", action="store_true", help="Validate benchmark provenance and runtime loadability without changing active files.")
+    parser.add_argument("--confirm-sha256", help="Required for promotion: explicitly acknowledge the exact verified staging checkpoint SHA-256 printed by --dry-run.")
     return parser.parse_args(argv)
 
 
@@ -508,7 +520,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.rollback:
             result = _restore_archive(active, args.rollback)
         else:
-            result = promote(args.report, active_checkpoint=active, dry_run=args.dry_run)
+            result = promote(
+                args.report,
+                active_checkpoint=active,
+                dry_run=args.dry_run,
+                confirm_sha256=args.confirm_sha256,
+            )
         serializable = {
             key: str(value) if isinstance(value, Path) else value
             for key, value in result.items()
