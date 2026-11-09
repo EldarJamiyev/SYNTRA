@@ -272,7 +272,8 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         or checkpoint.parents[3] != report_file.parent.parent
     ):
         raise PromotionError("Benchmark report and staged checkpoint are not from the same structured evaluation run.")
-    if report.get("isolation", {}).get("mode") != "docker":
+    isolation = report.get("isolation")
+    if not isinstance(isolation, dict) or isolation.get("mode") != "docker":
         raise PromotionError("Checkpoint promotion requires a completed network-disabled Docker benchmark, not host execution.")
     return {
         "report": report_file,
