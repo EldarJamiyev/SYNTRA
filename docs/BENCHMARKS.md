@@ -198,7 +198,7 @@ CPU RSS uses the operating system's process high-water metric. CUDA memory uses 
 npm run brain:smoke
 ```
 
-The profile is intentionally small and CPU-selected for predictable portability. It remains an integration smoke test, not evidence of model quality or a timing guarantee; Docker image availability and benchmark task execution still determine total duration.
+The profile is intentionally small and CPU-selected for predictable portability. It runs one actual task per supported language (Python, JavaScript, TypeScript, Go, Rust) while preflighting every local language image. It remains an integration smoke test, not evidence of model quality or a timing guarantee; Docker image availability and task execution still determine total duration. Its partial five-task report is rejected by the promotion utility, which requires the full current 13-task suite.
 
 `configs/training/local_cpu_fast.json` targets low-memory CPU machines with a 4-layer/width-64 model, 256-token context, physical batch 1, and gradient accumulation. `configs/training/local_gpu_scale.json` uses 8 layers, 8 heads, width 256 and 1024-token context for suitable dedicated GPU or high-memory unified-memory systems. Both keep micro-batches distinct from optimizer steps. Accumulation normalizes gradients by actual supervised-token counts and clips once per optimizer update. Select the backend explicitly to avoid silently using CPU on a machine where GPU acceleration was intended.
 
