@@ -148,7 +148,10 @@ def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelC
             source_mtime = target.stat().st_mtime_ns
         except OSError:
             source_mtime = -1
-        if saved.get("source_checkpoint_mtime_ns") != source_mtime:
+        # An mtime-only binding is insufficient: atomic promotion can replace
+        # the source inode while preserving its size and mtime. Legacy companion
+        # files without the full identity deliberately fall back to source weights.
+        if saved.get("source_checkpoint_identity") != _file_stat_identity_record(target):
             saved, config, tokenizer = load_validated(target)
     return target, saved, config, tokenizer
 
