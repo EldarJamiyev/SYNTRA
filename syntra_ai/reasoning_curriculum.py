@@ -155,16 +155,18 @@ def synthesize_multifile_reasoning_curriculum(
         zip(corpus.files, corpus.documents),
         key=lambda item: os.path.normcase(item[0]),
     ):
-        resolved = Path(source_path).resolve()
+        source_real = os.path.realpath(os.fspath(source_path), strict=True)
+        source_norm = os.path.normcase(os.path.normpath(source_real))
         matched_root: int | None = None
         relative: str | None = None
         for index, selected_root in enumerate(roots):
-            try:
-                relative = resolved.relative_to(selected_root).as_posix()
+            root_real = os.path.realpath(os.fspath(selected_root), strict=True)
+            root_norm = os.path.normcase(os.path.normpath(root_real))
+            root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+            if source_norm == root_norm or source_norm.startswith(root_prefix):
+                relative = Path(os.path.relpath(source_real, root_real)).as_posix()
                 matched_root = index
                 break
-            except ValueError:
-                continue
         if matched_root is None or relative is None:
             raise ValueError("A reasoning source file escaped all approved curriculum roots.")
         language = language_for_path(relative)
