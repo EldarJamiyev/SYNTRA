@@ -411,10 +411,13 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
                 "tokens_per_second": 123.5, "supervised_tokens_processed": 6000,
                 "step_latency_ms": 8.2, "mean_step_latency_ms": 9.1,
                 "peak_rss_bytes": 512 * 1024 * 1024,
+                "peak_rss_scope": "process_lifetime_high_water",
                 "peak_device_memory_bytes": 1024 * 1024 * 1024,
                 "device_memory_metric": "cuda_peak_allocated",
                 "estimated_training_memory_bytes": 2 * 1024 * 1024 * 1024,
                 "device": "cuda", "gradient_accumulation_steps": 2,
+                "throughput_basis": "supervised_target_tokens",
+                "throughput_scope": "stage_wall_clock_including_validation_and_checkpoint_io",
                 "suite_version": "1.3.0", "report": "report.json", "log": "run.log",
             }]
             markdown, csv_path = evaluate_epochs.write_summary(
@@ -432,6 +435,9 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
             self.assertEqual(row["peak_rss_bytes"], str(512 * 1024 * 1024))
             self.assertEqual(row["peak_device_memory_bytes"], str(1024 * 1024 * 1024))
             self.assertEqual(row["device_memory_metric"], "cuda_peak_allocated")
+            self.assertEqual(row["peak_rss_scope"], "process_lifetime_high_water")
+            self.assertEqual(row["throughput_basis"], "supervised_target_tokens")
+            self.assertEqual(row["throughput_scope"], "stage_wall_clock_including_validation_and_checkpoint_io")
 
     def test_ascii_trends_do_not_turn_missing_measurements_into_zero(self):
         empty = evaluate_epochs._ascii_plot([], "task_completion_rate", "Completion")
