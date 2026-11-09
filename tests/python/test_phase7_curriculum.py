@@ -110,6 +110,51 @@ class PolyglotCurriculumTests(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertNotEqual(a, c)
 
+    def test_repository_curriculum_deduplicates_polyglot_declarations_deterministically(self):
+        from syntra_ai.curriculum import synthesize_repository_curriculum
+
+        with tempfile.TemporaryDirectory(prefix="syntra-phase7-polyglot-dedup-") as temp:
+            root = Path(temp)
+            (root / "alpha.mjs").write_text(
+                "/** Normalize a user label. */\\n"
+                "export function normalize(input) {\\n"
+                "  const local = input.trim();\\n"
+                "  if (local.length > 1) return local.toLowerCase();\\n"
+                "  return local;\\n"
+                "}\\n",
+                encoding="utf-8",
+            )
+            (root / "beta.mjs").write_text(
+                "/** Format an incoming value. */\\n"
+                "export function format(value) {\\n"
+                "  const result = value.trim();\\n"
+                "  if (result.length > 1) return result.toLowerCase();\\n"
+                "  return result;\\n"
+                "}\\n",
+                encoding="utf-8",
+            )
+            first_output = root / "first.jsonl"
+            second_output = root / "second.jsonl"
+            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                first = synthesize_repository_curriculum(
+                    root=root, output_path=first_output, max_examples=20,
+                    languages=("javascript",),
+                )
+                second = synthesize_repository_curriculum(
+                    root=root, output_path=second_output, max_examples=20,
+                    languages=("javascript",),
+                )
+            self.assertEqual(first["quality_statistics"]["near_duplicate_symbols_skipped"], 1)
+            self.assertEqual(
+                first_output.read_text(encoding="utf-8"),
+                second_output.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(first["examples_by_type"], second["examples_by_type"])
+            self.assertEqual(
+                first["quality_statistics"]["by_language"]["javascript"]["quality_scored"],
+                2,
+            )
+
     def test_language_repairs_are_exact_unique_and_comment_safe(self):
         from syntra_ai.polyglot import safe_repair_examples
 
