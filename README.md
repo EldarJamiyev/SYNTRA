@@ -60,7 +60,7 @@ The current `main` line includes Phases 1–8: the standalone PyTorch brain, loc
 | Curriculum | Python AST extraction plus bounded JavaScript, TypeScript, Go, and Rust declaration/block curation. |
 | Reasoning traces | Source-linked two-file localization tasks with a thought completion and multi-file SYNTRA_AGENT_PATCH_V1 output. |
 | Benchmarking | Separate full-agent and direct-model regression suites with saved reports and explicit limitations. |
-| Promotion integrity | Paired pretraining/SFT evaluation, strict aggregate improvement, zero regressions on previously passing tasks, and explicit initial-baseline acknowledgement. |
+| Promotion integrity | Paired pretraining/SFT evaluation, strict improvement in fully verified tasks (target plus regression tests), zero regressions on previously passing tasks, and explicit initial-baseline acknowledgement. |
 
 Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 
