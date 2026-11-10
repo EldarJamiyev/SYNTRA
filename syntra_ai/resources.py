@@ -132,6 +132,14 @@ def validate_training_memory_budget(
         )
     return estimate
 
+def checkpoint_load_budget_bytes(available_bytes: int | None = None) -> int | None:
+    """Return the checkpoint size ceiling for the current available-RAM budget."""
+    available = _system_available_memory_bytes() if available_bytes is None else int(available_bytes)
+    if available is None or available <= 0:
+        return None
+    return int(available * CHECKPOINT_LOAD_FRACTION)
+
+
 def validate_checkpoint_load_budget(
     checkpoint_path: str | Path,
     available_bytes: int | None = None,
@@ -146,8 +154,8 @@ def validate_checkpoint_load_budget(
         raise ValueError("The selected checkpoint file is empty.")
 
     available = _system_available_memory_bytes() if available_bytes is None else int(available_bytes)
-    if available is not None and available > 0:
-        budget = int(available * CHECKPOINT_LOAD_FRACTION)
+    budget = checkpoint_load_budget_bytes(available)
+    if available is not None and available > 0 and budget is not None:
         if size > budget:
             size_gib = size / (1024 ** 3)
             available_gib = available / (1024 ** 3)
