@@ -429,6 +429,7 @@ SYNTRA/
 | [Architecture](docs/ARCHITECTURE.md) | Runtime components, request flow, agent orchestration, and recovery |
 | [Native model runtime](docs/NATIVE_MODEL.md) | PyTorch model, tokenizer, context integrity, training, and inference |
 | [Phase 9 promotion gate](docs/PHASE9_EVIDENCE_GATED_PROMOTION.md) | Paired benchmark comparison, regression policy, and safe initial activation |
+| [Phase 10 context integrity](docs/PHASE10_INSTRUCTION_CONTEXT_INTEGRITY.md) | Lossless SFT prompts, explicit context overflow, and completion-window regression coverage |
 | [Local baseline preflight](docs/LOCAL_BASELINE_PREFLIGHT.md) | Python/PyTorch device readiness, local Docker image digests, and GO/NO-GO runbook |
 | [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
 | [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
