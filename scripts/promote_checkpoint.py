@@ -269,6 +269,34 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         raise PromotionError("Checkpoint snapshot manifest does not authenticate this staging artifact.")
     if snapshot.get("stage") not in {"pretraining", "sft", "baseline"}:
         raise PromotionError("Checkpoint snapshot stage is not recognized.")
+    instruction_dataset_sha256 = None
+    instruction_dataset_bytes = None
+    metadata_path = checkpoint.with_suffix(checkpoint.suffix + ".json")
+    if snapshot["stage"] == "sft":
+        if metadata_path.is_symlink() or not metadata_path.is_file():
+            raise PromotionError("SFT checkpoint snapshot is missing its regular provenance sidecar.")
+        metadata_digest = artifacts.get(metadata_path.name)
+        if not isinstance(metadata_digest, str) or _sha256(metadata_path) != metadata_digest:
+            raise PromotionError("SFT checkpoint provenance sidecar is not authenticated by the snapshot manifest.")
+        sidecar = _read_json(metadata_path, maximum_bytes=5 * 1024 * 1024)
+        instruction_dataset_sha256 = sidecar.get("instruction_dataset_sha256")
+        instruction_dataset_bytes = sidecar.get("instruction_dataset_bytes")
+        if (
+            sidecar.get("training_mode") != "supervised-instruction-finetuning"
+            or not isinstance(instruction_dataset_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", instruction_dataset_sha256) is None
+            or type(instruction_dataset_bytes) is not int
+            or instruction_dataset_bytes < 0
+        ):
+            raise PromotionError("SFT checkpoint sidecar does not contain valid exact dataset provenance.")
+        if (
+            model.get("instruction_dataset_sha256") != instruction_dataset_sha256
+            or model.get("instruction_dataset_bytes") != instruction_dataset_bytes
+        ):
+            raise PromotionError("Benchmark report SFT dataset identity does not match the staged checkpoint sidecar.")
+    else:
+        if model.get("instruction_dataset_sha256") is not None or model.get("instruction_dataset_bytes") is not None:
+            raise PromotionError("Non-SFT benchmark report must not claim instruction-dataset provenance.")
     snapshot_step = snapshot.get("global_step")
     if type(snapshot_step) is not int or snapshot_step < 0:
         raise PromotionError("Checkpoint snapshot does not contain a valid global step.")
@@ -307,6 +335,8 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         "fully_verified_task_count": fully_verified_count,
         "fully_verified_task_rate": fully_verified_count / valid_count,
         "task_count": task_count,
+        "instruction_dataset_sha256": instruction_dataset_sha256,
+        "instruction_dataset_bytes": instruction_dataset_bytes,
         "fully_verified_by_id": {
             item["id"]: item["task_completion"] is True and item["regression_prevention"] is True
             for item in tasks
@@ -583,6 +613,8 @@ def promote(
         "promoted": True,
         "active_checkpoint": str(active),
         "checkpoint_sha256": candidate["checkpoint_sha256"],
+        "instruction_dataset_sha256": candidate["instruction_dataset_sha256"],
+        "instruction_dataset_bytes": candidate["instruction_dataset_bytes"],
         "benchmark_report": str(candidate["report"]),
         "benchmark_run_id": candidate["run_id"],
         "task_completion_rate": candidate["task_completion_rate"],

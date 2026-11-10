@@ -62,7 +62,8 @@ The current `main` line includes Phases 1–10: the standalone PyTorch brain, lo
 | Benchmarking | Separate full-agent and direct-model regression suites with saved reports and explicit limitations. |
 | Promotion integrity | Paired pretraining/SFT evaluation, strict improvement in fully verified tasks (target plus regression tests), zero regressions on previously passing tasks, and explicit initial-baseline acknowledgement. |
 | Instruction context integrity | SFT rejects prompts that exceed the selected checkpoint context instead of silently dropping leading task/system instructions; completion tokens remain supervised across bounded windows. |
-| SFT dataset provenance (Phase 11 proposal) | The exact JSONL byte digest and size are exposed by audit and retained in training reports, full checkpoints, inference companions, and sidecar metadata. |
+| SFT dataset provenance (Phase 11) | The exact JSONL byte digest and size are exposed by audit and retained in training reports, full checkpoints, inference companions, and sidecar metadata. |
+| Evaluation lineage (Phase 12 proposal) | Raw-model benchmark reports carry the SFT dataset identity, and promotion verifies that report identity against the staged, manifest-authenticated checkpoint sidecar. |
 
 Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 
