@@ -1,0 +1,11 @@
+import assert from "node:assert/strict";
+import { mergeConfig } from "../src/config.mjs";
+const base = { api: { host: "localhost", port: 3000 }, enabled: true };
+const override = { api: { port: 8080 } };
+assert.deepEqual(mergeConfig(base, override), { api: { host: "localhost", port: 8080 }, enabled: true });
+assert.deepEqual(mergeConfig({ flags: ["a", "b"] }, { flags: ["c"] }), { flags: ["c"] });
+const originalBase = { nested: { keep: 1, replace: 2 } };
+const originalOverride = { nested: { replace: 3 } };
+mergeConfig(originalBase, originalOverride);
+assert.deepEqual(originalBase, { nested: { keep: 1, replace: 2 } });
+assert.deepEqual(originalOverride, { nested: { replace: 3 } });

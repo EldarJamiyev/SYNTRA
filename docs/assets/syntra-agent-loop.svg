@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="440" viewBox="0 0 1280 440" role="img" aria-labelledby="title desc">
+<title id="title">SYNTRA evidence-driven coding agent workflow</title><desc id="desc">A seven-stage process from user goal through project inspection, context retrieval, structured patching, review, isolated verification and a human-approved apply.</desc>
+<defs>
+ <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0a111e"/><stop offset="1" stop-color="#151c31"/></linearGradient>
+ <linearGradient id="accent" x2="1"><stop stop-color="#7be4cf"/><stop offset=".5" stop-color="#88b4ff"/><stop offset="1" stop-color="#b69bff"/></linearGradient>
+ <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0L6 3L0 6" fill="none" stroke="#8ea8d6" stroke-width="1.2"/></marker>
+</defs>
+<rect width="1280" height="440" rx="24" fill="url(#bg)"/>
+<text x="54" y="58" fill="#f1f5ff" font-family="Inter,Segoe UI,Arial" font-size="25" font-weight="700">From request to reviewed change</text>
+<text x="54" y="86" fill="#98a8c1" font-family="Inter,Segoe UI,Arial" font-size="14">Bounded reasoning, explicit evidence, isolated checks and a deliberate human apply step.</text>
+<g font-family="Inter,Segoe UI,Arial">
+ <g transform="translate(50 151)">
+  <rect width="148" height="142" rx="15" fill="#152c2d" stroke="#79ddc8"/><circle cx="24" cy="26" r="14" fill="#79ddc8" fill-opacity=".18"/><text x="24" y="31" fill="#9df0df" text-anchor="middle" font-size="13" font-weight="700">01</text><text x="18" y="69" fill="#e7fbf6" font-size="15" font-weight="700">Understand</text><text x="18" y="94" fill="#a7c5c0" font-size="12">User goal + scope</text><text x="18" y="113" fill="#a7c5c0" font-size="12">Acceptance criteria</text>
+ </g>
+ <path d="M198 222H218" stroke="#8ea8d6" stroke-width="2" marker-end="url(#arrow)"/>
+ <g transform="translate(224 151)">
+  <rect width="148" height="142" rx="15" fill="#17283a" stroke="#83acfb"/><circle cx="24" cy="26" r="14" fill="#83acfb" fill-opacity=".18"/><text x="24" y="31" fill="#a9caff" text-anchor="middle" font-size="13" font-weight="700">02</text><text x="18" y="69" fill="#edf4ff" font-size="15" font-weight="700">Inspect</text><text x="18" y="94" fill="#adbed6" font-size="12">Workspace inventory</text><text x="18" y="113" fill="#adbed6" font-size="12">Imports + Git baseline</text>
+ </g>
+ <path d="M372 222H392" stroke="#8ea8d6" stroke-width="2" marker-end="url(#arrow)"/>
+ <g transform="translate(398 151)">
+  <rect width="148" height="142" rx="15" fill="#202741" stroke="#9b9de8"/><circle cx="24" cy="26" r="14" fill="#9b9de8" fill-opacity=".18"/><text x="24" y="31" fill="#c5c7ff" text-anchor="middle" font-size="13" font-weight="700">03</text><text x="18" y="69" fill="#f0efff" font-size="15" font-weight="700">Retrieve</text><text x="18" y="94" fill="#bebde0" font-size="12">Lexical · symbol</text><text x="18" y="113" fill="#bebde0" font-size="12">Memory · semantic</text>
+ </g>
+ <path d="M546 222H566" stroke="#8ea8d6" stroke-width="2" marker-end="url(#arrow)"/>
+ <g transform="translate(572 151)">
+  <rect width="148" height="142" rx="15" fill="#262641" stroke="#b49cff"/><circle cx="24" cy="26" r="14" fill="#b49cff" fill-opacity=".18"/><text x="24" y="31" fill="#d8c8ff" text-anchor="middle" font-size="13" font-weight="700">04</text><text x="18" y="69" fill="#f5efff" font-size="15" font-weight="700">Generate</text><text x="18" y="94" fill="#c9bde3" font-size="12">Structured exact patch</text><text x="18" y="113" fill="#c9bde3" font-size="12">Path + hash validation</text>
+ </g>
+ <path d="M720 222H740" stroke="#8ea8d6" stroke-width="2" marker-end="url(#arrow)"/>
+ <g transform="translate(746 151)">
+  <rect width="148" height="142" rx="15" fill="#262a40" stroke="#aaaeea"/><circle cx="24" cy="26" r="14" fill="#aaaeea" fill-opacity=".18"/><text x="24" y="31" fill="#d0d2ff" text-anchor="middle" font-size="13" font-weight="700">05</text><text x="18" y="69" fill="#f1f2ff" font-size="15" font-weight="700">Review</text><text x="18" y="94" fill="#c0c9df" font-size="12">Independent pass if set</text><text x="18" y="113" fill="#c0c9df" font-size="12">Blocking issues → repair</text>
+ </g>
+ <path d="M894 222H914" stroke="#8ea8d6" stroke-width="2" marker-end="url(#arrow)"/>
+ <g transform="translate(920 151)">
+  <rect width="148" height="142" rx="15" fill="#1c2d35" stroke="#83d8d0"/><circle cx="24" cy="26" r="14" fill="#83d8d0" fill-opacity=".18"/><text x="24" y="31" fill="#a9eee7" text-anchor="middle" font-size="13" font-weight="700">06</text><text x="18" y="69" fill="#e7fbfa" font-size="15" font-weight="700">Verify</text><text x="18" y="94" fill="#b0d2d2" font-size="12">Offline candidate checks</text><text x="18" y="113" fill="#b0d2d2" font-size="12">Changed-file integrity</text>
+ </g>
+ <path d="M1068 222H1088" stroke="#8ea8d6" stroke-width="2" marker-end="url(#arrow)"/>
+ <g transform="translate(1094 151)">
+  <rect width="148" height="142" rx="15" fill="#302a3a" stroke="#c5a5ff"/><circle cx="24" cy="26" r="14" fill="#c5a5ff" fill-opacity=".18"/><text x="24" y="31" fill="#e0ceff" text-anchor="middle" font-size="13" font-weight="700">07</text><text x="18" y="69" fill="#fbf2ff" font-size="15" font-weight="700">Approve</text><text x="18" y="94" fill="#d2c2e5" font-size="12">Review saved diff</text><text x="18" y="113" fill="#d2c2e5" font-size="12">Explicit /apply</text>
+ </g>
+ <rect x="54" y="338" width="1172" height="52" rx="12" fill="#121e2c" stroke="#7996c4" stroke-opacity=".35"/>
+ <circle cx="78" cy="364" r="5" fill="#83d8d0"/><text x="96" y="369" fill="#b6c5d9" font-size="13">If checks fail: re-inspect candidate → feed concrete evidence back → bounded repair attempt → verify again.</text>
+</g>
+</svg>

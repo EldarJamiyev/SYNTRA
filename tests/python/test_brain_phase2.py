@@ -1146,19 +1146,17 @@ class LocalTrainingPipelineTests(unittest.TestCase):
 
             training_sources = source_names(training)
             validation_sources = source_names(validation)
-            self.assertFalse(
-                expected.issubset(training_sources) and expected.issubset(validation_sources),
-                "identical files must never be divided across the training and validation holdout",
+            self.assertIn(
+                expected,
+                [
+                    training_sources.intersection(expected),
+                    validation_sources.intersection(expected),
+                ],
             )
             self.assertEqual(
-                len(expected.intersection(training_sources)) in (0, len(expected)),
-                True,
+                expected.intersection(training_sources) | expected.intersection(validation_sources),
+                expected,
             )
-            self.assertEqual(
-                len(expected.intersection(validation_sources)) in (0, len(expected)),
-                True,
-            )
-            self.assertEqual(expected.intersection(training_sources) | expected.intersection(validation_sources), expected)
             self.assertFalse(training_sources.intersection(validation_sources))
 
     def test_raw_repository_duplicate_only_corpus_cannot_claim_independent_holdout(self):

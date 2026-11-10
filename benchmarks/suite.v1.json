@@ -1,0 +1,161 @@
+{
+  "version": "1.3.0",
+  "description": "Deterministic coding-agent baseline across JavaScript utilities, multi-file changes, asynchronous control flow, Python unittest projects, Go packages and Rust crates. Each available-runtime fixture begins with failing assertions; unavailable non-JavaScript runtimes are explicitly skipped.",
+  "tasks": [
+    {
+      "id": "utility-clamp",
+      "category": "utility",
+      "title": "Implement a bounded numeric clamp helper",
+      "fixture": "fixtures/utility-clamp",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/math.test.mjs",
+      "expectedChangedPaths": [
+        "src/math.mjs"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Implement and export clamp(value, min, max) in src/math.mjs. Return min when value is below the range, max when it is above, and the original value when inside the inclusive range. Assume finite numeric arguments and min <= max. Do not mutate inputs. Do not edit tests or package files."
+    },
+    {
+      "id": "string-slugify",
+      "category": "string-processing",
+      "title": "Normalize strings into URL-safe slugs",
+      "fixture": "fixtures/string-slugify",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/strings.test.mjs",
+      "expectedChangedPaths": [
+        "src/strings.mjs"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Fix and export slugify(value) in src/strings.mjs. Preserve the existing null/undefined to empty-string behavior. Lowercase the string, replace every run of non-ASCII-alphanumeric characters with one hyphen, and trim hyphens from both ends. Do not edit tests or package files."
+    },
+    {
+      "id": "config-deep-merge",
+      "category": "configuration",
+      "title": "Merge nested configuration objects safely",
+      "fixture": "fixtures/config-deep-merge",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/config.test.mjs",
+      "expectedChangedPaths": [
+        "src/config.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Fix mergeConfig(base, override) in src/config.mjs. Recursively merge nested plain objects, preserve base keys not present in override, and replace arrays rather than merging their elements. Neither input object may be mutated. Keep the exported function name and do not edit tests or package files."
+    },
+    {
+      "id": "positive-integer",
+      "category": "input-validation",
+      "title": "Validate positive safe integers",
+      "fixture": "fixtures/positive-integer",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/validation.test.mjs",
+      "expectedChangedPaths": [
+        "src/validation.mjs"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Implement and export parsePositiveInteger(value) in src/validation.mjs. Accept a number or a non-empty numeric string only when its parsed value is a positive safe integer. Return the integer value when valid and null for zero, negative, fractional, non-finite, unsafe, empty, or unsupported input. Do not mutate input or edit tests."
+    },
+    {
+      "id": "array-chunk",
+      "category": "data-structures",
+      "title": "Split arrays into fixed-size chunks",
+      "fixture": "fixtures/array-chunk",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/array.test.mjs",
+      "expectedChangedPaths": [
+        "src/array.mjs"
+      ],
+      "maxIterations": 2,
+      "maxSlices": 1,
+      "goal": "Implement and export chunkArray(values, size) in src/array.mjs. Return ordered consecutive chunks with no chunk larger than size. Preserve the original values. Return an empty array for non-arrays and sizes that are not positive safe integers. Do not mutate inputs or edit tests."
+    },
+    {
+      "id": "http-header-lookup",
+      "category": "api-semantics",
+      "title": "Implement case-insensitive safe HTTP header lookup",
+      "fixture": "fixtures/case-insensitive-header",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/headers.test.mjs",
+      "expectedChangedPaths": [
+        "src/headers.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement getHeader(headers, name) in src/headers.mjs. Look up HTTP header names case-insensitively without mutating the supplied object. Accept only a non-empty string name and a plain object or null-prototype object. Return undefined for invalid inputs, missing names, and inherited properties. Preserve the original header value. Do not edit tests or package files."
+    },
+    {
+      "id": "async-retry",
+      "category": "async-control",
+      "title": "Implement bounded asynchronous retry with selective retry policy",
+      "fixture": "fixtures/async-retry",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/retry.test.mjs",
+      "expectedChangedPaths": [
+        "src/retry.mjs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement and export async retry(operation, options={}) in src/retry.mjs. operation must be a function. Support maxAttempts (default 3, positive safe integer), shouldRetry(error, attempt) (default true), and delayMs (default 0, finite non-negative number). Call operation with a 1-based attempt number, return the first successful result, immediately rethrow when shouldRetry returns false, and throw the final error after maxAttempts. Use Promise-based delay without blocking the event loop. Do not edit tests or package files."
+    },
+    {
+      "id": "multi-file-cache",
+      "category": "multi-file",
+      "title": "Implement and export a reusable in-memory cache across modules",
+      "fixture": "fixtures/multi-file-cache",
+      "baselineCheck": "node-script",
+      "testEntry": "checks/cache.test.mjs",
+      "expectedChangedPaths": [
+        "src/cache.mjs",
+        "src/index.mjs"
+      ],
+      "maxIterations": 4,
+      "maxSlices": 2,
+      "goal": "Implement createCache() in src/cache.mjs and export it from src/index.mjs. The returned cache must use Map semantics and expose set(key,value) returning the cache, get(key), has(key), delete(key), clear(), and a read-only size getter. Preserve arbitrary key identity and values including undefined. Do not edit tests or package files."
+    },
+    {
+      "id": "python-slugify",
+      "category": "python",
+      "title": "Implement deterministic Python slug normalization",
+      "fixture": "fixtures/python-slugify",
+      "baselineCheck": "python-unittest",
+      "testEntry": "checks/test_slug.py",
+      "expectedChangedPaths": [
+        "src/slug.py"
+      ],
+      "maxIterations": 4,
+      "maxSlices": 1,
+      "goal": "Implement slugify(value: str) in src/slug.py. Return a lowercase ASCII slug. Replace each run of non-alphanumeric characters with one hyphen, trim leading and trailing hyphens, and treat characters outside [a-zA-Z0-9] as separators. Do not edit tests or pyproject.toml."
+    },
+    {
+      "id": "go-clamp",
+      "category": "go",
+      "title": "Implement integer clamp in a Go package",
+      "fixture": "fixtures/go-clamp",
+      "baselineCheck": "go-test",
+      "testEntry": "clamp_test.go",
+      "expectedChangedPaths": [
+        "clamp.go"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement Clamp(value, minimum, maximum int) int in clamp.go. Return minimum when value is smaller, maximum when greater, and value otherwise. Assume minimum is less than or equal to maximum. Do not edit tests or go.mod."
+    },
+    {
+      "id": "rust-key-normalize",
+      "category": "rust",
+      "title": "Implement normalized cache-key handling in Rust",
+      "fixture": "fixtures/rust-key-normalize",
+      "baselineCheck": "rust-test",
+      "testEntry": "tests/normalize.rs",
+      "expectedChangedPaths": [
+        "src/lib.rs"
+      ],
+      "maxIterations": 3,
+      "maxSlices": 1,
+      "goal": "Implement normalize_key(value: &str) -> String in src/lib.rs. Return the input trimmed of leading and trailing Unicode whitespace and converted to lowercase using Rust's Unicode-aware lowercase conversion. Do not edit tests or Cargo.toml."
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="520" viewBox="0 0 1440 520" role="img" aria-labelledby="title desc">
+  <title id="title">SYNTRA — Local intelligence. Real engineering.</title>
+  <desc id="desc">A premium dark graphite hero banner with a luminous abstract orbital mark and a connected local engineering workflow.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#080d17"/><stop offset=".55" stop-color="#101b2d"/><stop offset="1" stop-color="#131329"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8be9dc"/><stop offset=".48" stop-color="#74a7ff"/><stop offset="1" stop-color="#b59aff"/></linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#78dcca" stop-opacity=".1"/><stop offset=".5" stop-color="#8aaeff" stop-opacity=".8"/><stop offset="1" stop-color="#b59aff" stop-opacity=".2"/></linearGradient>
+    <radialGradient id="glow"><stop offset="0" stop-color="#6e9eff" stop-opacity=".26"/><stop offset="1" stop-color="#6e9eff" stop-opacity="0"/></radialGradient>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M36 0H0V36" fill="none" stroke="#9bb4d4" stroke-opacity=".065" stroke-width="1"/></pattern>
+    <filter id="blur"><feGaussianBlur stdDeviation="26"/></filter>
+    <filter id="soft"><feGaussianBlur stdDeviation="5"/></filter>
+  </defs>
+  <rect width="1440" height="520" rx="28" fill="url(#bg)"/>
+  <rect width="1440" height="520" rx="28" fill="url(#grid)"/>
+  <circle cx="1150" cy="248" r="280" fill="url(#glow)"/>
+  <circle cx="1185" cy="245" r="128" fill="#789dff" opacity=".12" filter="url(#blur)"/>
+  <path d="M0 415C240 350 390 500 635 410S1050 328 1440 382" fill="none" stroke="#6e9eff" stroke-opacity=".12" stroke-width="1.5"/>
+  <path d="M0 438C250 378 430 510 670 430S1090 360 1440 410" fill="none" stroke="#81dfd1" stroke-opacity=".09" stroke-width="1"/>
+  <g transform="translate(92 95)">
+    <rect x="0" y="0" width="58" height="58" rx="18" fill="url(#accent)" opacity=".16" stroke="url(#accent)" stroke-opacity=".65"/>
+    <path d="M14 39V18l30 21V18" fill="none" stroke="url(#accent)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="78" y="39" fill="#eff5ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="30" font-weight="750" letter-spacing="6">SYNTRA</text>
+    <text x="2" y="145" fill="#f3f6ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="61" font-weight="760" letter-spacing="-2.5">Local intelligence.</text>
+    <text x="2" y="215" fill="#f3f6ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="61" font-weight="760" letter-spacing="-2.5">Real engineering.</text>
+    <text x="4" y="266" fill="#aebbd0" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21">A private, repository-aware AI workspace for understanding,</text>
+    <text x="4" y="296" fill="#aebbd0" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="21">changing and verifying real software projects.</text>
+    <g transform="translate(2 350)">
+      <rect width="174" height="42" rx="21" fill="#d9f3ef" fill-opacity=".1" stroke="#8be9dc" stroke-opacity=".5"/>
+      <circle cx="21" cy="21" r="4.5" fill="#8be9dc"/>
+      <text x="36" y="27" fill="#d9f3ef" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="650" letter-spacing="1.1">LOCAL-FIRST</text>
+      <rect x="188" width="176" height="42" rx="21" fill="#dce8ff" fill-opacity=".08" stroke="#91b6ff" stroke-opacity=".45"/>
+      <circle cx="209" cy="21" r="4.5" fill="#91b6ff"/>
+      <text x="224" y="27" fill="#dce8ff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="650" letter-spacing="1.1">EVIDENCE-DRIVEN</text>
+      <rect x="378" width="160" height="42" rx="21" fill="#e7ddff" fill-opacity=".08" stroke="#b59aff" stroke-opacity=".45"/>
+      <circle cx="399" cy="21" r="4.5" fill="#b59aff"/>
+      <text x="414" y="27" fill="#e7ddff" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="13" font-weight="650" letter-spacing="1.1">HUMAN-APPROVED</text>
+    </g>
+  </g>
+  <g transform="translate(780 84)">
+    <circle cx="275" cy="172" r="166" fill="none" stroke="#8caeff" stroke-opacity=".15" stroke-width="1.5"/>
+    <circle cx="275" cy="172" r="132" fill="none" stroke="#8be9dc" stroke-opacity=".13" stroke-width="1.5" stroke-dasharray="5 10"/>
+    <circle cx="275" cy="172" r="94" fill="#13233a" stroke="url(#accent)" stroke-width="1.8"/>
+    <circle cx="275" cy="172" r="74" fill="none" stroke="#91b6ff" stroke-opacity=".25"/>
+    <path d="M238 207V137l74 70v-70" fill="none" stroke="url(#accent)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="275" cy="6" r="5" fill="#8be9dc"/><circle cx="440" cy="172" r="5" fill="#91b6ff"/><circle cx="275" cy="338" r="5" fill="#b59aff"/><circle cx="109" cy="172" r="5" fill="#8be9dc"/>
+    <path d="M275 6V40M440 172H407M275 338V304M109 172H142" stroke="url(#line)" stroke-width="2"/>
+    <g font-family="Inter,Segoe UI,Arial,sans-serif">
+      <rect x="2" y="22" width="152" height="54" rx="13" fill="#101d2e" stroke="#8be9dc" stroke-opacity=".42"/>
+      <circle cx="20" cy="49" r="4" fill="#8be9dc"/><text x="34" y="46" fill="#edf8f5" font-size="13" font-weight="650">REPOSITORY</text><text x="34" y="63" fill="#93a9b9" font-size="11">context graph</text>
+      <rect x="400" y="22" width="172" height="54" rx="13" fill="#101d2e" stroke="#91b6ff" stroke-opacity=".42"/>
+      <circle cx="418" cy="49" r="4" fill="#91b6ff"/><text x="432" y="46" fill="#edf2ff" font-size="13" font-weight="650">LOCAL MODEL</text><text x="432" y="63" fill="#93a9b9" font-size="11">Ollama / research</text>
+      <rect x="400" y="273" width="172" height="54" rx="13" fill="#101d2e" stroke="#b59aff" stroke-opacity=".42"/>
+      <circle cx="418" cy="300" r="4" fill="#b59aff"/><text x="432" y="297" fill="#f1ebff" font-size="13" font-weight="650">VERIFICATION</text><text x="432" y="314" fill="#93a9b9" font-size="11">sandboxed checks</text>
+      <rect x="2" y="273" width="152" height="54" rx="13" fill="#101d2e" stroke="#8be9dc" stroke-opacity=".42"/>
+      <circle cx="20" cy="300" r="4" fill="#8be9dc"/><text x="34" y="297" fill="#edf8f5" font-size="13" font-weight="650">APPROVAL</text><text x="34" y="314" fill="#93a9b9" font-size="11">review before apply</text>
+    </g>
+    <path d="M154 49C195 49 188 113 215 123M400 49C358 49 363 113 335 123M400 300C359 300 363 232 335 222M154 300C195 300 188 232 215 222" fill="none" stroke="url(#line)" stroke-width="1.5"/>
+  </g>
+  <text x="1376" y="485" text-anchor="end" fill="#8091aa" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="12" letter-spacing="2">PRIVATE BY DESIGN · BUILT FOR DEVELOPERS</text>
+</svg>

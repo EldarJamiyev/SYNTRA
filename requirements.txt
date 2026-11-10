@@ -1,0 +1,6 @@
+# CPU-only wheels keep installs practical on laptops without NVIDIA CUDA.
+# CUDA users can install a matching CUDA-enabled PyTorch build separately.
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+numpy>=2.5.4,<3
+torch>=2.15.0,<2.16
