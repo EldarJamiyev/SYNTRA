@@ -61,7 +61,8 @@ async function stopChild(child) {
 
 test("cancelling ordinary chat aborts the native inference HTTP stream and remains terminal", { timeout: 15000 }, async () => {
   const localPort = await reservePort();
-  const aiPort = await reservePort();
+  let aiPort = await reservePort();
+  while (aiPort === localPort) aiPort = await reservePort();
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-chat-cancel-"));
 
   let generationStartedResolve;
