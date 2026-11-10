@@ -67,7 +67,7 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
-            newline="\\n",
+            newline="\n",
             dir=path.parent,
             prefix=f".{path.name}.",
             suffix=".tmp",
@@ -75,7 +75,7 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         ) as handle:
             temporary = handle.name
             json.dump(value, handle, ensure_ascii=False, indent=2, allow_nan=False)
-            handle.write("\\n")
+            handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
