@@ -43,7 +43,7 @@ For an SFT candidate, the operator must provide both the candidate report and it
 
 - Candidate and baseline reports use the same benchmark suite version and exact task-ID set.
 - The baseline checkpoint is a `pretraining` or `baseline` snapshot; the candidate checkpoint is an `sft` snapshot.
-- Every task passed by the baseline must also pass after SFT. Any per-task regression blocks promotion.
+- Every task fully verified by the baseline must remain fully verified after SFT. Any target-test or regression-test failure on a previously fully verified task blocks promotion.
 - The candidate must fully verify at least one additional task and have a strictly higher aggregate fully-verified task rate.
 - The exact candidate checkpoint SHA-256 must still be acknowledged with `--confirm-sha256` for a real promotion.
 
