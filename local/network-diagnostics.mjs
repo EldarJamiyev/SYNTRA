@@ -250,6 +250,10 @@ async function runTcp(task, { tcpConnectImpl = net.createConnection, tcpTimeoutM
       resolve({ kind: "port", host: task.host, port: task.port, status, message, remoteAddress });
     };
     signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     deadlineTimer = setTimeout(
       () => finish("timeout", "TCP connection timed out after " + Math.max(1, Math.round(tcpTimeoutMs / 1000)) + " seconds."),
       tcpTimeoutMs
