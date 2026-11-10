@@ -13,7 +13,7 @@ class InstructionContextIntegrityTests(unittest.TestCase):
     def _load(self, root: Path, prompt: str, completion: str, seq_len: int = 16):
         dataset = root / "instructions.jsonl"
         dataset.write_text(
-            json.dumps({"prompt": prompt, "completion": completion}) + "\\n",
+            json.dumps({"prompt": prompt, "completion": completion}) + "\n",
             encoding="utf-8",
         )
         with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
