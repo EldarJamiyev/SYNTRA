@@ -267,14 +267,15 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
 
     def test_sft_comparison_rejects_baseline_from_another_training_run(self):
         with tempfile.TemporaryDirectory(prefix=".phase9-run-identity-", dir=BENCHMARK_ROOT) as temp:
-            run_root = Path(temp) / "run"
-            baseline_report = self._baseline_report(run_root, outcomes={})
+            baseline_run_root = Path(temp) / "baseline-run"
+            baseline_report = self._baseline_report(baseline_run_root, outcomes={})
+            candidate_run_root = Path(temp) / "candidate-run"
             source = Path(temp) / "candidate-source.pt"
             digest = self._write_checkpoint(source, 34)
-            staged = self._candidate(run_root, source, digest)
-            candidate_report = self._report(run_root, staged, digest, run_id="different-training-run")
+            staged = self._candidate(candidate_run_root, source, digest)
+            candidate_report = self._report(candidate_run_root, staged, digest)
             candidate = promoter.verify_benchmark_candidate(candidate_report)
-            with self.assertRaisesRegex(promoter.PromotionError, "same training run"):
+            with self.assertRaisesRegex(promoter.PromotionError, "same orchestrated training run"):
                 promoter.verify_paired_benchmark(candidate, baseline_report)
 
     def test_sft_promotion_rejects_per_task_regression_even_if_other_tasks_improve(self):
