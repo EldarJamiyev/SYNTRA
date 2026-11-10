@@ -198,6 +198,22 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             with self.assertRaisesRegex(promoter.PromotionError, "does not match the staged checkpoint sidecar"):
                 promoter.verify_benchmark_candidate(report)
 
+    def test_sft_promotion_rejects_sidecar_bytes_outside_snapshot_manifest(self):
+        with tempfile.TemporaryDirectory(prefix=".phase12-sft-sidecar-hash-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 83)
+            staged = self._candidate(run_root, source, digest)
+            report = self._report(run_root, staged, digest)
+            sidecar = staged.with_suffix(staged.suffix + ".json")
+            sidecar.write_text(json.dumps({
+                "training_mode": "supervised-instruction-finetuning",
+                "instruction_dataset_sha256": "b" * 64,
+                "instruction_dataset_bytes": 123,
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(promoter.PromotionError, "not authenticated by the snapshot manifest"):
+                promoter.verify_benchmark_candidate(report)
+
     def test_sft_promotion_rejects_missing_or_unmanifested_dataset_sidecar(self):
         with tempfile.TemporaryDirectory(prefix=".phase12-sft-sidecar-", dir=BENCHMARK_ROOT) as temp:
             run_root = Path(temp) / "run"
