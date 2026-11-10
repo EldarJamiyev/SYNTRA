@@ -1125,7 +1125,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             )
             duplicate = source_root / "copied_module.py"
             duplicate.write_bytes(original.read_bytes())
-            expected = {"module_0.py", "copied_module.py"}
+            expected = {"src/module_0.py", "src/copied_module.py"}
             for index in range(1, 7):
                 (source_root / f"module_{index}.py").write_text(
                     f'"""Unique source module {index}."""\n'
