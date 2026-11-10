@@ -16,7 +16,7 @@ The promotion command compares real raw-native-model benchmark reports produced 
    npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/sft-step-<step>.json" --baseline-report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --dry-run
    ```
 
-4. Review the printed candidate/baseline checkpoint hashes, task counts, score delta, improved task IDs, and regression list. The dry-run must report a strictly positive task-completion delta and no regressions.
+4. Review the printed candidate/baseline checkpoint hashes, task counts, score delta, improved task IDs, and regression list. The dry-run must report a strictly positive fully-verified task delta and no regressions.
 5. Copy the exact candidate checkpoint SHA-256 from the verified dry-run output and explicitly acknowledge it:
 
    ```powershell
@@ -59,7 +59,9 @@ After reviewing the result, the actual promotion requires the exact digest retur
 
 ```powershell
 npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --allow-initial-baseline --confirm-sha256 "<verified-checkpoint-sha256>"
-``` The initial-baseline path is rejected if an active checkpoint, metadata file, or inference companion already exists, and it requires at least one completed task. It cannot be used for an SFT candidate.
+```
+
+The initial-baseline path is rejected if an active checkpoint, metadata file, or inference companion already exists, and it requires at least one task to pass both target and regression-prevention tests. It cannot be used for an SFT candidate.
 
 ## Safety and retained behavior
 
