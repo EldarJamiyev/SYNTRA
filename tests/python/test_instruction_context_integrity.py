@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from syntra_ai.instruction import audit_instruction_dataset, load_instruction_examples
+from syntra_ai.instruction import audit_instruction_dataset, load_instruction_examples, split_instruction_examples
 from syntra_ai.tokenizer import ByteBPETokenizer
 
 
@@ -75,6 +75,23 @@ class InstructionContextIntegrityTests(unittest.TestCase):
                 changed = load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer)
             self.assertNotEqual(changed[0]["dataset_sha256"], expected_sha256)
             self.assertEqual(changed[0]["dataset_sha256"], hashlib.sha256(updated).hexdigest())
+
+    def test_split_rejects_context_windows_with_mixed_dataset_identities(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-mixed-dataset-identity-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            rows = [
+                {"prompt": "Explain one.", "completion": "The first operation."},
+                {"prompt": "Explain two.", "completion": "The second operation."},
+            ]
+            dataset.write_text("\\n".join(json.dumps(row) for row in rows) + "\\n", encoding="utf-8")
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(
+                    dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
+                )
+            examples[-1]["dataset_sha256"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "one immutable dataset identity"):
+                split_instruction_examples(examples)
 
     def test_long_completion_remains_fully_supervised_across_windows(self):
         with tempfile.TemporaryDirectory(prefix="syntra-completion-windows-") as temp:
