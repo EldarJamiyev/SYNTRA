@@ -72,6 +72,10 @@ def evaluation_protocol_identity(repository_root: str | Path, engine_root: str |
         engine / "hidden",
     )
     files: list[Path] = []
+
+    def reject_walk_error(error: OSError) -> None:
+        raise EvaluationProvenanceError("Cannot enumerate evaluation protocol inputs: " + str(error)) from None
+
     for item in required:
         if item.is_symlink():
             raise EvaluationProvenanceError("Evaluation protocol input must not be a symbolic link: " + str(item))
@@ -84,7 +88,7 @@ def evaluation_protocol_identity(repository_root: str | Path, engine_root: str |
         except ValueError:
             raise EvaluationProvenanceError("Evaluation protocol input escapes the repository: " + str(item)) from None
         if item.is_dir():
-            for current, directories, filenames in os.walk(item, followlinks=False):
+            for current, directories, filenames in os.walk(item, followlinks=False, onerror=reject_walk_error):
                 current_path = Path(current)
                 directories.sort()
                 filenames.sort()
