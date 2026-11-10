@@ -1717,6 +1717,8 @@ class TransformerTests(unittest.TestCase):
                 {"prompt": "Write min function", "completion": "def min2(a,b): return min(a,b)"},
             ]
             dataset.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            instruction_dataset_sha256 = hashlib.sha256(dataset.read_bytes()).hexdigest()
+            instruction_dataset_bytes = dataset.stat().st_size
             checkpoint_state = torch.load(checkpoint, map_location="cpu", weights_only=True)
             tokenizer = ByteBPETokenizer.from_dict(checkpoint_state["tokenizer"])
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
@@ -1739,6 +1741,12 @@ class TransformerTests(unittest.TestCase):
             self.assertGreater(tuned["peak_rss_bytes"], 0)
             self.assertEqual(tuned["device_memory_metric"], "cpu_not_applicable")
             inference_saved = torch.load(inference_checkpoint, map_location="cpu", weights_only=True)
+            full_sft_saved = torch.load(checkpoint, map_location="cpu", weights_only=True)
+            for saved_payload in (full_sft_saved, inference_saved):
+                self.assertEqual(saved_payload["instruction_dataset_sha256"], instruction_dataset_sha256)
+                self.assertEqual(saved_payload["instruction_dataset_bytes"], instruction_dataset_bytes)
+            self.assertEqual(tuned["instruction_dataset_sha256"], instruction_dataset_sha256)
+            self.assertEqual(tuned["instruction_dataset_bytes"], instruction_dataset_bytes)
             self.assertEqual(inference_saved["step"], tuned["step"])
             self.assertNotIn("optimizer_state", inference_saved)
             self.assertEqual(len(inference_saved["training_history"]), 2)

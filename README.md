@@ -49,7 +49,7 @@ SYNTRA is an actively developed engineering and machine-learning project. The na
 
 ## Project status
 
-The current `main` line includes Phases 1–9: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, and evidence-gated checkpoint promotion. Phase 10 makes SFT prompt conditioning lossless by rejecting prompts that exceed the selected checkpoint's actual context window.
+The current `main` line includes Phases 1–10: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, evidence-gated checkpoint promotion, and lossless SFT prompt conditioning. Phase 11 adds exact SHA-256 provenance for the JSONL bytes used by instruction fine-tuning; it remains under validation until merged.
 
 | Area | Delivered behavior |
 | --- | --- |
@@ -62,6 +62,7 @@ The current `main` line includes Phases 1–9: the standalone PyTorch brain, loc
 | Benchmarking | Separate full-agent and direct-model regression suites with saved reports and explicit limitations. |
 | Promotion integrity | Paired pretraining/SFT evaluation, strict improvement in fully verified tasks (target plus regression tests), zero regressions on previously passing tasks, and explicit initial-baseline acknowledgement. |
 | Instruction context integrity | SFT rejects prompts that exceed the selected checkpoint context instead of silently dropping leading task/system instructions; completion tokens remain supervised across bounded windows. |
+| SFT dataset provenance (Phase 11 proposal) | The exact JSONL byte digest and size are exposed by audit and retained in training reports, full checkpoints, inference companions, and sidecar metadata. |
 
 Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 
@@ -430,6 +431,7 @@ SYNTRA/
 | [Native model runtime](docs/NATIVE_MODEL.md) | PyTorch model, tokenizer, context integrity, training, and inference |
 | [Phase 9 promotion gate](docs/PHASE9_EVIDENCE_GATED_PROMOTION.md) | Paired benchmark comparison, regression policy, and safe initial activation |
 | [Phase 10 context integrity](docs/PHASE10_INSTRUCTION_CONTEXT_INTEGRITY.md) | Lossless SFT prompts, explicit context overflow, and completion-window regression coverage |
+| [Phase 11 SFT dataset provenance](docs/PHASE11_SFT_DATASET_PROVENANCE.md) | Exact JSONL SHA-256 identity retained through audit, fine-tuning, and checkpoints (pending merge) |
 | [Local baseline preflight](docs/LOCAL_BASELINE_PREFLIGHT.md) | Python/PyTorch device readiness, local Docker image digests, and GO/NO-GO runbook |
 | [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
 | [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
