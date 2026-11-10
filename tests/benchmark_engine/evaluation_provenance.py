@@ -67,9 +67,7 @@ def evaluation_protocol_identity(repository_root: str | Path, engine_root: str |
         engine / "typescript_test_runner.mjs",
         engine / "evaluation_provenance.py",
         repository / "package-lock.json",
-        repository / "local" / "agent.mjs",
-        repository / "local" / "workspace.mjs",
-        repository / "local" / "tool-runtime.mjs",
+        repository / "local",
         engine / "fixtures",
         engine / "hidden",
     )
