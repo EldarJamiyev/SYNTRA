@@ -232,6 +232,17 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
     )
     if measured_completed != completed_count:
         raise PromotionError("Benchmark completion count does not match per-task completion evidence.")
+    fully_verified_count = summary.get("fully_verified_task_count")
+    if type(fully_verified_count) is not int or not 0 <= fully_verified_count <= valid_count:
+        raise PromotionError("Benchmark fully-verified task count is invalid.")
+    measured_fully_verified = sum(
+        1 for item in tasks
+        if isinstance(item, dict)
+        and item.get("task_completion") is True
+        and item.get("regression_prevention") is True
+    )
+    if measured_fully_verified != fully_verified_count:
+        raise PromotionError("Fully-verified task count does not match target and regression-test evidence.")
     suite = _read_json(ROOT / "tests" / "benchmark_engine" / "suite.v1.json", maximum_bytes=4 * 1024 * 1024)
     suite_tasks = suite.get("tasks")
     expected_task_ids = [
@@ -293,8 +304,60 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         "step": snapshot.get("global_step"),
         "task_completion_rate": float(rate),
         "completed_task_count": completed_count,
+        "fully_verified_task_count": fully_verified_count,
+        "fully_verified_task_rate": fully_verified_count / valid_count,
         "task_count": task_count,
+        "fully_verified_by_id": {
+            item["id"]: item["task_completion"] is True and item["regression_prevention"] is True
+            for item in tasks
+        },
         "snapshot": snapshot_path,
+    }
+
+
+def verify_paired_benchmark(candidate: dict[str, Any], baseline_report_path: str | Path) -> dict[str, Any]:
+    """Require a like-for-like SFT gain with no per-task regression."""
+    baseline = verify_benchmark_candidate(baseline_report_path)
+    if candidate.get("stage") != "sft":
+        raise PromotionError("Paired improvement gating is only valid for an SFT candidate checkpoint.")
+    if baseline.get("stage") not in {"pretraining", "baseline"}:
+        raise PromotionError("The comparison report must identify a pretraining or baseline checkpoint.")
+    if candidate.get("suite_version") != baseline.get("suite_version"):
+        raise PromotionError("Candidate and baseline benchmark suite versions differ.")
+    if candidate["report"].parent != baseline["report"].parent:
+        raise PromotionError("Candidate and pretraining baseline reports must belong to the same orchestrated training run.")
+    candidate_tasks = candidate.get("fully_verified_by_id")
+    baseline_tasks = baseline.get("fully_verified_by_id")
+    if not isinstance(candidate_tasks, dict) or not isinstance(baseline_tasks, dict):
+        raise PromotionError("Candidate and baseline reports must contain complete per-task results.")
+    if set(candidate_tasks) != set(baseline_tasks):
+        raise PromotionError("Candidate and baseline must measure the exact same task IDs.")
+    regressions = sorted(
+        task_id for task_id, baseline_passed in baseline_tasks.items()
+        if baseline_passed and not candidate_tasks[task_id]
+    )
+    if regressions:
+        raise PromotionError("SFT candidate regresses on baseline-passing tasks: " + ", ".join(regressions))
+    improvements = sorted(
+        task_id for task_id, candidate_passed in candidate_tasks.items()
+        if candidate_passed and not baseline_tasks[task_id]
+    )
+    if not improvements or candidate["fully_verified_task_rate"] <= baseline["fully_verified_task_rate"]:
+        raise PromotionError("SFT candidate must improve fully-verified task completion and pass at least one additional fully-verified task.")
+    return {
+        "baseline_report": str(baseline["report"]),
+        "baseline_checkpoint_sha256": baseline["checkpoint_sha256"],
+        "baseline_completed_task_count": baseline["completed_task_count"],
+        "baseline_task_completion_rate": baseline["task_completion_rate"],
+        "candidate_completed_task_count": candidate["completed_task_count"],
+        "candidate_task_completion_rate": candidate["task_completion_rate"],
+        "baseline_fully_verified_task_count": baseline["fully_verified_task_count"],
+        "candidate_fully_verified_task_count": candidate["fully_verified_task_count"],
+        "baseline_fully_verified_task_rate": baseline["fully_verified_task_rate"],
+        "candidate_fully_verified_task_rate": candidate["fully_verified_task_rate"],
+        "improved_task_ids": improvements,
+        "regressed_task_ids": regressions,
+        "fully_verified_task_delta": candidate["fully_verified_task_rate"] - baseline["fully_verified_task_rate"],
     }
 
 
@@ -440,6 +503,8 @@ def promote(
     *,
     dry_run: bool = False,
     confirm_sha256: str | None = None,
+    baseline_report_path: str | Path | None = None,
+    allow_initial_baseline: bool = False,
 ) -> dict[str, Any]:
     candidate = verify_benchmark_candidate(report_path)
     if not dry_run and confirm_sha256 != candidate["checkpoint_sha256"]:
@@ -449,13 +514,31 @@ def promote(
         )
     from syntra_ai import runtime
     active = _safe_repo_path(active_checkpoint or runtime.checkpoint_path())
+    comparison: dict[str, Any] | None = None
+    if candidate["stage"] == "sft":
+        if allow_initial_baseline:
+            raise PromotionError("--allow-initial-baseline cannot be used for an SFT checkpoint.")
+        if baseline_report_path is None:
+            raise PromotionError("SFT promotion requires --baseline-report with the matching pretraining benchmark.")
+        comparison = verify_paired_benchmark(candidate, baseline_report_path)
+    else:
+        if candidate["stage"] not in {"pretraining", "baseline"}:
+            raise PromotionError("Only pretraining baselines or SFT checkpoints can be promoted.")
+        if not allow_initial_baseline:
+            raise PromotionError("Initial pretraining promotion requires explicit --allow-initial-baseline acknowledgement.")
+        if baseline_report_path is not None:
+            raise PromotionError("--baseline-report is only valid when promoting an SFT candidate.")
+        if active.exists() or any(path.exists() for _kind, path in _active_artifact_paths(active)[1:]):
+            raise PromotionError("An initial baseline can only be promoted when no active checkpoint or companion artifacts exist.")
+        if candidate["fully_verified_task_count"] < 1:
+            raise PromotionError("An initial baseline must fully verify at least one task, including its regression tests.")
     if active == candidate["checkpoint"]:
         raise PromotionError("The evaluated staging checkpoint is already the active checkpoint.")
     if active.is_symlink():
         raise PromotionError("Active checkpoint destination must not be a symbolic link.")
     _validate_runtime_checkpoint(candidate["checkpoint"])
     if dry_run:
-        return {**candidate, "active_checkpoint": active, "dry_run": True, "archive_id": None}
+        return {**candidate, "active_checkpoint": active, "dry_run": True, "archive_id": None, "comparison": comparison}
 
     metadata_source = candidate["checkpoint"].with_suffix(candidate["checkpoint"].suffix + ".json")
     expected_metadata_hash = None
@@ -503,6 +586,9 @@ def promote(
         "benchmark_report": str(candidate["report"]),
         "benchmark_run_id": candidate["run_id"],
         "task_completion_rate": candidate["task_completion_rate"],
+        "fully_verified_task_count": candidate["fully_verified_task_count"],
+        "fully_verified_task_rate": candidate["fully_verified_task_rate"],
+        "comparison": comparison,
         "completed_task_count": candidate["completed_task_count"],
         "task_count": candidate["task_count"],
         "archive_id": archive_id,
@@ -517,6 +603,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--active-checkpoint", help="Optional active checkpoint override; it must remain inside the repository.")
     parser.add_argument("--dry-run", action="store_true", help="Validate benchmark provenance and runtime loadability without changing active files.")
     parser.add_argument("--confirm-sha256", help="Required for promotion: explicitly acknowledge the exact verified staging checkpoint SHA-256 printed by --dry-run.")
+    parser.add_argument("--baseline-report", help="Required for SFT promotion: completed pretraining benchmark JSON from the same task suite.")
+    parser.add_argument("--allow-initial-baseline", action="store_true", help="Explicitly allow the first pretraining checkpoint only when no active checkpoint exists and at least one task passes.")
     return parser.parse_args(argv)
 
 
@@ -533,6 +621,8 @@ def main(argv: list[str] | None = None) -> int:
                 active_checkpoint=active,
                 dry_run=args.dry_run,
                 confirm_sha256=args.confirm_sha256,
+                baseline_report_path=args.baseline_report,
+                allow_initial_baseline=args.allow_initial_baseline,
             )
         serializable = {
             key: str(value) if isinstance(value, Path) else value

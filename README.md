@@ -49,7 +49,7 @@ SYNTRA is an actively developed engineering and machine-learning project. The na
 
 ## Project status
 
-The current development line builds on the merged Phase 6 context-recovery work and adds Phase 7 curriculum capabilities.
+The current `main` line includes Phases 1–8: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, and offline baseline preflight. Phase 9 adds evidence-gated checkpoint promotion so an SFT checkpoint cannot replace the active model merely because its benchmark report is structurally valid.
 
 | Area | Delivered behavior |
 | --- | --- |
@@ -60,6 +60,7 @@ The current development line builds on the merged Phase 6 context-recovery work 
 | Curriculum | Python AST extraction plus bounded JavaScript, TypeScript, Go, and Rust declaration/block curation. |
 | Reasoning traces | Source-linked two-file localization tasks with a thought completion and multi-file SYNTRA_AGENT_PATCH_V1 output. |
 | Benchmarking | Separate full-agent and direct-model regression suites with saved reports and explicit limitations. |
+| Promotion integrity | Paired pretraining/SFT evaluation, strict improvement in fully verified tasks (target plus regression tests), zero regressions on previously passing tasks, and explicit initial-baseline acknowledgement. |
 
 Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 
@@ -349,11 +350,15 @@ npm run brain:milestone4 -- --skip-pretraining
 # Benchmark an existing checkpoint without pretraining or SFT
 npm run brain:milestone4 -- --skip-pretraining --skip-sft
 
-# Validate checkpoint provenance and loadability before promotion
-npm run brain:promote -- --dry-run
+# Validate an SFT candidate against its actual pretraining benchmark
+npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/sft-step-<step>.json" --baseline-report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --dry-run
 
-# Review and explicitly promote after validation
-npm run brain:promote
+# Promote only after reviewing the dry-run evidence and exact checkpoint SHA-256
+npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/sft-step-<step>.json" --baseline-report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --confirm-sha256 "<verified-checkpoint-sha256>"
+
+# First-ever baseline only: requires no active checkpoint and at least one passing task
+npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --allow-initial-baseline --dry-run
+npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --allow-initial-baseline --confirm-sha256 "<verified-checkpoint-sha256>"
 ~~~
 
 These workflows use separate staging/checkpoint paths and should be run with the corresponding documented configuration. Review the generated reports and actual local hardware measurements rather than assuming a profile is optimal for every CPU, CUDA, or MPS device.
@@ -422,6 +427,7 @@ SYNTRA/
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime components, request flow, agent orchestration, and recovery |
 | [Native model runtime](docs/NATIVE_MODEL.md) | PyTorch model, tokenizer, context integrity, training, and inference |
+| [Phase 9 promotion gate](docs/PHASE9_EVIDENCE_GATED_PROMOTION.md) | Paired benchmark comparison, regression policy, and safe initial activation |
 | [Local baseline preflight](docs/LOCAL_BASELINE_PREFLIGHT.md) | Python/PyTorch device readiness, local Docker image digests, and GO/NO-GO runbook |
 | [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
 | [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
