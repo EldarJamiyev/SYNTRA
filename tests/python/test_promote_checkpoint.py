@@ -72,15 +72,15 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         companion = _save_inference_checkpoint(checkpoint, payload)
         return hashlib.sha256(metadata_path.read_bytes()).hexdigest(), hashlib.sha256(companion.read_bytes()).hexdigest()
 
-    def _candidate(self, run_root: Path, checkpoint: Path, digest: str) -> Path:
-        snapshot_dir = run_root / "snapshots" / run_root.name / f"sft-step-000000020-{digest[:12]}"
+    def _candidate(self, run_root: Path, checkpoint: Path, digest: str, *, stage: str = "sft", step: int = 20) -> Path:
+        snapshot_dir = run_root / "snapshots" / run_root.name / f"{stage}-step-{step:09d}-{digest[:12]}"
         snapshot_dir.mkdir(parents=True)
         staged = snapshot_dir / "syntra-brain.pt"
         shutil.copy2(checkpoint, staged)
         snapshot = {
             "schema_version": 1,
-            "stage": "sft",
-            "global_step": 20,
+            "stage": stage,
+            "global_step": step,
             "created_at": "2026-11-09T10:00:00Z",
             "checkpoint_file": staged.name,
             "checkpoint_sha256": digest,
@@ -90,37 +90,57 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         (snapshot_dir / "snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
         return staged
 
-    def _report(self, run_root: Path, staged: Path, digest: str) -> Path:
+    def _report(
+        self,
+        run_root: Path,
+        staged: Path,
+        digest: str,
+        *,
+        stage: str = "sft",
+        step: int = 20,
+        outcomes: dict[str, bool] | None = None,
+    ) -> Path:
         suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
         task_ids = [task["id"] for task in suite["tasks"]]
+        measured = outcomes or {task_id: True for task_id in task_ids}
+        completed = sum(1 for task_id in task_ids if measured.get(task_id) is True)
         report_dir = run_root / "evaluations"
-        report_dir.mkdir(parents=True)
-        report_path = report_dir / "sft-step-000000020.json"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"{stage}-step-{step:09d}.json"
         report = {
             "schema_version": 1,
             "benchmark_track": "raw-native-model",
             "suite_version": suite["version"],
-            "run_id": "raw-model-phase5-test",
+            "run_id": "raw-model-phase9-test",
             "started_at": "2026-11-09T10:01:00Z",
             "completed_at": "2026-11-09T10:02:00Z",
             "model": {
                 "engine": "syntra-native-pytorch",
                 "checkpoint": str(staged),
                 "checkpoint_sha256": digest,
-                "trained_steps": 20,
+                "trained_steps": step,
             },
             "isolation": {"mode": "docker", "environments": {}},
             "summary": {
                 "task_count": len(task_ids),
                 "baseline_valid_task_count": len(task_ids),
                 "invalid_fixture_count": 0,
-                "completed_task_count": len(task_ids),
-                "task_completion_rate": 1.0,
+                "completed_task_count": completed,
+                "task_completion_rate": completed / len(task_ids),
             },
-            "tasks": [{"id": task_id, "baseline_validated": True, "task_completion": True} for task_id in task_ids],
+            "tasks": [
+                {"id": task_id, "baseline_validated": True, "task_completion": measured.get(task_id) is True}
+                for task_id in task_ids
+            ],
         }
         report_path.write_text(json.dumps(report), encoding="utf-8")
         return report_path
+
+    def _baseline_report(self, run_root: Path, *, outcomes: dict[str, bool] | None = None) -> Path:
+        source = run_root.parent / "baseline-source.pt"
+        digest = self._write_checkpoint(source, 9)
+        staged = self._candidate(run_root, source, digest, stage="pretraining", step=10)
+        return self._report(run_root, staged, digest, stage="pretraining", step=10, outcomes=outcomes)
 
     def test_report_verification_binds_report_to_snapshot_and_full_checkpoint_hash(self):
         with tempfile.TemporaryDirectory(prefix=".phase5-promotion-verify-", dir=BENCHMARK_ROOT) as temp:
@@ -155,12 +175,13 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             digest = self._write_checkpoint(candidate_source, 11)
             staged = self._candidate(run_root, candidate_source, digest)
             report = self._report(run_root, staged, digest)
+            baseline_report = self._baseline_report(run_root, outcomes={})
 
             active_root = CHECKPOINT_ROOT / (".phase5-active-" + uuid.uuid4().hex)
             active = active_root / "syntra.pt"
             old_digest = self._write_checkpoint(active, 3)
             old_metadata_digest, old_companion_digest = self._write_active_metadata_and_companion(active)
-            result = promoter.promote(report, active_checkpoint=active, confirm_sha256=digest)
+            result = promoter.promote(report, active_checkpoint=active, confirm_sha256=digest, baseline_report_path=baseline_report)
 
             self.assertTrue(result["promoted"])
             self.assertEqual(result["checkpoint_sha256"], digest)
@@ -213,13 +234,49 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             digest = self._write_checkpoint(candidate_source, 14)
             staged = self._candidate(run_root, candidate_source, digest)
             report = self._report(run_root, staged, digest)
+            baseline_report = self._baseline_report(run_root, outcomes={})
             active_root = CHECKPOINT_ROOT / (".phase5-dry-run-" + uuid.uuid4().hex)
             active = active_root / "syntra.pt"
             old_digest = self._write_checkpoint(active, 5)
-            result = promoter.promote(report, active_checkpoint=active, dry_run=True)
+            result = promoter.promote(report, active_checkpoint=active, dry_run=True, baseline_report_path=baseline_report)
             self.assertTrue(result["dry_run"])
             self.assertEqual(promoter._sha256(active), old_digest)
             shutil.rmtree(active_root, ignore_errors=True)
+
+    def test_sft_promotion_rejects_missing_baseline_and_non_improving_candidate(self):
+        with tempfile.TemporaryDirectory(prefix=".phase9-no-gain-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 31)
+            staged = self._candidate(run_root, source, digest)
+            candidate_report = self._report(run_root, staged, digest, outcomes={})
+            active_root = CHECKPOINT_ROOT / (".phase9-no-gain-active-" + uuid.uuid4().hex)
+            active = active_root / "syntra.pt"
+            self._write_checkpoint(active, 32)
+            with self.assertRaisesRegex(promoter.PromotionError, "requires --baseline-report"):
+                promoter.promote(candidate_report, active_checkpoint=active, confirm_sha256=digest)
+            baseline_report = self._baseline_report(run_root, outcomes={})
+            candidate = promoter.verify_benchmark_candidate(candidate_report)
+            with self.assertRaisesRegex(promoter.PromotionError, "must improve the aggregate"):
+                promoter.verify_paired_benchmark(candidate, baseline_report)
+            self.assertNotEqual(promoter._sha256(active), digest)
+            shutil.rmtree(active_root, ignore_errors=True)
+
+    def test_sft_promotion_rejects_per_task_regression_even_if_other_tasks_improve(self):
+        with tempfile.TemporaryDirectory(prefix=".phase9-regression-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
+            task_ids = [task["id"] for task in suite["tasks"]]
+            baseline_outcomes = {task_id: index < 2 for index, task_id in enumerate(task_ids)}
+            candidate_outcomes = {task_id: index != 0 for index, task_id in enumerate(task_ids)}
+            baseline_report = self._baseline_report(run_root, outcomes=baseline_outcomes)
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 33)
+            staged = self._candidate(run_root, source, digest)
+            candidate_report = self._report(run_root, staged, digest, outcomes=candidate_outcomes)
+            candidate = promoter.verify_benchmark_candidate(candidate_report)
+            with self.assertRaisesRegex(promoter.PromotionError, "regresses on baseline-passing tasks"):
+                promoter.verify_paired_benchmark(candidate, baseline_report)
 
     def test_smoke_or_partial_suite_report_cannot_promote_a_checkpoint(self):
         with tempfile.TemporaryDirectory(prefix=".phase5-promotion-partial-", dir=BENCHMARK_ROOT) as temp:
