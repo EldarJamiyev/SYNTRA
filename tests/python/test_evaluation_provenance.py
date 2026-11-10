@@ -17,6 +17,7 @@ class EvaluationProtocolIdentityTests(unittest.TestCase):
             "tests/benchmark_engine/environments.py": "environment",
             "tests/benchmark_engine/apply_patch_bridge.mjs": "bridge",
             "tests/benchmark_engine/typescript_test_runner.mjs": "typescript",
+            "tests/benchmark_engine/evaluation_provenance.py": "provenance",
             "package-lock.json": '{"lockfileVersion":3}',
             "local/agent.mjs": "agent",
             "local/workspace.mjs": "workspace",
