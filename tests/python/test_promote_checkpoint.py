@@ -1,12 +1,14 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 try:
     import torch
@@ -478,6 +480,29 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             report.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(promoter.PromotionError, "network-disabled Docker"):
                 promoter.verify_benchmark_candidate(report)
+
+    def test_artifact_hash_rejects_path_replacement_after_open(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-promotion-path-race-") as temp:
+            root = Path(temp)
+            artifact = root / "candidate.pt"
+            replacement = root / "replacement.pt"
+            artifact.write_bytes(b"verified candidate bytes")
+            replacement.write_bytes(b"different replacement bytes")
+            real_stat = os.stat
+            stat_calls = 0
+
+            def replace_before_final_path_check(path, *args, **kwargs):
+                nonlocal stat_calls
+                stat_calls += 1
+                if stat_calls == 2:
+                    os.replace(replacement, artifact)
+                return real_stat(path, *args, **kwargs)
+
+            with patch.object(promoter.os, "stat", side_effect=replace_before_final_path_check):
+                with self.assertRaisesRegex(promoter.PromotionError, "changed while being hashed"):
+                    promoter._sha256(artifact)
+
+            self.assertEqual(artifact.read_bytes(), b"different replacement bytes")
 
     def test_unrecognized_archive_id_is_rejected(self):
         with tempfile.TemporaryDirectory(prefix=".phase5-promotion-archive-id-", dir=CHECKPOINT_ROOT) as temp:
