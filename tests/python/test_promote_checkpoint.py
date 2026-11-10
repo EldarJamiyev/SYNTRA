@@ -370,6 +370,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             data["summary"]["task_count"] = 5
             data["summary"]["baseline_valid_task_count"] = 5
             data["summary"]["completed_task_count"] = 5
+            data["summary"]["fully_verified_task_count"] = 5
             report.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(promoter.PromotionError, "currently checked-in 13-task"):
                 promoter.verify_benchmark_candidate(report)

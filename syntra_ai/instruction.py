@@ -167,9 +167,17 @@ def load_instruction_examples(
 
         prompt = tokenizer.encode(prompt_text)
         completion = tokenizer.encode(completion_text)
-        # Retain the newest prompt context, then supervise every response
-        # token through causal windows instead of silently clipping code.
-        prompt = prompt[-(seq_len - 1):]
+        # A prompt is the conditioning contract for its completion. Silently
+        # keeping only its tail can remove system constraints, task details,
+        # or required output formats. Fail closed and require the dataset
+        # producer/operator to shorten the prompt or select a larger model.
+        if len(prompt) > seq_len - 1:
+            raise ValueError(
+                f"Prompt on line {line_number} requires {len(prompt)} tokens, "
+                f"but the selected checkpoint can retain at most {seq_len - 1} "
+                "prompt tokens after reserving BOS. The prompt was not truncated; "
+                "shorten it or use a checkpoint with a larger context window."
+            )
         sequence = [BOS_ID, *prompt, *completion, EOS_ID]
         first_response_target = 1 + len(prompt)
         source_example_id = hashlib.sha256(

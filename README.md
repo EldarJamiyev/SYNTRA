@@ -49,7 +49,7 @@ SYNTRA is an actively developed engineering and machine-learning project. The na
 
 ## Project status
 
-The current `main` line includes Phases 1–8: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, and offline baseline preflight. Phase 9 adds evidence-gated checkpoint promotion so an SFT checkpoint cannot replace the active model merely because its benchmark report is structurally valid.
+The current `main` line includes Phases 1–9: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, and evidence-gated checkpoint promotion. Phase 10 makes SFT prompt conditioning lossless by rejecting prompts that exceed the selected checkpoint's actual context window.
 
 | Area | Delivered behavior |
 | --- | --- |
@@ -61,6 +61,7 @@ The current `main` line includes Phases 1–8: the standalone PyTorch brain, loc
 | Reasoning traces | Source-linked two-file localization tasks with a thought completion and multi-file SYNTRA_AGENT_PATCH_V1 output. |
 | Benchmarking | Separate full-agent and direct-model regression suites with saved reports and explicit limitations. |
 | Promotion integrity | Paired pretraining/SFT evaluation, strict improvement in fully verified tasks (target plus regression tests), zero regressions on previously passing tasks, and explicit initial-baseline acknowledgement. |
+| Instruction context integrity | SFT rejects prompts that exceed the selected checkpoint context instead of silently dropping leading task/system instructions; completion tokens remain supervised across bounded windows. |
 
 Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 
@@ -428,6 +429,7 @@ SYNTRA/
 | [Architecture](docs/ARCHITECTURE.md) | Runtime components, request flow, agent orchestration, and recovery |
 | [Native model runtime](docs/NATIVE_MODEL.md) | PyTorch model, tokenizer, context integrity, training, and inference |
 | [Phase 9 promotion gate](docs/PHASE9_EVIDENCE_GATED_PROMOTION.md) | Paired benchmark comparison, regression policy, and safe initial activation |
+| [Phase 10 context integrity](docs/PHASE10_INSTRUCTION_CONTEXT_INTEGRITY.md) | Lossless SFT prompts, explicit context overflow, and completion-window regression coverage |
 | [Local baseline preflight](docs/LOCAL_BASELINE_PREFLIGHT.md) | Python/PyTorch device readiness, local Docker image digests, and GO/NO-GO runbook |
 | [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
 | [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
