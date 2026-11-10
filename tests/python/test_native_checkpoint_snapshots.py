@@ -89,6 +89,19 @@ class NativeCheckpointSnapshotTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "byte limit"):
                 load_torch_checkpoint_snapshot(checkpoint, max_bytes=checkpoint.stat().st_size - 1)
 
+    def test_enforces_available_ram_budget_inside_the_verified_snapshot_read(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-native-checkpoint-memory-budget-") as temp:
+            checkpoint = Path(temp) / "model.pt"
+            self._write_checkpoint(checkpoint)
+            memory_budget = checkpoint.stat().st_size - 1
+
+            with patch(
+                "syntra_ai.checkpoint_io.checkpoint_load_budget_bytes",
+                return_value=memory_budget,
+            ):
+                with self.assertRaisesRegex(ValueError, "40% checkpoint-load budget"):
+                    load_torch_checkpoint_snapshot(checkpoint)
+
 
 class NativeCheckpointIntegrationTests(unittest.TestCase):
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
