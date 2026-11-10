@@ -232,6 +232,17 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
     )
     if measured_completed != completed_count:
         raise PromotionError("Benchmark completion count does not match per-task completion evidence.")
+    fully_verified_count = summary.get("fully_verified_task_count")
+    if type(fully_verified_count) is not int or not 0 <= fully_verified_count <= valid_count:
+        raise PromotionError("Benchmark fully-verified task count is invalid.")
+    measured_fully_verified = sum(
+        1 for item in tasks
+        if isinstance(item, dict)
+        and item.get("task_completion") is True
+        and item.get("regression_prevention") is True
+    )
+    if measured_fully_verified != fully_verified_count:
+        raise PromotionError("Fully-verified task count does not match target and regression-test evidence.")
     suite = _read_json(ROOT / "tests" / "benchmark_engine" / "suite.v1.json", maximum_bytes=4 * 1024 * 1024)
     suite_tasks = suite.get("tasks")
     expected_task_ids = [
@@ -293,8 +304,14 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         "step": snapshot.get("global_step"),
         "task_completion_rate": float(rate),
         "completed_task_count": completed_count,
+        "task_completion_rate": float(rate),
+        "fully_verified_task_count": fully_verified_count,
+        "fully_verified_task_rate": fully_verified_count / valid_count,
         "task_count": task_count,
-        "task_completion_by_id": {item["id"]: item["task_completion"] is True for item in tasks},
+        "fully_verified_by_id": {
+            item["id"]: item["task_completion"] is True and item["regression_prevention"] is True
+            for item in tasks
+        },
         "snapshot": snapshot_path,
     }
 
@@ -310,8 +327,8 @@ def verify_paired_benchmark(candidate: dict[str, Any], baseline_report_path: str
         raise PromotionError("Candidate and baseline benchmark suite versions differ.")
     if candidate["report"].parent != baseline["report"].parent:
         raise PromotionError("Candidate and pretraining baseline reports must belong to the same orchestrated training run.")
-    candidate_tasks = candidate.get("task_completion_by_id")
-    baseline_tasks = baseline.get("task_completion_by_id")
+    candidate_tasks = candidate.get("fully_verified_by_id")
+    baseline_tasks = baseline.get("fully_verified_by_id")
     if not isinstance(candidate_tasks, dict) or not isinstance(baseline_tasks, dict):
         raise PromotionError("Candidate and baseline reports must contain complete per-task results.")
     if set(candidate_tasks) != set(baseline_tasks):
@@ -326,8 +343,8 @@ def verify_paired_benchmark(candidate: dict[str, Any], baseline_report_path: str
         task_id for task_id, candidate_passed in candidate_tasks.items()
         if candidate_passed and not baseline_tasks[task_id]
     )
-    if not improvements or candidate["task_completion_rate"] <= baseline["task_completion_rate"]:
-        raise PromotionError("SFT candidate must improve the aggregate task-completion rate and pass at least one additional task.")
+    if not improvements or candidate["fully_verified_task_rate"] <= baseline["fully_verified_task_rate"]:
+        raise PromotionError("SFT candidate must improve fully-verified task completion and pass at least one additional fully-verified task.")
     return {
         "baseline_report": str(baseline["report"]),
         "baseline_checkpoint_sha256": baseline["checkpoint_sha256"],
@@ -335,9 +352,13 @@ def verify_paired_benchmark(candidate: dict[str, Any], baseline_report_path: str
         "baseline_task_completion_rate": baseline["task_completion_rate"],
         "candidate_completed_task_count": candidate["completed_task_count"],
         "candidate_task_completion_rate": candidate["task_completion_rate"],
+        "baseline_fully_verified_task_count": baseline["fully_verified_task_count"],
+        "candidate_fully_verified_task_count": candidate["fully_verified_task_count"],
+        "baseline_fully_verified_task_rate": baseline["fully_verified_task_rate"],
+        "candidate_fully_verified_task_rate": candidate["fully_verified_task_rate"],
         "improved_task_ids": improvements,
         "regressed_task_ids": regressions,
-        "task_completion_delta": candidate["task_completion_rate"] - baseline["task_completion_rate"],
+        "fully_verified_task_delta": candidate["fully_verified_task_rate"] - baseline["fully_verified_task_rate"],
     }
 
 
@@ -510,8 +531,8 @@ def promote(
             raise PromotionError("--baseline-report is only valid when promoting an SFT candidate.")
         if active.exists() or any(path.exists() for _kind, path in _active_artifact_paths(active)[1:]):
             raise PromotionError("An initial baseline can only be promoted when no active checkpoint or companion artifacts exist.")
-        if candidate["completed_task_count"] < 1:
-            raise PromotionError("An initial baseline must complete at least one validated benchmark task.")
+        if candidate["fully_verified_task_count"] < 1:
+            raise PromotionError("An initial baseline must fully verify at least one task, including its regression tests.")
     if active == candidate["checkpoint"]:
         raise PromotionError("The evaluated staging checkpoint is already the active checkpoint.")
     if active.is_symlink():
@@ -566,6 +587,7 @@ def promote(
         "benchmark_report": str(candidate["report"]),
         "benchmark_run_id": candidate["run_id"],
         "task_completion_rate": candidate["task_completion_rate"],
+        "fully_verified_task_count": candidate["fully_verified_task_count"],
         "comparison": comparison,
         "completed_task_count": candidate["completed_task_count"],
         "task_count": candidate["task_count"],
