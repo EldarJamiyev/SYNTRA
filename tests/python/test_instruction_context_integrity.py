@@ -84,7 +84,7 @@ class InstructionContextIntegrityTests(unittest.TestCase):
                 {"prompt": "Explain one.", "completion": "The first operation."},
                 {"prompt": "Explain two.", "completion": "The second operation."},
             ]
-            dataset.write_text("\\n".join(json.dumps(row) for row in rows) + "\\n", encoding="utf-8")
+            dataset.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
             with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 examples = load_instruction_examples(
                     dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
