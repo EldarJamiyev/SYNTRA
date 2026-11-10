@@ -52,3 +52,8 @@ A first-ever pretraining checkpoint has a separate explicit path: `--allow-initi
 The `--dry-run` path performs all report, snapshot, paired-score, checkpoint-loadability, and destination checks without changing active files. Its output includes baseline/candidate task counts, score delta, improved task IDs, and an empty regression list. Existing atomic activation, previous-checkpoint archival, companion regeneration, and rollback behavior remain in place.
 
 This gate is intentionally strict but narrow: it measures the checked-in 13-task raw-model suite. It does not establish general coding competence, and passing a small controlled suite is not proof of production readiness. An SFT candidate that ties the baseline is not promoted; a candidate that loses even one previously passing task is not promoted.
+
+
+### Phase 10 — lossless instruction conditioning
+
+Instruction fine-tuning must preserve the complete conditioning prompt. The JSONL loader now checks the prompt's token count using the selected checkpoint's exact tokenizer and rejects any prompt that cannot fit in the available context after reserving the BOS token. It does not silently retain only the tail of an overlong prompt, because that can remove system constraints, task requirements, or output-format instructions. Operators must shorten the source prompt deliberately or use a checkpoint with a larger context window. Completion text remains fully supervised across the existing overlapping causal windows, including the terminal EOS target.
