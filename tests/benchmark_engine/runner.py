@@ -189,11 +189,27 @@ def load_checkpoint_evidence(checkpoint: Path) -> dict[str, Any]:
     step = metadata.get("step")
     if type(step) is not int or step < 0:
         step = None
+    instruction_dataset_sha256 = metadata.get("instruction_dataset_sha256")
+    instruction_dataset_bytes = metadata.get("instruction_dataset_bytes")
+    if instruction_dataset_sha256 is not None and (
+        not isinstance(instruction_dataset_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", instruction_dataset_sha256) is None
+    ):
+        raise BenchmarkError("Checkpoint sidecar contains a malformed SFT dataset SHA-256.")
+    if instruction_dataset_bytes is not None and (
+        type(instruction_dataset_bytes) is not int or instruction_dataset_bytes < 0
+    ):
+        raise BenchmarkError("Checkpoint sidecar contains a malformed SFT dataset byte count.")
+    if (instruction_dataset_sha256 is None) != (instruction_dataset_bytes is None):
+        raise BenchmarkError("Checkpoint sidecar contains incomplete SFT dataset provenance.")
     return {
         "path": str(target), "sha256": digest.hexdigest(), "step": step,
         "train_loss": finite_number("train_loss"), "validation_loss": finite_number("validation_loss"),
         "best_validation_loss": finite_number("best_validation_loss"),
-        "training_mode": metadata.get("training_mode"), "history": history,
+        "training_mode": metadata.get("training_mode"),
+        "instruction_dataset_sha256": metadata.get("instruction_dataset_sha256"),
+        "instruction_dataset_bytes": metadata.get("instruction_dataset_bytes"),
+        "history": history,
         "history_available": bool(history), "history_error": history_error, "metadata_error": metadata_error,
     }
 def _copy_fixture_workspace(task: dict[str, Any], parent: Path) -> Path:
@@ -1123,6 +1139,8 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             "checkpoint_sha256": checkpoint_evidence["sha256"], "checkpoint_identity": initial_identity,
             "device_requested": args.device, "trained_steps": checkpoint_evidence["step"],
             "training_mode": checkpoint_evidence["training_mode"],
+            "instruction_dataset_sha256": checkpoint_evidence["instruction_dataset_sha256"],
+            "instruction_dataset_bytes": checkpoint_evidence["instruction_dataset_bytes"],
         },
         "training_loss": {
             "train_loss": checkpoint_evidence["train_loss"], "validation_loss": checkpoint_evidence["validation_loss"],

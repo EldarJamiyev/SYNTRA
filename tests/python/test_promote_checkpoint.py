@@ -77,6 +77,16 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         snapshot_dir.mkdir(parents=True)
         staged = snapshot_dir / "syntra-brain.pt"
         shutil.copy2(checkpoint, staged)
+        artifacts = {staged.name: digest}
+        if stage == "sft":
+            sidecar = {
+                "training_mode": "supervised-instruction-finetuning",
+                "instruction_dataset_sha256": "a" * 64,
+                "instruction_dataset_bytes": 123,
+            }
+            sidecar_path = staged.with_suffix(staged.suffix + ".json")
+            sidecar_path.write_text(json.dumps(sidecar, sort_keys=True), encoding="utf-8")
+            artifacts[sidecar_path.name] = hashlib.sha256(sidecar_path.read_bytes()).hexdigest()
         snapshot = {
             "schema_version": 1,
             "stage": stage,
@@ -84,7 +94,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             "created_at": "2026-11-09T10:00:00Z",
             "checkpoint_file": staged.name,
             "checkpoint_sha256": digest,
-            "artifacts": {staged.name: digest},
+            "artifacts": artifacts,
             "snapshot_is_read_only": True,
         }
         (snapshot_dir / "snapshot.json").write_text(json.dumps(snapshot), encoding="utf-8")
@@ -126,6 +136,9 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
                 "checkpoint": str(staged),
                 "checkpoint_sha256": digest,
                 "trained_steps": step,
+                "training_mode": "supervised-instruction-finetuning" if stage == "sft" else "causal-source-pretraining",
+                "instruction_dataset_sha256": "a" * 64 if stage == "sft" else None,
+                "instruction_dataset_bytes": 123 if stage == "sft" else None,
             },
             "isolation": {"mode": "docker", "environments": {}},
             "summary": {
@@ -167,6 +180,57 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             self.assertEqual(verified["checkpoint"], staged)
             self.assertEqual(verified["stage"], "sft")
             self.assertEqual(verified["task_completion_rate"], 1.0)
+
+    def test_sft_promotion_binds_report_dataset_identity_to_snapshot_sidecar(self):
+        with tempfile.TemporaryDirectory(prefix=".phase12-sft-lineage-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 81)
+            staged = self._candidate(run_root, source, digest)
+            report = self._report(run_root, staged, digest)
+            verified = promoter.verify_benchmark_candidate(report)
+            self.assertEqual(verified["instruction_dataset_sha256"], "a" * 64)
+            self.assertEqual(verified["instruction_dataset_bytes"], 123)
+
+            data = json.loads(report.read_text(encoding="utf-8"))
+            data["model"]["training_mode"] = "causal-source-pretraining"
+            report.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(promoter.PromotionError, "training mode does not match"):
+                promoter.verify_benchmark_candidate(report)
+
+            data["model"]["training_mode"] = "supervised-instruction-finetuning"
+            data["model"]["instruction_dataset_sha256"] = "b" * 64
+            report.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(promoter.PromotionError, "dataset identity or training mode does not match"):
+                promoter.verify_benchmark_candidate(report)
+
+    def test_sft_promotion_rejects_sidecar_bytes_outside_snapshot_manifest(self):
+        with tempfile.TemporaryDirectory(prefix=".phase12-sft-sidecar-hash-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 83)
+            staged = self._candidate(run_root, source, digest)
+            report = self._report(run_root, staged, digest)
+            sidecar = staged.with_suffix(staged.suffix + ".json")
+            sidecar.write_text(json.dumps({
+                "training_mode": "supervised-instruction-finetuning",
+                "instruction_dataset_sha256": "b" * 64,
+                "instruction_dataset_bytes": 123,
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(promoter.PromotionError, "not authenticated by the snapshot manifest"):
+                promoter.verify_benchmark_candidate(report)
+
+    def test_sft_promotion_rejects_missing_or_unmanifested_dataset_sidecar(self):
+        with tempfile.TemporaryDirectory(prefix=".phase12-sft-sidecar-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 82)
+            staged = self._candidate(run_root, source, digest)
+            report = self._report(run_root, staged, digest)
+            sidecar = staged.with_suffix(staged.suffix + ".json")
+            sidecar.unlink()
+            with self.assertRaisesRegex(promoter.PromotionError, "missing its regular provenance sidecar"):
+                promoter.verify_benchmark_candidate(report)
 
     def test_report_hash_mismatch_is_rejected_before_runtime_loading(self):
         with tempfile.TemporaryDirectory(prefix=".phase5-promotion-hash-", dir=BENCHMARK_ROOT) as temp:
