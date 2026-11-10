@@ -66,6 +66,24 @@ test("TCP check enforces a wall-clock deadline when a connect never settles", as
   assert.ok(Date.now() - startedAt < 500, "TCP probes must respect their wall-clock timeout");
 });
 
+test("TCP check cancellation destroys the active socket and rejects as aborted", async () => {
+  let destroyed = false;
+  const controller = new AbortController();
+  const hangingSocket = {
+    remoteAddress: "",
+    setTimeout() {},
+    once() { return this; },
+    destroy() { destroyed = true; }
+  };
+  const pending = runNetworkDiagnostic(
+    { kind: "port", host: "blocked.example", port: 443 },
+    { tcpConnectImpl: () => hangingSocket, signal: controller.signal }
+  );
+  controller.abort();
+  await assert.rejects(pending, error => error?.name === "AbortError");
+  assert.equal(destroyed, true, "cancellation must close the underlying TCP socket");
+});
+
 test("TCP check can detect an open local port without touching an external host", async () => {
   const listener = net.createServer(socket => socket.end());
   await new Promise((resolve, reject) => {
