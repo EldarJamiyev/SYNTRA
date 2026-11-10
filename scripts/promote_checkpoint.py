@@ -23,6 +23,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 BENCHMARK_ROOT = ROOT / "data" / "benchmarks"
+BENCHMARK_ENGINE_ROOT = ROOT / "tests" / "benchmark_engine"
+if str(BENCHMARK_ENGINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_ENGINE_ROOT))
+from evaluation_provenance import evaluation_protocol_identity
+
 ARCHIVE_ROOT = ROOT / "data" / "checkpoints" / "archive"
 ARCHIVE_ID_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")
 
@@ -254,6 +259,12 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         or set(task_ids) != set(expected_task_ids)
     ):
         raise PromotionError("Promotion requires a complete benchmark from the currently checked-in 13-task polyglot suite, not a partial or stale suite run.")
+    try:
+        current_protocol_identity = evaluation_protocol_identity(ROOT, BENCHMARK_ENGINE_ROOT)
+    except (OSError, ValueError) as exc:
+        raise PromotionError("Cannot verify the current raw-model evaluation protocol: " + str(exc)) from None
+    if report.get("evaluation_protocol") != current_protocol_identity:
+        raise PromotionError("Benchmark report evaluation protocol fingerprint does not match the current suite, fixtures, hidden tests, patch validator, and harness inputs.")
 
     snapshot_path = _safe_repo_path(checkpoint.parent / "snapshot.json", must_exist=True)
     snapshot = _read_json(snapshot_path, maximum_bytes=1024 * 1024)
