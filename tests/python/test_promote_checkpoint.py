@@ -99,6 +99,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         stage: str = "sft",
         step: int = 20,
         outcomes: dict[str, bool] | None = None,
+        run_id: str = "raw-model-phase9-test",
     ) -> Path:
         suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
         task_ids = [task["id"] for task in suite["tasks"]]
@@ -111,7 +112,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             "schema_version": 1,
             "benchmark_track": "raw-native-model",
             "suite_version": suite["version"],
-            "run_id": "raw-model-phase9-test",
+            "run_id": run_id,
             "started_at": "2026-11-09T10:01:00Z",
             "completed_at": "2026-11-09T10:02:00Z",
             "model": {
@@ -263,6 +264,18 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
                 promoter.verify_paired_benchmark(candidate, baseline_report)
             self.assertNotEqual(promoter._sha256(active), digest)
             shutil.rmtree(active_root, ignore_errors=True)
+
+    def test_sft_comparison_rejects_baseline_from_another_training_run(self):
+        with tempfile.TemporaryDirectory(prefix=".phase9-run-identity-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            baseline_report = self._baseline_report(run_root, outcomes={})
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 34)
+            staged = self._candidate(run_root, source, digest)
+            candidate_report = self._report(run_root, staged, digest, run_id="different-training-run")
+            candidate = promoter.verify_benchmark_candidate(candidate_report)
+            with self.assertRaisesRegex(promoter.PromotionError, "same training run"):
+                promoter.verify_paired_benchmark(candidate, baseline_report)
 
     def test_sft_promotion_rejects_per_task_regression_even_if_other_tasks_improve(self):
         with tempfile.TemporaryDirectory(prefix=".phase9-regression-", dir=BENCHMARK_ROOT) as temp:
