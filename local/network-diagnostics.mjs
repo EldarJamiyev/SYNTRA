@@ -164,8 +164,14 @@ function createAbortError() {
 }
 
 function withAbort(promise, signal) {
-  if (!signal) return promise;
-  if (signal.aborted) return Promise.reject(createAbortError());
+  const pending = Promise.resolve(promise);
+  if (!signal) return pending;
+  if (signal.aborted) {
+    // The operation may already have started before the abort check. Consume
+    // its eventual rejection even though the caller no longer awaits it.
+    pending.catch(() => {});
+    return Promise.reject(createAbortError());
+  }
   return new Promise((resolve, reject) => {
     let settled = false;
     const cleanup = () => signal.removeEventListener("abort", onAbort);
@@ -177,7 +183,7 @@ function withAbort(promise, signal) {
     };
     const onAbort = () => settle(reject, createAbortError());
     signal.addEventListener("abort", onAbort, { once: true });
-    Promise.resolve(promise).then(
+    pending.then(
       value => settle(resolve, value),
       error => settle(reject, error)
     );
