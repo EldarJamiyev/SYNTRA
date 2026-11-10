@@ -196,7 +196,8 @@ def _atomic_json(path: Path, payload: dict) -> None:
 INFERENCE_CHECKPOINT_FIELDS = (
     "format", "config", "tokenizer", "model_state", "step", "created_by",
     "device_at_training", "corpus_files", "corpus_tokens", "train_loss",
-    "validation_loss", "training_mode", "instruction_examples", "training_history"
+    "validation_loss", "training_mode", "instruction_examples", "training_history",
+    "instruction_dataset_sha256", "instruction_dataset_bytes"
 )
 
 
