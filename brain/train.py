@@ -100,14 +100,23 @@ def _read_bounded_regular_file(
                 raise ValueError(f"{label} changed while it was being opened: {path}")
             raw = handle.read(max_bytes + 1)
             after = os.fstat(handle.fileno())
+            current = os.stat(path, follow_symlinks=False)
+            opened_identity = (opened.st_dev, opened.st_ino)
             if (
                 len(raw) > max_bytes
-                or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or opened_identity != (after.st_dev, after.st_ino)
+                or opened_identity != (current.st_dev, current.st_ino)
+                or not stat.S_ISREG(current.st_mode)
                 or opened.st_size != after.st_size
+                or opened.st_size != current.st_size
                 or opened.st_mtime_ns != after.st_mtime_ns
                 or opened.st_ctime_ns != after.st_ctime_ns
+                or opened.st_mtime_ns != current.st_mtime_ns
+                or opened.st_ctime_ns != current.st_ctime_ns
             ):
-                raise ValueError(f"{label} changed while it was being read or exceeded its byte limit: {path}")
+                raise ValueError(
+                    f"{label} changed while it was being read or exceeded its byte limit: {path}"
+                )
             return raw
     except ValueError:
         raise

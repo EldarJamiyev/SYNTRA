@@ -49,7 +49,7 @@ SYNTRA is an actively developed engineering and machine-learning project. The na
 
 ## Project status
 
-The current `main` line includes Phases 1–13: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, evidence-gated checkpoint promotion, lossless SFT prompt conditioning, exact SFT dataset provenance, dataset identity carried through evaluation and checkpoint promotion, and content-addressed evaluation protocol identity. Phase 14 binds checkpoint sidecar metadata to the exact checkpoint bytes and rejects stale metadata after partial writes or artifact changes. Phase 15 hardens checkpoint loading by rejecting final-component symlinks, enforcing bounded reads, detecting file replacement or mutation, and deserializing only a verified temporary snapshot.
+The current `main` line includes Phases 1–13: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, evidence-gated checkpoint promotion, lossless SFT prompt conditioning, exact SFT dataset provenance, dataset identity carried through evaluation and checkpoint promotion, and content-addressed evaluation protocol identity. Phase 14 binds checkpoint sidecar metadata to the exact checkpoint bytes and rejects stale metadata after partial writes or artifact changes. Phase 15 hardens checkpoint loading by rejecting final-component symlinks, enforcing bounded reads, detecting file replacement or mutation, and deserializing only a verified temporary snapshot. Phase 16 extends the same path-identity guarantee to local training-dataset reads and checkpoint-promotion artifact hashing, rejecting a pathname that is swapped after its file descriptor has been opened.
 
 | Area | Delivered behavior |
 | --- | --- |
@@ -66,6 +66,7 @@ The current `main` line includes Phases 1–13: the standalone PyTorch brain, lo
 | Evaluation lineage (Phase 12) | Raw-model benchmark reports carry the SFT dataset identity, and promotion verifies that report identity against the staged, manifest-authenticated checkpoint sidecar. |
 | Evaluation protocol identity (Phase 13) | Reports fingerprint the exact suite, fixtures, hidden tests, patch validator, and harness inputs; promotion rejects reports when those inputs have changed. |
 | Checkpoint sidecar integrity (Phase 14) | Sidecars record the checkpoint SHA-256 and byte length; metadata reads reject mismatched artifacts, and failed serialization cleans temporary files. |
+| Dataset and promotion path identity (Phase 16) | Local corpus reads and promotion hashing verify that the pathname still identifies the exact regular file opened and read; deterministic race regressions cover replacement after open. |
 
 Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 

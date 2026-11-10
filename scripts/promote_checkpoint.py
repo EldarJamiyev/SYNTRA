@@ -81,18 +81,40 @@ def _sha256(path: Path) -> str:
     if not stat.S_ISREG(before.st_mode) or before.st_size < 1:
         raise PromotionError("Artifact must be a non-empty regular file: " + str(path))
     digest = hashlib.sha256()
+    descriptor: int | None = None
     try:
-        with path.open("rb") as handle:
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
             opened = os.fstat(handle.fileno())
-            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            ):
                 raise PromotionError("Artifact changed while opening: " + str(path))
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
             after = os.fstat(handle.fileno())
+            current = os.stat(path, follow_symlinks=False)
     except OSError as exc:
         raise PromotionError("Cannot hash artifact " + str(path) + ": " + str(exc)) from None
-    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    identity_before = (
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns
+    )
+    identity_after = (
         after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+    )
+    identity_current = (
+        current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns
+    )
+    if (
+        identity_before != identity_after
+        or identity_before != identity_current
+        or not stat.S_ISREG(current.st_mode)
     ):
         raise PromotionError("Artifact changed while being hashed: " + str(path))
     return digest.hexdigest()
