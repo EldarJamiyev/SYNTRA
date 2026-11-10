@@ -290,13 +290,18 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         ):
             raise PromotionError("SFT checkpoint sidecar does not contain valid exact dataset provenance.")
         if (
-            model.get("instruction_dataset_sha256") != instruction_dataset_sha256
+            model.get("training_mode") != "supervised-instruction-finetuning"
+            or model.get("instruction_dataset_sha256") != instruction_dataset_sha256
             or model.get("instruction_dataset_bytes") != instruction_dataset_bytes
         ):
-            raise PromotionError("Benchmark report SFT dataset identity does not match the staged checkpoint sidecar.")
+            raise PromotionError("Benchmark report SFT dataset identity or training mode does not match the staged checkpoint sidecar.")
     else:
-        if model.get("instruction_dataset_sha256") is not None or model.get("instruction_dataset_bytes") is not None:
-            raise PromotionError("Non-SFT benchmark report must not claim instruction-dataset provenance.")
+        if (
+            model.get("training_mode") == "supervised-instruction-finetuning"
+            or model.get("instruction_dataset_sha256") is not None
+            or model.get("instruction_dataset_bytes") is not None
+        ):
+            raise PromotionError("Non-SFT benchmark report must not claim instruction-dataset provenance or SFT training mode.")
     snapshot_step = snapshot.get("global_step")
     if type(snapshot_step) is not int or snapshot_step < 0:
         raise PromotionError("Checkpoint snapshot does not contain a valid global step.")
