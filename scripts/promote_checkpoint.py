@@ -304,7 +304,6 @@ def verify_benchmark_candidate(report_path: str | Path) -> dict[str, Any]:
         "step": snapshot.get("global_step"),
         "task_completion_rate": float(rate),
         "completed_task_count": completed_count,
-        "task_completion_rate": float(rate),
         "fully_verified_task_count": fully_verified_count,
         "fully_verified_task_rate": fully_verified_count / valid_count,
         "task_count": task_count,
