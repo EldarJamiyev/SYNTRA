@@ -49,7 +49,7 @@ SYNTRA is an actively developed engineering and machine-learning project. The na
 
 ## Project status
 
-The current `main` line includes Phases 1–12: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, evidence-gated checkpoint promotion, lossless SFT prompt conditioning, exact SFT dataset provenance, and dataset identity carried through evaluation and checkpoint promotion. Phase 13 binds benchmark evidence to the exact suite, fixture, hidden-test, patch-validator, and harness inputs; it is under validation.
+The current `main` line includes Phases 1–13: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, evidence-gated checkpoint promotion, lossless SFT prompt conditioning, exact SFT dataset provenance, dataset identity carried through evaluation and checkpoint promotion, and content-addressed evaluation protocol identity. Phase 14 binds checkpoint sidecar metadata to the exact checkpoint bytes and rejects stale metadata after partial writes or artifact changes; it is under validation.
 
 | Area | Delivered behavior |
 | --- | --- |
@@ -64,7 +64,7 @@ The current `main` line includes Phases 1–12: the standalone PyTorch brain, lo
 | Instruction context integrity | SFT rejects prompts that exceed the selected checkpoint context instead of silently dropping leading task/system instructions; completion tokens remain supervised across bounded windows. |
 | SFT dataset provenance (Phase 11) | The exact JSONL byte digest and size are exposed by audit and retained in training reports, full checkpoints, inference companions, and sidecar metadata. |
 | Evaluation lineage (Phase 12) | Raw-model benchmark reports carry the SFT dataset identity, and promotion verifies that report identity against the staged, manifest-authenticated checkpoint sidecar. |
-| Evaluation protocol identity (Phase 13 proposal) | Reports fingerprint the exact suite, fixtures, hidden tests, patch validator, and harness inputs; promotion rejects reports when those inputs have changed. |
+| Evaluation protocol identity (Phase 13) | Reports fingerprint the exact suite, fixtures, hidden tests, patch validator, and harness inputs; promotion rejects reports when those inputs have changed. |\n| Checkpoint sidecar integrity (Phase 14) | Sidecars record the checkpoint SHA-256 and byte length; metadata reads reject mismatched artifacts, and failed serialization cleans temporary files. |
 
 Curriculum generation creates training examples; it does not prove that the model learned them. Fine-tuning must be followed by the same held-out task evaluation used for the pre-training baseline.
 
@@ -435,7 +435,7 @@ SYNTRA/
 | [Phase 10 context integrity](docs/PHASE10_INSTRUCTION_CONTEXT_INTEGRITY.md) | Lossless SFT prompts, explicit context overflow, and completion-window regression coverage |
 | [Phase 11 SFT dataset provenance](docs/PHASE11_SFT_DATASET_PROVENANCE.md) | Exact JSONL SHA-256 identity retained through audit, fine-tuning, and checkpoints |
 | [Phase 12 evaluation lineage](docs/PHASE12_SFT_EVALUATION_LINEAGE.md) | Dataset identity carried into raw benchmark reports and verified at checkpoint promotion |
-| [Phase 13 evaluation protocol identity](docs/PHASE13_EVALUATION_PROTOCOL_IDENTITY.md) | Content-addressed benchmark suite, fixture, hidden-test, patch-validator, and harness identity (pending validation) |
+| [Phase 13 evaluation protocol identity](docs/PHASE13_EVALUATION_PROTOCOL_IDENTITY.md) | Content-addressed benchmark suite, fixture, hidden-test, patch-validator, and harness identity |\n| [Phase 14 checkpoint sidecar integrity](docs/PHASE14_CHECKPOINT_SIDECAR_INTEGRITY.md) | Checkpoint-byte identity, stale-sidecar rejection, and failure-safe temporary artifact cleanup (pending validation) |
 | [Local baseline preflight](docs/LOCAL_BASELINE_PREFLIGHT.md) | Python/PyTorch device readiness, local Docker image digests, and GO/NO-GO runbook |
 | [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
 | [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
