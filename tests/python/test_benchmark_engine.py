@@ -352,6 +352,8 @@ class RawModelBenchmarkTests(unittest.TestCase):
                 "validation_loss": 0.76,
                 "best_validation_loss": 0.71,
                 "training_mode": "supervised-instruction-finetuning",
+                "instruction_dataset_sha256": "c" * 64,
+                "instruction_dataset_bytes": 4096,
                 "training_history": [
                     {"step": 50, "phase": "causal-source-pretraining", "train_loss": 1.2, "validation_loss": 1.4},
                     {"step": 100, "phase": "supervised-instruction-finetuning", "train_loss": 0.42, "validation_loss": 0.76},
@@ -364,6 +366,33 @@ class RawModelBenchmarkTests(unittest.TestCase):
                 "causal-source-pretraining", "supervised-instruction-finetuning",
             ])
             self.assertTrue(evidence["history_available"])
+            self.assertEqual(evidence["instruction_dataset_sha256"], "c" * 64)
+            self.assertEqual(evidence["instruction_dataset_bytes"], 4096)
+
+    def test_checkpoint_evidence_rejects_malformed_sft_dataset_provenance(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-invalid-sft-provenance-") as temp:
+            checkpoint = Path(temp) / "model.pt"
+            checkpoint.write_bytes(b"checkpoint-bytes-used-for-identity")
+            sidecar = checkpoint.with_suffix(".pt.json")
+            sidecar.write_text(json.dumps({
+                "training_mode": "supervised-instruction-finetuning",
+                "instruction_dataset_sha256": "not-a-sha256",
+                "instruction_dataset_bytes": 10,
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(runner.BenchmarkError, "malformed SFT dataset SHA-256"):
+                runner.load_checkpoint_evidence(checkpoint)
+
+    def test_checkpoint_evidence_rejects_partial_sft_dataset_provenance(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-partial-sft-provenance-") as temp:
+            checkpoint = Path(temp) / "model.pt"
+            checkpoint.write_bytes(b"checkpoint-bytes-used-for-identity")
+            sidecar = checkpoint.with_suffix(".pt.json")
+            sidecar.write_text(json.dumps({
+                "training_mode": "supervised-instruction-finetuning",
+                "instruction_dataset_sha256": "c" * 64,
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(runner.BenchmarkError, "incomplete SFT dataset provenance"):
+                runner.load_checkpoint_evidence(checkpoint)
 
     def test_generation_rejects_context_overflow_before_streaming_the_model(self):
         class TokenizerEvidenceOnly:

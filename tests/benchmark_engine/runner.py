@@ -189,6 +189,19 @@ def load_checkpoint_evidence(checkpoint: Path) -> dict[str, Any]:
     step = metadata.get("step")
     if type(step) is not int or step < 0:
         step = None
+    instruction_dataset_sha256 = metadata.get("instruction_dataset_sha256")
+    instruction_dataset_bytes = metadata.get("instruction_dataset_bytes")
+    if instruction_dataset_sha256 is not None and (
+        not isinstance(instruction_dataset_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", instruction_dataset_sha256) is None
+    ):
+        raise BenchmarkError("Checkpoint sidecar contains a malformed SFT dataset SHA-256.")
+    if instruction_dataset_bytes is not None and (
+        type(instruction_dataset_bytes) is not int or instruction_dataset_bytes < 0
+    ):
+        raise BenchmarkError("Checkpoint sidecar contains a malformed SFT dataset byte count.")
+    if (instruction_dataset_sha256 is None) != (instruction_dataset_bytes is None):
+        raise BenchmarkError("Checkpoint sidecar contains incomplete SFT dataset provenance.")
     return {
         "path": str(target), "sha256": digest.hexdigest(), "step": step,
         "train_loss": finite_number("train_loss"), "validation_loss": finite_number("validation_loss"),

@@ -49,7 +49,7 @@ SYNTRA is an actively developed engineering and machine-learning project. The na
 
 ## Project status
 
-The current `main` line includes Phases 1–10: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, evidence-gated checkpoint promotion, and lossless SFT prompt conditioning. Phase 11 adds exact SHA-256 provenance for the JSONL bytes used by instruction fine-tuning; it remains under validation until merged.
+The current `main` line includes Phases 1–11: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, evidence-gated checkpoint promotion, lossless SFT prompt conditioning, and exact SHA-256 provenance for the JSONL bytes used by instruction fine-tuning. Phase 12 carries that dataset identity into raw-model benchmark reports and verifies it against the staged checkpoint sidecar during promotion; it remains under validation.
 
 | Area | Delivered behavior |
 | --- | --- |
@@ -432,7 +432,8 @@ SYNTRA/
 | [Native model runtime](docs/NATIVE_MODEL.md) | PyTorch model, tokenizer, context integrity, training, and inference |
 | [Phase 9 promotion gate](docs/PHASE9_EVIDENCE_GATED_PROMOTION.md) | Paired benchmark comparison, regression policy, and safe initial activation |
 | [Phase 10 context integrity](docs/PHASE10_INSTRUCTION_CONTEXT_INTEGRITY.md) | Lossless SFT prompts, explicit context overflow, and completion-window regression coverage |
-| [Phase 11 SFT dataset provenance](docs/PHASE11_SFT_DATASET_PROVENANCE.md) | Exact JSONL SHA-256 identity retained through audit, fine-tuning, and checkpoints (pending merge) |
+| [Phase 11 SFT dataset provenance](docs/PHASE11_SFT_DATASET_PROVENANCE.md) | Exact JSONL SHA-256 identity retained through audit, fine-tuning, and checkpoints |
+| [Phase 12 evaluation lineage](docs/PHASE12_SFT_EVALUATION_LINEAGE.md) | Dataset identity carried into raw benchmark reports and verified at checkpoint promotion (pending validation) |
 | [Local baseline preflight](docs/LOCAL_BASELINE_PREFLIGHT.md) | Python/PyTorch device readiness, local Docker image digests, and GO/NO-GO runbook |
 | [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
 | [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
