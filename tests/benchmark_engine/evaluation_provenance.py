@@ -45,10 +45,16 @@ def _hash_regular_file(path: Path) -> tuple[str, int]:
                     raise EvaluationProvenanceError("Evaluation input exceeded its size limit while hashing: " + str(path))
                 digest.update(chunk)
             after = os.fstat(handle.fileno())
+            current = path.lstat()
     except OSError as exc:
         raise EvaluationProvenanceError("Cannot hash evaluation input " + str(path) + ": " + str(exc)) from None
-    if _identity_tuple(before) != _identity_tuple(after) or total != before.st_size:
-        raise EvaluationProvenanceError("Evaluation input changed while hashing: " + str(path))
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or _identity_tuple(before) != _identity_tuple(after)
+        or _identity_tuple(before) != _identity_tuple(current)
+        or total != before.st_size
+    ):
+        raise EvaluationProvenanceError("Evaluation input changed while hashing or its path identity was replaced: " + str(path))
     return digest.hexdigest(), total
 
 

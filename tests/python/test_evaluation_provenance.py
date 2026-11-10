@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -5,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests" / "benchmark_engine"))
+import evaluation_provenance as provenance
 from evaluation_provenance import EvaluationProvenanceError, evaluation_protocol_identity
 
 
@@ -51,6 +53,39 @@ class EvaluationProtocolIdentityTests(unittest.TestCase):
             fixture.write_text("source = 'changed'", encoding="utf-8")
             changed = evaluation_protocol_identity(repository, engine)
             self.assertNotEqual(original["sha256"], changed["sha256"])
+
+
+    def test_path_replacement_after_open_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-protocol-path-race-") as temp:
+            target = Path(temp) / "protocol.py"
+            replacement = Path(temp) / "replacement.py"
+            target.write_text("original = True", encoding="utf-8")
+            replacement.write_text("replacement = True", encoding="utf-8")
+            real_fstat = os.fstat
+            calls = 0
+
+            def replace_after_descriptor_read(descriptor):
+                nonlocal calls
+                calls += 1
+                result = real_fstat(descriptor)
+                if calls == 2:
+                    os.replace(replacement, target)
+                return result
+
+            from unittest.mock import patch
+            with patch.object(provenance.os, "fstat", side_effect=replace_after_descriptor_read):
+                with self.assertRaisesRegex(EvaluationProvenanceError, "path identity was replaced"):
+                    provenance._hash_regular_file(target)
+
+    def test_stable_regular_file_hash_remains_supported(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-protocol-stable-") as temp:
+            target = Path(temp) / "protocol.py"
+            content = b"stable protocol content"
+            target.write_bytes(content)
+            digest, size = provenance._hash_regular_file(target)
+            import hashlib
+            self.assertEqual(digest, hashlib.sha256(content).hexdigest())
+            self.assertEqual(size, len(content))
 
     def test_symbolic_links_are_rejected(self):
         with tempfile.TemporaryDirectory(prefix="syntra-protocol-symlink-") as temp:
