@@ -39,15 +39,15 @@ A trained checkpoint is required before chat or coding generation works. From-sc
 
 A valid benchmark report proves that a checkpoint was evaluated against the current hidden-baseline-validated suite. It does not, by itself, prove that fine-tuning improved the model. The promotion CLI now enforces a paired comparison before an SFT checkpoint can replace the active checkpoint.
 
-For an SFT candidate, the operator must provide both the candidate report and its pretraining baseline report using `--report` and `--baseline-report`. Both reports are independently verified against the current 13-task suite, immutable checkpoint snapshots, full SHA-256 identities, trained-step metadata, and Docker isolation evidence. The comparison then requires:
+For an SFT candidate, the operator must provide both the candidate report and its pretraining baseline report using `--report` and `--baseline-report`. Both reports are independently verified against the current 13-task suite, immutable checkpoint snapshots, full SHA-256 identities, trained-step metadata, and Docker isolation evidence. The comparison uses the benchmark's fully verified task outcome (held-out target tests and regression-prevention tests both pass), not target-test completion alone. It then requires:
 
 - Candidate and baseline reports use the same benchmark suite version and exact task-ID set.
 - The baseline checkpoint is a `pretraining` or `baseline` snapshot; the candidate checkpoint is an `sft` snapshot.
 - Every task passed by the baseline must also pass after SFT. Any per-task regression blocks promotion.
-- The candidate must pass at least one additional task and have a strictly higher aggregate task-completion rate.
+- The candidate must fully verify at least one additional task and have a strictly higher aggregate fully-verified task rate.
 - The exact candidate checkpoint SHA-256 must still be acknowledged with `--confirm-sha256` for a real promotion.
 
-A first-ever pretraining checkpoint has a separate explicit path: `--allow-initial-baseline`. It is accepted only when the active checkpoint and its companion artifacts do not exist and at least one validated benchmark task passes. This option cannot bypass SFT comparison and cannot replace an existing active checkpoint.
+A first-ever pretraining checkpoint has a separate explicit path: `--allow-initial-baseline`. It is accepted only when the active checkpoint and its companion artifacts do not exist and at least one task passes both held-out target tests and regression-prevention tests. This option cannot bypass SFT comparison and cannot replace an existing active checkpoint.
 
 The `--dry-run` path performs all report, snapshot, paired-score, checkpoint-loadability, and destination checks without changing active files. Its output includes baseline/candidate task counts, score delta, improved task IDs, and an empty regression list. Existing atomic activation, previous-checkpoint archival, companion regeneration, and rollback behavior remain in place.
 
