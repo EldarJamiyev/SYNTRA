@@ -15,7 +15,7 @@ import importlib.util
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import stat
 import subprocess
@@ -27,6 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 DEFAULT_CONFIG = ROOT / "configs" / "training" / "phase4_milestone4.json"
+PHASE7_LANGUAGES = ("python", "javascript", "typescript", "go", "rust")
+MAX_CURRICULUM_JSONL_BYTES = 128 * 1024 * 1024
+MAX_CURRICULUM_LINE_BYTES = 1024 * 1024
+MAX_CURRICULUM_TOTAL_RECORDS = 10_000
 
 
 class OrchestrationError(RuntimeError):
@@ -272,8 +276,18 @@ def _validate_profile_values(profile: dict[str, Any]) -> None:
     if gradient_clip != 1.0:
         raise OrchestrationError("pretraining.gradient_clip_norm is fixed at 1.0 for this milestone.")
     curriculum = profile["curriculum"]
-    _validate_positive_int(curriculum, "max_examples", 4, 10_000)
+    _validate_positive_int(curriculum, "max_examples", 4, MAX_CURRICULUM_TOTAL_RECORDS // 2)
     _validate_positive_int(curriculum, "max_tokens", 1024, 3_000_000)
+    if curriculum.get("mode") != "all":
+        raise OrchestrationError("curriculum.mode must be all so repository and multi-file records share the SFT pipeline.")
+    languages = curriculum.get("languages")
+    if (
+        not isinstance(languages, list)
+        or len(languages) != len(PHASE7_LANGUAGES)
+        or len(set(languages)) != len(PHASE7_LANGUAGES)
+        or set(languages) != set(PHASE7_LANGUAGES)
+    ):
+        raise OrchestrationError("curriculum.languages must contain Python, JavaScript, TypeScript, Go, and Rust exactly once.")
     sft = profile["sft"]
     _validate_positive_int(sft, "steps", 1, 1_000_000)
     _validate_positive_int(sft, "batch_size", 1, 128)
@@ -298,6 +312,305 @@ def _validate_profile_values(profile: dict[str, Any]) -> None:
     ):
         raise OrchestrationError("evaluation.task_ids must be a unique list of one to thirteen benchmark task IDs.")
 
+
+
+
+def _npm_command(args: list[str]) -> list[str]:
+    """Build a shell-free npm invocation, preserving Windows paths with spaces."""
+    if os.name == "nt":
+        executable = shutil.which("npm.cmd") or shutil.which("npm")
+        if not executable:
+            raise OrchestrationError("npm is required for Phase 7 curriculum generation.")
+        command_line = subprocess.list2cmdline([executable, *args])
+        return ["cmd.exe", "/d", "/s", "/c", f'"{command_line}"']
+    executable = shutil.which("npm")
+    if not executable:
+        raise OrchestrationError("npm is required for Phase 7 curriculum generation.")
+    return [executable, *args]
+
+
+def _read_curriculum_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Read bounded JSONL records from a canonical repository-local file."""
+    target = _inside_root(path)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(os.fspath(target), flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_CURRICULUM_JSONL_BYTES:
+                raise OrchestrationError("Curriculum input must be a bounded regular file.")
+            raw = handle.read(MAX_CURRICULUM_JSONL_BYTES + 1)
+            after = os.fstat(handle.fileno())
+            if (
+                len(raw) > MAX_CURRICULUM_JSONL_BYTES
+                or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
+                or before.st_size != after.st_size
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+            ):
+                raise OrchestrationError("Curriculum input changed while it was being read.")
+    except OrchestrationError:
+        raise
+    except OSError as exc:
+        raise OrchestrationError("Cannot safely read curriculum input: " + str(exc)) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise OrchestrationError("Curriculum JSONL must contain valid UTF-8.") from None
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        if len(line.encode("utf-8")) > MAX_CURRICULUM_LINE_BYTES:
+            raise OrchestrationError(f"Curriculum input line {line_number} exceeds the 1 MiB record limit.")
+        try:
+            item = _strict_json(line)
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise OrchestrationError(f"Invalid curriculum JSONL at line {line_number}: {exc}") from None
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("prompt"), str)
+            or not isinstance(item.get("completion"), str)
+            or not item["prompt"].strip()
+            or not item["completion"].strip()
+        ):
+            raise OrchestrationError(f"Curriculum line {line_number} must contain non-empty prompt and completion strings.")
+        records.append(item)
+        if len(records) > MAX_CURRICULUM_TOTAL_RECORDS:
+            raise OrchestrationError("Combined curriculum exceeds the 10,000 source-record safety limit.")
+    return records
+
+
+def _write_curriculum_jsonl_atomic(path: Path, records: list[dict[str, Any]]) -> None:
+    """Atomically write validated curriculum records without following symlinks."""
+    target = _inside_root(path)
+    if target.is_symlink():
+        raise OrchestrationError("Curriculum output must not be a symbolic link.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target = _inside_root(target)
+    encoded_parts: list[bytes] = []
+    total_bytes = 0
+    for record in records:
+        raw = (json.dumps(record, ensure_ascii=False, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+        if len(raw) > MAX_CURRICULUM_LINE_BYTES:
+            raise OrchestrationError("A merged curriculum record exceeds the 1 MiB record limit.")
+        total_bytes += len(raw)
+        if total_bytes > MAX_CURRICULUM_JSONL_BYTES:
+            raise OrchestrationError("Combined curriculum exceeds the 128 MiB dataset safety limit.")
+        encoded_parts.append(raw)
+    temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temporary.open("xb") as handle:
+            for part in encoded_parts:
+                handle.write(part)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if target.is_symlink():
+            raise OrchestrationError("Curriculum output became a symbolic link before replacement.")
+        os.replace(temporary, target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _validate_multifile_reasoning_record(record: dict[str, Any], line_number: int) -> None:
+    completion = record["completion"]
+    separator = "</thought>\n"
+    if not completion.startswith("<thought>\n") or completion.count(separator) != 1:
+        raise OrchestrationError(f"Multi-file curriculum line {line_number} is missing one bounded thought block.")
+    payload_text = completion.split(separator, 1)[1]
+    try:
+        payload = _strict_json(payload_text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise OrchestrationError(f"Multi-file curriculum line {line_number} has invalid patch JSON: {exc}") from None
+    edits = payload.get("edits") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format") != "SYNTRA_AGENT_PATCH_V1"
+        or not isinstance(edits, list)
+        or len(edits) != 2
+    ):
+        raise OrchestrationError(f"Multi-file curriculum line {line_number} must contain exactly two SYNTRA_AGENT_PATCH_V1 edits.")
+    paths: set[str] = set()
+    for edit in edits:
+        if not isinstance(edit, dict):
+            raise OrchestrationError(f"Multi-file curriculum line {line_number} contains a malformed edit.")
+        path = edit.get("path")
+        pure = PurePosixPath(path) if isinstance(path, str) else PurePosixPath(".")
+        if (
+            not isinstance(path, str)
+            or not path
+            or pure.is_absolute()
+            or pure.as_posix() != path
+            or any(part in {"", ".", ".."} for part in pure.parts)
+            or not all(isinstance(edit.get(key), str) and edit[key] for key in ("find", "replace", "reason"))
+            or path in paths
+            or f"FILE: {path}\n" not in record["prompt"]
+        ):
+            raise OrchestrationError(f"Multi-file curriculum line {line_number} contains an unsafe or ungrounded edit.")
+        paths.add(path)
+
+
+def _merge_phase7_curricula(
+    repository_path: Path,
+    reasoning_path: Path,
+    output_path: Path,
+    *,
+    max_examples_per_generator: int,
+) -> dict[str, Any]:
+    """Combine Phase 7's independent outputs into the one audited SFT dataset."""
+    repository_records = _read_curriculum_jsonl(repository_path)
+    if not repository_records:
+        raise OrchestrationError("The repository curriculum generator produced no usable records.")
+    reasoning_records = _read_curriculum_jsonl(reasoning_path) if reasoning_path.is_file() else []
+    if len(repository_records) > max_examples_per_generator or len(reasoning_records) > max_examples_per_generator:
+        raise OrchestrationError("A Phase 7 generator exceeded its configured per-dataset max_examples limit.")
+
+    for line_number, record in enumerate(reasoning_records, start=1):
+        if record.get("kind") != "multi_file_reasoning":
+            raise OrchestrationError(f"Reasoning curriculum line {line_number} is not marked multi_file_reasoning.")
+        _validate_multifile_reasoning_record(record, line_number)
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    duplicates = 0
+    for record in [*repository_records, *reasoning_records]:
+        identity = hashlib.sha256(
+            (record["prompt"] + "\0" + record["completion"]).encode("utf-8")
+        ).hexdigest()
+        if identity in seen:
+            duplicates += 1
+            continue
+        seen.add(identity)
+        merged.append(record)
+    if len(merged) < 2:
+        raise OrchestrationError("The merged curriculum must contain at least two unique source records for a validation split.")
+    if len(merged) > MAX_CURRICULUM_TOTAL_RECORDS:
+        raise OrchestrationError("Merged Phase 7 curriculum exceeds the 10,000 source-record limit.")
+    _write_curriculum_jsonl_atomic(output_path, merged)
+    return {
+        "dataset_path": str(_inside_root(output_path)),
+        "repository_records": len(repository_records),
+        "multi_file_reasoning_records": len(reasoning_records),
+        "duplicate_records_removed": duplicates,
+        "combined_records": len(merged),
+        "reasoning_completion_policy": "thought, patch JSON, and EOS are supervised; prompt tokens are masked; long completions are preserved across overlapping checkpoint-context windows.",
+    }
+
+
+def _run_phase7_curriculum(
+    corpus_root: Path,
+    repository_output: Path,
+    reasoning_output: Path,
+    *,
+    max_examples: int,
+    languages: list[str],
+    exclude_paths: list[Path],
+) -> dict[str, Any]:
+    """Invoke the public Phase 7 CLI in all-mode and validate its real outputs."""
+    if tuple(languages) != PHASE7_LANGUAGES:
+        raise OrchestrationError("Phase 7 curriculum language order must be Python, JavaScript, TypeScript, Go, Rust.")
+    command_args = [
+        "run", "--silent", "ai:curriculum", "--",
+        "--root", str(_inside_root(corpus_root)),
+        "--output", str(_inside_root(repository_output)),
+        "--multifile-output", str(_inside_root(reasoning_output)),
+        "--mode", "all",
+        "--languages", *languages,
+        "--max-examples", str(max_examples),
+        "--exclude", *[str(_inside_root(path)) for path in exclude_paths],
+    ]
+    try:
+        process = subprocess.run(
+            _npm_command(command_args),
+            cwd=ROOT,
+            env=dict(os.environ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1800,
+            shell=False,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise OrchestrationError("Phase 7 curriculum command could not complete: " + str(exc)) from None
+    if process.returncode != 0:
+        raise OrchestrationError(
+            "Phase 7 curriculum command failed with exit code "
+            + str(process.returncode) + ":\n" + (process.stdout or "")[-4000:]
+        )
+    try:
+        result = _strict_json((process.stdout or "").strip())
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise OrchestrationError("Phase 7 curriculum CLI did not return valid JSON: " + str(exc)) from None
+    if not isinstance(result, dict) or not isinstance(result.get("repository"), dict) or not isinstance(result.get("multifile"), dict):
+        raise OrchestrationError("Phase 7 curriculum CLI did not return both repository and multi-file results.")
+    repository_result = result["repository"]
+    reasoning_result = result["multifile"]
+    if repository_result.get("dataset_path") is None or not repository_output.is_file():
+        raise OrchestrationError("The Phase 7 repository curriculum did not produce its configured JSONL file.")
+    if Path(repository_result["dataset_path"]).resolve() != _inside_root(repository_output).resolve():
+        raise OrchestrationError("The repository curriculum wrote to an unexpected output path.")
+    reasoning_path_value = reasoning_result.get("dataset_path")
+    if reasoning_path_value is not None:
+        if not reasoning_output.is_file() or Path(reasoning_path_value).resolve() != _inside_root(reasoning_output).resolve():
+            raise OrchestrationError("The Phase 7 multi-file generator wrote to an unexpected output path.")
+    elif reasoning_output.exists():
+        raise OrchestrationError("The multi-file generator reported no dataset but left an unexpected output file.")
+    return {
+        "mode": "all",
+        "languages": list(languages),
+        "repository": repository_result,
+        "multifile": reasoning_result,
+        "command": "npm run --silent ai:curriculum -- --mode all --languages python javascript typescript go rust",
+    }
+
+
+def _filter_multifile_prompts_to_checkpoint_context(
+    dataset_path: Path,
+    tokenizer: Any,
+    seq_len: int,
+) -> dict[str, Any]:
+    """Drop oversized paired prompts instead of silently clipping their task/files."""
+    records = _read_curriculum_jsonl(dataset_path)
+    kept: list[dict[str, Any]] = []
+    candidates = 0
+    dropped = 0
+    largest_prompt_tokens = 0
+    prompt_limit = seq_len - 1  # Reserve one input position for BOS.
+    for record in records:
+        if record.get("kind") != "multi_file_reasoning":
+            kept.append(record)
+            continue
+        candidates += 1
+        prompt_tokens = len(tokenizer.encode(record["prompt"]))
+        largest_prompt_tokens = max(largest_prompt_tokens, prompt_tokens)
+        if prompt_tokens > prompt_limit:
+            dropped += 1
+            continue
+        kept.append(record)
+    if not kept:
+        raise OrchestrationError("Checkpoint-context filtering removed every instruction record; SFT cannot start.")
+    if dropped:
+        _write_curriculum_jsonl_atomic(dataset_path, kept)
+    return {
+        "multi_file_candidates": candidates,
+        "multi_file_records_kept": candidates - dropped,
+        "multi_file_records_dropped_prompt_overflow": dropped,
+        "multi_file_prompt_token_limit": prompt_limit,
+        "largest_multi_file_prompt_tokens_before_filter": largest_prompt_tokens,
+        "tokenizer": "selected-checkpoint-bpe",
+        "completion_policy": "multi-file completions are not truncated; every thought/patch/EOS token is supervised across overlapping context windows.",
+    }
 
 @dataclass
 class EvaluationJob:
@@ -395,18 +708,7 @@ class BackgroundEvaluator:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
 
     def _npm_command(self, args: list[str]) -> list[str]:
-        if os.name == "nt":
-            executable = shutil.which("npm.cmd") or shutil.which("npm")
-            if not executable:
-                raise OrchestrationError("npm is required for npm run benchmark:model.")
-            command_line = subprocess.list2cmdline([executable, *args])
-            # /s /c strips the outermost quote pair; the inner executable and
-            # argument quotes then survive for paths containing Windows spaces.
-            return ["cmd.exe", "/d", "/s", "/c", f'"{command_line}"']
-        executable = shutil.which("npm")
-        if not executable:
-            raise OrchestrationError("npm is required for npm run benchmark:model.")
-        return [executable, *args]
+        return _npm_command(args)
 
     def _wait_one(self) -> None:
         job = self.active.pop(0)
@@ -931,18 +1233,33 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         if not args.skip_sft:
-            from syntra_ai.curriculum import synthesize_repository_curriculum
-            curriculum_result = synthesize_repository_curriculum(
-                root=corpus_root,
-                output_path=curriculum_path,
+            repository_curriculum_path = run_root / "curriculum" / "repository.jsonl"
+            reasoning_curriculum_path = run_root / "curriculum" / "reasoning.jsonl"
+            curriculum_generation = _run_phase7_curriculum(
+                corpus_root,
+                repository_curriculum_path,
+                reasoning_curriculum_path,
                 max_examples=cur["max_examples"],
-                exclude_paths=generated_artifact_roots,
+                languages=cur["languages"],
+                exclude_paths=[
+                    *generated_artifact_roots,
+                    curriculum_path,
+                    repository_curriculum_path,
+                    reasoning_curriculum_path,
+                ],
             )
-            if not isinstance(curriculum_result, dict) or not curriculum_result.get("dataset_path"):
-                raise OrchestrationError("Curriculum synthesis did not return a verified output dataset.")
-            if Path(curriculum_result["dataset_path"]).resolve() != curriculum_path.resolve():
-                raise OrchestrationError("Curriculum synthesis output path differs from the requested local dataset path.")
-            manifest["curriculum_result"] = curriculum_result
+            curriculum_merge = _merge_phase7_curricula(
+                repository_curriculum_path,
+                reasoning_curriculum_path,
+                curriculum_path,
+                max_examples_per_generator=cur["max_examples"],
+            )
+            if Path(curriculum_merge["dataset_path"]).resolve() != curriculum_path.resolve():
+                raise OrchestrationError("Merged Phase 7 SFT dataset differs from the configured curriculum path.")
+            manifest["curriculum_result"] = {
+                "generation": curriculum_generation,
+                "merge": curriculum_merge,
+            }
             _write_json_atomic(run_root / "run_manifest.json", manifest)
 
         if not args.skip_pretraining:
@@ -1014,11 +1331,19 @@ def main(argv: list[str] | None = None) -> int:
             from syntra_ai.instruction import audit_instruction_dataset, finetune
             from syntra_ai.runtime import _read_checkpoint
             _, _, checkpoint_config, checkpoint_tokenizer = _read_checkpoint(checkpoint)
+            context_filter = _filter_multifile_prompts_to_checkpoint_context(
+                curriculum_path,
+                checkpoint_tokenizer,
+                checkpoint_config.seq_len,
+            )
+            training_results["curriculum_context_filter"] = context_filter
+            manifest["curriculum_context_filter"] = context_filter
+            _write_json_atomic(run_root / "run_manifest.json", manifest)
             audit = audit_instruction_dataset(
                 curriculum_path,
                 seq_len=checkpoint_config.seq_len,
                 tokenizer=checkpoint_tokenizer,
-                max_examples=cur["max_examples"],
+                max_examples=2 * cur["max_examples"],
                 max_tokens=cur["max_tokens"],
             )
             training_results["curriculum_audit"] = audit
@@ -1029,7 +1354,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(
                 f"[sft] audited {audit.get('example_count')} source records and "
-                f"{audit.get('context_window_count')} checkpoint-tokenized contexts.",
+                f"{audit.get('context_window_count')} checkpoint-tokenized contexts; "
+                f"kept {context_filter['multi_file_records_kept']}/{context_filter['multi_file_candidates']} "
+                f"multi-file prompts within {context_filter['multi_file_prompt_token_limit']} tokens "
+                f"(dropped {context_filter['multi_file_records_dropped_prompt_overflow']} over-context prompts).",
                 flush=True,
             )
             sft_result = finetune(

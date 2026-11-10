@@ -22,7 +22,8 @@
     "benchmark:model": "python scripts/run_syntra_module.py benchmark-model",
     "brain:milestone4": "python scripts/evaluate_epochs.py",
     "brain:promote": "python scripts/promote_checkpoint.py",
-    "brain:smoke": "python scripts/evaluate_epochs.py --config configs/training/phase4_smoke.json"
+    "brain:smoke": "python scripts/evaluate_epochs.py --config configs/training/phase4_smoke.json",
+    "brain:preflight": "python scripts/run_local_baseline.py"
   },
   "dependencies": {
     "lucide-react": "^1.65.0",

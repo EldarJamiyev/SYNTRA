@@ -220,9 +220,21 @@ Prompt target positions are masked with -100. Completion tokens remain supervise
 
 ### Training and model commands
 
-Run these from the repository root:
+Run these from the repository root. Before a long pretraining/SFT run, execute the read-only readiness gate first:
 
 ~~~powershell
+# Verify the selected CPU/CUDA/MPS backend and all four local Docker image tags/digests
+npm run brain:preflight
+
+# Check the larger 1024-token GPU profile before selecting it for training
+npm run brain:preflight -- --config configs/training/local_gpu_scale.json
+
+# Start the Phase 4 milestone only after preflight reports GO
+npm run brain:milestone4
+
+# Run the short integration/smoke profile
+npm run brain:smoke
+
 # Report actual local checkpoint and training metadata
 npm run ai:cli -- status
 
@@ -232,7 +244,7 @@ npm run ai:cli -- inspect-data --root "C:\Projects\SYNTRA"
 # Train or continue the native model from an approved source root
 npm run ai:cli -- train --root "C:\Projects\SYNTRA" --seq-len 1024 --steps 1000
 
-# Generate repository-grounded curriculum records for all five languages
+# Generate both Phase 7 datasets for all five languages
 npm run ai:curriculum -- --mode all --languages python javascript typescript go rust --max-examples 240
 
 # Generate only the regular module/symbol/repair dataset
@@ -248,12 +260,11 @@ npm run ai:cli -- audit-instructions --dataset "data/curricula/workspace-instruc
 npm run ai:cli -- finetune --dataset "data/curricula/workspace-instructions.jsonl" --steps 1000
 ~~~
 
-Curriculum output defaults to:
+The automated Phase 4 workflow runs the same command in `all` mode using each profile's explicit five-language list. It writes the repository and paired reasoning JSONL files to a unique run directory, validates both, and combines them into the profile's single SFT dataset. The checkpoint's exact BPE tokenizer is then used to remove only multi-file prompts that exceed `seq_len - 1` tokens (one position is reserved for BOS). This avoids silently clipping the task or either source file. Long `<thought>` and patch completions are not truncated: they are preserved across overlapping SFT context windows, with prompt and repeated-overlap targets masked and completion/EOS targets supervised. Both curriculum scans explicitly exclude prior benchmark reports, curricula, checkpoints, and the current run's intermediate outputs so generated artifacts cannot become future training source data.
 
-- data/curricula/workspace-instructions.jsonl
-- data/curricula/workspace-reasoning.jsonl
+The standalone CLI defaults to `data/curricula/workspace-instructions.jsonl` and `data/curricula/workspace-reasoning.jsonl`. Use `--root` to scan one approved repository instead of the project plus configured roots. Use `--output` or `--multifile-output` to choose output paths inside the project or selected workspace. `--languages` selects the source languages, and `--mode` selects `repository`, `multifile`, or `all`.
 
-Use --root to scan one approved repository instead of the project plus configured roots. Use --output or --multifile-output to choose output paths inside the project or selected workspace. --languages selects the source languages, and --mode selects repository, multifile, or all.
+The preflight inspects local Docker tags and SHA-256 digests only. It does not pull, build, run containers, or contact an image registry. A NO-GO report exits with code 2; provision missing images and rerun the gate before starting training.
 
 External corpus roots must be explicitly approved. In PowerShell:
 
@@ -411,6 +422,7 @@ SYNTRA/
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | Runtime components, request flow, agent orchestration, and recovery |
 | [Native model runtime](docs/NATIVE_MODEL.md) | PyTorch model, tokenizer, context integrity, training, and inference |
+| [Local baseline preflight](docs/LOCAL_BASELINE_PREFLIGHT.md) | Python/PyTorch device readiness, local Docker image digests, and GO/NO-GO runbook |
 | [Repository curriculum](docs/REPOSITORY_CURRICULUM.md) | Five-language curation, repair evidence, paired reasoning, and SFT masks |
 | [Operating security](docs/OPERATING_SECURITY.md) | Local API boundaries, project-check isolation, path safety, and residual risks |
 | [Model capabilities](docs/MODEL_CAPABILITIES.md) | Native inference, self-review, benchmark evidence, and limits |

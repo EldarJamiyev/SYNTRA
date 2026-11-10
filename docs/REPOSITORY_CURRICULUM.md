@@ -16,7 +16,7 @@ Examples:
     npm run ai:curriculum -- --mode repository --languages python javascript typescript go rust --max-examples 240
     npm run ai:curriculum -- --mode multifile --languages javascript typescript go rust --max-examples 120
 
-The default repository dataset is data/curricula/workspace-instructions.jsonl; the paired reasoning dataset is data/curricula/workspace-reasoning.jsonl. Use --root to select one approved local source root, --output for the repository dataset, and --multifile-output for paired examples. External roots must be included in SYNTRA_ALLOWED_CORPUS_ROOTS. The existing corpus reader continues to apply canonical-path, symlink, size, file-count and sensitive-path controls.
+The default repository dataset is data/curricula/workspace-instructions.jsonl; the paired reasoning dataset is data/curricula/workspace-reasoning.jsonl. Use --root to select one approved local source root, --output for the repository dataset, and --multifile-output for paired examples. External roots must be included in SYNTRA_ALLOWED_CORPUS_ROOTS. The --exclude option accepts additional absolute file or directory paths and applies each exclusion to both generators. The existing corpus reader continues to apply canonical-path, symlink, size, file-count and sensitive-path controls.
 
 The curriculum scanner adds tests/benchmark_engine/hidden to the exclusion list for every approved root. Hidden benchmark targets are evaluation-only material and are not valid training labels.
 
@@ -53,10 +53,12 @@ The JSONL record schema remains prompt and completion. The native instruction lo
 
 All prompt target positions are masked with -100; response tokens remain supervised. For paired examples this means the <thought> trace, patch JSON, and terminal EOS are included in the completion loss. Long completions use the existing overlapping context-window logic, which masks repeated overlap targets to avoid counting the same response token twice. No change to the model architecture or training loss is required.
 
+The automated epoch runner calls the Phase 7 CLI with mode all and the five benchmark languages, keeps both generated outputs in the unique training-run artifact directory, validates the two-file patch structure, and merges repository and multi-file records into the profile's single curriculum.dataset. After checkpoint creation, it measures each multi-file prompt using the selected checkpoint's exact BPE tokenizer. Prompts longer than seq_len - 1 are removed as whole records rather than clipped from the left; this prevents losing the task statement or either source file. Completion text is retained intact and can span multiple overlapping context windows. The manifest records candidate, kept, and dropped counts. The final combined JSONL is audited with the checkpoint tokenizer before any SFT optimizer step.
+
 Run the instruction audit before fine-tuning:
 
-    npm run ai:cli -- audit-instructions --dataset "data/curricula/workspace-reasoning.jsonl" --seq-len 1024
-    npm run ai:cli -- finetune --dataset "data/curricula/workspace-reasoning.jsonl" --steps 1000
+    npm run ai:cli -- audit-instructions --dataset "data/curricula/workspace-instructions.jsonl" --seq-len 1024
+    npm run ai:cli -- finetune --dataset "data/curricula/workspace-instructions.jsonl" --steps 1000
 
 The audit checks token limits, duplicate prompts, source-group leakage and train/validation split availability. A small or single-pair corpus may not provide an independent validation split; treat that warning as a data-quality limitation rather than proof of generalization.
 

@@ -55,6 +55,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     curriculum.add_argument("--max-examples", type=int, default=240)
     curriculum.add_argument(
+        "--exclude",
+        nargs="*",
+        default=[],
+        help="Additional approved local files/directories to exclude from both curriculum scans.",
+    )
+    curriculum.add_argument(
         "--mode",
         choices=("repository", "multifile", "all"),
         default="all",
@@ -116,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_path=args.output,
                 max_examples=args.max_examples,
                 languages=args.languages,
+                exclude_paths=args.exclude,
             )
         if args.mode in {"multifile", "all"}:
             results["multifile"] = synthesize_multifile_reasoning_curriculum(
@@ -123,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_path=args.multifile_output,
                 max_examples=min(args.max_examples, 5_000),
                 languages=args.languages,
+                exclude_paths=args.exclude,
             )
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0
