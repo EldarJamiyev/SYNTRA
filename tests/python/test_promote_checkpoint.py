@@ -185,6 +185,8 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
 
             self.assertTrue(result["promoted"])
             self.assertEqual(result["checkpoint_sha256"], digest)
+            self.assertGreater(result["comparison"]["task_completion_delta"], 0)
+            self.assertEqual(result["comparison"]["regressed_task_ids"], [])
             self.assertEqual(promoter._sha256(active), digest)
             self.assertTrue(result["archive_id"])
             self.assertTrue(active.with_name("syntra.inference.pt").is_file())
@@ -277,6 +279,31 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             candidate = promoter.verify_benchmark_candidate(candidate_report)
             with self.assertRaisesRegex(promoter.PromotionError, "regresses on baseline-passing tasks"):
                 promoter.verify_paired_benchmark(candidate, baseline_report)
+
+    def test_initial_baseline_requires_explicit_ack_and_empty_active_destination(self):
+        with tempfile.TemporaryDirectory(prefix=".phase9-initial-baseline-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
+            first_task = suite["tasks"][0]["id"]
+            outcomes = {task["id"]: task["id"] == first_task for task in suite["tasks"]}
+            source = Path(temp) / "initial-source.pt"
+            digest = self._write_checkpoint(source, 41)
+            staged = self._candidate(run_root, source, digest, stage="pretraining", step=10)
+            report = self._report(run_root, staged, digest, stage="pretraining", step=10, outcomes=outcomes)
+            active_root = CHECKPOINT_ROOT / (".phase9-initial-active-" + uuid.uuid4().hex)
+            active = active_root / "syntra.pt"
+            with self.assertRaisesRegex(promoter.PromotionError, "requires explicit --allow-initial-baseline"):
+                promoter.promote(report, active_checkpoint=active, dry_run=True)
+            result = promoter.promote(report, active_checkpoint=active, dry_run=True, allow_initial_baseline=True)
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["completed_task_count"], 1)
+            self.assertFalse(active.exists())
+
+            active_root.mkdir(parents=True)
+            active.write_bytes(b"existing active checkpoint")
+            with self.assertRaisesRegex(promoter.PromotionError, "only be promoted when no active checkpoint"):
+                promoter.promote(report, active_checkpoint=active, dry_run=True, allow_initial_baseline=True)
+            shutil.rmtree(active_root, ignore_errors=True)
 
     def test_smoke_or_partial_suite_report_cannot_promote_a_checkpoint(self):
         with tempfile.TemporaryDirectory(prefix=".phase5-promotion-partial-", dir=BENCHMARK_ROOT) as temp:
