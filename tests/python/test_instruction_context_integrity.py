@@ -1,11 +1,12 @@
 """Regression tests for lossless instruction prompt conditioning."""
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from syntra_ai.instruction import load_instruction_examples
+from syntra_ai.instruction import audit_instruction_dataset, load_instruction_examples
 from syntra_ai.tokenizer import ByteBPETokenizer
 
 
@@ -44,6 +45,36 @@ class InstructionContextIntegrityTests(unittest.TestCase):
                 r"Prompt on line 1 requires 16 tokens.*prompt was not truncated",
             ):
                 self._load(root, "p" * 16, "ok")
+
+    def test_dataset_fingerprint_matches_exact_jsonl_bytes_in_loader_and_audit(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-dataset-provenance-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            content = (
+                json.dumps({"prompt": "task one", "completion": "answer one"}) + "\\n"
+            ).encode("utf-8")
+            dataset.write_bytes(content)
+            expected_sha256 = hashlib.sha256(content).hexdigest()
+            tokenizer = ByteBPETokenizer.empty()
+
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer)
+                audit = audit_instruction_dataset(dataset, seq_len=32, tokenizer=tokenizer)
+
+            self.assertTrue(examples)
+            self.assertTrue(all(item["dataset_sha256"] == expected_sha256 for item in examples))
+            self.assertTrue(all(item["dataset_bytes"] == len(content) for item in examples))
+            self.assertEqual(audit["dataset_sha256"], expected_sha256)
+            self.assertEqual(audit["dataset_bytes"], len(content))
+
+            updated = content + (
+                json.dumps({"prompt": "task two", "completion": "answer two"}) + "\\n"
+            ).encode("utf-8")
+            dataset.write_bytes(updated)
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                changed = load_instruction_examples(dataset, seq_len=32, tokenizer=tokenizer)
+            self.assertNotEqual(changed[0]["dataset_sha256"], expected_sha256)
+            self.assertEqual(changed[0]["dataset_sha256"], hashlib.sha256(updated).hexdigest())
 
     def test_long_completion_remains_fully_supervised_across_windows(self):
         with tempfile.TemporaryDirectory(prefix="syntra-completion-windows-") as temp:
