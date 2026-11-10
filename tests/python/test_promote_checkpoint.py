@@ -102,7 +102,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
     ) -> Path:
         suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
         task_ids = [task["id"] for task in suite["tasks"]]
-        measured = outcomes or {task_id: True for task_id in task_ids}
+        measured = outcomes if outcomes is not None else {task_id: True for task_id in task_ids}
         completed = sum(1 for task_id in task_ids if measured.get(task_id) is True)
         report_dir = run_root / "evaluations"
         report_dir.mkdir(parents=True, exist_ok=True)
