@@ -1,8 +1,0 @@
-{
-  "name": "syntra-benchmark-string-slugify",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node checks/strings.test.mjs"
-  }
-}

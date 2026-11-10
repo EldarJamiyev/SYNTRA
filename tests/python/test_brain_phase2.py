@@ -1111,6 +1111,67 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "generated or excluded directory"):
                 _read_local_datasets([root / "node_modules" / "package" / "ignored.py"], 1024 * 1024)
 
+    def test_raw_repository_holdout_keeps_identical_source_contents_together(self):
+        from brain.train import _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-duplicate-content-holdout-") as temp:
+            root = Path(temp)
+            source_root = root / "src"
+            source_root.mkdir()
+            original = source_root / "module_0.py"
+            original.write_text(
+                '"""Shared implementation."""\ndef shared(value):\n    return value + 7\n',
+                encoding="utf-8",
+            )
+            duplicate = source_root / "copied_module.py"
+            duplicate.write_bytes(original.read_bytes())
+            expected = {"module_0.py", "copied_module.py"}
+            for index in range(1, 7):
+                (source_root / f"module_{index}.py").write_text(
+                    f'"""Unique source module {index}."""\n'
+                    f"def operation_{index}(value):\n    return value + {index}\n",
+                    encoding="utf-8",
+                )
+
+            training, validation, _names, _byte_count, _fingerprint = (
+                _read_local_datasets([root], 1024 * 1024)
+            )
+
+            def source_names(value: str) -> set[str]:
+                return {
+                    line.removeprefix("# SYNTRA_SOURCE_FILE: ").strip()
+                    for line in value.splitlines()
+                    if line.startswith("# SYNTRA_SOURCE_FILE: ")
+                }
+
+            training_sources = source_names(training)
+            validation_sources = source_names(validation)
+            self.assertFalse(
+                expected.issubset(training_sources) and expected.issubset(validation_sources),
+                "identical files must never be divided across the training and validation holdout",
+            )
+            self.assertEqual(
+                len(expected.intersection(training_sources)) in (0, len(expected)),
+                True,
+            )
+            self.assertEqual(
+                len(expected.intersection(validation_sources)) in (0, len(expected)),
+                True,
+            )
+            self.assertEqual(expected.intersection(training_sources) | expected.intersection(validation_sources), expected)
+            self.assertFalse(training_sources.intersection(validation_sources))
+
+    def test_raw_repository_duplicate_only_corpus_cannot_claim_independent_holdout(self):
+        from brain.train import _read_local_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-duplicate-only-holdout-") as temp:
+            root = Path(temp)
+            first = root / "first.py"
+            first.write_text("def identical(): return 1\n", encoding="utf-8")
+            (root / "second.py").write_bytes(first.read_bytes())
+            with self.assertRaisesRegex(ValueError, "fewer than two independent source contents"):
+                _read_local_datasets([root], 1024 * 1024)
+
     def test_raw_repository_validation_split_keeps_each_source_file_wholly_separate(self):
         from brain.train import _read_local_datasets
 

@@ -1,8 +1,0 @@
-{
-  "name": "syntra-benchmark-utility-clamp",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node checks/math.test.mjs"
-  }
-}

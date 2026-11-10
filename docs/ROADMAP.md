@@ -223,3 +223,12 @@ A phase is not complete merely because the interface looks finished. It must inc
 4. Security review of filesystem, process, network, and model-input boundaries affected by the change.
 5. Updated user documentation that describes actual behavior and remaining limitations.
 
+
+
+### Phase 17 — Content-grouped raw dataset holdouts
+
+- [x] Group exact duplicate raw source contents before deterministic train/validation assignment.
+- [x] Fail closed when a required holdout has fewer than two independent source contents.
+- [x] Add regressions for duplicate files across paths and duplicate-only corpora.
+
+**Acceptance:** Exact copies of a source file cannot cross the raw training/validation boundary. This is exact-content deduplication, not semantic near-duplicate detection.

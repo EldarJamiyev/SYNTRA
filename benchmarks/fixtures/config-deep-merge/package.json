@@ -1,8 +1,0 @@
-{
-  "name": "syntra-benchmark-config-deep-merge",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node checks/config.test.mjs"
-  }
-}
