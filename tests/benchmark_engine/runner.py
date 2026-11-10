@@ -25,6 +25,10 @@ if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 ENGINE_ROOT = Path(__file__).resolve().parent
 SUITE_PATH = ENGINE_ROOT / "suite.v1.json"
+try:
+    from .evaluation_provenance import evaluation_protocol_identity
+except ImportError:
+    from evaluation_provenance import evaluation_protocol_identity
 TYPESCRIPT_ROOT = REPOSITORY_ROOT / "node_modules" / "typescript"
 TYPESCRIPT_TEST_RUNNER = ENGINE_ROOT / "typescript_test_runner.mjs"
 
@@ -1084,6 +1088,10 @@ def write_report(path: Path, report: dict[str, Any]) -> Path:
 
 def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     suite = load_suite()
+    try:
+        protocol_identity = evaluation_protocol_identity(REPOSITORY_ROOT, ENGINE_ROOT)
+    except (OSError, ValueError) as exc:
+        raise BenchmarkError("Cannot establish the raw-model evaluation protocol identity: " + str(exc)) from None
     requested = set(args.task or [])
     unknown = requested - {task["id"] for task in suite["tasks"]}
     if unknown:
@@ -1129,10 +1137,17 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         print("[" + task["id"] + "] " + result["status"] + " | patch=" + str(result["patch_correctness"]) + " | target=" + str(result["task_completion"]) + " | regression=" + str(result["regression_prevention"]))
     if runtime._checkpoint_identity(checkpoint) != initial_identity:
         raise BenchmarkError("Checkpoint identity changed during the benchmark; the run is invalid.")
+    try:
+        final_protocol_identity = evaluation_protocol_identity(REPOSITORY_ROOT, ENGINE_ROOT)
+    except (OSError, ValueError) as exc:
+        raise BenchmarkError("Cannot revalidate the raw-model evaluation protocol: " + str(exc)) from None
+    if final_protocol_identity != protocol_identity:
+        raise BenchmarkError("Raw-model evaluation inputs changed during the benchmark; the run is invalid.")
     summary = summarize(results)
     divergence = assess_loss_intelligence_divergence(summary, checkpoint_evidence, args.low_loss_threshold)
     report = {
         "schema_version": 1, "benchmark_track": "raw-native-model", "suite_version": suite["version"],
+        "evaluation_protocol": protocol_identity,
         "run_id": run_id, "started_at": started_at, "completed_at": _now(),
         "model": {
             "engine": "syntra-native-pytorch", "checkpoint": checkpoint_evidence["path"],
