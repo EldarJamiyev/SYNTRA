@@ -29,7 +29,7 @@ from .training import (
     _batch, _encode_documents, _estimate_loss, choose_device, select_inference_checkpoint,
 )
 from .data import MAX_CORPUS_TOKENS, load_corpus
-from .resources import validate_checkpoint_load_budget, validate_inference_memory_budget
+from .resources import validate_inference_memory_budget
 from .safe_paths import resolve_corpus_root
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -143,7 +143,6 @@ def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelC
     load_target = select_inference_checkpoint(target)
 
     def load_validated(source: Path) -> tuple[dict, ModelConfig, ByteBPETokenizer]:
-        validate_checkpoint_load_budget(source)
         raw_payload = load_torch_checkpoint_snapshot(source)
         payload = _normalize_checkpoint_payload(raw_payload)
         config = ModelConfig.from_dict(payload["config"])
