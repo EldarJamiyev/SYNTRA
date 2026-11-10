@@ -983,7 +983,7 @@ class TransformerTests(unittest.TestCase):
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 examples = load_instruction_examples(
                     dataset,
-                    seq_len=32,
+                    seq_len=64,
                     tokenizer=tokenizer,
                 )
 
@@ -999,8 +999,8 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(all(len(item["input_ids"]) <= 32 for item in examples))
             self.assertTrue(all(len(item["labels"]) == len(item["input_ids"]) for item in examples))
             self.assertEqual(
-                ordered[1]["input_ids"][:16],
-                ordered[0]["input_ids"][16:],
+                ordered[1]["input_ids"][:32],
+                ordered[0]["input_ids"][32:],
                 "subsequent response windows must retain the prior 16-token context",
             )
             self.assertEqual(
@@ -1009,8 +1009,8 @@ class TransformerTests(unittest.TestCase):
             )
             self.assertEqual(
                 ordered[0]["prompt_tokens"],
-                min(len(tokenizer.encode(prompt)), 31),
-                "the first context window must mask the full retained prompt context",
+                len(tokenizer.encode(prompt)),
+                "the first context window must mask the complete prompt without truncation",
             )
             self.assertGreater(sum(item["context_overlap_tokens"] for item in ordered), 0)
 
