@@ -488,17 +488,18 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             replacement = root / "replacement.pt"
             artifact.write_bytes(b"verified candidate bytes")
             replacement.write_bytes(b"different replacement bytes")
-            real_stat = os.stat
-            stat_calls = 0
+            real_fstat = os.fstat
+            fstat_calls = 0
 
-            def replace_before_final_path_check(path, *args, **kwargs):
-                nonlocal stat_calls
-                stat_calls += 1
-                if stat_calls == 2:
+            def replace_after_hashing_descriptor(fd):
+                nonlocal fstat_calls
+                fstat_calls += 1
+                result = real_fstat(fd)
+                if fstat_calls == 2:
                     os.replace(replacement, artifact)
-                return real_stat(path, *args, **kwargs)
+                return result
 
-            with patch.object(promoter.os, "stat", side_effect=replace_before_final_path_check):
+            with patch.object(promoter.os, "fstat", side_effect=replace_after_hashing_descriptor):
                 with self.assertRaisesRegex(promoter.PromotionError, "changed while being hashed"):
                     promoter._sha256(artifact)
 
