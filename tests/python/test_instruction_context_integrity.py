@@ -34,7 +34,7 @@ class InstructionContextIntegrityTests(unittest.TestCase):
                 for token in example["labels"]
             )
             self.assertEqual(supervised, len(ByteBPETokenizer.empty().encode("ok")) + 1)
-            self.assertEqual(examples[0]["input_ids"][1:], list(prompt.encode("utf-8")))
+            self.assertEqual(examples[0]["input_ids"][1:], ByteBPETokenizer.empty().encode(prompt))
 
     def test_overlong_prompt_is_rejected_instead_of_silently_truncated(self):
         with tempfile.TemporaryDirectory(prefix="syntra-prompt-context-overflow-") as temp:
