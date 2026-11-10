@@ -272,7 +272,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
                 promoter.promote(candidate_report, active_checkpoint=active, confirm_sha256=digest)
             baseline_report = self._baseline_report(run_root, outcomes={})
             candidate = promoter.verify_benchmark_candidate(candidate_report)
-            with self.assertRaisesRegex(promoter.PromotionError, "must improve the aggregate"):
+            with self.assertRaisesRegex(promoter.PromotionError, "must improve fully-verified"):
                 promoter.verify_paired_benchmark(candidate, baseline_report)
             self.assertNotEqual(promoter._sha256(active), digest)
             shutil.rmtree(active_root, ignore_errors=True)
