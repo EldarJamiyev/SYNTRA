@@ -4,7 +4,7 @@
 
 Prevent a structurally valid but weaker SFT checkpoint from replacing the active SYNTRA model. A successful training run, lower training loss, valid checkpoint hash, or complete benchmark report is not sufficient evidence of improvement.
 
-The promotion command compares real raw-native-model benchmark reports produced from immutable local checkpoint snapshots. It does not generate benchmark results, fabricate scores, or call a hosted model.
+The promotion command compares real raw-native-model benchmark reports produced from immutable local checkpoint snapshots. Its score is fully verified task completion: both the held-out target tests and regression-prevention tests must pass. Target-test success by itself is not enough. It does not generate benchmark results, fabricate scores, or call a hosted model.
 
 ## SFT promotion workflow
 
@@ -41,9 +41,9 @@ The paired comparison then requires:
 - SFT candidate stage is exactly `sft`;
 - baseline stage is `pretraining` or `baseline`;
 - suite versions and task-ID sets match exactly;
-- no task that passed in the baseline may fail in the SFT candidate;
-- at least one additional task passes after SFT; and
-- aggregate task-completion rate strictly increases.
+- no task that was fully verified in the baseline may fail either its target tests or regression-prevention tests in the SFT candidate;
+- at least one additional task is fully verified after SFT; and
+- aggregate fully-verified task rate strictly increases.
 
 A tie is not an improvement. A single per-task regression blocks promotion even if other tasks improve enough to raise the aggregate score.
 
