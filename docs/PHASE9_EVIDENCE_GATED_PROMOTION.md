@@ -55,7 +55,11 @@ A repository with no active checkpoint can explicitly activate an initial pretra
 npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --allow-initial-baseline --dry-run
 ```
 
-The actual promotion also requires `--confirm-sha256` with the exact digest returned by dry-run. The initial-baseline path is rejected if an active checkpoint, metadata file, or inference companion already exists, and it requires at least one completed task. It cannot be used for an SFT candidate.
+After reviewing the result, the actual promotion requires the exact digest returned by dry-run:
+
+```powershell
+npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --allow-initial-baseline --confirm-sha256 "<verified-checkpoint-sha256>"
+``` The initial-baseline path is rejected if an active checkpoint, metadata file, or inference companion already exists, and it requires at least one completed task. It cannot be used for an SFT candidate.
 
 ## Safety and retained behavior
 
