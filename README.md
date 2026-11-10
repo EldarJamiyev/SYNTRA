@@ -49,7 +49,7 @@ SYNTRA is an actively developed engineering and machine-learning project. The na
 
 ## Project status
 
-The current `main` line includes Phases 1–8: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, and offline baseline preflight. Phase 9 adds evidence-gated checkpoint promotion so an SFT checkpoint cannot replace the active model merely because its benchmark report is structurally valid.
+The current `main` line includes Phases 1–9: the standalone PyTorch brain, local training/inference, chat integration, instruction SFT, context integrity/recovery, polyglot curriculum generation, end-to-end reasoning SFT, offline baseline preflight, and evidence-gated checkpoint promotion. Phase 10 makes SFT prompt conditioning lossless by rejecting prompts that exceed the selected checkpoint's actual context window.
 
 | Area | Delivered behavior |
 | --- | --- |
