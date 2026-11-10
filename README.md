@@ -358,6 +358,7 @@ npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/sft-step
 
 # First-ever baseline only: requires no active checkpoint and at least one passing task
 npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --allow-initial-baseline --dry-run
+npm run brain:promote -- --report "data/benchmarks/<run-id>/evaluations/pretraining-step-<step>.json" --allow-initial-baseline --confirm-sha256 "<verified-checkpoint-sha256>"
 ~~~
 
 These workflows use separate staging/checkpoint paths and should be run with the corresponding documented configuration. Review the generated reports and actual local hardware measurements rather than assuming a profile is optimal for every CPU, CUDA, or MPS device.
