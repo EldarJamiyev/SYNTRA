@@ -1087,11 +1087,17 @@ def write_report(path: Path, report: dict[str, Any]) -> Path:
 
 
 def run_suite(args: argparse.Namespace) -> dict[str, Any]:
-    suite = load_suite()
     try:
         protocol_identity = evaluation_protocol_identity(REPOSITORY_ROOT, ENGINE_ROOT)
     except (OSError, ValueError) as exc:
         raise BenchmarkError("Cannot establish the raw-model evaluation protocol identity: " + str(exc)) from None
+    suite = load_suite()
+    try:
+        loaded_protocol_identity = evaluation_protocol_identity(REPOSITORY_ROOT, ENGINE_ROOT)
+    except (OSError, ValueError) as exc:
+        raise BenchmarkError("Cannot revalidate the loaded raw-model evaluation protocol: " + str(exc)) from None
+    if loaded_protocol_identity != protocol_identity:
+        raise BenchmarkError("Raw-model evaluation inputs changed while the suite was being loaded.")
     requested = set(args.task or [])
     unknown = requested - {task["id"] for task in suite["tasks"]}
     if unknown:
