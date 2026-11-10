@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pickle
+from io import BytesIO
 from pathlib import Path
 import re
 import stat
@@ -183,17 +185,60 @@ def load_checkpoint(
     max_bytes: int = MAX_CHECKPOINT_BYTES,
 ) -> dict[str, Any]:
     """Load only tensor/primitive checkpoint data; never unpickle arbitrary objects."""
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("Checkpoint byte limit must be a positive integer.")
     source = Path(path).expanduser()
+    descriptor: int | None = None
     try:
-        resolved = source.resolve(strict=True)
-        if not resolved.is_file():
-            raise ValueError("Checkpoint path must identify a regular file.")
-        size = resolved.stat().st_size
-        if size < 1 or size > max_bytes:
-            raise ValueError(f"Checkpoint must be between 1 and {max_bytes:,} bytes.")
-        payload = torch.load(resolved, map_location="cpu", weights_only=True)
-    except (OSError, RuntimeError, EOFError) as exc:
+        before = os.stat(source, follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode) or before.st_size < 1:
+            raise ValueError("Checkpoint path must identify a non-empty regular file.")
+        if before.st_size > max_bytes:
+            raise ValueError(f"Checkpoint exceeds the {max_bytes:,}-byte limit.")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(source, flags)
+        with tempfile.TemporaryFile(mode="w+b") as snapshot:
+            with os.fdopen(descriptor, "rb") as handle:
+                descriptor = None
+                opened = os.fstat(handle.fileno())
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                    or opened.st_size < 1
+                    or opened.st_size > max_bytes
+                ):
+                    raise ValueError("Checkpoint changed while it was being opened.")
+                total = 0
+                while True:
+                    chunk = handle.read(min(1024 * 1024, max_bytes - total + 1))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(f"Checkpoint exceeds the {max_bytes:,}-byte limit.")
+                    snapshot.write(chunk)
+                after = os.fstat(handle.fileno())
+                current = os.stat(source, follow_symlinks=False)
+                identity = (opened.st_dev, opened.st_ino)
+                if (
+                    identity != (after.st_dev, after.st_ino)
+                    or identity != (current.st_dev, current.st_ino)
+                    or not stat.S_ISREG(current.st_mode)
+                    or opened.st_size != after.st_size
+                    or opened.st_size != current.st_size
+                    or opened.st_mtime_ns != after.st_mtime_ns
+                    or opened.st_ctime_ns != after.st_ctime_ns
+                    or total != after.st_size
+                ):
+                    raise ValueError("Checkpoint changed while it was being read.")
+            snapshot.flush()
+            snapshot.seek(0)
+            payload = torch.load(snapshot, map_location="cpu", weights_only=True)
+    except (OSError, RuntimeError, EOFError, pickle.UnpicklingError) as exc:
         raise ValueError(f"Cannot load local SYNTRA checkpoint: {exc}") from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
     if not isinstance(payload, dict) or payload.get("format") != CHECKPOINT_FORMAT:
         raise ValueError("The selected file is not a supported SYNTRA brain checkpoint.")

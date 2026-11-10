@@ -93,5 +93,46 @@ class CheckpointSidecarIntegrityTests(unittest.TestCase):
             self.assertEqual(read_checkpoint_metadata(checkpoint), {})
 
 
+    def test_load_checkpoint_rejects_final_component_symlink(self):
+        from brain.checkpoint import load_checkpoint, save_checkpoint
+
+        with tempfile.TemporaryDirectory(prefix="syntra-checkpoint-symlink-") as temp:
+            root = Path(temp)
+            checkpoint = root / "model.pt"
+            link = root / "linked.pt"
+            save_checkpoint(checkpoint, self._payload())
+            try:
+                link.symlink_to(checkpoint)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"Symlink creation is unavailable: {exc}")
+
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                load_checkpoint(link)
+
+    def test_load_checkpoint_enforces_positive_integer_byte_limit(self):
+        from brain.checkpoint import load_checkpoint, save_checkpoint
+
+        with tempfile.TemporaryDirectory(prefix="syntra-checkpoint-size-limit-") as temp:
+            checkpoint = Path(temp) / "model.pt"
+            save_checkpoint(checkpoint, self._payload())
+            with self.assertRaisesRegex(ValueError, "positive integer"):
+                load_checkpoint(checkpoint, max_bytes=0)
+            with self.assertRaisesRegex(ValueError, "positive integer"):
+                load_checkpoint(checkpoint, max_bytes=True)
+            with self.assertRaisesRegex(ValueError, "byte limit"):
+                load_checkpoint(checkpoint, max_bytes=checkpoint.stat().st_size - 1)
+
+    def test_load_checkpoint_deserializes_the_verified_file_snapshot(self):
+        from brain.checkpoint import load_checkpoint, save_checkpoint
+
+        with tempfile.TemporaryDirectory(prefix="syntra-checkpoint-load-") as temp:
+            checkpoint = Path(temp) / "model.pt"
+            save_checkpoint(checkpoint, self._payload(step=7))
+            payload = load_checkpoint(checkpoint)
+            self.assertEqual(payload["step"], 7)
+            self.assertEqual(payload["epoch"], 7)
+
+
+
 if __name__ == "__main__":
     unittest.main()
