@@ -12,7 +12,7 @@ The protocol identity covers:
 - The benchmark runner and language environment definitions
 - The patch bridge and TypeScript test runner
 - All checked-in fixture and hidden-evaluation files
-- The local patch validator and its directly imported workspace/tool-runtime modules
+- The local agent/patch runtime source tree, including its workspace and tool-runtime dependencies
 - The locked Node dependency manifest
 
 Each regular file is recorded by repository-relative path, exact byte length, and SHA-256. Entries are sorted and serialized deterministically before the aggregate SHA-256 is calculated. Symbolic links, non-regular files, missing required inputs, files over the per-file limit, and aggregate file/byte-limit violations fail closed.
