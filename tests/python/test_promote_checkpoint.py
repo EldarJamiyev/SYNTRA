@@ -280,7 +280,10 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
     def test_promotion_rejects_target_passes_without_regression_test_success(self):
         with tempfile.TemporaryDirectory(prefix=".phase9-regression-check-", dir=BENCHMARK_ROOT) as temp:
             run_root = Path(temp) / "run"
-            baseline_report = self._baseline_report(run_root, outcomes={})
+            suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
+            task_ids = [task["id"] for task in suite["tasks"]]
+            baseline_outcomes = {task_id: index != 0 for index, task_id in enumerate(task_ids)}
+            baseline_report = self._baseline_report(run_root, outcomes=baseline_outcomes)
             source = Path(temp) / "candidate-source.pt"
             digest = self._write_checkpoint(source, 35)
             staged = self._candidate(run_root, source, digest)
