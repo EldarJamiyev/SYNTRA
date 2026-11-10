@@ -308,6 +308,8 @@ def verify_paired_benchmark(candidate: dict[str, Any], baseline_report_path: str
         raise PromotionError("The comparison report must identify a pretraining or baseline checkpoint.")
     if candidate.get("suite_version") != baseline.get("suite_version"):
         raise PromotionError("Candidate and baseline benchmark suite versions differ.")
+    if candidate.get("run_id") != baseline.get("run_id"):
+        raise PromotionError("Candidate and pretraining baseline must come from the same training run.")
     candidate_tasks = candidate.get("task_completion_by_id")
     baseline_tasks = baseline.get("task_completion_by_id")
     if not isinstance(candidate_tasks, dict) or not isinstance(baseline_tasks, dict):
