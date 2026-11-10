@@ -193,9 +193,15 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             self.assertEqual(verified["instruction_dataset_bytes"], 123)
 
             data = json.loads(report.read_text(encoding="utf-8"))
+            data["model"]["training_mode"] = "causal-source-pretraining"
+            report.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(promoter.PromotionError, "training mode does not match"):
+                promoter.verify_benchmark_candidate(report)
+
+            data["model"]["training_mode"] = "supervised-instruction-finetuning"
             data["model"]["instruction_dataset_sha256"] = "b" * 64
             report.write_text(json.dumps(data), encoding="utf-8")
-            with self.assertRaisesRegex(promoter.PromotionError, "does not match the staged checkpoint sidecar"):
+            with self.assertRaisesRegex(promoter.PromotionError, "dataset identity or training mode does not match"):
                 promoter.verify_benchmark_candidate(report)
 
     def test_sft_promotion_rejects_sidecar_bytes_outside_snapshot_manifest(self):
