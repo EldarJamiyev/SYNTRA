@@ -115,6 +115,8 @@ def load_instruction_examples(
         if descriptor is not None:
             os.close(descriptor)
 
+    dataset_sha256 = hashlib.sha256(raw).hexdigest()
+    dataset_bytes = len(raw)
     try:
         dataset_text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -235,6 +237,8 @@ def load_instruction_examples(
                     "example_id": chunk_example_id,
                     "line": line_number,
                     "chunk_index": chunk_index,
+                    "dataset_sha256": dataset_sha256,
+                    "dataset_bytes": dataset_bytes,
                 })
                 total_tokens += example_tokens
                 last_supervised_target = start + len(labels)
@@ -259,10 +263,23 @@ def _source_record_index(examples: list[dict]) -> dict[str, dict[str, Any]]:
             raise ValueError("Instruction context window has a malformed source-row identifier.")
         if not isinstance(source_id, str) or len(source_id) != 64:
             raise ValueError("Instruction context window has a malformed source-example identifier.")
+        dataset_sha256 = example.get("dataset_sha256")
+        dataset_bytes = example.get("dataset_bytes")
+        if dataset_sha256 is not None and (
+            not isinstance(dataset_sha256, str)
+            or re.fullmatch(r"[a-f0-9]{64}", dataset_sha256) is None
+        ):
+            raise ValueError("Instruction context window has a malformed dataset SHA-256.")
+        if dataset_bytes is not None and (
+            type(dataset_bytes) is not int or dataset_bytes < 0
+        ):
+            raise ValueError("Instruction context window has a malformed dataset byte count.")
         record = {
             "source_example_id": source_id,
             "prompt_group_id": example["prompt_group_id"],
             "split_group_id": example.get("split_group_id"),
+            "dataset_sha256": dataset_sha256,
+            "dataset_bytes": dataset_bytes,
         }
         previous = records.get(row_id)
         if previous is not None and previous != record:
@@ -388,6 +405,12 @@ def split_instruction_examples(
     validation_prompt_ids = {item["prompt_group_id"] for item in validation_records.values()}
     prompt_leakage_groups = len(training_prompt_ids.intersection(validation_prompt_ids))
     validation_fraction_actual = len(validation_records) / source_record_count
+    dataset_hashes = {item.get("dataset_sha256") for item in source_records.values()}
+    dataset_sizes = {item.get("dataset_bytes") for item in source_records.values()}
+    if len(dataset_hashes) > 1 or len(dataset_sizes) > 1:
+        raise ValueError("Instruction records do not share one immutable dataset identity.")
+    dataset_sha256 = next(iter(dataset_hashes), None)
+    dataset_bytes = next(iter(dataset_sizes), None)
     warnings = []
     if source_record_count < 100:
         warnings.append("Small dataset: fewer than 100 source records; validation loss is weak evidence of generalization.")
@@ -413,6 +436,8 @@ def split_instruction_examples(
     quality = {
         "example_count": source_record_count,
         "context_window_count": len(examples),
+        "dataset_sha256": dataset_sha256,
+        "dataset_bytes": dataset_bytes,
         "unique_prompt_count": unique_prompts,
         "source_group_count": len(source_group_ids),
         "independent_split_group_count": len(groups),
@@ -497,6 +522,8 @@ def audit_instruction_dataset(
             "split_strategy": "deterministic-sha256-prompt-and-source-groups-v2",
             "split_seed": INSTRUCTION_SPLIT_SEED,
             "prompt_leakage_groups": None,
+            "dataset_sha256": next(iter({item.get("dataset_sha256") for item in source_records.values()}), None),
+            "dataset_bytes": next(iter({item.get("dataset_bytes") for item in source_records.values()}), None),
             "tokenizer_basis": tokenizer_basis,
             "tokenization_note": "Byte-level fallback used for audit unless a checkpoint tokenizer is supplied; fine-tuning uses the checkpoint tokenizer.",
             "error": str(error),
@@ -651,6 +678,8 @@ def finetune(
             "instruction_examples": dataset_quality["example_count"],
             "instruction_context_windows": len(examples),
             "instruction_dataset_quality": dataset_quality,
+            "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
+            "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
             "tokenizer_vocab_size": tokenizer.vocab_size,
             "context_tokens": config.seq_len,
             "training_history_points": len(training_history),
@@ -732,6 +761,8 @@ def finetune(
                 "training_history": training_history,
                 "instruction_context_windows": len(examples),
                 "instruction_dataset_quality": dataset_quality,
+                "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
+                "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
             }
@@ -749,6 +780,8 @@ def finetune(
                 "instruction_examples": dataset_quality["example_count"],
                 "instruction_context_windows": len(examples),
                 "instruction_dataset_quality": dataset_quality,
+                "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
+                "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
                 "pretrained_weights": False,
                 "training_history": training_history,
                 "training_history_points": len(training_history),
