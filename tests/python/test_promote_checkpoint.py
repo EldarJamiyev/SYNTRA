@@ -128,6 +128,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             "schema_version": 1,
             "benchmark_track": "raw-native-model",
             "suite_version": suite["version"],
+            "evaluation_protocol": promoter.evaluation_protocol_identity(ROOT, ROOT / "tests" / "benchmark_engine"),
             "run_id": run_id,
             "started_at": "2026-11-09T10:01:00Z",
             "completed_at": "2026-11-09T10:02:00Z",
@@ -180,6 +181,19 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             self.assertEqual(verified["checkpoint"], staged)
             self.assertEqual(verified["stage"], "sft")
             self.assertEqual(verified["task_completion_rate"], 1.0)
+
+    def test_promotion_rejects_a_stale_evaluation_protocol_fingerprint(self):
+        with tempfile.TemporaryDirectory(prefix=".phase13-stale-protocol-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 84)
+            staged = self._candidate(run_root, source, digest)
+            report = self._report(run_root, staged, digest)
+            data = json.loads(report.read_text(encoding="utf-8"))
+            data["evaluation_protocol"]["sha256"] = "f" * 64
+            report.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaisesRegex(promoter.PromotionError, "evaluation protocol fingerprint"):
+                promoter.verify_benchmark_candidate(report)
 
     def test_sft_promotion_binds_report_dataset_identity_to_snapshot_sidecar(self):
         with tempfile.TemporaryDirectory(prefix=".phase12-sft-lineage-", dir=BENCHMARK_ROOT) as temp:
