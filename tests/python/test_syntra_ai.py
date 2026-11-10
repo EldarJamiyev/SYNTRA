@@ -983,7 +983,7 @@ class TransformerTests(unittest.TestCase):
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 examples = load_instruction_examples(
                     dataset,
-                    seq_len=32,
+                    seq_len=64,
                     tokenizer=tokenizer,
                 )
 
@@ -996,12 +996,12 @@ class TransformerTests(unittest.TestCase):
                 if token != -100
             ]
             self.assertEqual(supervised, tokenizer.encode(completion) + [EOS_ID])
-            self.assertTrue(all(len(item["input_ids"]) <= 32 for item in examples))
+            self.assertTrue(all(len(item["input_ids"]) <= 64 for item in examples))
             self.assertTrue(all(len(item["labels"]) == len(item["input_ids"]) for item in examples))
             self.assertEqual(
-                ordered[1]["input_ids"][:16],
-                ordered[0]["input_ids"][16:],
-                "subsequent response windows must retain the prior 16-token context",
+                ordered[1]["input_ids"][:32],
+                ordered[0]["input_ids"][32:],
+                "subsequent response windows must retain the prior 32-token context",
             )
             self.assertEqual(
                 [item["chunk_index"] for item in ordered],
@@ -1009,13 +1009,13 @@ class TransformerTests(unittest.TestCase):
             )
             self.assertEqual(
                 ordered[0]["prompt_tokens"],
-                min(len(tokenizer.encode(prompt)), 31),
-                "the first context window must mask the full retained prompt context",
+                len(tokenizer.encode(prompt)),
+                "the first context window must mask the complete prompt without truncation",
             )
             self.assertGreater(sum(item["context_overlap_tokens"] for item in ordered), 0)
 
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
-                audit = audit_instruction_dataset(dataset, seq_len=32, tokenizer=tokenizer)
+                audit = audit_instruction_dataset(dataset, seq_len=64, tokenizer=tokenizer)
             self.assertTrue(audit["valid"], audit)
             self.assertFalse(audit["split_available"])
             self.assertEqual(audit["example_count"], 1)
