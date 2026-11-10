@@ -587,6 +587,7 @@ def promote(
         "benchmark_run_id": candidate["run_id"],
         "task_completion_rate": candidate["task_completion_rate"],
         "fully_verified_task_count": candidate["fully_verified_task_count"],
+        "fully_verified_task_rate": candidate["fully_verified_task_rate"],
         "comparison": comparison,
         "completed_task_count": candidate["completed_task_count"],
         "task_count": candidate["task_count"],
