@@ -70,13 +70,10 @@ def load_torch_checkpoint_snapshot(
         effective_max_bytes = min(max_bytes, memory_budget) if memory_budget is not None else max_bytes
         if before.st_size > effective_max_bytes:
             if memory_budget is not None and memory_budget < max_bytes and before.st_size > memory_budget:
-                available_gib = (memory_budget / 0.40) / (1024 ** 3)
-                budget_gib = memory_budget / (1024 ** 3)
                 raise ValueError(
-                    f"Checkpoint file is {before.st_size / (1024 ** 3):.2f} GiB, above the "
-                    f"40% checkpoint-load budget ({budget_gib:.2f} GiB of {available_gib:.2f} GiB "
-                    "currently available RAM). Close memory-heavy applications or use a smaller "
-                    "local checkpoint before loading it."
+                    f"Checkpoint file is {before.st_size / (1024 ** 3):.2f} GiB and exceeds "
+                    "the 40% checkpoint-load budget calculated from currently available RAM. "
+                    "Close memory-heavy applications or use a smaller local checkpoint before loading it."
                 )
             raise ValueError(f"Checkpoint exceeds the {max_bytes:,}-byte limit.")
 
