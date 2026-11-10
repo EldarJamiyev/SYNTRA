@@ -516,7 +516,7 @@ def promote(
         raise PromotionError("Active checkpoint destination must not be a symbolic link.")
     _validate_runtime_checkpoint(candidate["checkpoint"])
     if dry_run:
-        return {**candidate, "active_checkpoint": active, "dry_run": True, "archive_id": None}
+        return {**candidate, "active_checkpoint": active, "dry_run": True, "archive_id": None, "comparison": comparison}
 
     metadata_source = candidate["checkpoint"].with_suffix(candidate["checkpoint"].suffix + ".json")
     expected_metadata_hash = None
