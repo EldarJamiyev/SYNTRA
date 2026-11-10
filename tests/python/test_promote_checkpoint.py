@@ -153,7 +153,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         source = run_root.parent / "baseline-source.pt"
         digest = self._write_checkpoint(source, 9)
         staged = self._candidate(run_root, source, digest, stage="pretraining", step=10)
-        return self._report(run_root, staged, digest, stage="pretraining", step=10, outcomes=outcomes)
+        return self._report(run_root, staged, digest, stage="pretraining", step=10, outcomes=outcomes, run_id="raw-model-pretraining-invocation")
 
     def test_report_verification_binds_report_to_snapshot_and_full_checkpoint_hash(self):
         with tempfile.TemporaryDirectory(prefix=".phase5-promotion-verify-", dir=BENCHMARK_ROOT) as temp:
