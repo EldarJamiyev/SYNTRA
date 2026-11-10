@@ -99,12 +99,18 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
         stage: str = "sft",
         step: int = 20,
         outcomes: dict[str, bool] | None = None,
+        regression_outcomes: dict[str, bool] | None = None,
         run_id: str = "raw-model-phase9-test",
     ) -> Path:
         suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
         task_ids = [task["id"] for task in suite["tasks"]]
         measured = outcomes if outcomes is not None else {task_id: True for task_id in task_ids}
+        regression = regression_outcomes if regression_outcomes is not None else measured
         completed = sum(1 for task_id in task_ids if measured.get(task_id) is True)
+        fully_verified = sum(
+            1 for task_id in task_ids
+            if measured.get(task_id) is True and regression.get(task_id) is True
+        )
         report_dir = run_root / "evaluations"
         report_dir.mkdir(parents=True, exist_ok=True)
         report_path = report_dir / f"{stage}-step-{step:09d}.json"
@@ -127,10 +133,16 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
                 "baseline_valid_task_count": len(task_ids),
                 "invalid_fixture_count": 0,
                 "completed_task_count": completed,
+                "fully_verified_task_count": fully_verified,
                 "task_completion_rate": completed / len(task_ids),
             },
             "tasks": [
-                {"id": task_id, "baseline_validated": True, "task_completion": measured.get(task_id) is True}
+                {
+                    "id": task_id,
+                    "baseline_validated": True,
+                    "task_completion": measured.get(task_id) is True,
+                    "regression_prevention": regression.get(task_id) is True,
+                }
                 for task_id in task_ids
             ],
         }
@@ -186,7 +198,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
 
             self.assertTrue(result["promoted"])
             self.assertEqual(result["checkpoint_sha256"], digest)
-            self.assertGreater(result["comparison"]["task_completion_delta"], 0)
+            self.assertGreater(result["comparison"]["fully_verified_task_delta"], 0)
             self.assertEqual(result["comparison"]["regressed_task_ids"], [])
             self.assertEqual(promoter._sha256(active), digest)
             self.assertTrue(result["archive_id"])
@@ -265,6 +277,30 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
             self.assertNotEqual(promoter._sha256(active), digest)
             shutil.rmtree(active_root, ignore_errors=True)
 
+    def test_promotion_rejects_target_passes_without_regression_test_success(self):
+        with tempfile.TemporaryDirectory(prefix=".phase9-regression-check-", dir=BENCHMARK_ROOT) as temp:
+            run_root = Path(temp) / "run"
+            baseline_report = self._baseline_report(run_root, outcomes={})
+            source = Path(temp) / "candidate-source.pt"
+            digest = self._write_checkpoint(source, 35)
+            staged = self._candidate(run_root, source, digest)
+            suite = json.loads((ROOT / "tests" / "benchmark_engine" / "suite.v1.json").read_text(encoding="utf-8"))
+            task_ids = [task["id"] for task in suite["tasks"]]
+            target_passes = {task_id: True for task_id in task_ids}
+            regression_passes = {task_id: index != 0 for index, task_id in enumerate(task_ids)}
+            candidate_report = self._report(
+                run_root,
+                staged,
+                digest,
+                outcomes=target_passes,
+                regression_outcomes=regression_passes,
+            )
+            candidate = promoter.verify_benchmark_candidate(candidate_report)
+            self.assertEqual(candidate["completed_task_count"], len(task_ids))
+            self.assertEqual(candidate["fully_verified_task_count"], len(task_ids) - 1)
+            with self.assertRaisesRegex(promoter.PromotionError, "must improve fully-verified"):
+                promoter.verify_paired_benchmark(candidate, baseline_report)
+
     def test_sft_comparison_rejects_baseline_from_another_training_run(self):
         with tempfile.TemporaryDirectory(prefix=".phase9-run-identity-", dir=BENCHMARK_ROOT) as temp:
             baseline_run_root = Path(temp) / "baseline-run"
@@ -310,7 +346,7 @@ class BenchmarkVerifiedPromotionTests(unittest.TestCase):
                 promoter.promote(report, active_checkpoint=active, dry_run=True)
             result = promoter.promote(report, active_checkpoint=active, dry_run=True, allow_initial_baseline=True)
             self.assertTrue(result["dry_run"])
-            self.assertEqual(result["completed_task_count"], 1)
+            self.assertEqual(result["fully_verified_task_count"], 1)
             self.assertFalse(active.exists())
 
             active_root.mkdir(parents=True)
