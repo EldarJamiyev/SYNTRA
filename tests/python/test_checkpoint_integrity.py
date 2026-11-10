@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -22,10 +21,10 @@ class CheckpointSidecarIntegrityTests(unittest.TestCase):
 
         config = TransformerConfig(
             vocab_size=258,
-            block_size=8,
+            block_size=16,
             n_layer=1,
             n_head=1,
-            n_embd=8,
+            n_embd=32,
             dropout=0.0,
         )
         tokenizer = BytePairTokenizer.empty()
@@ -50,10 +49,7 @@ class CheckpointSidecarIntegrityTests(unittest.TestCase):
 
             metadata = read_checkpoint_metadata(checkpoint)
             checkpoint_bytes = checkpoint.read_bytes()
-            self.assertEqual(
-                metadata["checkpoint_sha256"],
-                hashlib.sha256(checkpoint_bytes).hexdigest(),
-            )
+            self.assertEqual(metadata["checkpoint_sha256"], hashlib.sha256(checkpoint_bytes).hexdigest())
             self.assertEqual(metadata["checkpoint_bytes"], len(checkpoint_bytes))
             self.assertEqual(metadata["checkpoint"], str(checkpoint.resolve()))
 
@@ -94,8 +90,6 @@ class CheckpointSidecarIntegrityTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "sidecar write failed"):
                     save_checkpoint(checkpoint, self._payload(step=2))
 
-            # The checkpoint replacement succeeded, but the previous sidecar is now
-            # stale and must not be returned as if it described the new checkpoint.
             self.assertEqual(read_checkpoint_metadata(checkpoint), {})
 
 
