@@ -51,7 +51,7 @@ class InstructionContextIntegrityTests(unittest.TestCase):
             root = Path(temp)
             dataset = root / "instructions.jsonl"
             content = (
-                json.dumps({"prompt": "task one", "completion": "answer one"}) + "\\n"
+                json.dumps({"prompt": "task one", "completion": "answer one"}) + "\n"
             ).encode("utf-8")
             dataset.write_bytes(content)
             expected_sha256 = hashlib.sha256(content).hexdigest()
@@ -68,7 +68,7 @@ class InstructionContextIntegrityTests(unittest.TestCase):
             self.assertEqual(audit["dataset_bytes"], len(content))
 
             updated = content + (
-                json.dumps({"prompt": "task two", "completion": "answer two"}) + "\\n"
+                json.dumps({"prompt": "task two", "completion": "answer two"}) + "\n"
             ).encode("utf-8")
             dataset.write_bytes(updated)
             with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
