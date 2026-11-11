@@ -815,7 +815,7 @@ async function runChatTurn(jobId, message, history, signal) {
     });
     if (!promptContext.fits) {
       finishChat(jobId,
-        "Your complete message requires " + promptContext.tokenCount.toLocaleString()
+        "Your complete request prompt requires " + promptContext.tokenCount.toLocaleString()
         + " input tokens, but this model can accept at most "
         + promptContext.inputBudgetTokens.toLocaleString()
         + " tokens while reserving space for a response. I did not truncate or rewrite your message. Split it into shorter messages and send the missing context in follow-up turns.",
@@ -832,7 +832,7 @@ async function runChatTurn(jobId, message, history, signal) {
     updateChat(jobId, { phase: "generating", message: "Generating a local response" });
     const generation = await aiRequest("POST", "/model/generate", {
       prompt,
-      max_new_tokens: Math.min(512, Math.max(16, contextTokens - tokenInfo.token_count - 1)),
+      max_new_tokens: Math.min(512, Math.max(1, contextTokens - tokenInfo.token_count - 1)),
       temperature: 0.7,
       top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
       device: "auto"
