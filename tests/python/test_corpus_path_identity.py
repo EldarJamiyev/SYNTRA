@@ -15,7 +15,9 @@ class SourceCorpusPathIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="syntra-corpus-path-race-") as temp:
             root = Path(temp)
             source = root / "a.py"
-            replacement = root / "replacement.py"
+            excluded_target_dir = root / ".excluded"
+            excluded_target_dir.mkdir()
+            replacement = excluded_target_dir / "replacement.py"
             stable = root / "b.py"
             source.write_text("ORIGINAL_CORPUS_BYTES = True\n", encoding="utf-8")
             replacement.write_text("REPLACEMENT_CORPUS_BYTES = True\n", encoding="utf-8")
@@ -23,11 +25,9 @@ class SourceCorpusPathIdentityTests(unittest.TestCase):
             stable.write_bytes(stable_content)
 
             if replacement_kind == "symlink":
-                excluded_target_dir = root / ".excluded"
-                excluded_target_dir.mkdir()
                 link_target = excluded_target_dir / "outside.py"
                 link_target.write_text("LINK_TARGET_BYTES = True\n", encoding="utf-8")
-                link_source = root / "replacement-link.py"
+                link_source = excluded_target_dir / "replacement-link.py"
                 try:
                     link_source.symlink_to(link_target)
                 except (OSError, NotImplementedError):
