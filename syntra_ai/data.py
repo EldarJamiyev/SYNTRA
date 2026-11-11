@@ -110,8 +110,11 @@ def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, byt
             # descriptor stable while changing the file associated with this
             # corpus path and its provenance digest.
             current = os.stat(resolved, follow_symlinks=False)
+            current_path = os.path.realpath(resolved, strict=True)
             if (
                 len(raw) > max_file_bytes
+                or os.path.normcase(os.path.normpath(current_path))
+                != os.path.normcase(os.path.normpath(resolved))
                 or not stat.S_ISREG(current.st_mode)
                 or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
                 or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
