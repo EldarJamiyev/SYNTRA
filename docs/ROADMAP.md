@@ -213,6 +213,20 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 
 **Acceptance:** Release claims are backed by repeatable measurements. The installation path, test results, supported hardware, and model limitations are documented.
 
+### Phase 19 — End-to-end chat cancellation integrity
+
+**Objective:** Make the local chat cancellation control stop the work it claims to stop, across ordinary model responses, workspace shortcuts, proposal operations, and local network diagnostics.
+
+- [x] Propagate the chat AbortSignal into normal-chat tokenization and streamed native inference requests.
+- [x] Propagate cancellation into /secrets, proposal listing, /apply, /discard, /status, workspace switching, and local network checks.
+- [x] Destroy active TCP probe sockets and terminate ping child processes on cancellation; stop waiting on DNS results promptly.
+- [x] Make cancellation terminal for a chat job so a late response cannot overwrite its cancelled status.
+- [x] Keep cancellation scoped to the workspace captured by the job when persisting agent-run state.
+- [x] Add HTTP integration coverage proving /cancel closes an active native inference response and leaves the chat job cancelled.
+- [x] Add a network-diagnostic regression proving TCP cancellation destroys the underlying socket.
+
+**Acceptance:** A cancellation request stops cancellable in-flight work, prevents late completion from replacing the terminal cancelled state, and leaves workspace/proposal operations under their existing transactional and explicit-approval rules. Cancellation is not reported as successful application or completed work.
+
 ## Definition of done for every phase
 
 A phase is not complete merely because the interface looks finished. It must include:

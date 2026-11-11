@@ -184,6 +184,12 @@ function pruneChatJobs() {
 function finishChat(jobId, reply, details = {}) {
   const job = chatJobs.get(jobId);
   if (!job) return;
+  // Cancellation is terminal for this turn. A late result from a subsystem
+  // that finishes just after abort must never overwrite the cancelled state.
+  if (job.controller?.signal.aborted) {
+    cancelChatJob(jobId);
+    return;
+  }
   Object.assign(job, { status: "completed", phase: "completed", reply, error: null, updatedAt: new Date().toISOString() }, details);
   if (activeChatJobId === jobId) activeChatJobId = null;
 }
@@ -432,7 +438,9 @@ async function runChatTurn(jobId, message, history, signal) {
         finishChat(jobId, "Current workspace:\n" + activeWorkspace + "\n\nSwitch project by typing /workspace followed by an absolute folder path.");
         return;
       }
-      activeWorkspace = await resolveWorkspace(requested);
+      const resolvedWorkspace = await resolveWorkspace(requested);
+      if (signal?.aborted) throw Object.assign(new Error("Chat turn was cancelled."), { name: "AbortError" });
+      activeWorkspace = resolvedWorkspace;
       finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
       return;
     }
@@ -440,7 +448,7 @@ async function runChatTurn(jobId, message, history, signal) {
       updateChat(jobId, { phase: "scanning", message: "Scanning readable workspace files locally" });
       const result = await executeWorkspaceTool({
         root: activeWorkspace, auditRoot: activeWorkspace,
-        name: "workspace.secrets.scan", input: {}
+        name: "workspace.secrets.scan", input: {}, signal
       });
       if (!result.ok) throw new Error(result.error || result.message || "Workspace secret scan failed.");
       finishChat(jobId, formatSecretScan(result.output), {
@@ -457,7 +465,7 @@ async function runChatTurn(jobId, message, history, signal) {
       || /^\/discard\s*$/i.test(message.trim())) {
       const listRun = await executeWorkspaceTool({
         root: activeWorkspace, auditRoot: activeWorkspace,
-        name: "workspace.proposals.list", input: {}
+        name: "workspace.proposals.list", input: {}, signal
       });
       if (!listRun.ok) throw new Error(listRun.error || "The proposal list tool failed.");
       const saved = listRun.output;
@@ -485,7 +493,7 @@ async function runChatTurn(jobId, message, history, signal) {
           return;
         }
         updateChat(jobId, { phase: "applying", message: "Rechecking saved proposal hashes and applying changes" });
-        const transaction = await applyProposals(activeWorkspace, saved.pending);
+        const transaction = await applyProposals(activeWorkspace, saved.pending, signal);
         const auditNote = transaction.toolCall.auditRecorded
           ? "Backups and tool audit records are saved under .syntra."
           : "Backups are saved under .syntra, but the final tool audit event could not be written.";
@@ -502,7 +510,7 @@ async function runChatTurn(jobId, message, history, signal) {
       }
       const discardRun = await executeWorkspaceTool({
         root: activeWorkspace, auditRoot: activeWorkspace, name: "workspace.proposals.discard",
-        input: { proposalIds: ids }, approval: true
+        input: { proposalIds: ids }, approval: true, signal
       });
       if (!discardRun.ok) throw new Error(discardRun.error || "The proposal discard tool failed.");
       finishChat(jobId, "Discarded " + discardRun.output.discarded.length + " saved proposal record(s). Project files were not modified.", {
@@ -545,7 +553,7 @@ async function runChatTurn(jobId, message, history, signal) {
     if (/^\/status\s*$/i.test(trimmedMessage)) {
       updateChat(jobId, { phase: "status", message: "Checking the local model backend" });
       try {
-        const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000);
+        const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000, { signal });
         const backend = modelStatus.backend || "native";
         const lines = [
           "**SYNTRA status**",
@@ -568,6 +576,7 @@ async function runChatTurn(jobId, message, history, signal) {
         if (!modelStatus.checkpoint_exists) lines.push("Train the native SYNTRA model to enable ordinary chat and code edits.");
         finishChat(jobId, lines.join("\n"), { modelStatus: "reachable" });
       } catch (error) {
+        if (signal?.aborted || error?.name === "AbortError") throw error;
         finishChat(jobId, [
           "**SYNTRA status**",
           "",
@@ -589,7 +598,8 @@ async function runChatTurn(jobId, message, history, signal) {
         return;
       }
       updateChat(jobId, { phase: "diagnostics", message: "Running a local network check" });
-      const result = await runNetworkDiagnostic(diagnostic);
+      const result = await runNetworkDiagnostic(diagnostic, { signal });
+      if (signal?.aborted) throw Object.assign(new Error("Chat turn was cancelled."), { name: "AbortError" });
       finishChat(jobId, formatNetworkDiagnostic(result), {
         diagnostic: result.kind,
         diagnosticStatus: result.status,
@@ -809,7 +819,7 @@ async function runChatTurn(jobId, message, history, signal) {
         "USER: " + userMessage,
         "ASSISTANT:"
       ].join("\n\n");
-      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000);
+      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000, { signal });
       if (tokenInfo.token_count <= contextLimit) break;
       if (workspaceGrounding) workspaceGrounding = "";
       else if (recentHistory.length) recentHistory.shift();
@@ -828,6 +838,7 @@ async function runChatTurn(jobId, message, history, signal) {
       top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
       device: "auto"
     }, 300000, {
+      signal,
       onToken: (_delta, fullText) => updateChat(jobId, {
         phase: "streaming",
         message: "Responding",
@@ -842,10 +853,12 @@ async function runChatTurn(jobId, message, history, signal) {
     });
   } catch (error) {
     const cancelled = Boolean(signal?.aborted || error?.name === "AbortError");
+    const job = chatJobs.get(jobId);
+    const runWorkspace = job?.workspace || activeWorkspace;
     if (agentRunId) {
-      try { await saveAgentCandidateCheckpoint(activeWorkspace, agentRunId, null); } catch {}
+      try { await saveAgentCandidateCheckpoint(runWorkspace, agentRunId, null); } catch {}
       try {
-        await updateAgentRun(activeWorkspace, agentRunId, {
+        await updateAgentRun(runWorkspace, agentRunId, {
           status: cancelled ? "cancelled" : "failed",
           phase: cancelled ? "cancelled" : "failed",
           message: cancelled

@@ -157,6 +157,40 @@ export function classifyNetworkDiagnostic(message) {
   return null;
 }
 
+function createAbortError() {
+  const error = new Error("Network diagnostic was cancelled.");
+  error.name = "AbortError";
+  return error;
+}
+
+function withAbort(promise, signal) {
+  const pending = Promise.resolve(promise);
+  if (!signal) return pending;
+  if (signal.aborted) {
+    // The operation may already have started before the abort check. Consume
+    // its eventual rejection even though the caller no longer awaits it.
+    pending.catch(() => {});
+    return Promise.reject(createAbortError());
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const settle = (action, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      action(value);
+    };
+    const onAbort = () => settle(reject, createAbortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending.then(
+      value => settle(resolve, value),
+      error => settle(reject, error)
+    );
+    if (signal.aborted) onAbort();
+  });
+}
+
 function withTimeout(promise, milliseconds, message) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -169,19 +203,20 @@ function withTimeout(promise, milliseconds, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function runDns(task) {
+async function runDns(task, { signal } = {}) {
   try {
-    const addresses = await withTimeout(
+    const addresses = await withAbort(withTimeout(
       dns.lookup(task.host, { all: true, verbatim: true }),
       DNS_TIMEOUT_MS,
       "DNS resolution timed out."
-    );
+    ), signal);
     const unique = [...new Map(addresses.map(item => [item.family + ":" + item.address, item])).values()];
     return {
       kind: "dns", host: task.host, status: unique.length ? "resolved" : "not-found",
       addresses: unique, message: unique.length ? "" : "The resolver returned no addresses."
     };
   } catch (error) {
+    if (error?.name === "AbortError") throw error;
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
     return {
       kind: "dns", host: task.host,
@@ -192,19 +227,39 @@ async function runDns(task) {
   }
 }
 
-async function runTcp(task, { tcpConnectImpl = net.createConnection, tcpTimeoutMs = TCP_TIMEOUT_MS } = {}) {
-  return new Promise(resolve => {
+async function runTcp(task, { tcpConnectImpl = net.createConnection, tcpTimeoutMs = TCP_TIMEOUT_MS, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
     const socket = tcpConnectImpl({ host: task.host, port: task.port });
     let settled = false;
     let deadlineTimer;
+    const cleanup = () => {
+      clearTimeout(deadlineTimer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      socket.destroy();
+      reject(createAbortError());
+    };
     const finish = (status, message = "") => {
       if (settled) return;
       settled = true;
-      clearTimeout(deadlineTimer);
+      cleanup();
       const remoteAddress = socket.remoteAddress || "";
       socket.destroy();
       resolve({ kind: "port", host: task.host, port: task.port, status, message, remoteAddress });
     };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     deadlineTimer = setTimeout(
       () => finish("timeout", "TCP connection timed out after " + Math.max(1, Math.round(tcpTimeoutMs / 1000)) + " seconds."),
       tcpTimeoutMs
@@ -220,7 +275,7 @@ async function runTcp(task, { tcpConnectImpl = net.createConnection, tcpTimeoutM
   });
 }
 
-async function runPing(task) {
+async function runPing(task, { signal } = {}) {
   const executable = process.platform === "win32" ? "ping.exe" : "ping";
   const args = process.platform === "win32"
     ? ["-n", "4", "-w", "1000", task.host]
@@ -228,18 +283,33 @@ async function runPing(task) {
       ? ["-c", "4", "-W", "1000", task.host]
       : ["-c", "4", "-W", "1", task.host];
 
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
     let child;
     let settled = false;
     let timedOut = false;
     let output = "";
     let killTimer;
     let timeoutTimer;
+    const cleanup = () => {
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      child?.kill();
+      reject(createAbortError());
+    };
     const finish = (status, exitCode = null, message = "") => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeoutTimer);
-      clearTimeout(killTimer);
+      cleanup();
       resolve({ kind: "ping", host: task.host, status, exitCode, output: output.trim(), message });
     };
     try {
@@ -251,6 +321,11 @@ async function runPing(task) {
     const collect = chunk => {
       if (output.length < MAX_PING_OUTPUT) output += chunk.toString("utf8").slice(0, MAX_PING_OUTPUT - output.length);
     };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     child.stdout.on("data", collect);
     child.stderr.on("data", collect);
     child.once("error", error => finish(error && error.code === "ENOENT" ? "unavailable" : "failed", null, error instanceof Error ? error.message : String(error)));
@@ -267,8 +342,8 @@ export async function runNetworkDiagnostic(task, options = {}) {
   if (!task || task.kind === "invalid") return { kind: "invalid", status: "invalid", message: task?.message || "Invalid network diagnostic request." };
   const host = cleanHost(task.host, true);
   if (!host) return { kind: "invalid", status: "invalid", message: "That host name or IP address is not valid." };
-  if (task.kind === "dns") return runDns({ kind: "dns", host });
-  if (task.kind === "ping") return runPing({ kind: "ping", host });
+  if (task.kind === "dns") return runDns({ kind: "dns", host }, options);
+  if (task.kind === "ping") return runPing({ kind: "ping", host }, options);
   if (task.kind === "port") {
     const port = parsePort(String(task.port));
     if (!port) return { kind: "invalid", status: "invalid", message: "TCP port must be an integer from 1 to 65535." };
