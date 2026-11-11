@@ -8,7 +8,7 @@ const EXPLICIT_REPO_CONTEXT = /\b(?:this|the|current|my)\s+(?:codebase|repositor
 const CONVERSATIONAL_OUTPUT = /^(?:hey[, ]*)?(?:please\s+)?(?:(?:can|could|would) you(?:\s+please)?\s+)?(?:please\s+)?(?:write|create|draft|compose|prepare|generate)\s+(?:(?:me|us)\s+)?(?:an?\s+)?(?:email|letter|poem|story|song|essay|article|blog post|social post|text message|message|proposal|job application|cover letter|resume|résumé|cv|joke|speech|recipe)\b/i;
 const SOURCE_PATH_PATTERN = /\b(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:m?js|cjs|tsx?|jsx?|py|go|rs|json|css|html|md|ya?ml|toml|sql|sh)\b|\b[A-Za-z0-9_-]+\.(?:mjs|cjs|tsx|jsx|py|go|rs)\b/g;
 const WORKSPACE_QUERY_SIGNAL = /\b(?:where\s+is|how\s+does|what\s+(?:does|files?|modules?|functions?|classes?)|explain\s+(?:how|the)|trace|find\s+(?:where|all)|in\s+(?:this|the)\s+(?:repo|repository|workspace|codebase|project)|architecture\s+of)\b/i;
-const TARGET_FIRST_COMMAND = /^(?:(?:the|a|an|my|this|that)\s+)?(?:app|application|website|web\s+(?:app|application|site)|site|frontend|front[- ]end|backend|back[- ]end|ui|ux|interface|component|module|function|feature|bug|api|endpoint|route|server|client|script|package|database|query|schema|login|button|form|chat|code|source|repository|repo|codebase|project|dark mode|theme)\b[\\s\\S]{0,80}\\b(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit|patch)\\s*[.!?]*$/i;
+const TARGET_FIRST_COMMAND = /^(?:(?:the|a|an|my|this|that)\s+)?(?:app|application|website|web\s+(?:app|application|site)|site|frontend|front[- ]end|backend|back[- ]end|ui|ux|interface|component|module|function|feature|bug|api|endpoint|route|server|client|script|package|database|query|schema|login|button|form|chat|code|source|repository|repo|codebase|project|dark mode|theme)\b[\s\S]{0,80}\b(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit|patch)\s*[.!?]*$/i;
 // Keep identifier grammars deterministic: repeated segments start with a
 // delimiter that cannot be consumed by the preceding segment.
 const BACKTICK_IDENTIFIER_PATTERN = /`([A-Za-z_$][A-Za-z0-9_$]{2,63})`/g;
@@ -88,7 +88,7 @@ export function isCodingTask(message) {
 
   if (TARGET_FIRST_COMMAND.test(text)) return true;
 
-  const requestCue = /^(?:please\\b|(?:can|could|would)\\s+you\\b|i\\s+(?:want|need)\\s+(?:you\\s+)?to\\b)/i;
+  const requestCue = /^(?:please\b|(?:can|could|would)\s+you\b|i\s+(?:want|need)\s+(?:you\s+)?to\b)/i;
   if (requestCue.test(text) && ACTION_ANYWHERE.test(text) && SOFTWARE_TARGET.test(text)) return true;
 
   const command = text.match(ACTION);
