@@ -23,7 +23,9 @@ class SourceCorpusPathIdentityTests(unittest.TestCase):
             stable.write_bytes(stable_content)
 
             if replacement_kind == "symlink":
-                link_target = root / "outside.py"
+                excluded_target_dir = root / ".excluded"
+                excluded_target_dir.mkdir()
+                link_target = excluded_target_dir / "outside.py"
                 link_target.write_text("LINK_TARGET_BYTES = True\n", encoding="utf-8")
                 link_source = root / "replacement-link.py"
                 try:
