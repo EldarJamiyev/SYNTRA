@@ -24,6 +24,19 @@ The classifier resolves a bounded set of short follow-ups against the most recen
 - The lookup is bounded to the last 24 history entries; at most eight follow-up messages are retained for task-goal construction.
 - Generic acknowledgements do not authorize a coding action. Normal proposal approval, cancellation, and project verification safeguards remain in force.
 
+## Lossless context budgeting
+
+The local chat bridge measures the assembled prompt with SYNTRA's actual native tokenizer before generation. Context packing follows an explicit priority order:
+
+1. Keep the complete latest user message unchanged.
+2. Remove optional workspace-grounding snippets when the prompt exceeds the input budget.
+3. Remove complete oldest history messages until the prompt fits, retaining the most recent context first.
+4. If the current message still cannot fit on its own, reject the turn with the measured token requirement and ask the user to split the request.
+
+The bridge never clips the beginning or end of the latest request, and it never truncates a retained history message mid-sentence. It also bounds retained history to eight messages and 16,000 aggregate characters before tokenization. The tokenizer's measured count, not character estimates, decides whether the final prompt fits.
+
+This protects leading constraints, exclusions, identifiers, and later acceptance criteria from silent loss. It does not enlarge the trained model's context window or improve model quality by itself.
+
 ## Known limits
 
 This is not unrestricted coreference resolution, arbitrary translation, or a general-purpose language-understanding model. The multilingual vocabulary is intentionally limited and does not imply complete Azerbaijani, Turkish, or Russian grammar support. Unrecognized or ambiguous wording remains unchanged for the native model to interpret.
