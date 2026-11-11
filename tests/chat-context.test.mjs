@@ -35,7 +35,7 @@ test("drops optional workspace evidence before removing conversation history", a
     message: "Fix the API.",
     history,
     workspaceGrounding: "WORKSPACE EVIDENCE: " + "repository context ".repeat(5),
-    contextTokens: 240,
+    contextTokens: 400,
     tokenize: characterTokenizer
   });
 
@@ -55,7 +55,7 @@ test("removes complete oldest history messages while retaining the newest contex
       { role: "user", content: oldest },
       { role: "assistant", content: newest }
     ],
-    contextTokens: 200,
+    contextTokens: 288,
     tokenize: characterTokenizer
   });
 
