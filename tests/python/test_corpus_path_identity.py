@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from syntra_ai.data import load_corpus
+from syntra_ai.data import _read_safe_file, load_corpus
 
 
 class SourceCorpusPathIdentityTests(unittest.TestCase):
@@ -106,6 +106,50 @@ class SourceCorpusPathIdentityTests(unittest.TestCase):
             expected.update(len(content).to_bytes(8, "big"))
             expected.update(content)
             self.assertEqual(corpus.source_sha256, expected.hexdigest())
+
+
+    def test_parent_directory_symlink_swap_cannot_escape_approved_corpus_root(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-corpus-parent-race-") as temp:
+            base = Path(temp)
+            root = base / "approved"
+            source_dir = root / "src"
+            outside_dir = base / "outside" / "src"
+            root.mkdir()
+            source_dir.mkdir()
+            outside_dir.mkdir(parents=True)
+            source = source_dir / "module.py"
+            source.write_text("PATH_IDENTITY = True\\n", encoding="utf-8")
+            outside_alias = outside_dir / "module.py"
+            try:
+                os.link(source, outside_alias)
+            except OSError:
+                self.skipTest("Hard links are unavailable on this runner.")
+
+            held_directory = root / ".held-src"
+            real_fstat = os.fstat
+            calls = 0
+
+            def swap_parent_after_descriptor_read(descriptor):
+                nonlocal calls
+                calls += 1
+                result = real_fstat(descriptor)
+                if calls == 2:
+                    os.replace(source_dir, held_directory)
+                    try:
+                        source_dir.symlink_to(outside_dir, target_is_directory=True)
+                    except (OSError, NotImplementedError):
+                        self.skipTest("Directory symlinks are unavailable on this runner.")
+                return result
+
+            with patch("syntra_ai.data.os.fstat", side_effect=swap_parent_after_descriptor_read):
+                accepted = _read_safe_file(str(source), str(root), 1024)
+
+            self.assertTrue(source_dir.is_symlink())
+            self.assertTrue(outside_alias.is_file())
+            self.assertIsNone(
+                accepted,
+                "a parent-directory symlink swap must not keep an escaped file under its stale in-root path",
+            )
 
 
 if __name__ == "__main__":
