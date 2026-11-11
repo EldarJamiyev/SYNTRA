@@ -18,8 +18,9 @@ except ImportError:
     SyntraTransformer = None  # type: ignore[assignment]
 
 from .config import ModelConfig
+from .checkpoint_io import load_torch_checkpoint_snapshot
 from .data import MAX_CORPUS_TOKENS, load_corpus
-from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
+from .resources import validate_training_memory_budget
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training_history import append_training_history, validate_training_history
 
@@ -202,13 +203,13 @@ INFERENCE_CHECKPOINT_FIELDS = (
 
 
 def inference_checkpoint_path(checkpoint: str | Path) -> Path:
-    target = Path(checkpoint).expanduser().resolve()
+    target = Path(checkpoint).expanduser().absolute()
     return target.with_name(target.stem + ".inference" + target.suffix)
 
 
 def select_inference_checkpoint(checkpoint: str | Path) -> Path:
     """Select a recent companion candidate; runtime validates its source-file identity."""
-    target = Path(checkpoint).expanduser().resolve()
+    target = Path(checkpoint).expanduser().absolute()
     companion = inference_checkpoint_path(target)
     try:
         if companion.is_file() and companion.stat().st_mtime_ns >= target.stat().st_mtime_ns:
@@ -219,7 +220,7 @@ def select_inference_checkpoint(checkpoint: str | Path) -> Path:
 
 
 def _save_inference_checkpoint(checkpoint: str | Path, payload: dict) -> Path:
-    target = Path(checkpoint).expanduser().resolve()
+    target = Path(checkpoint).expanduser().absolute()
     companion = inference_checkpoint_path(target)
     inference_payload = {
         key: payload[key]
@@ -280,7 +281,7 @@ def train(
     if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     requested_config = config
-    checkpoint_path = Path(checkpoint).expanduser().resolve()
+    checkpoint_path = Path(checkpoint).expanduser().absolute()
     device = choose_device(device_name)
     random.seed(seed)
     torch.manual_seed(seed)
@@ -290,11 +291,9 @@ def train(
     saved = None
     corpus = None
     if resume and checkpoint_path.exists():
-        # Bound the on-disk checkpoint before deserializing its tensor and optimizer state.
-        validate_checkpoint_load_budget(checkpoint_path)
-        # Load checkpoint tensors on CPU first so the training memory preflight can run before
-        # copying model and optimizer state onto a potentially constrained device.
-        saved = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        # The snapshot loader binds the hard byte ceiling and available-RAM budget
+        # to the same descriptor whose verified bytes are passed to torch.load().
+        saved = load_torch_checkpoint_snapshot(checkpoint_path)
         if saved.get("format") != "syntra-transformer-v1":
             raise ValueError("Resume checkpoint is not a supported SYNTRA Transformer checkpoint.")
         stored_config = ModelConfig.from_dict(saved["config"])

@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 
 try:
     import torch
@@ -22,12 +23,13 @@ except ImportError:
         return fn
 
 from .config import ModelConfig
+from .checkpoint_io import load_torch_checkpoint_snapshot
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
     _batch, _encode_documents, _estimate_loss, choose_device, select_inference_checkpoint,
 )
 from .data import MAX_CORPUS_TOKENS, load_corpus
-from .resources import validate_checkpoint_load_budget, validate_inference_memory_budget
+from .resources import validate_inference_memory_budget
 from .safe_paths import resolve_corpus_root
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -52,30 +54,37 @@ class ContextWindowExceededError(ValueError):
         )
 
 
+def _checkpoint_stat(path: Path):
+    info = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("Checkpoint path must identify a regular file, not a symbolic link or directory.")
+    return info
+
+
 def _file_stat_identity(path: Path) -> tuple[int, int, int, int, int]:
-    info = path.stat()
+    info = _checkpoint_stat(path)
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 def _file_stat_identity_record(path: Path) -> dict[str, int]:
-    device, inode, size, modified_ns, changed_ns = _file_stat_identity(path)
+    info = _checkpoint_stat(path)
     return {
-        "device": device,
-        "inode": inode,
-        "size": size,
-        "mtime_ns": modified_ns,
-        "ctime_ns": changed_ns,
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "size": info.st_size,
+        "mtime_ns": info.st_mtime_ns,
+        "ctime_ns": info.st_ctime_ns,
     }
 
 
 def checkpoint_path() -> Path:
     configured = os.environ.get("SYNTRA_CHECKPOINT")
     if configured:
-        return Path(configured).expanduser().resolve()
-    default_resolved = DEFAULT_CHECKPOINT.expanduser().resolve()
+        return Path(configured).expanduser().absolute()
+    default_resolved = DEFAULT_CHECKPOINT.expanduser().absolute()
     if default_resolved.is_file():
         return default_resolved
-    fallback_resolved = FALLBACK_BRAIN_CHECKPOINT.expanduser().resolve()
+    fallback_resolved = FALLBACK_BRAIN_CHECKPOINT.expanduser().absolute()
     if fallback_resolved.is_file():
         return fallback_resolved
     return default_resolved
@@ -128,14 +137,13 @@ def _normalize_checkpoint_payload(payload: dict) -> dict:
 
 
 def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelConfig, ByteBPETokenizer]:
-    target = Path(path).expanduser().resolve() if path else checkpoint_path()
+    target = Path(path).expanduser().absolute() if path else checkpoint_path()
     if not target.is_file():
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
     load_target = select_inference_checkpoint(target)
 
     def load_validated(source: Path) -> tuple[dict, ModelConfig, ByteBPETokenizer]:
-        validate_checkpoint_load_budget(source)
-        raw_payload = torch.load(source, map_location="cpu", weights_only=True)
+        raw_payload = load_torch_checkpoint_snapshot(source)
         payload = _normalize_checkpoint_payload(raw_payload)
         config = ModelConfig.from_dict(payload["config"])
         tokenizer = ByteBPETokenizer.from_dict(payload.get("tokenizer"))
@@ -155,16 +163,19 @@ def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelC
         saved, config, tokenizer = load_validated(target)
 
     if load_target != target:
-        # An mtime-only binding is insufficient: atomic promotion can replace
-        # the source inode while preserving its size and mtime. Legacy companion
-        # files without the full identity deliberately fall back to source weights.
-        if saved.get("source_checkpoint_identity") != _file_stat_identity_record(target):
+        # A companion is valid only for the exact regular source checkpoint from
+        # which it was produced. Preserve the final path component so symlinks
+        # cannot be normalized away before this no-follow identity check.
+        source_identity = _file_stat_identity_record(target)
+        if saved.get("source_checkpoint_identity") != source_identity:
             saved, config, tokenizer = load_validated(target)
+        if _file_stat_identity_record(target) != source_identity:
+            raise ValueError("The source checkpoint changed while its inference companion was being loaded.")
     return target, saved, config, tokenizer
 
 
 def _get_resident_bundle(path: str | Path | None = None, device_name: str = "auto") -> tuple[Path, SyntraTransformer, dict, ModelConfig, ByteBPETokenizer, torch.device]:
-    target = Path(path).expanduser().resolve() if path else checkpoint_path()
+    target = Path(path).expanduser().absolute() if path else checkpoint_path()
     if not target.is_file():
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
     load_target = select_inference_checkpoint(target)
@@ -211,12 +222,12 @@ def clear_resident_cache() -> None:
 
 def _checkpoint_identity(path: str | Path | None = None) -> str | None:
     """Identify the current full checkpoint and its selected inference companion."""
-    source = Path(path or checkpoint_path()).expanduser().resolve()
+    source = Path(path or checkpoint_path()).expanduser().absolute()
     try:
         selected = select_inference_checkpoint(source)
         parts = []
         for candidate in dict.fromkeys((source, selected)):
-            info = candidate.stat()
+            info = _checkpoint_stat(candidate)
             parts.append(
                 f"{candidate}\0{info.st_dev}\0{info.st_ino}\0{info.st_size}\0{info.st_mtime_ns}\0{info.st_ctime_ns}"
             )
@@ -227,7 +238,7 @@ def _checkpoint_identity(path: str | Path | None = None) -> str | None:
 
 def _resident_cache_matches_checkpoint(path: str | Path) -> bool:
     """Report a resident model only while its cached files match the current checkpoint."""
-    target = Path(path).expanduser().resolve()
+    target = Path(path).expanduser().absolute()
     try:
         selected = select_inference_checkpoint(target)
         source_identity = _file_stat_identity(target)
@@ -258,7 +269,11 @@ def status() -> dict:
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             metadata = {}
             metadata_error = str(exc)
-    checkpoint_exists = path.is_file()
+    try:
+        _checkpoint_stat(path)
+        checkpoint_exists = True
+    except OSError:
+        checkpoint_exists = False
     raw_config = metadata.get("config") or {}
     context_tokens = metadata.get("context_tokens") or raw_config.get("seq_len") or raw_config.get("block_size")
     vocab_size = metadata.get("tokenizer_vocab_size") or metadata.get("vocab_size") or raw_config.get("vocab_size")
