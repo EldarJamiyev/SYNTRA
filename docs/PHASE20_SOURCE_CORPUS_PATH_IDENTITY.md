@@ -10,6 +10,8 @@ A concurrent rename or replacement could therefore leave the descriptor reading 
 
 After the bounded descriptor read, `syntra_ai.data._read_safe_file` performs a non-following inspection of the selected path. The reader accepts content only when:
 
+- Re-canonicalizing the selected path after the read produces the same canonical path as the one approved before opening; a parent-directory symlink or directory swap cannot redirect the final path outside the approved corpus root.
+
 - The opened descriptor is still a regular file.
 - The path itself still resolves to a regular file rather than a symlink or another file type.
 - Device and inode identity match across the initial inspection, opened descriptor, final descriptor inspection, and final path inspection.
@@ -24,6 +26,7 @@ Any observed replacement, removal, symlink substitution, metadata change, or rea
 
 - A deterministic replacement immediately after the descriptor's post-read identity check is excluded.
 - A deterministic final-component symlink substitution is excluded.
+- A parent-directory swap that redirects the same inode through an in-root symlink alias to an outside directory is rejected by the post-read canonical-path check.
 - An unchanged regular source remains included.
 - The source digest is independently reconstructed from the exact retained path and bytes, proving that rejected files do not contribute to the reported digest.
 
