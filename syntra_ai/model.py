@@ -5,6 +5,7 @@ RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU, nucleus (top-p) sampling,
 repetition penalties, and dense hidden-state representation pooling.
 """
 import math
+from functools import wraps
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -13,6 +14,22 @@ from .config import ModelConfig
 
 BOS_ID = 256
 EOS_ID = 257
+
+
+def _preserve_module_modes(method):
+    """Restore every module's exact training flag after temporary inference mode."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        module_modes = tuple((module, module.training) for module in self.modules())
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            # Calling self.train(previous_state) would overwrite intentionally mixed
+            # child-module states. Restore the snapshot one module at a time instead.
+            for module, was_training in module_modes:
+                module.training = was_training
+
+    return wrapped
 
 
 class RMSNorm(nn.Module):
@@ -275,6 +292,7 @@ class SyntraTransformer(nn.Module):
             return logits, loss, presents
         return logits, loss
 
+    @_preserve_module_modes
     @torch.no_grad()
     def embed_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
         """Compute L2-normalized semantic embeddings from pooled final hidden states."""
@@ -286,6 +304,7 @@ class SyntraTransformer(nn.Module):
         combined = 0.7 * mean_pooled + 0.3 * last_token
         return F.normalize(combined.float(), p=2, dim=-1)
 
+    @_preserve_module_modes
     @torch.no_grad()
     def generate(
         self,

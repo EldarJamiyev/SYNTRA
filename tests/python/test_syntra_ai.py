@@ -1871,5 +1871,70 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite number"):
             model.generate(prompt, max_new_tokens=1, temperature=float("nan"), top_k=1)
 
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_inference_helpers_restore_exact_module_modes_after_success(self):
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=2, n_head=2, n_embd=32, dropout=0.2)
+        model = SyntraTransformer(config)
+        model.train()
+        # Retain intentionally mixed submodule modes, not only the root training flag.
+        model.blocks[0].attn.eval()
+        model.blocks[0].attn.resid_dropout.train()
+        expected_modes = tuple(module.training for module in model.modules())
+        tokens = torch.tensor([[BOS_ID, 65, 66, 67]], dtype=torch.long)
+
+        embeddings = model.embed_tokens(tokens)
+        torch.testing.assert_close(
+            torch.linalg.vector_norm(embeddings, dim=-1),
+            torch.ones(1),
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "embed_tokens must restore all module modes, including mixed child states",
+        )
+
+        generated = model.generate(tokens, max_new_tokens=2, temperature=0.0, top_k=1)
+        self.assertGreaterEqual(generated.shape[1], tokens.shape[1] + 1)
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "generate must restore all module modes after successful inference",
+        )
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_inference_helpers_restore_exact_module_modes_when_forward_raises(self):
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=2, n_head=2, n_embd=32, dropout=0.2)
+        model = SyntraTransformer(config)
+        model.train()
+        model.blocks[0].attn.eval()
+        model.blocks[0].attn.resid_dropout.train()
+        expected_modes = tuple(module.training for module in model.modules())
+        tokens = torch.tensor([[BOS_ID, 65, 66]], dtype=torch.long)
+
+        with patch.object(model, "_forward_hidden", side_effect=RuntimeError("forced embedding failure")):
+            with self.assertRaisesRegex(RuntimeError, "forced embedding failure"):
+                model.embed_tokens(tokens)
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "embed_tokens must restore module modes even when inference raises",
+        )
+
+        with patch.object(model, "forward", side_effect=RuntimeError("forced generation failure")):
+            with self.assertRaisesRegex(RuntimeError, "forced generation failure"):
+                model.generate(tokens, max_new_tokens=2, temperature=0.0, top_k=1)
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "generate must restore module modes even when inference raises",
+        )
+
 if __name__ == "__main__":
     unittest.main()
