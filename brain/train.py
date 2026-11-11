@@ -313,29 +313,46 @@ def _read_local_datasets(
             "No readable UTF-8 source files were found. Select a text/code file or a project folder."
         )
 
-    if len(documents) >= 2:
-        # Keep every source file wholly inside one split. Splitting a concatenated
-        # repository at a character offset leaks definitions and shared file context
-        # across training and validation. The stable path hash makes the holdout
-        # reproducible when the same approved source set is selected again.
-        ranked_documents = sorted(
-            documents,
+    # Exact duplicate source content must be assigned as one unit. Otherwise
+    # identical copies under different paths can land on opposite sides of the
+    # holdout and make validation loss look artificially strong.
+    content_groups: dict[str, list[tuple[str, str]]] = {}
+    for relative_name, document in documents:
+        source_body = document.split("\n", 2)[2]
+        content_id = sha256(source_body.encode("utf-8")).hexdigest()
+        content_groups.setdefault(content_id, []).append((relative_name, document))
+
+    if len(content_groups) >= 2:
+        ranked_groups = sorted(
+            content_groups.items(),
             key=lambda item: sha256(
-                ("syntra-raw-file-holdout-v1:" + item[0]).encode("utf-8")
+                ("syntra-raw-content-holdout-v1:" + item[0]).encode("utf-8")
             ).hexdigest(),
         )
         validation_count = min(
-            len(ranked_documents) - 1,
-            max(1, math.ceil(len(ranked_documents) * 0.1)),
+            len(ranked_groups) - 1,
+            max(1, math.ceil(len(ranked_groups) * 0.1)),
         )
-        validation_documents = ranked_documents[:validation_count]
-        training_documents = ranked_documents[validation_count:]
+        validation_ids = {content_id for content_id, _ in ranked_groups[:validation_count]}
+        training_documents = [
+            item for content_id, group in content_groups.items()
+            if content_id not in validation_ids for item in group
+        ]
+        validation_documents = [
+            item for content_id, group in content_groups.items()
+            if content_id in validation_ids for item in group
+        ]
         train_text = "\n\n".join(document for _, document in training_documents)
         validation_text = "\n\n".join(document for _, document in validation_documents)
+    elif len(documents) >= 2 and require_holdout:
+        raise ValueError(
+            "The local corpus contains fewer than two independent source contents; "
+            "duplicate files cannot form separate training and validation splits."
+        )
     else:
-        # A single explicitly selected file cannot be held out by source identity.
-        # Retain the historical line-boundary split for this legacy use case.
-        combined = documents[0][1]
+        # A single explicitly selected file (or duplicate-only legacy corpus)
+        # cannot be held out by source identity. Retain the historical line split.
+        combined = "\n\n".join(document for _, document in documents)
         split_at = int(len(combined) * 0.9)
         line_boundary = combined.rfind("\n", 0, split_at)
         if line_boundary > 0 and len(combined) - line_boundary > 1:
