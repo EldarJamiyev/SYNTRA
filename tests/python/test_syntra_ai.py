@@ -1871,7 +1871,6 @@ class TransformerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite number"):
             model.generate(prompt, max_new_tokens=1, temperature=float("nan"), top_k=1)
 
-
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_inference_helpers_restore_exact_module_modes_after_success(self):
         from syntra_ai.model import BOS_ID, SyntraTransformer
