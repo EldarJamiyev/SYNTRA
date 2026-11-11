@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
-import { classifyChatIntent, isCodingTask } from "./chat-intent.mjs";
+import { buildFollowUpTaskGoal, classifyChatIntent, isCodingTask } from "./chat-intent.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
@@ -634,6 +634,9 @@ async function runChatTurn(jobId, message, history, signal) {
     }
 
     const intent = classifyChatIntent(message, history);
+    if (!resumeRecord && intent.contextualFollowUp === true) {
+      taskGoal = buildFollowUpTaskGoal(message, intent);
+    }
 
     if (intent.kind === "coding_task" || isCodingTask(message) || resumeRecord) {
       const saved = await listPendingProposals(activeWorkspace);
