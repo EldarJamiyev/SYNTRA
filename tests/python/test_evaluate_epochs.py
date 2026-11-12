@@ -455,6 +455,41 @@ class Phase4CheckpointEvaluationTests(unittest.TestCase):
         self.assertIn("0.5", actual)
         self.assertNotIn("1500", actual)
 
+    def test_run_metadata_redaction_removes_absolute_approved_root_paths(self):
+        private_root = "/srv/tenants/customer-a/private-source"
+        payload = {
+            "corpus_root": private_root,
+            "workspace_roots": [private_root, "/mnt/secure/second-corpus"],
+            "settings": {
+                "corpus_root": private_root,
+                "checkpoint": "/srv/tenants/customer-a/weights/local.pt",
+                "curriculum": {"dataset": "/srv/tenants/customer-a/data/private-curriculum.jsonl"},
+            },
+            "curriculum_result": {
+                "generation": {
+                    "workspace_root": private_root,
+                    "workspace_roots": [private_root],
+                    "dataset_path": "/srv/tenants/customer-a/data/private-curriculum.jsonl",
+                }
+            },
+        }
+        redacted = evaluate_epochs._redact_run_metadata_paths(payload)
+        encoded = json.dumps(redacted)
+        for private_fragment in ("/srv/tenants", "customer-a", "/mnt/secure", "private-source", "weights"):
+            self.assertNotIn(private_fragment, encoded)
+        self.assertEqual(redacted["corpus_root"], "approved-local-root-1")
+        self.assertEqual(redacted["workspace_roots"], ["approved-local-root-1", "approved-local-root-2"])
+        self.assertEqual(redacted["curriculum_result"]["generation"]["dataset_path"], "generated-curriculum.jsonl")
+
+    def test_corpus_root_fingerprint_is_stable_without_exposing_path(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-root-fingerprint-") as temp:
+            root = Path(temp) / "approved"
+            root.mkdir()
+            first = evaluate_epochs._corpus_root_fingerprint(root)
+            second = evaluate_epochs._corpus_root_fingerprint(root)
+            self.assertEqual(first, second)
+            self.assertEqual(len(first), 64)
+            self.assertNotIn(str(root), first)
 
 if __name__ == "__main__":
     unittest.main()

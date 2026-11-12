@@ -96,6 +96,37 @@ def _read_json(path: Path, limit: int = 10 * 1024 * 1024) -> dict[str, Any]:
     return result
 
 
+def _redact_run_metadata_paths(value: Any, key: str = "") -> Any:
+    """Remove machine-specific filesystem paths from persisted run metadata."""
+    if key == "workspace_roots":
+        if not isinstance(value, (list, tuple)):
+            return ["approved-local-root-1"]
+        return [f"approved-local-root-{index + 1}" for index, _ in enumerate(value)]
+    if key in {"corpus_root", "workspace_root"}:
+        return "approved-local-root-1"
+    if key in {"dataset_path", "curriculum_dataset", "output_path", "dataset"}:
+        return None if value is None else "generated-curriculum.jsonl"
+    if key == "checkpoint":
+        return "local-checkpoint"
+    if key == "profile":
+        return "local-profile"
+    if key == "run_directory":
+        return "local-run-output"
+    if isinstance(value, dict):
+        return {name: _redact_run_metadata_paths(item, name) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_run_metadata_paths(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_run_metadata_paths(item) for item in value]
+    return value
+
+
+def _corpus_root_fingerprint(path: str | Path) -> str:
+    """Return a stable SHA-256 identifier without persisting the source path."""
+    canonical = os.path.normcase(os.path.normpath(os.path.realpath(os.fspath(path), strict=True)))
+    return hashlib.sha256(os.fsencode(canonical)).hexdigest()
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path = _inside_root(path)
     if path.is_symlink():
@@ -1213,15 +1244,16 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": 1,
             "run_id": run_id,
             "started_at": _now(),
-            "profile": str(profile_path),
-            "corpus_root": str(corpus_root),
-            "checkpoint": str(checkpoint),
-            "curriculum_dataset": str(curriculum_path),
+            "profile": "local-profile",
+            "corpus_root": "approved-local-root-1",
+            "corpus_root_sha256": _corpus_root_fingerprint(corpus_root),
+            "checkpoint": "local-checkpoint",
+            "curriculum_dataset": "generated-curriculum.jsonl",
             "training_device_requested": training_device,
             "evaluation_device": evaluation_device,
             "isolation": isolation,
             "benchmark_preflight": benchmark_preflight,
-            "settings": profile,
+            "settings": _redact_run_metadata_paths(profile),
         }
         _write_json_atomic(run_root / "run_manifest.json", manifest)
         seen: set[tuple[str, int]] = set()
@@ -1256,10 +1288,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             if Path(curriculum_merge["dataset_path"]).resolve() != curriculum_path.resolve():
                 raise OrchestrationError("Merged Phase 7 SFT dataset differs from the configured curriculum path.")
-            manifest["curriculum_result"] = {
+            manifest["curriculum_result"] = _redact_run_metadata_paths({
                 "generation": curriculum_generation,
                 "merge": curriculum_merge,
-            }
+            })
             _write_json_atomic(run_root / "run_manifest.json", manifest)
 
         if not args.skip_pretraining:

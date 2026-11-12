@@ -181,16 +181,6 @@ def resolve_curriculum_output_path(
     else:
         raise ValueError("Curriculum output directory must be inside the active workspace or SYNTRA project directory.")
 
-    os.makedirs(parent, exist_ok=True)
-    parent = os.path.normcase(os.path.normpath(os.path.realpath(parent, strict=True)))
-    for root_norm in trusted_roots:
-        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-        if parent == root_norm or parent.startswith(root_prefix):
-            break
-    else:
-        raise ValueError("Curriculum output directory must remain inside an approved root.")
-    if not os.path.isdir(parent):
-        raise ValueError("Curriculum output directory must remain inside an approved root.")
 
     target = os.path.normcase(os.path.normpath(os.path.join(parent, filename)))
     for root_norm in trusted_roots:
