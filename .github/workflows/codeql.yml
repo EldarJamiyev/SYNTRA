@@ -28,11 +28,23 @@ jobs:
           languages: ${{ matrix.language }}
       - uses: github/codeql-action/autobuild@v4
       - uses: github/codeql-action/analyze@v4
+      - name: Stage CodeQL SARIF inside the workspace
+        if: always()
+        shell: bash
+        run: |
+          shopt -s nullglob
+          sarif_files=(../results/*.sarif)
+          if [ "${#sarif_files[@]}" -eq 0 ]; then
+            echo "::error::CodeQL did not produce SARIF results for this language."
+            exit 1
+          fi
+          mkdir -p .codeql-sarif
+          cp -- "${sarif_files[@]}" .codeql-sarif/
       - name: Archive CodeQL SARIF results for security triage
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: codeql-sarif-${{ matrix.language }}
-          path: ../results/*.sarif
+          path: .codeql-sarif/*.sarif
           if-no-files-found: error
           retention-days: 14
