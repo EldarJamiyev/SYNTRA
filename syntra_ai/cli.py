@@ -16,6 +16,25 @@ from .reasoning_curriculum import synthesize_multifile_reasoning_curriculum
 from .training import train
 
 
+def _redact_curriculum_paths(value: Any, key: str = "") -> Any:
+    """Remove machine-specific filesystem paths from CLI output."""
+    if key == "workspace_roots":
+        if not isinstance(value, (list, tuple)):
+            return ["approved-local-root-1"]
+        return [f"approved-local-root-{index + 1}" for index, _ in enumerate(value)]
+    if key == "workspace_root":
+        return "approved-local-root-1"
+    if key == "dataset_path":
+        return None if value is None else "generated-curriculum.jsonl"
+    if isinstance(value, dict):
+        return {name: _redact_curriculum_paths(item, name) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_curriculum_paths(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_curriculum_paths(item) for item in value]
+    return value
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="syntra", description="SYNTRA local neural coding-model tools.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -132,14 +151,14 @@ def main(argv: list[str] | None = None) -> int:
                 languages=args.languages,
                 exclude_paths=args.exclude,
             )
-        print(json.dumps(results, ensure_ascii=False, indent=2))
+        print(json.dumps(_redact_curriculum_paths(results), ensure_ascii=False, indent=2))
         return 0
     if args.command == "inspect-data":
         corpus = load_corpus([args.root], max_tokens=args.max_tokens)
         print(json.dumps({
             "files": len(corpus.files), "source_bytes": corpus.source_bytes,
             "tokens": len(corpus.token_ids), "skipped_files": corpus.skipped_files,
-            "sample_files": corpus.files[:20]
+            "sample_files": [Path(item).name for item in corpus.files[:20]]
         }, indent=2))
         return 0
     if args.command == "train":
