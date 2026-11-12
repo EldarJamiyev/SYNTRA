@@ -1025,7 +1025,13 @@ async function runModelSelectedReadOnlyTools({
       prompt, max_new_tokens: 320, temperature: 0.1, top_k: 20, device: "auto"
     }, 120000, signal);
     const payload = extractJsonObject(generated.text);
-    const proposedCalls = validateReadOnlyToolPlan(payload, ranked.slice(0, 40).map(item => item.path));
+    const validatedCalls = validateReadOnlyToolPlan(payload, ranked.slice(0, 40).map(item => item.path));
+    // Workspace semantic indexing is bound to SYNTRA's native checkpoint. In
+    // hybrid mode, keep retrieval lexical/symbol/memory based rather than
+    // attempting embeddings against a native service that is intentionally off.
+    const proposedCalls = modelStatus.backend === "openai-compatible"
+      ? validatedCalls.filter(call => call.tool !== "workspace.semantic.search")
+      : validatedCalls;
     const calls = [];
     for (const call of proposedCalls) {
       const key = call.tool + ":" + JSON.stringify(call.input);
@@ -1477,14 +1483,16 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 }
 
 export function deriveModelContextBudget(modelStatus = {}) {
-  // SYNTRA's checkpoint stores its own byte-BPE tokenizer. Token counts are
-  // exact only when that tokenizer is the active runtime tokenizer; never infer
-  // a context window larger than SYNTRA's own supported native architecture.
+  // Native checkpoint dimensions are architecture-bound and capped separately.
+  // An explicitly selected compatible model has an operator-declared context
+  // limit, which must not inherit the native model's 16K ceiling.
+  const hybridProvider = modelStatus.backend === "openai-compatible";
   const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
-  // The checkpoint's own sequence length is authoritative. A 256/512-token
-  // CPU checkpoint must never be treated as a 1024-token model.
+  const maximumContext = hybridProvider ? 1_000_000 : 16_384;
+  // The installed checkpoint (or explicitly configured provider limit) remains
+  // authoritative. Never enlarge a 256/512-token native checkpoint.
   const contextWindowTokens = Number.isFinite(rawContext) && rawContext > 0
-    ? Math.max(16, Math.min(16_384, Math.floor(rawContext)))
+    ? Math.max(16, Math.min(maximumContext, Math.floor(rawContext)))
     : 4096;
   const exactTokenCount = modelStatus.tokenizer === "byte-BPE";
   const outputCap = Number(modelStatus.max_output_tokens || 1024);
@@ -1566,21 +1574,24 @@ export async function runAgentTask({
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
-  if (!modelStatus.checkpoint_exists) throw new Error("No trained native SYNTRA checkpoint is available. Complete native model training before requesting an agent patch.");
+  if (!modelStatus.checkpoint_exists && modelStatus.model_available !== true) throw new Error("No trained native SYNTRA checkpoint or verified opt-in hybrid model is available. Complete native training or verify the explicitly configured hybrid endpoint.");
   const contextPlan = deriveModelContextBudget(modelStatus);
   const contextWindow = contextPlan.contextWindowTokens;
   const contextBudget = contextPlan.contextBudgetTokens;
   const outputBudget = contextPlan.outputBudgetTokens;
   const modelMetadata = {
-    engine: "syntra-native",
-    name: "SYNTRA native Transformer",
-    checkpoint: String(modelStatus.checkpoint || "").slice(0, 512),
+    engine: String(modelStatus.backend || "syntra-native"),
+    name: String(modelStatus.model_name || "SYNTRA native Transformer"),
+    ...(modelStatus.provider ? { provider: String(modelStatus.provider) } : {}),
+    ...(modelStatus.backend === "openai-compatible" ? { modelId: String(modelStatus.model_name || "") } : {}),
+    ...(modelStatus.checkpoint ? { checkpoint: String(modelStatus.checkpoint).slice(0, 512) } : {}),
     contextWindowTokens: contextWindow,
     contextBudgetTokens: contextBudget,
     outputBudgetTokens: outputBudget,
     contextSafetyMarginTokens: contextPlan.safetyMarginTokens,
     contextBudgetProfile: contextPlan.budgetProfile,
-    tokenizerIsExact: contextPlan.exactTokenCount
+    tokenizerIsExact: contextPlan.exactTokenCount,
+    contextCountIsEstimate: modelStatus.context_count_is_estimate === true
   };
   await emitProgress({ phase: "tool-execution", iteration: 0, message: "Tool: workspace.inspect — collecting project metadata and file inventory." });
   const inspectionRun = await executeWorkspaceTool({

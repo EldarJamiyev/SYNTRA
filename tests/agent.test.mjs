@@ -1227,7 +1227,7 @@ test("agent compresses a large multi-file prompt and retries once after a 256-to
     "lowest-priority later file chunks should be removed before task instructions");
 });
 
-test("model context budgets use only SYNTRA's saved byte-BPE tokenizer and native context limit", () => {
+test("model context budgets distinguish the native architecture from the explicit hybrid context", () => {
   const native = deriveModelContextBudget({
     backend: "PyTorch",
     tokenizer: "byte-BPE",
@@ -1249,6 +1249,26 @@ test("model context budgets use only SYNTRA's saved byte-BPE tokenizer and nativ
   });
   assert.equal(unknownTokenizer.exactTokenCount, false);
   assert.equal(unknownTokenizer.budgetProfile, "conservative-estimate");
+
+  const hybrid = deriveModelContextBudget({
+    backend: "openai-compatible",
+    tokenizer: "provider-utf8-byte-budget",
+    context_count_is_estimate: true,
+    context_tokens: 65_536,
+    max_output_tokens: 4096
+  });
+  assert.equal(hybrid.contextWindowTokens, 65_536,
+    "hybrid context must preserve the explicitly configured provider window rather than inherit the native 16K ceiling");
+  assert.equal(hybrid.exactTokenCount, false);
+  assert.equal(hybrid.budgetProfile, "conservative-estimate");
+  assert.ok(hybrid.outputBudgetTokens <= 4096);
+  assert.ok(hybrid.contextBudgetTokens + hybrid.outputBudgetTokens + hybrid.safetyMarginTokens + 1 <= 65_536);
+  const maxHybrid = deriveModelContextBudget({
+    backend: "openai-compatible",
+    context_tokens: 2_000_000
+  });
+  assert.equal(maxHybrid.contextWindowTokens, 1_000_000,
+    "hybrid context remains within the provider adapter's explicit safety limit");
 
   const oversized = deriveModelContextBudget({
     tokenizer: "byte-BPE",

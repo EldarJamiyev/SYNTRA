@@ -103,3 +103,66 @@ test("benchmark runner checks failing baseline in isolated copy and writes a rep
     assert.equal(await fs.readFile(path.join(sourceDir, "target.mjs"), "utf8"), original);
   } finally { await fs.rm(parent, { recursive: true, force: true }); }
 });
+
+test("benchmark runner accepts only a verified hybrid model and labels its measurements", async () => {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-hybrid-benchmark-test-"));
+  const suiteDir = path.join(parent, "suite");
+  const fixtureDir = path.join(suiteDir, "fixture");
+  const sourceDir = path.join(fixtureDir, "src");
+  const testDir = path.join(fixtureDir, "checks");
+  const original = "export const value = 1;\n";
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.mkdir(testDir, { recursive: true });
+  await fs.writeFile(path.join(sourceDir, "target.mjs"), original);
+  await fs.writeFile(path.join(testDir, "baseline.test.mjs"), [
+    'import assert from "node:assert/strict";', 'assert.equal(1, 2);'
+  ].join("\n"));
+  const suite = { version: "1.0.0", tasks: [{
+    id: "fixture-task", category: "test", title: "Hybrid fixture test",
+    fixture: "fixture", baselineCheck: "node-script", testEntry: "checks/baseline.test.mjs", expectedChangedPaths: ["src/target.mjs"],
+    goal: "Implement the expected source behavior without changing tests.", maxIterations: 1, maxSlices: 1
+  }] };
+  try {
+    const { report } = await runBenchmarkSuite({
+      suite, suiteDir,
+      modelRequest: async (method, route) => {
+        assert.equal(method, "GET");
+        assert.equal(route, "/model/status");
+        return {
+          backend: "openai-compatible",
+          provider: "openai-compatible",
+          model_name: "actual-configured-model-id",
+          model_available: true,
+          checkpoint_exists: false,
+          context_tokens: 8192,
+          tokenizer: "provider-utf8-byte-budget",
+          context_count_is_estimate: true
+        };
+      },
+      agentRunner: async options => {
+        await options.onProgress({
+          phase: "plan-created",
+          model: {
+            engine: "openai-compatible",
+            name: "actual-configured-model-id",
+            modelId: "actual-configured-model-id",
+            contextWindowTokens: 8192,
+            contextCountIsEstimate: true
+          }
+        });
+        return {
+          status: "verified_proposals_ready", changedFiles: [{ path: "src/target.mjs" }],
+          verification: { passed: true, status: "passed" }, attempts: [{ promptTokens: 128, outputTokens: 24 }]
+        };
+      }
+    });
+    assert.equal(report.model.engine, "openai-compatible");
+    assert.equal(report.model.name, "actual-configured-model-id");
+    assert.equal(report.model.modelId, "actual-configured-model-id");
+    assert.equal(report.model.contextCountIsEstimate, true);
+    assert.equal(report.summary.completedTaskCount, 1);
+    assert.match(report.measurementNotes[0], /UTF-8 byte counts as an estimate/);
+  } finally {
+    await fs.rm(parent, { recursive: true, force: true });
+  }
+});

@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible SYNTRA defect.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Report a real issue. Remove API keys, source code, private paths, and customer data from all logs."
+  - type: input
+    id: version
+    attributes:
+      label: SYNTRA revision
+      description: Commit SHA or release tag.
+      placeholder: Commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Inference mode
+      options:
+        - Native PyTorch
+        - OpenAI-compatible hybrid
+        - Not applicable
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: OS and runtime versions
+      description: Include Node.js and Python versions where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Exact actions and sanitized command lines.
+      placeholder: "1. ...\n2. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized evidence
+      description: Include HTTP status, error class, or test failure. Never include secrets or private source.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Relevant tests already run
+      description: Commands and pass/fail outcome. Separate app tests from model-quality benchmarks.
+    validations:
+      required: false

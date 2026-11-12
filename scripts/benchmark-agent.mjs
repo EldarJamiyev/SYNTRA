@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 import path from "node:path";
+import {
+  estimateHybridTokenCount,
+  generateHybridCompletion,
+  getHybridModelStatus,
+  isHybridModelEnabled
+} from "../local/model-provider.mjs";
 import { DEFAULT_BENCHMARK_SUITE, loadBenchmarkSuite, runBenchmarkSuite } from "../local/benchmark.mjs";
 
 function parseArgs(argv) {
@@ -37,6 +43,18 @@ function help() {
 }
 
 function createModelRequest() {
+  if (isHybridModelEnabled()) {
+    return async (method, route, body, timeoutMs, options = {}) => {
+      if (method === "GET" && route === "/model/status") return getHybridModelStatus({ signal: options.signal });
+      if (method === "POST" && route === "/model/tokenize") {
+        return estimateHybridTokenCount(typeof body?.text === "string" ? body.text : "");
+      }
+      if (method === "POST" && route === "/model/generate") {
+        return generateHybridCompletion(body, { signal: options.signal, timeoutMs: timeoutMs || 300000 });
+      }
+      throw new Error("Benchmark operation " + route + " is unavailable in hybrid mode.");
+    };
+  }
   const configuredPort = Number(process.env.SYNTRA_AI_PORT || 3002);
   if (!Number.isInteger(configuredPort) || configuredPort < 1024 || configuredPort > 65535) {
     throw new Error("SYNTRA_AI_PORT must be an integer between 1024 and 65535.");
