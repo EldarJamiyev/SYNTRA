@@ -29,3 +29,14 @@ jobs:
         run: npm ci --ignore-scripts --no-audit
       - name: Fail on high or critical npm advisories
         run: npm audit --audit-level=high
+  python-audit:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Audit the exact hashed CPU-only Python dependency lock
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: requirements.lock.txt
+          require-hashes: true
+          summary: true
