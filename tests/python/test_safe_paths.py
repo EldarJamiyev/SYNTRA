@@ -115,7 +115,14 @@ class ApprovedCorpusPathTests(unittest.TestCase):
                 resolve_curriculum_output_path(nested_output, workspace),
                 nested_output,
             )
+            self.assertFalse(nested.exists(), "Path resolution must not create directories.")
+            from syntra_ai.curriculum import _write_jsonl_atomically
+            _write_jsonl_atomically(
+                nested_output,
+                [{"prompt": "Explain the guard", "completion": "Reject unapproved paths."}],
+            )
             self.assertTrue(nested.is_dir())
+            self.assertTrue(nested_output.is_file())
             with self.assertRaisesRegex(ValueError, "inside the active workspace"):
                 resolve_curriculum_output_path(outside / "escape.jsonl", workspace)
             with self.assertRaisesRegex(ValueError, "workspace root must be inside an approved"):
