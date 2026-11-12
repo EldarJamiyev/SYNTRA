@@ -953,9 +953,10 @@ function makeReadOnlyToolPlanPrompt(goal, ranked, {
   maxRounds = MAX_MODEL_RETRIEVAL_ROUNDS,
   remainingCalls = MAX_MODEL_RETRIEVAL_CALLS,
   priorContext = "",
-  previousCalls = []
+  previousCalls = [],
+  availableLimit = 40
 } = {}) {
-  const available = ranked.slice(0, 40).map(item => ({
+  const available = ranked.slice(0, Math.max(1, Math.min(40, availableLimit))).map(item => ({
     path: item.path, language: item.language, size: item.size, score: Number(item.score.toFixed(2))
   }));
   return [
@@ -1005,50 +1006,54 @@ async function runModelSelectedReadOnlyTools({
     throwIfAborted(signal);
     const remainingCalls = MAX_MODEL_RETRIEVAL_CALLS - selectedCalls.length;
     const accumulatedEvidence = fragments.join("\n");
-    // Retrieval evidence is optional context; task instructions, available tool
-    // contracts and previous-call identities are not. Recount the prompt while
-    // progressively clipping only the oldest evidence until it fits the actual
-    // selected checkpoint budget. This allows multi-round discovery on small
-    // local models without silently exceeding their trained context window.
-    const evidenceLimits = [
-      MAX_MODEL_RETRIEVAL_CONTEXT_CHARS,
-      6000,
-      3000,
-      1200,
-      0
+    // The current request and read-only tool contract stay intact. First discard
+    // the oldest optional evidence; only then reduce the ranked path catalogue.
+    // Every candidate prompt is counted by the actual selected model tokenizer,
+    // and the final prompt must fit the complete derived input budget.
+    const compactionProfiles = [
+      { evidenceChars: MAX_MODEL_RETRIEVAL_CONTEXT_CHARS, availableFiles: 40 },
+      { evidenceChars: 6000, availableFiles: 32 },
+      { evidenceChars: 3000, availableFiles: 24 },
+      { evidenceChars: 1200, availableFiles: 16 },
+      { evidenceChars: 600, availableFiles: 8 },
+      { evidenceChars: 0, availableFiles: 8 },
+      { evidenceChars: 0, availableFiles: 4 }
     ];
     let prompt = "";
     let tokenInfo = null;
     let retainedEvidenceChars = accumulatedEvidence.length;
-    for (const evidenceLimit of evidenceLimits) {
-      const priorContext = evidenceLimit > 0
-        ? accumulatedEvidence.slice(-evidenceLimit)
+    let retainedAvailableFiles = 40;
+    for (const profile of compactionProfiles) {
+      const priorContext = profile.evidenceChars > 0
+        ? accumulatedEvidence.slice(-profile.evidenceChars)
         : "";
       prompt = makeReadOnlyToolPlanPrompt(goal, ranked, {
         round,
         maxRounds: MAX_MODEL_RETRIEVAL_ROUNDS,
         remainingCalls,
         priorContext,
-        previousCalls: selectedCalls
+        previousCalls: selectedCalls,
+        availableLimit: profile.availableFiles
       });
       tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
       retainedEvidenceChars = priorContext.length;
-      if (Number(tokenInfo.token_count) <= Math.min(contextBudget, 2400)) break;
+      retainedAvailableFiles = profile.availableFiles;
+      if (Number(tokenInfo.token_count) <= contextBudget) break;
     }
-    if (!tokenInfo || Number(tokenInfo.token_count) > Math.min(contextBudget, 2400)) {
+    if (!tokenInfo || Number(tokenInfo.token_count) > contextBudget) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
         status: "skipped_context_budget",
-        detail: "The task and bounded read-only tool contract did not fit the selected model context after optional retrieval evidence was compacted; prior findings were retained."
+        detail: "The task and bounded read-only tool contract did not fit the selected model context after optional retrieval evidence and file catalogue compaction; prior findings were retained."
       });
       break;
     }
-    if (retainedEvidenceChars < accumulatedEvidence.length) {
+    if (retainedEvidenceChars < accumulatedEvidence.length || retainedAvailableFiles < 40) {
       observations.push({
         kind: "model-readonly-tool-plan",
         stage: "context-retrieval-round-" + round,
         status: "context_compacted",
-        detail: "Compacted older optional retrieval evidence from " + accumulatedEvidence.length + " to " + retainedEvidenceChars + " characters to fit the selected model context."
+        detail: "Compacted optional retrieval context to " + retainedEvidenceChars + " recent evidence characters and " + retainedAvailableFiles + " ranked file paths to fit the selected model's " + contextBudget + "-token input budget."
       });
     }
 
