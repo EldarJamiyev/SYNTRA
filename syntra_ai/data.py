@@ -104,12 +104,26 @@ def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, byt
                 return None
             raw = handle.read(max_file_bytes + 1)
             after = os.fstat(handle.fileno())
+            # The descriptor checks above prove that the opened inode did not
+            # mutate while reading. They do not prove that the selected path
+            # still names that inode: a concurrent rename/replace can leave the
+            # descriptor stable while changing the file associated with this
+            # corpus path and its provenance digest.
+            current = os.stat(resolved, follow_symlinks=False)
+            current_path = os.path.realpath(resolved, strict=True)
             if (
                 len(raw) > max_file_bytes
+                or os.path.normcase(os.path.normpath(current_path))
+                != os.path.normcase(os.path.normpath(resolved))
+                or not stat.S_ISREG(current.st_mode)
                 or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
                 or opened.st_size != after.st_size
                 or opened.st_mtime_ns != after.st_mtime_ns
                 or opened.st_ctime_ns != after.st_ctime_ns
+                or opened.st_size != current.st_size
+                or opened.st_mtime_ns != current.st_mtime_ns
+                or opened.st_ctime_ns != current.st_ctime_ns
             ):
                 return None
         if len(raw) > max_file_bytes:
