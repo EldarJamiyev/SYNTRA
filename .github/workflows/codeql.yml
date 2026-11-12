@@ -33,6 +33,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: codeql-sarif-${{ matrix.language }}
-          path: results/*.sarif
-          if-no-files-found: warn
+          path: ../results/*.sarif
+          if-no-files-found: error
           retention-days: 14
