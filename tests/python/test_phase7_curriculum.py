@@ -573,25 +573,52 @@ class PolyglotCurriculumTests(unittest.TestCase):
         self.assertEqual(args.languages, ["javascript", "typescript", "go", "rust"])
         self.assertEqual(args.max_examples, 12)
 
-    def test_cli_curriculum_metadata_redacts_absolute_workspace_paths(self):
-        from syntra_ai.cli import _redact_curriculum_paths
+    def test_cli_curriculum_summary_excludes_paths_and_preserves_real_metrics(self):
+        from syntra_ai.cli import _curriculum_cli_summary
 
         private_root = "/srv/tenants/customer-a/private-source"
-        output = _redact_curriculum_paths({
+        output = _curriculum_cli_summary({
             "repository": {
                 "dataset_path": "/srv/tenants/customer-a/data/curriculum.jsonl",
                 "workspace_root": private_root,
                 "workspace_roots": [private_root, "/mnt/secure/second-corpus"],
-                "example_count": 12,
+                "source_files": 18,
+                "module_count": 12,
+                "represented_source_files": 10,
+                "source_tokens": 4096,
+                "symbol_count": 33,
+                "patch_candidate_count": 4,
+                "example_count": 21,
+                "warnings": ["A real warning"],
+            },
+            "multifile": {
+                "dataset_path": "/mnt/secure/second-corpus/private-reasoning.jsonl",
+                "workspace_roots": ["/mnt/secure/second-corpus"],
+                "source_files": 6,
+                "candidate_relationships": 7,
+                "paired_candidates": 2,
+                "example_count": 2,
+                "warnings": [],
+                "audit": {
+                    "valid": True,
+                    "split_available": True,
+                    "example_count": 2,
+                    "context_window_count": 3,
+                    "training_examples": 2,
+                    "validation_examples": 1,
+                    "warnings": [],
+                },
             },
         })
         encoded = json.dumps(output)
-        for private_fragment in ("/srv/tenants", "customer-a", "/mnt/secure", "private-source"):
+        for private_fragment in ("/srv/tenants", "customer-a", "/mnt/secure", "private-source", "private-reasoning"):
             self.assertNotIn(private_fragment, encoded)
-        self.assertEqual(output["repository"]["dataset_path"], "generated-curriculum.jsonl")
-        self.assertEqual(output["repository"]["workspace_root"], "approved-local-root-1")
-        self.assertEqual(output["repository"]["workspace_roots"], ["approved-local-root-1", "approved-local-root-2"])
-        self.assertEqual(output["repository"]["example_count"], 12)
+        self.assertEqual(output["repository"]["example_count"], 21)
+        self.assertEqual(output["repository"]["source_files"], 18)
+        self.assertEqual(output["repository"]["warnings_count"], 1)
+        self.assertTrue(output["repository"]["output_written"])
+        self.assertEqual(output["multifile"]["audit"]["training_examples"], 2)
+        self.assertFalse(any("workspace_root" in item or "dataset_path" in item for item in output.values()))
 
 if __name__ == "__main__":
     unittest.main()

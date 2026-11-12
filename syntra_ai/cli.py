@@ -16,24 +16,50 @@ from .reasoning_curriculum import synthesize_multifile_reasoning_curriculum
 from .training import train
 
 
-def _redact_curriculum_paths(value: Any, key: str = "") -> Any:
-    """Remove machine-specific filesystem paths from CLI output."""
-    if key == "workspace_roots":
-        if not isinstance(value, (list, tuple)):
-            return ["approved-local-root-1"]
-        return [f"approved-local-root-{index + 1}" for index, _ in enumerate(value)]
-    if key == "workspace_root":
-        return "approved-local-root-1"
-    if key == "dataset_path":
-        return None if value is None else "generated-curriculum.jsonl"
-    if isinstance(value, dict):
-        return {name: _redact_curriculum_paths(item, name) for name, item in value.items()}
-    if isinstance(value, list):
-        return [_redact_curriculum_paths(item) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_curriculum_paths(item) for item in value]
-    return value
+def _safe_cli_count(value: Any) -> int | None:
+    """Accept only bounded, non-negative integer metrics for CLI summaries."""
+    if type(value) is int and 0 <= value <= 10_000_000:
+        return value
+    return None
 
+
+def _curriculum_cli_summary(results: dict[str, Any]) -> dict[str, Any]:
+    """Project curriculum results onto an allowlist; never serialize raw path-bearing objects."""
+    summary: dict[str, Any] = {}
+    for stage in ("repository", "multifile"):
+        result = results.get(stage)
+        if not isinstance(result, dict):
+            continue
+        example_count = _safe_cli_count(result.get("example_count"))
+        warning_values = result.get("warnings")
+        stage_summary: dict[str, Any] = {
+            "output_written": example_count is not None and example_count > 0,
+            "output_file": "generated-curriculum.jsonl" if example_count is not None and example_count > 0 else None,
+            "example_count": example_count,
+            "source_files": _safe_cli_count(result.get("source_files")),
+            "module_count": _safe_cli_count(result.get("module_count")),
+            "represented_source_files": _safe_cli_count(result.get("represented_source_files")),
+            "source_tokens": _safe_cli_count(result.get("source_tokens")),
+            "symbol_count": _safe_cli_count(result.get("symbol_count")),
+            "patch_candidate_count": _safe_cli_count(result.get("patch_candidate_count")),
+            "candidate_relationships": _safe_cli_count(result.get("candidate_relationships")),
+            "paired_candidates": _safe_cli_count(result.get("paired_candidates")),
+            "warnings_count": len(warning_values) if isinstance(warning_values, (list, tuple)) else 0,
+        }
+        audit = result.get("audit")
+        if isinstance(audit, dict):
+            audit_warnings = audit.get("warnings")
+            stage_summary["audit"] = {
+                "valid": audit.get("valid") is True,
+                "split_available": audit.get("split_available") is True,
+                "example_count": _safe_cli_count(audit.get("example_count")),
+                "context_window_count": _safe_cli_count(audit.get("context_window_count")),
+                "training_examples": _safe_cli_count(audit.get("training_examples")),
+                "validation_examples": _safe_cli_count(audit.get("validation_examples")),
+                "warnings_count": len(audit_warnings) if isinstance(audit_warnings, (list, tuple)) else 0,
+            }
+        summary[stage] = stage_summary
+    return summary
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="syntra", description="SYNTRA local neural coding-model tools.")
@@ -151,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
                 languages=args.languages,
                 exclude_paths=args.exclude,
             )
-        print(json.dumps(_redact_curriculum_paths(results), ensure_ascii=False, indent=2))
+        print(json.dumps(_curriculum_cli_summary(results), ensure_ascii=False, indent=2))
         return 0
     if args.command == "inspect-data":
         corpus = load_corpus([args.root], max_tokens=args.max_tokens)
