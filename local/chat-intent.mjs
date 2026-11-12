@@ -1,3 +1,5 @@
+import { normalizeIntentText } from "./intent-language.mjs";
+
 const ACTION = /^(?:hey[, ]*)?(?:please\s+)?(?:(?:can|could|would|will) you(?:\s+please)?\s+)?(?:please\s+)?(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit|patch)\b/i;
 const ACTION_ANYWHERE = /\b(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit|patch)\b/i;
 
@@ -6,11 +8,31 @@ const EXPLICIT_REPO_CONTEXT = /\b(?:this|the|current|my)\s+(?:codebase|repositor
 const CONVERSATIONAL_OUTPUT = /^(?:hey[, ]*)?(?:please\s+)?(?:(?:can|could|would) you(?:\s+please)?\s+)?(?:please\s+)?(?:write|create|draft|compose|prepare|generate)\s+(?:(?:me|us)\s+)?(?:an?\s+)?(?:email|letter|poem|story|song|essay|article|blog post|social post|text message|message|proposal|job application|cover letter|resume|résumé|cv|joke|speech|recipe)\b/i;
 const SOURCE_PATH_PATTERN = /\b(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.(?:m?js|cjs|tsx?|jsx?|py|go|rs|json|css|html|md|ya?ml|toml|sql|sh)\b|\b[A-Za-z0-9_-]+\.(?:mjs|cjs|tsx|jsx|py|go|rs)\b/g;
 const WORKSPACE_QUERY_SIGNAL = /\b(?:where\s+is|how\s+does|what\s+(?:does|files?|modules?|functions?|classes?)|explain\s+(?:how|the)|trace|find\s+(?:where|all)|in\s+(?:this|the)\s+(?:repo|repository|workspace|codebase|project)|architecture\s+of)\b/i;
+const TARGET_FIRST_COMMAND = /^(?:(?:the|a|an|my|this|that)\s+)?(?:app|application|website|web\s+(?:app|application|site)|site|frontend|front[- ]end|backend|back[- ]end|ui|ux|interface|component|module|function|feature|bug|api|endpoint|route|server|client|script|package|database|query|schema|login|button|form|chat|code|source|repository|repo|codebase|project|dark mode|theme)\b[\s\S]{0,80}\b(?:implement|build|fix|debug|refactor|add|create|update|change|repair|write|remove|optimize|migrate|test|extend|integrate|wire|replace|make|improve|enhance|upgrade|harden|simplify|modernize|redesign|modify|edit|patch)\s*[.!?]*$/i;
 // Keep identifier grammars deterministic: repeated segments start with a
 // delimiter that cannot be consumed by the preceding segment.
 const BACKTICK_IDENTIFIER_PATTERN = /`([A-Za-z_$][A-Za-z0-9_$]{2,63})`/g;
-const CAMEL_IDENTIFIER_PATTERN = /\b[A-Za-z_$][a-z0-9]*(?:[A-Z][a-z0-9]*)+\b/g;
+const CAMEL_IDENTIFIER_PATTERN = /\b[A-Za-z_$][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b/g;
 const SNAKE_IDENTIFIER_PATTERN = /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g;
+
+const CODE_FOLLOW_UP = /^(?:(?:and|also|now|then)\s+)?(?:(?:please|pls|plz)\s+)?(?:continue(?:\s+from there)?|keep going|go on|carry on|proceed(?:\s+with (?:it|the task|the changes|the implementation))?|do (?:it|that)|finish(?: it| the task| the implementation| the changes)?|complete(?: it| the task| the implementation| the changes)?|resume(?: it)?|pick up where you left off|keep working|make (?:it|that) (?:more\s+)?(?:robust|secure|fast(?:er)?|performant|readable|clean(?:er)?|resilient|accessible|responsive|reliable|maintainable|efficient)|fix it|improve it|refine it|harden it|optimize it|update it|change it|add (?:the )?(?:tests?|edge cases|type checks)|include (?:tests?|edge cases)|handle (?:it|that|edge cases)|cover (?:it|those cases|edge cases)|run (?:the )?tests?|verify it|check it)(?:\s+(?:please|now|too))?[.!?]*$/i;
+const WORKSPACE_FOLLOW_UP = /^(?:(?:and|also|then)\s+)?(?:(?:can|could|would) you\s+)?(?:explain (?:that|this|it)(?:\s+(?:again|further|in more detail))?|elaborate(?:\s+on)?(?:\s+(?:that|this|it))?(?:\s+further)?|tell me more(?:\s+about\s+(?:that|this|it))?|show me more(?:\s+about\s+(?:that|this|it))?|where (?:is|does) (?:that|this|it)\b.{0,80}|how (?:does|is|was) (?:that|this|it)\b.{0,80}|what about (?:that|this|it)\b.{0,80}|go deeper(?:\s+on\s+(?:that|this|it))?)(?:[.!?]+)?$/i;
+
+function latestPriorUserEntry(history, currentMessage) {
+  if (!Array.isArray(history)) return null;
+  const current = currentMessage.trim();
+  const start = Math.max(0, history.length - 24);
+  for (let index = history.length - 1; index >= start; index -= 1) {
+    const item = history[index];
+    if (!item || item.role !== "user" || typeof item.content !== "string") continue;
+    const candidate = item.content.trim();
+    if (!candidate || candidate === current) continue;
+    if (candidate.length > 12000) return null;
+    return { index, content: candidate };
+  }
+  return null;
+}
+
 
 export function extractTargetPaths(message) {
   if (typeof message !== "string" || !message.trim()) return [];
@@ -53,16 +75,21 @@ export function extractTargetSymbols(message) {
  */
 export function isCodingTask(message) {
   if (typeof message !== "string") return false;
-  const text = message.trim();
+  const text = normalizeIntentText(message);
   if (!text || text.length > 12000) return false;
 
   if (CONVERSATIONAL_OUTPUT.test(text)) return false;
   if (EXPLICIT_REPO_CONTEXT.test(text) && ACTION_ANYWHERE.test(text)) return true;
 
-  const paths = extractTargetPaths(text);
+  const paths = extractTargetPaths(message);
   if (paths.length > 0 && ACTION_ANYWHERE.test(text) && !/^(?:what|how|why|where|explain|describe)\b/i.test(text)) {
     return true;
   }
+
+  if (TARGET_FIRST_COMMAND.test(text)) return true;
+
+  const requestCue = /^(?:please\b|(?:can|could|would)\s+you\b|i\s+(?:want|need)\s+(?:you\s+)?to\b)/i;
+  if (requestCue.test(text) && ACTION_ANYWHERE.test(text) && SOFTWARE_TARGET.test(text)) return true;
 
   const command = text.match(ACTION);
   if (!command) {
@@ -84,16 +111,17 @@ export function classifyChatIntent(message, history = []) {
   if (typeof message !== "string") {
     return { kind: "conversation", confidence: 1, signals: ["non-string"], targetPaths: [], targetSymbols: [], searchQuery: "" };
   }
-  const text = message.trim();
-  if (!text || text.length > 12000) {
+  const originalText = message.trim();
+  const text = normalizeIntentText(originalText);
+  if (!text || originalText.length > 12000) {
     return { kind: "conversation", confidence: 1, signals: ["empty-or-overlong"], targetPaths: [], targetSymbols: [], searchQuery: "" };
   }
 
-  const targetPaths = extractTargetPaths(text);
-  const targetSymbols = extractTargetSymbols(text);
+  const targetPaths = extractTargetPaths(originalText);
+  const targetSymbols = extractTargetSymbols(originalText);
   const signals = [];
 
-  if (isCodingTask(text)) {
+  if (isCodingTask(originalText)) {
     signals.push("action-verb", "software-target");
     if (targetPaths.length) signals.push("explicit-path");
     if (targetSymbols.length) signals.push("symbol-reference");
@@ -103,8 +131,48 @@ export function classifyChatIntent(message, history = []) {
       signals,
       targetPaths,
       targetSymbols,
-      searchQuery: (targetPaths[0] || targetSymbols[0] || text.slice(0, 120)).trim()
+      searchQuery: (targetPaths[0] || targetSymbols[0] || originalText.slice(0, 120)).trim()
     };
+  }
+
+  const previousEntry = latestPriorUserEntry(history, originalText);
+  if (previousEntry) {
+    // Classify the preceding user turn against only the history that existed
+    // before it. This lets a chain of concise follow-ups inherit the original
+    // task without allowing an unrelated later question to revive stale intent.
+    const previousIntent = classifyChatIntent(previousEntry.content, history.slice(0, previousEntry.index));
+    const inheritedMessages = previousIntent.contextualFollowUp === true
+      && Array.isArray(previousIntent.contextMessages)
+      ? [...previousIntent.contextMessages, previousEntry.content]
+      : [previousEntry.content];
+    const rootMessage = previousIntent.contextMessage || previousEntry.content;
+
+    if (previousIntent.kind === "coding_task" && CODE_FOLLOW_UP.test(text)) {
+      return {
+        kind: "coding_task",
+        confidence: Math.min(0.9, Math.max(0.72, previousIntent.confidence - 0.04)),
+        signals: ["contextual-follow-up", "prior-coding-task", "continuation-cue"],
+        targetPaths: previousIntent.targetPaths,
+        targetSymbols: previousIntent.targetSymbols,
+        searchQuery: previousIntent.searchQuery,
+        contextualFollowUp: true,
+        contextMessage: rootMessage,
+        contextMessages: inheritedMessages.slice(-8)
+      };
+    }
+    if (previousIntent.kind === "workspace_query" && WORKSPACE_FOLLOW_UP.test(text)) {
+      return {
+        kind: "workspace_query",
+        confidence: Math.min(0.9, previousIntent.confidence),
+        signals: ["contextual-follow-up", "prior-workspace-query", "reference-resolution"],
+        targetPaths: previousIntent.targetPaths,
+        targetSymbols: previousIntent.targetSymbols,
+        searchQuery: previousIntent.searchQuery,
+        contextualFollowUp: true,
+        contextMessage: rootMessage,
+        contextMessages: inheritedMessages.slice(-8)
+      };
+    }
   }
 
   if (!CONVERSATIONAL_OUTPUT.test(text)) {
@@ -127,7 +195,7 @@ export function classifyChatIntent(message, history = []) {
         signals,
         targetPaths,
         targetSymbols,
-        searchQuery: (targetSymbols[0] || targetPaths[0] || fallbackTerms || text.slice(0, 80)).slice(0, 120)
+        searchQuery: (targetSymbols[0] || targetPaths[0] || fallbackTerms || originalText.slice(0, 80)).slice(0, 120)
       };
     }
   }
@@ -142,3 +210,33 @@ export function classifyChatIntent(message, history = []) {
   };
 }
 
+
+
+/**
+ * Preserve the original task and every bounded follow-up instruction.
+ * The caller still performs the normal agent verification and approval workflow.
+ */
+export function buildFollowUpTaskGoal(message, intent) {
+  if (
+    typeof message !== "string"
+    || intent?.kind !== "coding_task"
+    || intent.contextualFollowUp !== true
+    || typeof intent.contextMessage !== "string"
+    || !intent.contextMessage.trim()
+  ) return message;
+
+  const priorMessages = Array.isArray(intent.contextMessages)
+    ? intent.contextMessages.filter(item => typeof item === "string" && item.trim()).slice(-8)
+    : [intent.contextMessage];
+  const original = intent.contextMessage.trim();
+  const followUps = priorMessages.filter(item => item.trim() !== original).slice(-6);
+  return [
+    "CONTINUE THE EXISTING USER-REQUESTED CODING TASK. Inspect the current workspace state before changing files.",
+    "The original request and prior follow-up instructions remain binding. Treat the latest follow-up as an addition, not a replacement. Preserve all constraints and verify the cumulative result.",
+    "ORIGINAL USER REQUEST:",
+    original,
+    ...followUps.map((item, index) => "PRIOR FOLLOW-UP " + (index + 1) + ":\n" + item.trim().slice(0, 1200)),
+    "LATEST USER FOLLOW-UP:",
+    message
+  ].join("\n\n");
+}

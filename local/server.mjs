@@ -5,7 +5,8 @@ import crypto from "node:crypto";
 import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
-import { classifyChatIntent, isCodingTask } from "./chat-intent.mjs";
+import { buildFollowUpTaskGoal, classifyChatIntent, isCodingTask } from "./chat-intent.mjs";
+import { buildChatPromptContext } from "./chat-context.mjs";
 import { classifyNetworkDiagnostic, formatNetworkDiagnostic, runNetworkDiagnostic } from "./network-diagnostics.mjs";
 import {
   createAgentRun,
@@ -634,6 +635,9 @@ async function runChatTurn(jobId, message, history, signal) {
     }
 
     const intent = classifyChatIntent(message, history);
+    if (!resumeRecord && intent.contextualFollowUp === true) {
+      taskGoal = buildFollowUpTaskGoal(message, intent);
+    }
 
     if (intent.kind === "coding_task" || isCodingTask(message) || resumeRecord) {
       const saved = await listPendingProposals(activeWorkspace);
@@ -801,39 +805,34 @@ async function runChatTurn(jobId, message, history, signal) {
       }
     }
 
-    const recentHistory = Array.isArray(history)
-      ? history.filter(item => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
-          .slice(-8).map(item => ({ role: item.role, content: item.content.slice(-2500) }))
-      : [];
-    let userMessage = message.slice(-10000);
-    let prompt = "";
-    let tokenInfo = null;
     const contextTokens = Number(modelStatus.context_tokens || modelStatus.config?.seq_len || 1024);
-    const contextLimit = Math.max(64, contextTokens - 64);
-    while (true) {
-      prompt = [
-        "SYNTRA ASSISTANT",
-        "Answer the user's latest message directly and clearly. Do not claim facts or tools you do not have.",
-        ...(workspaceGrounding ? [workspaceGrounding] : []),
-        ...recentHistory.map(item => (item.role === "user" ? "USER: " : "ASSISTANT: ") + item.content),
-        "USER: " + userMessage,
-        "ASSISTANT:"
-      ].join("\n\n");
-      tokenInfo = await aiRequest("POST", "/model/tokenize", { text: prompt }, 30000, { signal });
-      if (tokenInfo.token_count <= contextLimit) break;
-      if (workspaceGrounding) workspaceGrounding = "";
-      else if (recentHistory.length) recentHistory.shift();
-      else if (userMessage.length > 1000) userMessage = userMessage.slice(-Math.max(1000, Math.floor(userMessage.length * 0.65)));
-      else break;
-    }
-    if (tokenInfo.token_count >= contextTokens) {
-      finishChat(jobId, "Your message exceeds the trained model's context window. Please split it into a shorter message.");
+    const promptContext = await buildChatPromptContext({
+      message,
+      history,
+      workspaceGrounding,
+      contextTokens,
+      tokenize: text => aiRequest("POST", "/model/tokenize", { text }, 30000, { signal })
+    });
+    if (!promptContext.fits) {
+      finishChat(jobId,
+        "Your complete request prompt requires " + promptContext.tokenCount.toLocaleString()
+        + " input tokens, but this model can accept at most "
+        + promptContext.inputBudgetTokens.toLocaleString()
+        + " tokens while reserving space for a response. I did not truncate or rewrite your message. Split it into shorter messages and send the missing context in follow-up turns.",
+        {
+          contextTokensUsed: promptContext.tokenCount,
+          contextTokenLimit: promptContext.inputBudgetTokens,
+          contextHistoryMessagesUsed: promptContext.historyMessagesUsed,
+          contextHistoryMessagesDropped: promptContext.historyMessagesDropped
+        });
       return;
     }
+    const prompt = promptContext.prompt;
+    const tokenInfo = { token_count: promptContext.tokenCount };
     updateChat(jobId, { phase: "generating", message: "Generating a local response" });
     const generation = await aiRequest("POST", "/model/generate", {
       prompt,
-      max_new_tokens: Math.min(512, Math.max(16, contextTokens - tokenInfo.token_count - 1)),
+      max_new_tokens: Math.min(512, Math.max(1, contextTokens - tokenInfo.token_count - 1)),
       temperature: 0.7,
       top_k: Math.min(40, Number(modelStatus.tokenizer_vocab_size || modelStatus.config?.vocab_size || 1024)),
       device: "auto"
@@ -848,6 +847,9 @@ async function runChatTurn(jobId, message, history, signal) {
     const reply = String(generation.text || "").trim();
     finishChat(jobId, reply || "The local model returned an empty response. This may happen with an early checkpoint; more training is needed.", {
       contextTokensUsed: tokenInfo.token_count,
+      contextHistoryMessagesUsed: promptContext.historyMessagesUsed,
+      contextHistoryMessagesDropped: promptContext.historyMessagesDropped,
+      workspaceGroundingIncluded: promptContext.workspaceGroundingIncluded,
       trainedSteps: generation.trained_steps,
       ...(chatToolCalls.length ? { toolCalls: chatToolCalls } : {})
     });
