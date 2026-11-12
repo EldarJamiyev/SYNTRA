@@ -719,7 +719,7 @@ def _write_jsonl_atomically(target: Path, records: list[dict[str, str]]) -> None
     filename = target.name
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.jsonl", filename, re.IGNORECASE):
         raise ValueError("Curriculum output filename must be a simple .jsonl filename.")
-    parent = os.path.normcase(os.path.normpath(os.path.realpath(os.fspath(target.parent), strict=True)))
+    parent = os.path.normcase(os.path.normpath(os.path.realpath(os.fspath(target.parent), strict=False)))
     for trusted_root in _approved_roots():
         root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
         root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
