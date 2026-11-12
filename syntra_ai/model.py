@@ -5,6 +5,7 @@ RMSNorm, Rotary Position Embeddings (RoPE), SwiGLU, nucleus (top-p) sampling,
 repetition penalties, and dense hidden-state representation pooling.
 """
 import math
+from functools import wraps
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -13,6 +14,22 @@ from .config import ModelConfig
 
 BOS_ID = 256
 EOS_ID = 257
+
+
+def _preserve_module_modes(method):
+    """Restore every module's exact training flag after temporary inference mode."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        module_modes = tuple((module, module.training) for module in self.modules())
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            # Calling self.train(previous_state) would overwrite intentionally mixed
+            # child-module states. Restore the snapshot one module at a time instead.
+            for module, was_training in module_modes:
+                module.training = was_training
+
+    return wrapped
 
 
 class RMSNorm(nn.Module):
@@ -275,6 +292,7 @@ class SyntraTransformer(nn.Module):
             return logits, loss, presents
         return logits, loss
 
+    @_preserve_module_modes
     @torch.no_grad()
     def embed_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
         """Compute L2-normalized semantic embeddings from pooled final hidden states."""
@@ -286,6 +304,7 @@ class SyntraTransformer(nn.Module):
         combined = 0.7 * mean_pooled + 0.3 * last_token
         return F.normalize(combined.float(), p=2, dim=-1)
 
+    @_preserve_module_modes
     @torch.no_grad()
     def generate(
         self,
@@ -296,21 +315,30 @@ class SyntraTransformer(nn.Module):
         top_p: float = 1.0,
         repetition_penalty: float = 1.0,
     ) -> torch.Tensor:
-        if not 0.0 <= temperature <= 2.0:
-            raise ValueError("temperature must be between 0.0 and 2.0.")
-        if max_new_tokens < 1 or max_new_tokens > 4096:
-            raise ValueError("max_new_tokens must be between 1 and 4096.")
-        if top_k < 1 or top_k > self.config.vocab_size:
-            raise ValueError(f"top_k must be between 1 and {self.config.vocab_size}.")
-        if not 0.0 < top_p <= 1.0:
-            raise ValueError("top_p must be between 0.0 (exclusive) and 1.0.")
-        if not 1.0 <= repetition_penalty <= 2.0:
-            raise ValueError("repetition_penalty must be between 1.0 and 2.0.")
+        if not isinstance(tokens, torch.Tensor) or tokens.dtype != torch.long:
+            raise ValueError("tokens must be a torch.long tensor with shape [batch, sequence].")
+        if tokens.ndim != 2 or tokens.shape[0] < 1 or tokens.shape[1] < 1:
+            raise ValueError("tokens must contain a non-empty batch and a non-empty sequence.")
+        if tokens.device != self.token_embedding.weight.device:
+            raise ValueError("tokens must be on the same device as the model parameters.")
+        if torch.any((tokens < 0) | (tokens >= self.config.vocab_size)):
+            raise ValueError("tokens contains an ID outside the configured vocabulary.")
+        if isinstance(temperature, bool) or not isinstance(temperature, (int, float)) or not math.isfinite(float(temperature)) or not 0.0 <= temperature <= 2.0:
+            raise ValueError("temperature must be a finite number between 0.0 and 2.0.")
+        if type(max_new_tokens) is not int or max_new_tokens < 1 or max_new_tokens > 4096:
+            raise ValueError("max_new_tokens must be an integer between 1 and 4096.")
+        if type(top_k) is not int or top_k < 1 or top_k > self.config.vocab_size:
+            raise ValueError(f"top_k must be an integer between 1 and {self.config.vocab_size}.")
+        if isinstance(top_p, bool) or not isinstance(top_p, (int, float)) or not math.isfinite(float(top_p)) or not 0.0 < top_p <= 1.0:
+            raise ValueError("top_p must be a finite number between 0.0 (exclusive) and 1.0.")
+        if isinstance(repetition_penalty, bool) or not isinstance(repetition_penalty, (int, float)) or not math.isfinite(float(repetition_penalty)) or not 1.0 <= repetition_penalty <= 2.0:
+            raise ValueError("repetition_penalty must be a finite number between 1.0 and 2.0.")
         self.eval()
         output = tokens
         prompt_len = tokens.shape[1]
         context = output[:, -self.config.seq_len:]
         logits, _, past_key_values = self(context, use_cache=True)
+        finished = torch.zeros(output.shape[0], dtype=torch.bool, device=output.device)
         for step in range(max_new_tokens):
             next_logits = logits[:, -1, :].float().clone()
             next_logits[:, BOS_ID] = float("-inf")
@@ -346,8 +374,16 @@ class SyntraTransformer(nn.Module):
                 probabilities = F.softmax(next_logits, dim=-1)
                 next_token = torch.multinomial(probabilities, num_samples=1)
 
+            # A finished row is held at EOS while the remaining batch continues.
+            # This keeps the result rectangular without generating post-EOS content.
+            next_token = torch.where(
+                finished[:, None],
+                torch.full_like(next_token, EOS_ID),
+                next_token,
+            )
+            finished = finished | next_token[:, 0].eq(EOS_ID)
             output = torch.cat((output, next_token), dim=1)
-            if int(next_token[0, 0].item()) == EOS_ID or step + 1 >= max_new_tokens:
+            if bool(finished.all().item()) or step + 1 >= max_new_tokens:
                 break
 
             cache_length = past_key_values[0][0].shape[-2]

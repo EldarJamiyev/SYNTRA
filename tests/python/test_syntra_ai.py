@@ -1793,5 +1793,147 @@ class TransformerTests(unittest.TestCase):
             self.assertLessEqual(generated.shape[1], context.shape[1] + 2)
 
 
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_batched_generation_stops_each_row_at_its_own_eos(self):
+        from syntra_ai.model import BOS_ID, EOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        model = SyntraTransformer(config)
+        model.eval()
+        original_forward = model.forward
+
+        def controlled_logits_forward(tokens, *args, **kwargs):
+            logits, loss, cache = original_forward(tokens, *args, **kwargs)
+            if kwargs.get("use_cache"):
+                forced = torch.full_like(logits, float("-inf"))
+                forced[0, -1, EOS_ID] = 0.0
+                past = kwargs.get("past_key_values")
+                if past is None:
+                    forced[1, -1, 100] = 0.0
+                elif past[0][0].shape[-2] == 3:
+                    forced[1, -1, 101] = 0.0
+                else:
+                    forced[1, -1, EOS_ID] = 0.0
+                logits = forced
+            return logits, loss, cache
+
+        model.forward = controlled_logits_forward
+        prompt = torch.tensor(
+            [[BOS_ID, 10, 11], [BOS_ID, 20, 21]],
+            dtype=torch.long,
+        )
+        generated = model.generate(prompt, max_new_tokens=6, temperature=0.0, top_k=1)
+
+        self.assertEqual(generated[0, :3].tolist(), prompt[0].tolist())
+        self.assertEqual(generated[1, :3].tolist(), prompt[1].tolist())
+        self.assertEqual(
+            generated[0, 3:].tolist(),
+            [EOS_ID, EOS_ID, EOS_ID],
+            "the first row must remain EOS padding after it finishes",
+        )
+        self.assertEqual(
+            generated[1, 3:].tolist(),
+            [100, 101, EOS_ID],
+            "a later row must continue generating until its own EOS",
+        )
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_generation_rejects_malformed_token_batches_before_forward(self):
+        from syntra_ai.model import SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        model = SyntraTransformer(config)
+        invalid_inputs = (
+            (torch.ones((1, 3), dtype=torch.int32), "torch.long"),
+            (torch.ones((3,), dtype=torch.long), "non-empty batch"),
+            (torch.empty((1, 0), dtype=torch.long), "non-empty batch"),
+            (torch.empty((0, 3), dtype=torch.long), "non-empty batch"),
+            (torch.tensor([[0, 258]], dtype=torch.long), "outside the configured vocabulary"),
+            (torch.tensor([[-1, 10]], dtype=torch.long), "outside the configured vocabulary"),
+        )
+        for tokens, message in invalid_inputs:
+            with self.subTest(shape=tuple(tokens.shape), dtype=tokens.dtype):
+                with self.assertRaisesRegex(ValueError, message):
+                    model.generate(tokens, max_new_tokens=1, temperature=0.0, top_k=1)
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_generation_rejects_non_integral_token_budget_and_sampling_width(self):
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
+        model = SyntraTransformer(config)
+        prompt = torch.tensor([[BOS_ID, 10]], dtype=torch.long)
+        with self.assertRaisesRegex(ValueError, "max_new_tokens must be an integer"):
+            model.generate(prompt, max_new_tokens=1.5, temperature=0.0, top_k=1)
+        with self.assertRaisesRegex(ValueError, "top_k must be an integer"):
+            model.generate(prompt, max_new_tokens=1, temperature=0.0, top_k=1.5)
+        with self.assertRaisesRegex(ValueError, "finite number"):
+            model.generate(prompt, max_new_tokens=1, temperature=float("nan"), top_k=1)
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_inference_helpers_restore_exact_module_modes_after_success(self):
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=2, n_head=2, n_embd=32, dropout=0.2)
+        model = SyntraTransformer(config)
+        model.train()
+        # Retain intentionally mixed submodule modes, not only the root training flag.
+        model.blocks[0].attn.eval()
+        model.blocks[0].attn.resid_dropout.train()
+        expected_modes = tuple(module.training for module in model.modules())
+        tokens = torch.tensor([[BOS_ID, 65, 66, 67]], dtype=torch.long)
+
+        embeddings = model.embed_tokens(tokens)
+        torch.testing.assert_close(
+            torch.linalg.vector_norm(embeddings, dim=-1),
+            torch.ones(1),
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "embed_tokens must restore all module modes, including mixed child states",
+        )
+
+        generated = model.generate(tokens, max_new_tokens=2, temperature=0.0, top_k=1)
+        self.assertGreaterEqual(generated.shape[1], tokens.shape[1] + 1)
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "generate must restore all module modes after successful inference",
+        )
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_inference_helpers_restore_exact_module_modes_when_forward_raises(self):
+        from syntra_ai.model import BOS_ID, SyntraTransformer
+
+        config = ModelConfig(vocab_size=258, seq_len=16, n_layer=2, n_head=2, n_embd=32, dropout=0.2)
+        model = SyntraTransformer(config)
+        model.train()
+        model.blocks[0].attn.eval()
+        model.blocks[0].attn.resid_dropout.train()
+        expected_modes = tuple(module.training for module in model.modules())
+        tokens = torch.tensor([[BOS_ID, 65, 66]], dtype=torch.long)
+
+        with patch.object(model, "_forward_hidden", side_effect=RuntimeError("forced embedding failure")):
+            with self.assertRaisesRegex(RuntimeError, "forced embedding failure"):
+                model.embed_tokens(tokens)
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "embed_tokens must restore module modes even when inference raises",
+        )
+
+        with patch.object(model, "forward", side_effect=RuntimeError("forced generation failure")):
+            with self.assertRaisesRegex(RuntimeError, "forced generation failure"):
+                model.generate(tokens, max_new_tokens=2, temperature=0.0, top_k=1)
+        self.assertEqual(
+            tuple(module.training for module in model.modules()),
+            expected_modes,
+            "generate must restore module modes even when inference raises",
+        )
+
 if __name__ == "__main__":
     unittest.main()
