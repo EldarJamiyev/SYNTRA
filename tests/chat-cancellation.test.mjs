@@ -34,7 +34,7 @@ async function waitForHealth(port, child) {
         signal: AbortSignal.timeout(500)
       });
       if (response.ok) return;
-    } catch (error) {
+    } catch {
       lastError = error;
     }
     await delay(40);
@@ -107,7 +107,7 @@ test("cancelling ordinary chat aborts the native inference HTTP stream and remai
     } catch (error) {
       if (!response.destroyed) {
         response.writeHead(500, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        response.end(JSON.stringify({ error: "Unexpected failure in the test inference server." }));
       }
     }
   });

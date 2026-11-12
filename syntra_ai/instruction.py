@@ -55,24 +55,16 @@ def load_instruction_examples(
     max_tokens: int = MAX_INSTRUCTION_TOKENS,
 ) -> list[dict]:
     # Direct library callers receive the same approved-root protection as HTTP
-    # and CLI entry points; a caller cannot bypass the dataset path boundary.
-    path = os.path.realpath(
+    # and CLI entry points. This exact canonical value is used by os.stat/open.
+    path = os.path.normcase(os.path.normpath(os.path.realpath(
         os.fspath(resolve_instruction_dataset(dataset_path)), strict=True
-    )
-    # Keep a local canonical-root guard adjacent to the file-open sink. The
-    # resolver already enforces policy; this repeat check makes the constraint
-    # explicit where this function opens user-selected JSONL data.
-    path_norm = os.path.normcase(os.path.normpath(path))
-    approved_dataset = False
+    )))
     for trusted_root in _approved_roots():
-        root_norm = os.path.normcase(os.path.normpath(
-            os.path.realpath(trusted_root, strict=True)
-        ))
+        root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
         root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-        if path_norm.startswith(root_prefix):
-            approved_dataset = True
+        if path.startswith(root_prefix):
             break
-    if not approved_dataset:
+    else:
         raise ValueError("The instruction dataset must remain inside an approved local root.")
     if type(seq_len) is not int or seq_len < 16 or seq_len > 16384:
         raise ValueError("Instruction context must be between 16 and 16,384 tokens.")
@@ -87,24 +79,38 @@ def load_instruction_examples(
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor: int | None = None
     try:
+        path_before = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(path_before.st_mode):
+            raise ValueError("Instruction dataset must be an existing regular file.")
         descriptor = os.open(path, flags)
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = None
             file_info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(file_info.st_mode):
-                raise ValueError("Instruction dataset must be an existing regular file.")
+            if (
+                not stat.S_ISREG(file_info.st_mode)
+                or (file_info.st_dev, file_info.st_ino) != (path_before.st_dev, path_before.st_ino)
+            ):
+                raise ValueError("Instruction dataset changed while it was being opened.")
             if file_info.st_size > MAX_INSTRUCTION_FILE_BYTES:
                 raise ValueError(
                     f"Instruction JSONL is limited to {MAX_INSTRUCTION_FILE_BYTES // (1024 * 1024)} MiB."
                 )
             raw = handle.read(MAX_INSTRUCTION_FILE_BYTES + 1)
             after = os.fstat(handle.fileno())
+            current = os.stat(path, follow_symlinks=False)
+            current_path = os.path.normcase(os.path.normpath(os.path.realpath(path, strict=True)))
             if (
                 len(raw) > MAX_INSTRUCTION_FILE_BYTES
+                or current_path != path
+                or not stat.S_ISREG(current.st_mode)
                 or (file_info.st_dev, file_info.st_ino) != (after.st_dev, after.st_ino)
+                or (file_info.st_dev, file_info.st_ino) != (current.st_dev, current.st_ino)
                 or file_info.st_size != after.st_size
                 or file_info.st_mtime_ns != after.st_mtime_ns
                 or file_info.st_ctime_ns != after.st_ctime_ns
+                or file_info.st_size != current.st_size
+                or file_info.st_mtime_ns != current.st_mtime_ns
+                or file_info.st_ctime_ns != current.st_ctime_ns
             ):
                 raise ValueError("Instruction dataset changed while it was being read or exceeded its file-size limit.")
     except ValueError:
