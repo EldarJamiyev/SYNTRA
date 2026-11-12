@@ -982,7 +982,8 @@ function makeReadOnlyToolPlanPrompt(goal, ranked, {
 }
 
 async function runModelSelectedReadOnlyTools({
-  root, auditRoot = root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
+  root, auditRoot = root, goal, ranked, modelRequest, contextBudget,
+  hybridProvider = false, signal, toolCalls, observations
 }) {
   const indexRefresh = await executeWorkspaceTool({
     root, auditRoot, name: "workspace.index.refresh", input: {}, signal
@@ -1068,7 +1069,7 @@ async function runModelSelectedReadOnlyTools({
     // Workspace semantic indexing is bound to SYNTRA's native checkpoint. In
     // hybrid mode, keep retrieval lexical/symbol/memory based rather than
     // attempting embeddings against a native service that is intentionally off.
-    const proposedCalls = modelStatus.backend === "openai-compatible"
+    const proposedCalls = hybridProvider
       ? validatedCalls.filter(call => call.tool !== "workspace.semantic.search")
       : validatedCalls;
     const calls = [];
@@ -1763,7 +1764,7 @@ export async function runAgentTask({
         message: "Asking the local model to select bounded read-only context tools."
       });
       modelSelectedContext = await runModelSelectedReadOnlyTools({
-        root, auditRoot: root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
+        root, auditRoot: root, goal, ranked, modelRequest, contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
       });
     } catch (error) {
       if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -1859,7 +1860,7 @@ export async function runAgentTask({
         try {
           modelSelectedContext = await runModelSelectedReadOnlyTools({
             root: snapshot.root, auditRoot: root, goal: implementationSlices[firstSliceIndex].goal, ranked,
-            modelRequest, contextBudget, signal, toolCalls, observations
+            modelRequest, contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
           });
         } catch (error) {
           if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -2596,7 +2597,7 @@ export async function runAgentTask({
           try {
             modelSelectedContext = await runModelSelectedReadOnlyTools({
               root: snapshot.root, auditRoot: root, goal: sliceGoal, ranked, modelRequest,
-              contextBudget, signal, toolCalls, observations
+              contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
             });
           } catch (error) {
             if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -2661,7 +2662,7 @@ export async function runAgentTask({
           try {
             modelSelectedContext = await runModelSelectedReadOnlyTools({
               root: snapshot.root, auditRoot: root, goal: nextSlice.goal, ranked, modelRequest,
-              contextBudget, signal, toolCalls, observations
+              contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
             });
           } catch (error) {
             if (signal?.aborted || error?.name === "AbortError") throw error;
