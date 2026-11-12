@@ -20,6 +20,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
+      - name: Generate an npm lockfile when none is committed
+        run: |
+          if [ ! -f package-lock.json ]; then
+            npm install --package-lock-only --ignore-scripts --no-audit
+          fi
       - name: Retain generated package lock for deterministic repository lock-in
         uses: actions/upload-artifact@v7
         with:
