@@ -15,7 +15,7 @@ The post-merge full-branch CodeQL SARIF identified two remaining path-injection 
 - Evaluation run manifests no longer store absolute corpus, checkpoint, profile, workspace, or curriculum output paths.
 - The selected corpus root is represented by an opaque approved-root label and a SHA-256 fingerprint of its canonical path.
 - Nested profile and curriculum-result metadata are redacted before persistence so generated `dataset_path`, `workspace_roots`, and checkpoint fields cannot reintroduce absolute paths.
-- Curriculum CLI output replaces machine-specific roots and absolute dataset paths with stable local labels while preserving counts, quality statistics, warnings, and other operational metadata.
+- Curriculum CLI output is an explicit allowlisted summary of numeric counts and validation metrics; raw curriculum result objects, absolute paths, root labels, and free-text path-bearing fields are never serialized.
 - The `inspect-data` CLI sample list reports source filenames rather than absolute filesystem paths.
 
 ## Regression coverage
@@ -24,7 +24,7 @@ The post-merge full-branch CodeQL SARIF identified two remaining path-injection 
 - The real atomic JSONL writer creates that approved destination and writes the requested records.
 - Run-manifest metadata redaction removes private root/path fragments from nested settings and curriculum results.
 - Corpus-root fingerprint remains stable and has a fixed SHA-256 representation.
-- CLI curriculum metadata keeps useful numeric results but emits only approved-root labels and a generic dataset filename.
+- CLI curriculum summary preserves bounded counts and validation metrics without emitting any filesystem path, root identifier, or raw result object.
 
 ## Boundaries
 
