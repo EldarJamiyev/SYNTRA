@@ -104,10 +104,10 @@ test("cancelling ordinary chat aborts the native inference HTTP stream and remai
       }
       response.writeHead(404, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: "Unexpected test request." }));
-    } catch (error) {
+    } catch {
       if (!response.destroyed) {
         response.writeHead(500, { "Content-Type": "application/json" });
-        response.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        response.end(JSON.stringify({ error: "Unexpected failure in the test inference server." }));
       }
     }
   });

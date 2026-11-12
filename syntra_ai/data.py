@@ -55,24 +55,17 @@ class Corpus:
 def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, bytes, str] | None:
     """Read one bounded regular file after canonical containment and link checks."""
     try:
-        absolute = os.path.abspath(path)
-        resolved = os.path.realpath(path, strict=True)
+        absolute = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+        resolved = os.path.normcase(os.path.normpath(os.path.realpath(path, strict=True)))
+        root_real = os.path.normcase(os.path.normpath(os.path.realpath(root, strict=True)))
     except (OSError, RuntimeError, ValueError):
         return None
 
-    # Canonicalize both paths and perform the containment comparison in
-    # this function, immediately before file-system access. This rejects
-    # traversal and symlinks without depending on a custom sanitizer call.
-    root_real = os.path.realpath(root, strict=True)
-    candidate_norm = os.path.normcase(os.path.normpath(resolved))
-    root_norm = os.path.normcase(os.path.normpath(root_real))
-    root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-    if not (candidate_norm == root_norm or candidate_norm.startswith(root_prefix)):
-        return None
-    if os.path.normcase(absolute) != os.path.normcase(resolved):
+    root_prefix = root_real if root_real.endswith(os.sep) else root_real + os.sep
+    # The same canonical value checked here is used by all filesystem sinks below.
+    if not resolved.startswith(root_prefix) or absolute != resolved:
         return None
 
-    # The path has passed the canonical root-prefix guard above.
     relative_parts = os.path.relpath(resolved, root_real).split(os.sep)
     name = os.path.basename(resolved).lower()
     if any(part.lower() in SENSITIVE_DIRS for part in relative_parts[:-1]):
@@ -104,17 +97,11 @@ def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, byt
                 return None
             raw = handle.read(max_file_bytes + 1)
             after = os.fstat(handle.fileno())
-            # The descriptor checks above prove that the opened inode did not
-            # mutate while reading. They do not prove that the selected path
-            # still names that inode: a concurrent rename/replace can leave the
-            # descriptor stable while changing the file associated with this
-            # corpus path and its provenance digest.
             current = os.stat(resolved, follow_symlinks=False)
-            current_path = os.path.realpath(resolved, strict=True)
+            current_path = os.path.normcase(os.path.normpath(os.path.realpath(resolved, strict=True)))
             if (
                 len(raw) > max_file_bytes
-                or os.path.normcase(os.path.normpath(current_path))
-                != os.path.normcase(os.path.normpath(resolved))
+                or current_path != resolved
                 or not stat.S_ISREG(current.st_mode)
                 or (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
                 or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
@@ -138,7 +125,6 @@ def _read_safe_file(path: str, root: str, max_file_bytes: int) -> tuple[str, byt
     if not text.strip():
         return None
     return resolved, raw, text
-
 
 def load_corpus(
     roots: Iterable[str | os.PathLike[str]],
@@ -178,19 +164,15 @@ def load_corpus(
         # resolve_corpus_root applies the application policy; repeat the
         # canonical approved-root containment check here at the traversal sink.
         root_path = resolve_corpus_root(raw_root)
-        root = os.path.realpath(os.fspath(root_path), strict=True)
-        root_norm = os.path.normcase(os.path.normpath(root))
-        approved_root = False
+        root = os.path.normcase(os.path.normpath(os.path.realpath(os.fspath(root_path), strict=True)))
         for trusted_root in _approved_roots():
-            trusted_norm = os.path.normcase(os.path.normpath(
-                os.path.realpath(trusted_root, strict=True)
-            ))
+            trusted_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
             trusted_prefix = trusted_norm if trusted_norm.endswith(os.sep) else trusted_norm + os.sep
-            if root_norm == trusted_norm or root_norm.startswith(trusted_prefix):
-                approved_root = True
+            if root == trusted_norm or root.startswith(trusted_prefix):
                 break
-        if not approved_root:
+        else:
             raise ValueError("Refusing to scan a corpus root outside approved directories.")
+        root_norm = root
         root_path = Path(root)
         root_parts = {part.casefold() for part in root_path.parts}
         root_name = root_path.name.casefold()
@@ -203,13 +185,13 @@ def load_corpus(
             raise ValueError("Refusing to scan a sensitive or generated corpus root.")
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             try:
-                base = os.path.realpath(current, strict=True)
+                base = os.path.normcase(os.path.normpath(os.path.realpath(current, strict=True)))
             except (OSError, RuntimeError):
                 dirnames[:] = []
                 continue
             base_norm = os.path.normcase(os.path.normpath(base))
             root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-            if not (base_norm == root_norm or base_norm.startswith(root_prefix)):
+            if base != root_norm and not base.startswith(root_prefix):
                 dirnames[:] = []
                 continue
 
@@ -220,15 +202,11 @@ def load_corpus(
                     continue
                 child = os.path.join(base, name)
                 try:
-                    child_absolute = os.path.abspath(child)
-                    child_real = os.path.realpath(child, strict=True)
-                    child_norm = os.path.normcase(os.path.normpath(child_real))
-                    root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-                    if (
-                        os.path.normcase(child_absolute) != os.path.normcase(child_real)
-                        or not (child_norm == root_norm or child_norm.startswith(root_prefix))
-                        or not os.path.isdir(child_real)
-                    ):
+                    child_absolute = os.path.normcase(os.path.normpath(os.path.abspath(child)))
+                    child_real = os.path.normcase(os.path.normpath(os.path.realpath(child, strict=True)))
+                    if child_absolute != child_real or not child_real.startswith(root_prefix):
+                        continue
+                    if not os.path.isdir(child_real):
                         continue
                 except (OSError, RuntimeError, ValueError):
                     continue
@@ -240,11 +218,14 @@ def load_corpus(
                     break
                 candidate = os.path.join(base, filename)
                 try:
-                    candidate_real = os.path.realpath(candidate, strict=True)
+                    candidate_real = os.path.normcase(os.path.normpath(os.path.realpath(candidate, strict=True)))
                 except (OSError, RuntimeError):
                     skipped += 1
                     continue
-                normalized_candidate = os.path.normcase(os.path.normpath(candidate_real))
+                if not candidate_real.startswith(root_prefix):
+                    skipped += 1
+                    continue
+                normalized_candidate = candidate_real
                 excluded_candidate = False
                 for excluded in excluded_paths:
                     excluded_norm = os.path.normcase(os.path.normpath(excluded))
@@ -255,7 +236,7 @@ def load_corpus(
                 if excluded_candidate:
                     skipped += 1
                     continue
-                result = _read_safe_file(candidate, root, max_file_bytes)
+                result = _read_safe_file(candidate_real, root, max_file_bytes)
                 if result is None:
                     skipped += 1
                     continue

@@ -697,7 +697,15 @@ def _fsync_output_directory(path: Path) -> None:
         return
     descriptor = None
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        canonical = os.path.normcase(os.path.normpath(os.path.realpath(os.fspath(path), strict=True)))
+        for trusted_root in _approved_roots():
+            root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
+            root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+            if canonical == root_norm or canonical.startswith(root_prefix):
+                break
+        else:
+            return
+        descriptor = os.open(canonical, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         os.fsync(descriptor)
     except OSError:
         pass
@@ -708,42 +716,41 @@ def _fsync_output_directory(path: Path) -> None:
 
 def _write_jsonl_atomically(target: Path, records: list[dict[str, str]]) -> None:
     """Write a size-bounded JSONL dataset atomically and durably."""
-    # Revalidate the final destination at the actual write boundary. The
-    # path resolver enforces the public policy; this local canonical-prefix
-    # guard ensures that even direct library calls cannot redirect writes.
-    parent_real = os.path.realpath(os.fspath(target.parent), strict=True)
-    parent_norm = os.path.normcase(os.path.normpath(parent_real))
-    approved_output_parent = False
+    filename = target.name
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.jsonl", filename, re.IGNORECASE):
+        raise ValueError("Curriculum output filename must be a simple .jsonl filename.")
+    parent = os.path.normcase(os.path.normpath(os.path.realpath(os.fspath(target.parent), strict=True)))
     for trusted_root in _approved_roots():
-        root_norm = os.path.normcase(os.path.normpath(
-            os.path.realpath(trusted_root, strict=True)
-        ))
+        root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
         root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-        if parent_norm == root_norm or parent_norm.startswith(root_prefix):
-            approved_output_parent = True
+        if parent == root_norm or parent.startswith(root_prefix):
             break
-    if not approved_output_parent:
+    else:
         raise ValueError("Curriculum output parent is outside approved local roots.")
-    target = Path(parent_real) / target.name
-    if target.is_symlink():
-        raise ValueError("Curriculum output must not be a symbolic link.")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    parent_after_create = os.path.realpath(os.fspath(target.parent), strict=True)
-    parent_after_norm = os.path.normcase(os.path.normpath(parent_after_create))
-    parent_still_approved = False
+
+    Path(parent).mkdir(parents=True, exist_ok=True)
+    parent = os.path.normcase(os.path.normpath(os.path.realpath(parent, strict=True)))
     for trusted_root in _approved_roots():
-        root_norm = os.path.normcase(os.path.normpath(
-            os.path.realpath(trusted_root, strict=True)
-        ))
+        root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
         root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-        if parent_after_norm == root_norm or parent_after_norm.startswith(root_prefix):
-            parent_still_approved = True
+        if parent == root_norm or parent.startswith(root_prefix):
             break
-    if not parent_still_approved:
+    else:
         raise ValueError("Curriculum output parent escaped approved local roots during creation.")
-    target = Path(parent_after_create) / target.name
-    if target.is_symlink():
+    if not os.path.isdir(parent):
+        raise ValueError("Curriculum output parent escaped approved local roots during creation.")
+
+    target = os.path.normcase(os.path.normpath(os.path.join(parent, filename)))
+    for trusted_root in _approved_roots():
+        root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
+        root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+        if target.startswith(root_prefix):
+            break
+    else:
+        raise ValueError("Curriculum output is outside approved local roots.")
+    if os.path.islink(target):
         raise ValueError("Curriculum output must not be a symbolic link.")
+
     temporary_path: str | None = None
     total_bytes = 0
     try:
@@ -751,7 +758,7 @@ def _write_jsonl_atomically(target: Path, records: list[dict[str, str]]) -> None
             mode="wb",
             prefix=".syntra-curriculum-",
             suffix=".tmp",
-            dir=target.parent,
+            dir=parent,
             delete=False,
         ) as handle:
             temporary_path = handle.name
@@ -771,18 +778,27 @@ def _write_jsonl_atomically(target: Path, records: list[dict[str, str]]) -> None
                 total_bytes += len(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        if target.is_symlink():
+        current_parent = os.path.normcase(os.path.normpath(os.path.realpath(parent, strict=True)))
+        if current_parent != parent:
+            raise ValueError("Curriculum output parent changed during dataset creation.")
+        for trusted_root in _approved_roots():
+            root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
+            root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
+            if current_parent == root_norm or current_parent.startswith(root_prefix):
+                break
+        else:
+            raise ValueError("Curriculum output parent escaped approved local roots before publish.")
+        if os.path.islink(target):
             raise ValueError("Curriculum output must not be a symbolic link.")
         os.replace(temporary_path, target)
         temporary_path = None
-        _fsync_output_directory(target.parent)
+        _fsync_output_directory(Path(parent))
     finally:
         if temporary_path:
             try:
                 os.unlink(temporary_path)
             except FileNotFoundError:
                 pass
-
 
 def synthesize_repository_curriculum(
     root: str | Path | None = None,
