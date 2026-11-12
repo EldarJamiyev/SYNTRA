@@ -1012,7 +1012,7 @@ async function runModelSelectedReadOnlyTools({
       previousCalls: selectedCalls
     });
     const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
-    if (Number(tokenInfo.token_count) > Math.min(contextBudget, 1800)) {
+    if (Number(tokenInfo.token_count) > Math.min(contextBudget, 2400)) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
         status: "skipped_context_budget",

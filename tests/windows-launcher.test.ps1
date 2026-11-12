@@ -14,7 +14,7 @@ if ($launcher -notmatch "\^20\.19\.0 or >=22\.12\.0") {
 }
 foreach ($required in @(
     "scripts\setup_syntra_env.py",
-    "local\model-provider.mjs",
+    "local/model-provider.mjs",
     "openai-compatible",
     "requirements.lock.txt",
     "syntra_ai.cli",
@@ -36,4 +36,4 @@ if ($launcher -notmatch 'CHECKPOINT_OK') {
     throw "The launcher must validate the native checkpoint before starting chat."
 }
 
-Write-Host "Windows launcher native-only startup checks passed." -ForegroundColor Green
+Write-Host "Windows launcher native-first and hybrid startup checks passed." -ForegroundColor Green
