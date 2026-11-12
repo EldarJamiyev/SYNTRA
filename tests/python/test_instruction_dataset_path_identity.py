@@ -23,8 +23,8 @@ class InstructionDatasetPathIdentityTests(unittest.TestCase):
     @staticmethod
     def _dataset_text() -> str:
         return (
-            json.dumps({"prompt": "Explain addition", "completion": "Add two values."}) + "\\n"
-            + json.dumps({"prompt": "Explain maximum", "completion": "Return the larger value."}) + "\\n"
+            json.dumps({"prompt": "Explain addition", "completion": "Add two values."}) + "\n"
+            + json.dumps({"prompt": "Explain maximum", "completion": "Return the larger value."}) + "\n"
         )
 
     def test_reader_rejects_file_replacement_after_open(self):
@@ -34,7 +34,7 @@ class InstructionDatasetPathIdentityTests(unittest.TestCase):
             replacement = root / "replacement.jsonl"
             dataset.write_text(self._dataset_text(), encoding="utf-8")
             replacement.write_text(
-                json.dumps({"prompt": "Different task", "completion": "Different result."}) + "\\n",
+                json.dumps({"prompt": "Different task", "completion": "Different result."}) + "\n",
                 encoding="utf-8",
             )
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
