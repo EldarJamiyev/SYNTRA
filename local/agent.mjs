@@ -1004,21 +1004,52 @@ async function runModelSelectedReadOnlyTools({
   for (let round = 1; round <= MAX_MODEL_RETRIEVAL_ROUNDS && selectedCalls.length < MAX_MODEL_RETRIEVAL_CALLS; round += 1) {
     throwIfAborted(signal);
     const remainingCalls = MAX_MODEL_RETRIEVAL_CALLS - selectedCalls.length;
-    const prompt = makeReadOnlyToolPlanPrompt(goal, ranked, {
-      round,
-      maxRounds: MAX_MODEL_RETRIEVAL_ROUNDS,
-      remainingCalls,
-      priorContext: fragments.join("\n"),
-      previousCalls: selectedCalls
-    });
-    const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
-    if (Number(tokenInfo.token_count) > Math.min(contextBudget, 2400)) {
+    const accumulatedEvidence = fragments.join("\n");
+    // Retrieval evidence is optional context; task instructions, available tool
+    // contracts and previous-call identities are not. Recount the prompt while
+    // progressively clipping only the oldest evidence until it fits the actual
+    // selected checkpoint budget. This allows multi-round discovery on small
+    // local models without silently exceeding their trained context window.
+    const evidenceLimits = [
+      MAX_MODEL_RETRIEVAL_CONTEXT_CHARS,
+      6000,
+      3000,
+      1200,
+      0
+    ];
+    let prompt = "";
+    let tokenInfo = null;
+    let retainedEvidenceChars = accumulatedEvidence.length;
+    for (const evidenceLimit of evidenceLimits) {
+      const priorContext = evidenceLimit > 0
+        ? accumulatedEvidence.slice(-evidenceLimit)
+        : "";
+      prompt = makeReadOnlyToolPlanPrompt(goal, ranked, {
+        round,
+        maxRounds: MAX_MODEL_RETRIEVAL_ROUNDS,
+        remainingCalls,
+        priorContext,
+        previousCalls: selectedCalls
+      });
+      tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+      retainedEvidenceChars = priorContext.length;
+      if (Number(tokenInfo.token_count) <= Math.min(contextBudget, 2400)) break;
+    }
+    if (!tokenInfo || Number(tokenInfo.token_count) > Math.min(contextBudget, 2400)) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
         status: "skipped_context_budget",
-        detail: "The next evidence-driven retrieval plan exceeded the bounded planning context; existing evidence was retained."
+        detail: "The task and bounded read-only tool contract did not fit the selected model context after optional retrieval evidence was compacted; prior findings were retained."
       });
       break;
+    }
+    if (retainedEvidenceChars < accumulatedEvidence.length) {
+      observations.push({
+        kind: "model-readonly-tool-plan",
+        stage: "context-retrieval-round-" + round,
+        status: "context_compacted",
+        detail: "Compacted older optional retrieval evidence from " + accumulatedEvidence.length + " to " + retainedEvidenceChars + " characters to fit the selected model context."
+      });
     }
 
     const generated = await modelJson(modelRequest, "/model/generate", {
