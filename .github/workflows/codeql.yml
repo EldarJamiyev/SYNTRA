@@ -28,3 +28,11 @@ jobs:
           languages: ${{ matrix.language }}
       - uses: github/codeql-action/autobuild@v4
       - uses: github/codeql-action/analyze@v4
+      - name: Archive CodeQL SARIF results for security triage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: results/*.sarif
+          if-no-files-found: warn
+          retention-days: 14
