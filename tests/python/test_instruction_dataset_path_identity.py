@@ -41,13 +41,16 @@ class InstructionDatasetPathIdentityTests(unittest.TestCase):
             import syntra_ai.instruction as instruction
 
             real_stat = os.stat
-            calls = 0
+            final_path_checks = 0
+            canonical_dataset = os.path.normcase(os.path.normpath(os.path.realpath(dataset)))
 
             def replace_before_final_path_check(path, *args, **kwargs):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
-                    os.replace(replacement, dataset)
+                nonlocal final_path_checks
+                path_value = os.path.normcase(os.path.normpath(os.fspath(path)))
+                if path_value == canonical_dataset and kwargs.get("follow_symlinks") is False:
+                    final_path_checks += 1
+                    if final_path_checks == 2:
+                        os.replace(replacement, dataset)
                 return real_stat(path, *args, **kwargs)
 
             with patch.object(instruction.os, "stat", side_effect=replace_before_final_path_check):
