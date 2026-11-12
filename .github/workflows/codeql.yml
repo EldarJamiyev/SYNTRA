@@ -38,13 +38,13 @@ jobs:
             echo "::error::CodeQL did not produce SARIF results for this language."
             exit 1
           fi
-          mkdir -p .codeql-sarif
-          cp -- "${sarif_files[@]}" .codeql-sarif/
+          mkdir -p codeql-sarif
+          cp -- "${sarif_files[@]}" codeql-sarif/
       - name: Archive CodeQL SARIF results for security triage
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: codeql-sarif-${{ matrix.language }}
-          path: .codeql-sarif/*.sarif
+          path: codeql-sarif/*.sarif
           if-no-files-found: error
           retention-days: 14
