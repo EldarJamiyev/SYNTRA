@@ -1,10 +1,13 @@
+import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests" / "benchmark_engine"))
+import evaluation_provenance as provenance
 from evaluation_provenance import EvaluationProvenanceError, evaluation_protocol_identity
 
 
@@ -65,6 +68,71 @@ class EvaluationProtocolIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(EvaluationProvenanceError, "symbolic links"):
                 evaluation_protocol_identity(repository, engine)
 
+
+    def test_path_replacement_after_open_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-protocol-path-race-") as temp:
+            root = Path(temp)
+            target = root / "protocol.py"
+            replacement = root / "replacement.py"
+            target.write_text("original = True", encoding="utf-8")
+            replacement.write_text("replacement = True", encoding="utf-8")
+            real_fstat = os.fstat
+            calls = 0
+
+            def replace_after_descriptor_read(descriptor):
+                nonlocal calls
+                calls += 1
+                result = real_fstat(descriptor)
+                if calls == 2:
+                    os.replace(replacement, target)
+                return result
+
+            with patch.object(provenance.os, "fstat", side_effect=replace_after_descriptor_read):
+                with self.assertRaisesRegex(EvaluationProvenanceError, "path identity was replaced"):
+                    provenance._hash_regular_file(target, repository_root=root)
+
+    def test_parent_directory_redirect_to_same_inode_outside_root_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-protocol-parent-swap-") as temp:
+            workspace = Path(temp)
+            repository = workspace / "repository"
+            parent = repository / "protocol"
+            outside = workspace / "outside"
+            held = workspace / "held-protocol"
+            parent.mkdir(parents=True)
+            outside.mkdir()
+            target = parent / "source.py"
+            target.write_bytes(b"same inode, different canonical path")
+            try:
+                os.link(target, outside / target.name)
+            except OSError:
+                self.skipTest("Hard-link creation is unavailable on this runner.")
+
+            real_fstat = os.fstat
+            calls = 0
+
+            def redirect_parent_after_descriptor_read(descriptor):
+                nonlocal calls
+                calls += 1
+                result = real_fstat(descriptor)
+                if calls == 2:
+                    os.replace(parent, held)
+                    parent.symlink_to(outside, target_is_directory=True)
+                return result
+
+            with patch.object(provenance.os, "fstat", side_effect=redirect_parent_after_descriptor_read):
+                with self.assertRaisesRegex(EvaluationProvenanceError, "path identity was replaced/redirected"):
+                    provenance._hash_regular_file(target, repository_root=repository)
+
+    def test_stable_regular_file_hash_is_bound_to_approved_root(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-protocol-stable-") as temp:
+            root = Path(temp)
+            target = root / "protocol.py"
+            content = b"stable protocol content"
+            target.write_bytes(content)
+            digest, size = provenance._hash_regular_file(target, repository_root=root)
+            import hashlib
+            self.assertEqual(digest, hashlib.sha256(content).hexdigest())
+            self.assertEqual(size, len(content))
 
 if __name__ == "__main__":
     unittest.main()
