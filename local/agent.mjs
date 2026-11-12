@@ -1024,6 +1024,7 @@ async function runModelSelectedReadOnlyTools({
     let tokenInfo = null;
     let retainedEvidenceChars = accumulatedEvidence.length;
     let retainedAvailableFiles = 40;
+    let finalPromptChars = 0;
     for (const profile of compactionProfiles) {
       const priorContext = profile.evidenceChars > 0
         ? accumulatedEvidence.slice(-profile.evidenceChars)
@@ -1039,13 +1040,14 @@ async function runModelSelectedReadOnlyTools({
       tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
       retainedEvidenceChars = priorContext.length;
       retainedAvailableFiles = profile.availableFiles;
+      finalPromptChars = prompt.length;
       if (Number(tokenInfo.token_count) <= contextBudget) break;
     }
     if (!tokenInfo || Number(tokenInfo.token_count) > contextBudget) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
         status: "skipped_context_budget",
-        detail: "The task and bounded read-only tool contract did not fit the selected model context after optional retrieval evidence and file catalogue compaction; prior findings were retained."
+        detail: "The planning prompt measured " + Number(tokenInfo?.token_count || 0) + " tokens / " + finalPromptChars + " characters against a " + contextBudget + "-token input budget after evidence/file compaction; prior findings were retained."
       });
       break;
     }

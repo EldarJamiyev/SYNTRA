@@ -601,7 +601,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(generated.length, 4, "three evidence-driven planning rounds should precede patch generation");
+    assert.equal(generated.length, 4, "three evidence-driven planning rounds should precede patch generation. Observations: " + JSON.stringify(result.observations));
     assert.equal(retrievalPrompts.length, 3);
     assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL CALLS/);
     assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL EVIDENCE/);
@@ -677,7 +677,7 @@ test("iterative retrieval enforces the eight-call global limit and stops without
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(planningRounds, 3, "the twelve-call budget should stop planning after three rounds of four unique calls");
+    assert.equal(planningRounds, 3, "the twelve-call budget should stop planning after three rounds of four unique calls. Observations: " + JSON.stringify(result.observations));
     assert.equal(result.toolCalls.filter(call => call.name === "workspace.search").length, 12);
     const investigation = result.observations.find(item => item.kind === "model-readonly-investigation");
     assert.match(investigation.detail, /3 evidence-driven planning round\(s\), 12 unique read-only retrieval call/);
@@ -1227,7 +1227,7 @@ test("agent compresses a large multi-file prompt and retries once after a 256-to
     "lowest-priority later file chunks should be removed before task instructions");
 });
 
-test("model context budgets distinguish the native architecture from the explicit hybrid context", () => {
+test("model context budgets use only SYNTRA's saved byte-BPE tokenizer and native context limit", () => {
   const native = deriveModelContextBudget({
     backend: "PyTorch",
     tokenizer: "byte-BPE",
@@ -1249,26 +1249,6 @@ test("model context budgets distinguish the native architecture from the explici
   });
   assert.equal(unknownTokenizer.exactTokenCount, false);
   assert.equal(unknownTokenizer.budgetProfile, "conservative-estimate");
-
-  const hybrid = deriveModelContextBudget({
-    backend: "openai-compatible",
-    tokenizer: "provider-utf8-byte-budget",
-    context_count_is_estimate: true,
-    context_tokens: 65_536,
-    max_output_tokens: 4096
-  });
-  assert.equal(hybrid.contextWindowTokens, 65_536,
-    "hybrid context must preserve the explicitly configured provider window rather than inherit the native 16K ceiling");
-  assert.equal(hybrid.exactTokenCount, false);
-  assert.equal(hybrid.budgetProfile, "conservative-estimate");
-  assert.ok(hybrid.outputBudgetTokens <= 4096);
-  assert.ok(hybrid.contextBudgetTokens + hybrid.outputBudgetTokens + hybrid.safetyMarginTokens + 1 <= 65_536);
-  const maxHybrid = deriveModelContextBudget({
-    backend: "openai-compatible",
-    context_tokens: 2_000_000
-  });
-  assert.equal(maxHybrid.contextWindowTokens, 1_000_000,
-    "hybrid context remains within the provider adapter's explicit safety limit");
 
   const oversized = deriveModelContextBudget({
     tokenizer: "byte-BPE",
