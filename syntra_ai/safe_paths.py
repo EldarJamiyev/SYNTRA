@@ -100,7 +100,11 @@ def resolve_corpus_root(value: str | Path) -> Path:
     for trusted_root in _approved_roots():
         root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
         root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-        if resolved == root_norm or resolved.startswith(root_prefix):
+        if resolved == root_norm:
+            if _is_filesystem_root(root_norm) or not os.path.isdir(root_norm):
+                raise ValueError("The selected corpus path must be an existing approved non-root directory.")
+            return Path(root_norm)
+        if resolved.startswith(root_prefix):
             break
     else:
         raise ValueError("The selected corpus path must be an existing approved non-root directory.")
@@ -116,7 +120,7 @@ def resolve_instruction_dataset(value: str | Path) -> Path:
     for trusted_root in _approved_roots():
         root_norm = os.path.normcase(os.path.normpath(os.path.realpath(trusted_root, strict=True)))
         root_prefix = root_norm if root_norm.endswith(os.sep) else root_norm + os.sep
-        if resolved == root_norm or resolved.startswith(root_prefix):
+        if resolved.startswith(root_prefix):
             break
     else:
         raise ValueError("The fine-tuning dataset must be an existing regular file inside an approved root.")
