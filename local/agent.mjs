@@ -1000,6 +1000,7 @@ async function runModelSelectedReadOnlyTools({
   const selectedCalls = [];
   const seenCalls = new Set();
   let totalChars = 0;
+  let compactedEvidenceChars = 0;
   let roundsCompleted = 0;
 
   for (let round = 1; round <= MAX_MODEL_RETRIEVAL_ROUNDS && selectedCalls.length < MAX_MODEL_RETRIEVAL_CALLS; round += 1) {
@@ -1182,12 +1183,24 @@ async function runModelSelectedReadOnlyTools({
         });
       }
 
-      const remainingChars = 9000 - totalChars;
-      if (remainingChars <= 0) break;
-      fragments.push(fragment.slice(0, remainingChars));
-      totalChars += fragments.at(-1).length;
+      // Keep a rolling 9,000-character evidence window instead of terminating
+      // the investigation when it fills. The newest retrieval result is retained;
+      // oldest optional excerpts are trimmed while selected tool calls continue.
+      fragments.push(fragment);
+      totalChars += fragment.length;
+      while (totalChars > MAX_MODEL_RETRIEVAL_CONTEXT_CHARS && fragments.length) {
+        const overflow = totalChars - MAX_MODEL_RETRIEVAL_CONTEXT_CHARS;
+        if (fragments[0].length <= overflow) {
+          const removed = fragments.shift();
+          totalChars -= removed.length;
+          compactedEvidenceChars += removed.length;
+        } else {
+          fragments[0] = fragments[0].slice(overflow);
+          totalChars -= overflow;
+          compactedEvidenceChars += overflow;
+        }
+      }
     }
-    if (totalChars >= 9000) break;
   }
 
   observations.push({
@@ -1195,9 +1208,9 @@ async function runModelSelectedReadOnlyTools({
     stage: "context-retrieval",
     status: "completed",
     detail: "Completed " + roundsCompleted + " evidence-driven planning round(s), " + selectedCalls.length +
-      " unique read-only retrieval call(s), and retained " + totalChars + " characters of bounded evidence."
+      " unique read-only retrieval call(s), retained " + totalChars + " characters of recent evidence, and rolled out " + compactedEvidenceChars + " characters of older evidence."
   });
-  return fragments.join("\n").slice(0, 9000);
+  return fragments.join("\n").slice(-MAX_MODEL_RETRIEVAL_CONTEXT_CHARS);
 }
 
 export function validatePatchReview(payload, availablePaths = [], changedPaths = []) {
