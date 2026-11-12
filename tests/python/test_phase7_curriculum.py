@@ -573,6 +573,25 @@ class PolyglotCurriculumTests(unittest.TestCase):
         self.assertEqual(args.languages, ["javascript", "typescript", "go", "rust"])
         self.assertEqual(args.max_examples, 12)
 
+    def test_cli_curriculum_metadata_redacts_absolute_workspace_paths(self):
+        from syntra_ai.cli import _redact_curriculum_paths
+
+        private_root = "/srv/tenants/customer-a/private-source"
+        output = _redact_curriculum_paths({
+            "repository": {
+                "dataset_path": "/srv/tenants/customer-a/data/curriculum.jsonl",
+                "workspace_root": private_root,
+                "workspace_roots": [private_root, "/mnt/secure/second-corpus"],
+                "example_count": 12,
+            },
+        })
+        encoded = json.dumps(output)
+        for private_fragment in ("/srv/tenants", "customer-a", "/mnt/secure", "private-source"):
+            self.assertNotIn(private_fragment, encoded)
+        self.assertEqual(output["repository"]["dataset_path"], "generated-curriculum.jsonl")
+        self.assertEqual(output["repository"]["workspace_root"], "approved-local-root-1")
+        self.assertEqual(output["repository"]["workspace_roots"], ["approved-local-root-1", "approved-local-root-2"])
+        self.assertEqual(output["repository"]["example_count"], 12)
 
 if __name__ == "__main__":
     unittest.main()
