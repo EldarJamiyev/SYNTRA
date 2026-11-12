@@ -953,9 +953,10 @@ function makeReadOnlyToolPlanPrompt(goal, ranked, {
   maxRounds = MAX_MODEL_RETRIEVAL_ROUNDS,
   remainingCalls = MAX_MODEL_RETRIEVAL_CALLS,
   priorContext = "",
-  previousCalls = []
+  previousCalls = [],
+  availableLimit = 40
 } = {}) {
-  const available = ranked.slice(0, 40).map(item => ({
+  const available = ranked.slice(0, Math.max(1, Math.min(40, availableLimit))).map(item => ({
     path: item.path, language: item.language, size: item.size, score: Number(item.score.toFixed(2))
   }));
   return [
@@ -981,7 +982,8 @@ function makeReadOnlyToolPlanPrompt(goal, ranked, {
 }
 
 async function runModelSelectedReadOnlyTools({
-  root, auditRoot = root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
+  root, auditRoot = root, goal, ranked, modelRequest, contextBudget,
+  hybridProvider = false, signal, toolCalls, observations
 }) {
   const indexRefresh = await executeWorkspaceTool({
     root, auditRoot, name: "workspace.index.refresh", input: {}, signal
@@ -999,33 +1001,77 @@ async function runModelSelectedReadOnlyTools({
   const selectedCalls = [];
   const seenCalls = new Set();
   let totalChars = 0;
+  let compactedEvidenceChars = 0;
   let roundsCompleted = 0;
 
   for (let round = 1; round <= MAX_MODEL_RETRIEVAL_ROUNDS && selectedCalls.length < MAX_MODEL_RETRIEVAL_CALLS; round += 1) {
     throwIfAborted(signal);
     const remainingCalls = MAX_MODEL_RETRIEVAL_CALLS - selectedCalls.length;
-    const prompt = makeReadOnlyToolPlanPrompt(goal, ranked, {
-      round,
-      maxRounds: MAX_MODEL_RETRIEVAL_ROUNDS,
-      remainingCalls,
-      priorContext: fragments.join("\n"),
-      previousCalls: selectedCalls
-    });
-    const tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
-    if (Number(tokenInfo.token_count) > Math.min(contextBudget, 1800)) {
+    const accumulatedEvidence = fragments.join("\n");
+    // The current request and read-only tool contract stay intact. First discard
+    // the oldest optional evidence; only then reduce the ranked path catalogue.
+    // Every candidate prompt is counted by the actual selected model tokenizer,
+    // and the final prompt must fit the complete derived input budget.
+    const compactionProfiles = [
+      { evidenceChars: MAX_MODEL_RETRIEVAL_CONTEXT_CHARS, availableFiles: 40 },
+      { evidenceChars: 6000, availableFiles: 32 },
+      { evidenceChars: 3000, availableFiles: 24 },
+      { evidenceChars: 1200, availableFiles: 16 },
+      { evidenceChars: 600, availableFiles: 8 },
+      { evidenceChars: 0, availableFiles: 8 },
+      { evidenceChars: 0, availableFiles: 4 }
+    ];
+    let prompt = "";
+    let tokenInfo = null;
+    let retainedEvidenceChars = accumulatedEvidence.length;
+    let retainedAvailableFiles = 40;
+    let finalPromptChars = 0;
+    for (const profile of compactionProfiles) {
+      const priorContext = profile.evidenceChars > 0
+        ? accumulatedEvidence.slice(-profile.evidenceChars)
+        : "";
+      prompt = makeReadOnlyToolPlanPrompt(goal, ranked, {
+        round,
+        maxRounds: MAX_MODEL_RETRIEVAL_ROUNDS,
+        remainingCalls,
+        priorContext,
+        previousCalls: selectedCalls,
+        availableLimit: profile.availableFiles
+      });
+      tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+      retainedEvidenceChars = priorContext.length;
+      retainedAvailableFiles = profile.availableFiles;
+      finalPromptChars = prompt.length;
+      if (Number(tokenInfo.token_count) <= contextBudget) break;
+    }
+    if (!tokenInfo || Number(tokenInfo.token_count) > contextBudget) {
       observations.push({
         kind: "model-readonly-tool-plan", stage: "context-retrieval-round-" + round,
         status: "skipped_context_budget",
-        detail: "The next evidence-driven retrieval plan exceeded the bounded planning context; existing evidence was retained."
+        detail: "The planning prompt measured " + Number(tokenInfo?.token_count || 0) + " tokens / " + finalPromptChars + " characters against a " + contextBudget + "-token input budget after evidence/file compaction; prior findings were retained."
       });
       break;
+    }
+    if (retainedEvidenceChars < accumulatedEvidence.length || retainedAvailableFiles < 40) {
+      observations.push({
+        kind: "model-readonly-tool-plan",
+        stage: "context-retrieval-round-" + round,
+        status: "context_compacted",
+        detail: "Compacted optional retrieval context to " + retainedEvidenceChars + " recent evidence characters and " + retainedAvailableFiles + " ranked file paths to fit the selected model's " + contextBudget + "-token input budget."
+      });
     }
 
     const generated = await modelJson(modelRequest, "/model/generate", {
       prompt, max_new_tokens: 320, temperature: 0.1, top_k: 20, device: "auto"
     }, 120000, signal);
     const payload = extractJsonObject(generated.text);
-    const proposedCalls = validateReadOnlyToolPlan(payload, ranked.slice(0, 40).map(item => item.path));
+    const validatedCalls = validateReadOnlyToolPlan(payload, ranked.slice(0, 40).map(item => item.path));
+    // Workspace semantic indexing is bound to SYNTRA's native checkpoint. In
+    // hybrid mode, keep retrieval lexical/symbol/memory based rather than
+    // attempting embeddings against a native service that is intentionally off.
+    const proposedCalls = hybridProvider
+      ? validatedCalls.filter(call => call.tool !== "workspace.semantic.search")
+      : validatedCalls;
     const calls = [];
     for (const call of proposedCalls) {
       const key = call.tool + ":" + JSON.stringify(call.input);
@@ -1140,12 +1186,24 @@ async function runModelSelectedReadOnlyTools({
         });
       }
 
-      const remainingChars = 9000 - totalChars;
-      if (remainingChars <= 0) break;
-      fragments.push(fragment.slice(0, remainingChars));
-      totalChars += fragments.at(-1).length;
+      // Keep a rolling 9,000-character evidence window instead of terminating
+      // the investigation when it fills. The newest retrieval result is retained;
+      // oldest optional excerpts are trimmed while selected tool calls continue.
+      fragments.push(fragment);
+      totalChars += fragment.length;
+      while (totalChars > MAX_MODEL_RETRIEVAL_CONTEXT_CHARS && fragments.length) {
+        const overflow = totalChars - MAX_MODEL_RETRIEVAL_CONTEXT_CHARS;
+        if (fragments[0].length <= overflow) {
+          const removed = fragments.shift();
+          totalChars -= removed.length;
+          compactedEvidenceChars += removed.length;
+        } else {
+          fragments[0] = fragments[0].slice(overflow);
+          totalChars -= overflow;
+          compactedEvidenceChars += overflow;
+        }
+      }
     }
-    if (totalChars >= 9000) break;
   }
 
   observations.push({
@@ -1153,9 +1211,9 @@ async function runModelSelectedReadOnlyTools({
     stage: "context-retrieval",
     status: "completed",
     detail: "Completed " + roundsCompleted + " evidence-driven planning round(s), " + selectedCalls.length +
-      " unique read-only retrieval call(s), and retained " + totalChars + " characters of bounded evidence."
+      " unique read-only retrieval call(s), retained " + totalChars + " characters of recent evidence, and rolled out " + compactedEvidenceChars + " characters of older evidence."
   });
-  return fragments.join("\n").slice(0, 9000);
+  return fragments.join("\n").slice(-MAX_MODEL_RETRIEVAL_CONTEXT_CHARS);
 }
 
 export function validatePatchReview(payload, availablePaths = [], changedPaths = []) {
@@ -1477,14 +1535,16 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 }
 
 export function deriveModelContextBudget(modelStatus = {}) {
-  // SYNTRA's checkpoint stores its own byte-BPE tokenizer. Token counts are
-  // exact only when that tokenizer is the active runtime tokenizer; never infer
-  // a context window larger than SYNTRA's own supported native architecture.
+  // Native checkpoint dimensions are architecture-bound and capped separately.
+  // An explicitly selected compatible model has an operator-declared context
+  // limit, which must not inherit the native model's 16K ceiling.
+  const hybridProvider = modelStatus.backend === "openai-compatible";
   const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
-  // The checkpoint's own sequence length is authoritative. A 256/512-token
-  // CPU checkpoint must never be treated as a 1024-token model.
+  const maximumContext = hybridProvider ? 1_000_000 : 16_384;
+  // The installed checkpoint (or explicitly configured provider limit) remains
+  // authoritative. Never enlarge a 256/512-token native checkpoint.
   const contextWindowTokens = Number.isFinite(rawContext) && rawContext > 0
-    ? Math.max(16, Math.min(16_384, Math.floor(rawContext)))
+    ? Math.max(16, Math.min(maximumContext, Math.floor(rawContext)))
     : 4096;
   const exactTokenCount = modelStatus.tokenizer === "byte-BPE";
   const outputCap = Number(modelStatus.max_output_tokens || 1024);
@@ -1566,21 +1626,24 @@ export async function runAgentTask({
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
-  if (!modelStatus.checkpoint_exists) throw new Error("No trained native SYNTRA checkpoint is available. Complete native model training before requesting an agent patch.");
+  if (!modelStatus.checkpoint_exists && modelStatus.model_available !== true) throw new Error("No trained native SYNTRA checkpoint or verified opt-in hybrid model is available. Complete native training or verify the explicitly configured hybrid endpoint.");
   const contextPlan = deriveModelContextBudget(modelStatus);
   const contextWindow = contextPlan.contextWindowTokens;
   const contextBudget = contextPlan.contextBudgetTokens;
   const outputBudget = contextPlan.outputBudgetTokens;
   const modelMetadata = {
-    engine: "syntra-native",
-    name: "SYNTRA native Transformer",
-    checkpoint: String(modelStatus.checkpoint || "").slice(0, 512),
+    engine: String(modelStatus.backend || "syntra-native"),
+    name: String(modelStatus.model_name || "SYNTRA native Transformer"),
+    ...(modelStatus.provider ? { provider: String(modelStatus.provider) } : {}),
+    ...(modelStatus.backend === "openai-compatible" ? { modelId: String(modelStatus.model_name || "") } : {}),
+    ...(modelStatus.checkpoint ? { checkpoint: String(modelStatus.checkpoint).slice(0, 512) } : {}),
     contextWindowTokens: contextWindow,
     contextBudgetTokens: contextBudget,
     outputBudgetTokens: outputBudget,
     contextSafetyMarginTokens: contextPlan.safetyMarginTokens,
     contextBudgetProfile: contextPlan.budgetProfile,
-    tokenizerIsExact: contextPlan.exactTokenCount
+    tokenizerIsExact: contextPlan.exactTokenCount,
+    contextCountIsEstimate: modelStatus.context_count_is_estimate === true
   };
   await emitProgress({ phase: "tool-execution", iteration: 0, message: "Tool: workspace.inspect — collecting project metadata and file inventory." });
   const inspectionRun = await executeWorkspaceTool({
@@ -1701,7 +1764,7 @@ export async function runAgentTask({
         message: "Asking the local model to select bounded read-only context tools."
       });
       modelSelectedContext = await runModelSelectedReadOnlyTools({
-        root, auditRoot: root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
+        root, auditRoot: root, goal, ranked, modelRequest, contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
       });
     } catch (error) {
       if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -1797,7 +1860,7 @@ export async function runAgentTask({
         try {
           modelSelectedContext = await runModelSelectedReadOnlyTools({
             root: snapshot.root, auditRoot: root, goal: implementationSlices[firstSliceIndex].goal, ranked,
-            modelRequest, contextBudget, signal, toolCalls, observations
+            modelRequest, contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
           });
         } catch (error) {
           if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -2534,7 +2597,7 @@ export async function runAgentTask({
           try {
             modelSelectedContext = await runModelSelectedReadOnlyTools({
               root: snapshot.root, auditRoot: root, goal: sliceGoal, ranked, modelRequest,
-              contextBudget, signal, toolCalls, observations
+              contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
             });
           } catch (error) {
             if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -2599,7 +2662,7 @@ export async function runAgentTask({
           try {
             modelSelectedContext = await runModelSelectedReadOnlyTools({
               root: snapshot.root, auditRoot: root, goal: nextSlice.goal, ranked, modelRequest,
-              contextBudget, signal, toolCalls, observations
+              contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
             });
           } catch (error) {
             if (signal?.aborted || error?.name === "AbortError") throw error;

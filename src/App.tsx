@@ -91,8 +91,12 @@ type AgentRunSummary = {
 
 type NativeAiStatus = {
   backend?: string;
+  provider?: string;
   model_name?: string;
+  model_available?: boolean;
   checkpoint_exists?: boolean;
+  native_training_available?: boolean;
+  context_count_is_estimate?: boolean;
   parameters?: number;
   context_tokens?: number;
   resident_cached?: boolean;
@@ -909,28 +913,35 @@ export default function App() {
           <section className="workspace-native-ai-panel" aria-label="Native AI runtime">
             <div className="workspace-memory-heading">
               <div>
-                <div className="workspace-agent-runs-heading">Native AI runtime</div>
+                <div className="workspace-agent-runs-heading">AI runtime</div>
                 <div className="workspace-memory-subtitle">
                   {nativeAiStatus
-                    ? `${nativeAiStatus.backend || 'PyTorch'} · ${nativeAiStatus.checkpoint_exists ? 'Weights ready' : 'Untrained weights'}${nativeAiStatus.context_tokens ? ` · ${nativeAiStatus.context_tokens} ctx` : ''}`
+                    ? `${nativeAiStatus.backend || 'PyTorch'} · ${nativeAiStatus.model_name || (nativeAiStatus.checkpoint_exists ? 'Weights ready' : 'Model unavailable')}${nativeAiStatus.context_tokens ? ` · ${nativeAiStatus.context_tokens.toLocaleString()} ctx` : ''}${nativeAiStatus.context_count_is_estimate ? ' · estimated' : ''}`
                     : 'Local runtime status'}
                 </div>
               </div>
               <span className="workspace-memory-count">
-                {nativeAiStatus?.resident_cached ? 'Resident' : nativeAiStatus?.checkpoint_exists ? 'Ready' : 'Standby'}
+                {(nativeAiStatus?.checkpoint_exists || nativeAiStatus?.model_available) ? 'Ready' : 'Standby'}
               </span>
             </div>
-            <div className="workspace-native-ai-actions">
-              <button type="button" onClick={() => void runCurriculumSynthesis()} disabled={nativeAiBusy || pending}>
-                Synthesize curriculum
-              </button>
-              <button type="button" onClick={() => void triggerNativeBrainJob('train')} disabled={nativeAiBusy || pending}>
-                Train native brain
-              </button>
-              <button type="button" onClick={() => void triggerNativeBrainJob('finetune')} disabled={nativeAiBusy || pending}>
-                Fine-tune brain
-              </button>
-            </div>
+            {nativeAiStatus?.backend === 'openai-compatible' ? (
+              <div className="workspace-memory-footnote">
+                Hybrid inference is active. Native pretraining, fine-tuning, and curriculum synthesis require switching back to the native provider.
+                {nativeAiStatus.context_count_is_estimate ? ' Provider context accounting is an estimate, not exact tokenizer output.' : ''}
+              </div>
+            ) : (
+              <div className="workspace-native-ai-actions">
+                <button type="button" onClick={() => void runCurriculumSynthesis()} disabled={nativeAiBusy || pending}>
+                  Synthesize curriculum
+                </button>
+                <button type="button" onClick={() => void triggerNativeBrainJob('train')} disabled={nativeAiBusy || pending}>
+                  Train native brain
+                </button>
+                <button type="button" onClick={() => void triggerNativeBrainJob('finetune')} disabled={nativeAiBusy || pending}>
+                  Fine-tune brain
+                </button>
+              </div>
+            )}
             {nativeAiNotice && <div className="workspace-memory-footnote" role="status">{nativeAiNotice}</div>}
           </section>
           <section className="workspace-exclusions-panel" aria-label="Agent path exclusions">

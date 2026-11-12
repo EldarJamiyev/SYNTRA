@@ -1,44 +1,63 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="610" viewBox="0 0 1280 610" role="img" aria-labelledby="title desc">
-<title id="title">SYNTRA local-first architecture</title><desc id="desc">React and Vite connect to a loopback Node service, which coordinates local model inference, repository intelligence, isolated verification and user-approved proposal application.</desc>
-<defs>
- <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1220"/><stop offset="1" stop-color="#151a2b"/></linearGradient>
- <linearGradient id="mint" x2="1" y2="1"><stop stop-color="#7be4cf"/><stop offset="1" stop-color="#5aa9a0"/></linearGradient>
- <linearGradient id="blue" x2="1" y2="1"><stop stop-color="#8ab8ff"/><stop offset="1" stop-color="#647fe8"/></linearGradient>
- <linearGradient id="violet" x2="1" y2="1"><stop stop-color="#c1a5ff"/><stop offset="1" stop-color="#8d76dc"/></linearGradient>
- <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#a5b9dc" opacity=".055"/></pattern>
- <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0 0L6 3L0 6" fill="none" stroke="#8baee6" stroke-width="1.2"/></marker>
-</defs>
-<rect width="1280" height="610" rx="24" fill="url(#bg)"/><rect width="1280" height="610" rx="24" fill="url(#grid)"/>
-<text x="58" y="62" fill="#f1f5ff" font-family="Inter,Segoe UI,Arial" font-size="26" font-weight="700">A local stack. A controlled engineering loop.</text>
-<text x="58" y="91" fill="#92a2ba" font-family="Inter,Segoe UI,Arial" font-size="14">The browser, orchestration service, model runtime and project workspace stay on the user's machine.</text>
-<rect x="42" y="126" width="1196" height="428" rx="20" fill="#0b1322" stroke="#7da6e9" stroke-opacity=".35" stroke-dasharray="7 7"/>
-<text x="66" y="156" fill="#8fb5ff" font-family="Inter,Segoe UI,Arial" font-size="12" font-weight="700" letter-spacing="2">LOCAL TRUST BOUNDARY · 127.0.0.1</text>
-<g font-family="Inter,Segoe UI,Arial">
- <rect x="72" y="202" width="214" height="120" rx="15" fill="#142b2c" stroke="#73d5c1" stroke-opacity=".8"/>
- <rect x="90" y="220" width="34" height="34" rx="9" fill="url(#mint)" fill-opacity=".2"/><text x="107" y="242" text-anchor="middle" fill="#9af0dc" font-size="17" font-weight="700">UI</text>
- <text x="140" y="235" fill="#e9fbf7" font-size="16" font-weight="700">React + Vite</text><text x="90" y="277" fill="#a9c6c2" font-size="12">Chat · history · workspace</text><text x="90" y="296" fill="#a9c6c2" font-size="12">review panel · approvals</text>
- <rect x="370" y="202" width="224" height="120" rx="15" fill="#17243b" stroke="#82aaff" stroke-opacity=".8"/>
- <rect x="389" y="220" width="34" height="34" rx="9" fill="url(#blue)" fill-opacity=".2"/><text x="406" y="242" text-anchor="middle" fill="#a9c7ff" font-size="15" font-weight="700">API</text>
- <text x="439" y="235" fill="#eef3ff" font-size="16" font-weight="700">Node service</text><text x="389" y="277" fill="#aab9d0" font-size="12">Request routing · job state</text><text x="389" y="296" fill="#aab9d0" font-size="12">permissioned tool registry</text>
- <rect x="677" y="180" width="230" height="164" rx="15" fill="#1d2340" stroke="#9b9be8" stroke-opacity=".8"/>
- <text x="700" y="211" fill="#d8d5ff" font-size="12" font-weight="700" letter-spacing="1.5">INFERENCE</text>
- <text x="700" y="241" fill="#f2f0ff" font-size="16" font-weight="700">Local model runtime</text>
- <rect x="700" y="260" width="184" height="28" rx="8" fill="#343a60"/><text x="792" y="279" text-anchor="middle" fill="#e4e4ff" font-size="12">Ollama · pretrained</text>
- <rect x="700" y="296" width="184" height="28" rx="8" fill="#2d2a49"/><text x="792" y="315" text-anchor="middle" fill="#d8ceff" font-size="12">PyTorch · research mode</text>
- <rect x="988" y="180" width="214" height="164" rx="15" fill="#28233b" stroke="#b59aff" stroke-opacity=".85"/>
- <text x="1012" y="211" fill="#d9c9ff" font-size="12" font-weight="700" letter-spacing="1.5">PROJECT CONTEXT</text>
- <text x="1012" y="241" fill="#f4edff" font-size="16" font-weight="700">Workspace intelligence</text>
- <text x="1012" y="270" fill="#c4b5e5" font-size="12">Source / import graph</text><text x="1012" y="291" fill="#c4b5e5" font-size="12">Semantic + symbol search</text><text x="1012" y="312" fill="#c4b5e5" font-size="12">User-authored project memory</text>
- <path d="M286 262H360M594 262H666M907 262H978" fill="none" stroke="#8baee6" stroke-width="2" marker-end="url(#arr)"/>
- <text x="323" y="246" fill="#8298b9" text-anchor="middle" font-size="10">HTTP</text><text x="630" y="246" fill="#8298b9" text-anchor="middle" font-size="10">PROMPTS</text><text x="943" y="246" fill="#8298b9" text-anchor="middle" font-size="10">READ ONLY</text>
- <rect x="370" y="399" width="224" height="116" rx="15" fill="#20283a" stroke="#8ca4c7" stroke-opacity=".8"/>
- <text x="392" y="430" fill="#dfe8f7" font-size="15" font-weight="700">Candidate verifier</text><text x="392" y="457" fill="#b1c1d7" font-size="12">Offline Docker by default</text><text x="392" y="477" fill="#b1c1d7" font-size="12">Build · test · lint · typecheck</text><text x="392" y="497" fill="#b1c1d7" font-size="12">Hash and integrity checks</text>
- <rect x="677" y="399" width="230" height="116" rx="15" fill="#2a253b" stroke="#ba9eff" stroke-opacity=".8"/>
- <text x="700" y="430" fill="#e9dcff" font-size="15" font-weight="700">Proposal queue</text><text x="700" y="457" fill="#c3b4dc" font-size="12">Hash-bound diffs + backups</text><text x="700" y="477" fill="#c3b4dc" font-size="12">Explicit review before apply</text><text x="700" y="497" fill="#c3b4dc" font-size="12">Transactional file changes</text>
- <rect x="988" y="399" width="214" height="116" rx="15" fill="#182c2e" stroke="#73d5c1" stroke-opacity=".8"/>
- <text x="1012" y="430" fill="#ddfff6" font-size="15" font-weight="700">Workspace state</text><text x="1012" y="457" fill="#afd3cc" font-size="12">.syntra / run records</text><text x="1012" y="477" fill="#afd3cc" font-size="12">Audit events · local memory</text><text x="1012" y="497" fill="#afd3cc" font-size="12">Proposals · checkpoints</text>
- <path d="M482 322V389M594 457H667M907 457H978" fill="none" stroke="#8baee6" stroke-width="1.8" marker-end="url(#arr)"/>
- <path d="M1095 344V389M988 457H918" fill="none" stroke="#b59aff" stroke-opacity=".55" stroke-width="1.4" stroke-dasharray="5 5" marker-end="url(#arr)"/>
- <text x="639" y="578" text-anchor="middle" fill="#8c9cb5" font-size="12">No hosted AI API · no arbitrary shell tool · no automatic source apply</text>
-</g>
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="820" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
+  <title id="title">SYNTRA system architecture</title>
+  <desc id="desc">The React chat interface sends user requests to loopback Node orchestration. The orchestrator uses bounded workspace tools and a selected inference engine, then validates and stages reviewable patches.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#08111f"/><stop offset="1" stop-color="#101b31"/></linearGradient>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#91b6ff"/></marker>
+    <style>
+      .h{font:700 24px Inter,Segoe UI,Arial,sans-serif;fill:#f1f5ff}
+      .t{font:600 18px Inter,Segoe UI,Arial,sans-serif;fill:#edf3ff}
+      .s{font:14px Inter,Segoe UI,Arial,sans-serif;fill:#aab9cf}
+      .k{font:700 12px Inter,Segoe UI,Arial,sans-serif;letter-spacing:1.5px;fill:#9fb4d4}
+      .node{fill:#12213a;stroke:#456184;stroke-width:1.5}
+      .line{fill:none;stroke:#91b6ff;stroke-width:2;marker-end:url(#arrow)}
+      .dash{fill:none;stroke:#8be9dc;stroke-width:2;stroke-dasharray:7 7;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1440" height="820" rx="28" fill="url(#bg)"/>
+  <g opacity=".22" fill="none" stroke="#8aa8d1"><path d="M0 120H1440M0 240H1440M0 360H1440M0 480H1440M0 600H1440M0 720H1440"/><path d="M120 0V820M240 0V820M360 0V820M480 0V820M600 0V820M720 0V820M840 0V820M960 0V820M1080 0V820M1200 0V820M1320 0V820"/></g>
+  <text x="72" y="76" class="k">SYNTRA · PRODUCTION PATH</text>
+  <text x="72" y="118" class="h" font-size="34">One controlled agent. Two explicit inference choices.</text>
+  <text x="72" y="151" class="s">Provider selection changes model inference only. Workspace access, approvals, and verification stay in SYNTRA.</text>
+  <rect x="72" y="210" width="260" height="130" rx="18" class="node"/>
+  <text x="100" y="252" class="k">USER INTERFACE</text>
+  <text x="100" y="290" class="t">React + TypeScript</text>
+  <text x="100" y="317" class="s">Chat · sessions · workspace</text>
+  <rect x="408" y="210" width="320" height="130" rx="18" class="node"/>
+  <text x="436" y="252" class="k">LOCAL ORCHESTRATION</text>
+  <text x="436" y="290" class="t">Node.js loopback API</text>
+  <text x="436" y="317" class="s">Intent · retrieval · agent runs</text>
+  <rect x="804" y="180" width="270" height="105" rx="18" class="node"/>
+  <text x="832" y="218" class="k">NATIVE DEFAULT</text>
+  <text x="832" y="254" class="t">SYNTRA PyTorch</text>
+  <text x="832" y="275" class="s">Local checkpoint · training</text>
+  <rect x="1120" y="180" width="250" height="105" rx="18" class="node" stroke="#8c9fff"/>
+  <text x="1148" y="218" class="k">OPT-IN ONLY</text>
+  <text x="1148" y="254" class="t">Compatible endpoint</text>
+  <text x="1148" y="275" class="s">Exact model ID · HTTPS opt-in</text>
+  <rect x="804" y="330" width="566" height="78" rx="16" fill="#18233b" stroke="#8975b7" stroke-width="1.5"/>
+  <text x="832" y="362" class="k">BOUNDED WORKSPACE TOOLS</text>
+  <text x="832" y="390" class="t">Search · read · symbols · memory · diagnostics</text>
+  <rect x="408" y="500" width="320" height="118" rx="18" class="node"/>
+  <text x="436" y="540" class="k">PATCH PIPELINE</text>
+  <text x="436" y="578" class="t">Structured candidate edits</text>
+  <text x="436" y="600" class="s">Source hashes · review · proposals</text>
+  <rect x="804" y="500" width="566" height="118" rx="18" class="node"/>
+  <text x="832" y="540" class="k">VERIFICATION &amp; TRUST BOUNDARY</text>
+  <text x="832" y="578" class="t">Isolated checks · result evidence · user approval</text>
+  <text x="832" y="600" class="s">No auto-apply for unverified proposals</text>
+  <path d="M332 275H408" class="line"/>
+  <path d="M728 255C760 255 770 232 804 232" class="line"/>
+  <path d="M728 290C765 290 770 380 804 380" class="line"/>
+  <path d="M1074 232H1120" class="dash"/>
+  <text x="1086" y="160" class="k" text-anchor="middle">OR</text>
+  <path d="M1080 285V330" class="line"/>
+  <path d="M728 565H804" class="line"/>
+  <path d="M967 408V500" class="line"/>
+  <path d="M728 340V450H568V500" class="line"/>
+  <path d="M1080 618V680H568V618" class="dash"/>
+  <rect x="72" y="680" width="1298" height="74" rx="16" fill="#0d192b" stroke="#344c6e"/>
+  <text x="100" y="710" class="k">EVIDENCE RULE</text>
+  <text x="100" y="737" class="s">CI proves application behavior. Only a real checkpoint/endpoint benchmark run proves model task outcomes. Missing measurements remain unpublished.</text>
+  <text x="1368" y="790" class="s" text-anchor="end">LOCAL-FIRST · EXPLICIT PROVIDERS · HUMAN-APPROVED</text>
 </svg>
