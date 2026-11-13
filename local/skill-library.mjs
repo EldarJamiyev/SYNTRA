@@ -163,6 +163,51 @@ async function discoverSkillDirectory(rootRealPath) {
   return skillsReal;
 }
 
+export function compactSkillContext(context, maxChars) {
+  if (typeof context !== "string" || !context || !Number.isFinite(maxChars) || maxChars <= 0) return "";
+  if (context.length <= maxChars) return context;
+
+  const separator = "\n\n---\n\n";
+  const sections = context.split(separator).map(section => {
+    const boundary = section.indexOf("\n\n");
+    const header = boundary < 0 ? section : section.slice(0, boundary);
+    const body = boundary < 0 ? "" : section.slice(boundary + 2);
+    const slug = header.match(/^\[SKILL:\s*([^\]]+)\]/mu)?.[1] || "";
+    const weight = slug === "syntra-project-guardrails"
+      ? 1.35
+      : slug === "verification-before-completion" ? 1.15 : 1.5;
+    return { header, body, weight };
+  });
+
+  const separatorChars = Math.max(0, sections.length - 1) * separator.length;
+  const headerChars = sections.reduce((total, section) => total + section.header.length, 0);
+  const bodyBudget = Math.max(0, maxChars - separatorChars - headerChars);
+  const totalWeight = sections.reduce((total, section) => total + section.weight, 0);
+
+  const allocations = sections.map(section =>
+    Math.min(section.body.length, Math.floor(bodyBudget * section.weight / totalWeight))
+  );
+  let remaining = bodyBudget - allocations.reduce((total, value) => total + value, 0);
+
+  // Distribute rounding and unused short-section capacity without removing
+  // mandatory skill headers or allowing the final result to exceed the budget.
+  while (remaining > 0) {
+    let allocated = false;
+    for (let index = 0; index < sections.length && remaining > 0; index += 1) {
+      const capacity = sections[index].body.length - allocations[index];
+      if (capacity <= 0) continue;
+      allocations[index] += 1;
+      remaining -= 1;
+      allocated = true;
+    }
+    if (!allocated) break;
+  }
+
+  return sections.map((section, index) =>
+    section.header + (allocations[index] > 0 ? "\n\n" + section.body.slice(0, allocations[index]) : "")
+  ).join(separator).slice(0, maxChars);
+}
+
 export async function loadRelevantSkills(workspaceRoot, goal, { libraryRoot = SYNTRA_ROOT } = {}) {
   const empty = (status, reason, discovered = 0) => ({
     status,
