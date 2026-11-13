@@ -134,23 +134,34 @@ test("oversized skill files, symbolic-link folders, and hard-linked skill docume
     }
 
     const hardlinkSource = path.join(outside, "shared-skill.md");
-    const hardlinkDirectory = path.join(root, ".agents", "skills", "hardlinked");
-    await fs.mkdir(hardlinkDirectory, { recursive: true });
     await fs.writeFile(hardlinkSource,
-      "---\nname: hardlinked\ndescription: A hard-linked skill must be rejected.\n---\n\n# Hardlinked\nNo external aliases are allowed.\n",
+      "---\nname: external-content\ndescription: External file content must not be followed.\n---\n\n# External content\nNo external aliases are allowed.\n",
       "utf8");
+
+    const hardlinkDirectory = path.join(root, ".agents", "skills", "hardlinked");
+    const symlinkFileDirectory = path.join(root, ".agents", "skills", "symlink-file");
+    await fs.mkdir(hardlinkDirectory, { recursive: true });
+    await fs.mkdir(symlinkFileDirectory, { recursive: true });
     let hardlinkCreated = false;
+    let symlinkFileCreated = false;
     try {
       await fs.link(hardlinkSource, path.join(hardlinkDirectory, "SKILL.md"));
       hardlinkCreated = true;
     } catch {
       // Some Windows/filesystem configurations restrict hard-link creation.
     }
+    try {
+      await fs.symlink(hardlinkSource, path.join(symlinkFileDirectory, "SKILL.md"), "file");
+      symlinkFileCreated = true;
+    } catch {
+      // Some Windows/filesystem configurations restrict symlink creation.
+    }
 
     const result = await loadRelevantSkills(root, "Debug a failing test.", { libraryRoot: root });
     assert.ok(!result.skills.some(skill => skill.slug === "oversized"));
     assert.ok(!result.skills.some(skill => skill.slug === "external-link"));
     if (hardlinkCreated) assert.ok(!result.skills.some(skill => skill.slug === "hardlinked"));
+    if (symlinkFileCreated) assert.ok(!result.skills.some(skill => skill.slug === "symlink-file"));
     assert.ok(result.skills.some(skill => skill.slug === "syntra-project-guardrails"));
   } finally {
     await removeWorkspace(root);
