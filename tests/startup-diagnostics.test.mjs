@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
+import { isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "../scripts/node-version.mjs";
 
 const launcherPath = new URL("../scripts/start-syntra.ps1", import.meta.url);
+
+
+test("Windows launcher enforces the same Node.js range declared by the package", async () => {
+  const [launcher, packageText] = await Promise.all([
+    fs.readFile(launcherPath, "utf8"),
+    fs.readFile(new URL("../package.json", import.meta.url), "utf8")
+  ]);
+  const packageJson = JSON.parse(packageText);
+  assert.equal(packageJson.engines?.node, SUPPORTED_NODE_RANGE);
+  assert.match(launcher, /scripts\\node-version\.mjs/u);
+  assert.match(launcher, /Node\.js >=22\.12\.0/u);
+  assert.equal(isSupportedNodeVersion("22.12.0"), true);
+  assert.equal(isSupportedNodeVersion("20.19.0"), false);
+});
 
 test("Windows startup verifies the expected SYNTRA page after starting Vite", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
