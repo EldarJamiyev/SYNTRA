@@ -123,13 +123,14 @@ try {
         throw "Node.js is missing. Install Node.js 20 or newer from https://nodejs.org/ and double-click Start-SYNTRA.bat again."
     }
     $nodeVersionText = (& node --version 2>&1 | Out-String).Trim()
-    $nodeMatch = [regex]::Match($nodeVersionText, '^v?(\d+)\.')
-    if ($LASTEXITCODE -ne 0 -or -not $nodeMatch.Success) {
-        throw "Could not read the Node.js version. Reinstall Node.js 20 or newer."
+    if ($LASTEXITCODE -ne 0 -or -not $nodeVersionText) {
+        throw "Could not read the Node.js version. Reinstall Node.js 22.12.0 or newer."
     }
-    $nodeMajor = [int]$nodeMatch.Groups[1].Value
-    if ($nodeMajor -lt 20) {
-        throw "SYNTRA needs Node.js 20 or newer. Installed version: $nodeVersionText"
+    $nodeVersionCheck = & node (Join-Path $Root "scripts\node-version.mjs") 2>&1
+    $nodeVersionExitCode = $LASTEXITCODE
+    if ($nodeVersionExitCode -ne 0) {
+        $nodeVersionCheck | ForEach-Object { Write-Host $_ }
+        throw "SYNTRA needs Node.js 22.12.0 or newer. Installed version: $nodeVersionText"
     }
 
     # SYNTRA has one inference engine: its own local Python/PyTorch checkpoint.
