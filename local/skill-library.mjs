@@ -285,8 +285,8 @@ export async function loadRelevantSkills(workspaceRoot, goal, { libraryRoot = SY
   } catch (error) {
     return empty(
       "unavailable",
-      "Local skill retrieval was skipped because the skill library could not be read safely: "
-        + String(error instanceof Error ? error.message : error).slice(0, 240)
+      "Local skill retrieval was skipped because a filesystem read or path validation failed ("
+        + String(error instanceof Error && error.name ? error.name : "unknown error").slice(0, 80) + ")."
     );
   }
 }
