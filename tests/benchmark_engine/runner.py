@@ -1038,6 +1038,17 @@ def summarize(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def language_summary_lines(language_breakdown: dict[str, dict[str, Any]]) -> list[str]:
+    """Format the fully verified per-language counts emitted by summarize()."""
+    return [
+        "Language " + language + ": "
+        + str(counts["fully_verified_task_count"])
+        + "/" + str(counts["baseline_valid_task_count"])
+        + " fully verified; " + str(counts["task_count"]) + " selected"
+        for language, counts in sorted(language_breakdown.items())
+    ]
+
+
 def assess_loss_intelligence_divergence(summary: dict[str, Any], checkpoint: dict[str, Any], low_loss_threshold: float = LOW_TRAINING_LOSS_THRESHOLD) -> dict[str, Any]:
     train_loss = checkpoint.get("train_loss")
     baseline_valid = summary.get("baseline_valid_task_count", 0)
@@ -1210,12 +1221,8 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         print(f"Regression prevention: {summary['regression_prevention_rate']:.1%}")
     else:
         print("Regression prevention: unavailable (no completed regression measurements)")
-    for language, counts in sorted(summary["language_breakdown"].items()):
-        print(
-            "Language " + language + ": " + str(counts["completed_task_count"])
-            + "/" + str(counts["baseline_valid_task_count"]) + " fully verified; "
-            + str(counts["task_count"]) + " selected"
-        )
+    for line in language_summary_lines(summary["language_breakdown"]):
+        print(line)
     print("Generated tokens: " + str(summary["generated_tokens"]))
     print("Loss/intelligence divergence: " + ("DETECTED" if divergence["detected"] else "not detected"))
     print("Report: " + str(output))
