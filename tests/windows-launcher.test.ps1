@@ -2,6 +2,13 @@ $ErrorActionPreference = "Stop"
 
 $launcherPath = Join-Path $PSScriptRoot "..\scripts\start-syntra.ps1"
 $launcher = Get-Content -LiteralPath $launcherPath -Raw
+$package = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\package.json") -Raw | ConvertFrom-Json
+if ($package.engines.node -ne ">=22.12.0") {
+    throw "package.json must declare the same supported Node.js runtime as the Windows launcher."
+}
+if ($launcher -notmatch 'scripts\\node-version\.mjs') {
+    throw "The Windows launcher must run the shared Node.js compatibility check before installing dependencies."
+}
 
 if ($launcher -match "(?i)SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|11434|UsePretrainedModel|launcher-helpers") {
     throw "The Windows launcher must not contain alternate AI providers or model selection."
