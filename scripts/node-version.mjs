@@ -10,10 +10,15 @@ export function parseNodeVersion(value) {
   const match = NODE_VERSION_PATTERN.exec(value.trim());
   if (!match) return null;
 
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  if (![major, minor, patch].every(Number.isSafeInteger)) return null;
+
   return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
+    major,
+    minor,
+    patch,
     prerelease: match[4] ?? null
   };
 }
@@ -28,7 +33,7 @@ export function isSupportedNodeVersion(value) {
 export function getNodeVersionError(value) {
   const actual = typeof value === "string" && value.trim() ? value.trim() : "unknown";
   return "SYNTRA requires Node.js " + SUPPORTED_NODE_RANGE
-    + " because its Vite 8 frontend does not support older runtimes. Detected: " + actual + ".";
+    + " to satisfy Vite 8 and SYNTRA's supported-runtime policy. Detected: " + actual + ".";
 }
 
 function runVersionCheck() {
