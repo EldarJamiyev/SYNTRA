@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { loadRelevantSkills, MAX_SKILL_CONTEXT_CHARS } from "../local/skill-library.mjs";
+import { compactSkillContext, loadRelevantSkills, MAX_SKILL_CONTEXT_CHARS } from "../local/skill-library.mjs";
 
 async function createWorkspace() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-skill-library-"));
@@ -77,6 +77,23 @@ test("skill ranking and selected excerpts are deterministic and bounded", async 
   } finally {
     await removeWorkspace(root);
   }
+});
+
+test("native context compaction preserves skill identities and respects a hard character budget", () => {
+  const context = [
+    "[SKILL: syntra-project-guardrails]\nPurpose: Preserve SYNTRA project boundaries.\n\n" + "guardrail guidance ".repeat(180),
+    "[SKILL: verification-before-completion]\nPurpose: Verify actual behavior.\n\n" + "verification guidance ".repeat(180),
+    "[SKILL: systematic-debugging]\nPurpose: Investigate failures systematically.\n\n" + "debugging guidance ".repeat(180)
+  ].join("\n\n---\n\n");
+
+  const compacted = compactSkillContext(context, 900);
+
+  assert.ok(compacted.length <= 900);
+  assert.match(compacted, /\[SKILL: syntra-project-guardrails\]/u);
+  assert.match(compacted, /\[SKILL: verification-before-completion\]/u);
+  assert.match(compacted, /\[SKILL: systematic-debugging\]/u);
+  assert.equal(compactSkillContext(context, 0), "");
+  assert.equal(compactSkillContext(context, context.length), context);
 });
 
 test("missing skill libraries are reported without failing the coding-agent task", async () => {
