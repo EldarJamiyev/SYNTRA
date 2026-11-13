@@ -1595,8 +1595,8 @@ export async function runAgentTask({
     contextSafetyMarginTokens: contextPlan.safetyMarginTokens,
     contextBudgetProfile: contextPlan.budgetProfile,
     tokenizerIsExact: contextPlan.exactTokenCount,
-    selectedSkills: skillSelection.skills.map(({ slug, excerptSha256, score, characters }) => ({
-      slug, excerptSha256, score, characters
+    selectedSkills: skillSelection.skills.map(({ slug, source, excerptSha256, score, characters }) => ({
+      slug, source, excerptSha256, score, characters
     }))
   };
   await emitProgress({ phase: "tool-execution", iteration: 0, message: "Tool: workspace.inspect — collecting project metadata and file inventory." });
@@ -1989,13 +1989,19 @@ export async function runAgentTask({
           prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext, skillContext);
           tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
         }
-        if (skillContext !== skillSelection.context) {
+        if (skillSelection.context) {
+          const includedSlugs = skillSelection.skills
+            .filter(skill => skillContext.includes("[SKILL: " + skill.slug + "]"))
+            .map(skill => skill.slug);
           observations.push({
             kind: "skill-library-context", stage: slice.id + "-attempt-" + sliceAttempt,
-            status: skillContext ? "compacted" : "omitted_for_context",
-            detail: skillContext
-              ? "Skill guidance was reduced to " + skillContext.length + " characters using the native tokenizer budget."
-              : "Optional skill guidance was omitted to preserve the task and patch contract inside the native context window."
+            status: !skillContext ? "omitted_for_context"
+              : skillContext === skillSelection.context ? "included" : "compacted",
+            detail: JSON.stringify({
+              characters: skillContext.length,
+              sha256: skillContext ? sha256(skillContext) : null,
+              selectedSkills: includedSlugs
+            })
           });
         }
         if (tokenInfo.token_count > contextBudget) {
