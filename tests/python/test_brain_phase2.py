@@ -635,7 +635,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
 
         tokenizer = BytePairTokenizer.empty()
         block_size = 64
-        response = "normalize(value): return value.strip().lower()\\n" * 20
+        response = "normalize(value): return value.strip().lower()\n" * 20
         prompt = "Normalize text."
         record = {"prompt": prompt, "completion": response}
         inputs, targets = _instruction_context_blocks(
@@ -653,7 +653,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             all(token == -100 for token in targets[1][:stride]),
             "overlap context targets must be masked instead of trained twice",
         )
-        prefix = "Instruction:\\n" + prompt + "\\nResponse:\\n"
+        prefix = "Instruction:\n" + prompt + "\nResponse:\n"
         sequence = [BOS_ID, *tokenizer.encode(prefix), *tokenizer.encode(response), EOS_ID]
         supervised = [
             token for row in targets for token in row if token != -100
