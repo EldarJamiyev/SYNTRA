@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+
+const SYNTRA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 export const MAX_SKILL_CONTEXT_CHARS = 7200;
 
@@ -160,7 +163,7 @@ async function discoverSkillDirectory(rootRealPath) {
   return skillsReal;
 }
 
-export async function loadRelevantSkills(workspaceRoot, goal) {
+export async function loadRelevantSkills(workspaceRoot, goal, { libraryRoot = SYNTRA_ROOT } = {}) {
   const empty = (status, reason, discovered = 0) => ({
     status,
     reason,
@@ -170,49 +173,70 @@ export async function loadRelevantSkills(workspaceRoot, goal) {
   });
 
   try {
-    const rootRealPath = await fs.realpath(workspaceRoot);
-    const skillsRoot = await discoverSkillDirectory(rootRealPath);
-    if (!skillsRoot) {
-      return empty("not_available", "No safe .agents/skills directory was found in the selected workspace.");
+    const roots = [];
+    const seenRoots = new Set();
+    for (const [candidate, source] of [[libraryRoot, "bundled"], [workspaceRoot, "workspace"]]) {
+      try {
+        const rootRealPath = await fs.realpath(candidate);
+        if (seenRoots.has(rootRealPath)) continue;
+        seenRoots.add(rootRealPath);
+        const skillsRoot = await discoverSkillDirectory(rootRealPath);
+        if (skillsRoot) roots.push({ skillsRoot, source });
+      } catch {
+        // A missing optional workspace skills directory must not block agent work.
+      }
     }
 
-    const entries = (await fs.readdir(skillsRoot, { withFileTypes: true }))
-      .filter(entry => entry.isDirectory() && /^[a-z0-9][a-z0-9._-]{0,79}$/u.test(entry.name))
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .slice(0, MAX_DISCOVERED_SKILLS);
-
-    const discovered = [];
-    for (const entry of entries) {
-      const skillDirectory = path.join(skillsRoot, entry.name);
-      const expectedDirectory = path.join(skillsRoot, entry.name);
-      const realSkillDirectory = await realDirectory(skillDirectory, expectedDirectory);
-      if (!realSkillDirectory || !isWithin(skillsRoot, realSkillDirectory)) continue;
-
-      const skillPath = path.join(realSkillDirectory, "SKILL.md");
-      const prefix = await readVerifiedPrefix(skillPath, realSkillDirectory, MAX_DISCOVERY_BYTES);
-      if (prefix === null || !prefix.trim()) continue;
-
-      const parsed = parseSkillDocument(prefix, entry.name);
-      discovered.push({
-        slug: entry.name,
-        path: skillPath,
-        name: parsed.name,
-        description: parsed.description
-      });
+    if (!roots.length) {
+      return empty("not_available", "No safe SYNTRA or workspace .agents/skills directory was found.");
     }
 
+    const discoveredBySlug = new Map();
+    for (const { skillsRoot, source } of roots) {
+      const entries = (await fs.readdir(skillsRoot, { withFileTypes: true }))
+        .filter(entry => entry.isDirectory() && /^[a-z0-9][a-z0-9._-]{0,79}$/u.test(entry.name))
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .slice(0, MAX_DISCOVERED_SKILLS);
+
+      for (const entry of entries) {
+        if (discoveredBySlug.has(entry.name)) continue;
+        const skillDirectory = path.join(skillsRoot, entry.name);
+        const expectedDirectory = path.join(skillsRoot, entry.name);
+        const realSkillDirectory = await realDirectory(skillDirectory, expectedDirectory);
+        if (!realSkillDirectory || !isWithin(skillsRoot, realSkillDirectory)) continue;
+
+        const skillPath = path.join(realSkillDirectory, "SKILL.md");
+        const prefix = await readVerifiedPrefix(skillPath, realSkillDirectory, MAX_DISCOVERY_BYTES);
+        if (prefix === null || !prefix.trim()) continue;
+
+        const parsed = parseSkillDocument(prefix, entry.name);
+        discoveredBySlug.set(entry.name, {
+          slug: entry.name,
+          path: skillPath,
+          source,
+          name: parsed.name,
+          description: parsed.description
+        });
+      }
+    }
+
+    const discovered = [...discoveredBySlug.values()];
     if (!discovered.length) {
-      return empty("empty", "The local skill directory contains no readable SKILL.md files.", entries.length);
+      return empty("empty", "The available skill directories contain no readable SKILL.md files.");
     }
 
     const goalTerms = termsOf(goal);
-    const mandatory = discovered.filter(skill => ALWAYS_SELECTED.has(skill.slug));
+    const mandatory = discovered.filter(skill =>
+      skill.source === "bundled" && ALWAYS_SELECTED.has(skill.slug)
+    );
     const ranked = discovered
-      .filter(skill => !ALWAYS_SELECTED.has(skill.slug))
+      .filter(skill => !mandatory.includes(skill))
       .map(skill => ({ ...skill, score: scoreSkill(goalTerms, skill) }))
       .filter(skill => skill.score > 0)
       .sort((left, right) =>
-        right.score - left.score || left.slug.localeCompare(right.slug)
+        right.score - left.score
+        || (left.source === right.source ? 0 : left.source === "bundled" ? -1 : 1)
+        || left.slug.localeCompare(right.slug)
       );
 
     const selectedMetadata = [...mandatory, ...ranked].slice(0, MAX_SELECTED_SKILLS);
@@ -239,7 +263,8 @@ export async function loadRelevantSkills(workspaceRoot, goal) {
         slug: item.slug,
         name: parsed.name,
         description: parsed.description,
-        score: ALWAYS_SELECTED.has(item.slug) ? 1000 : item.score,
+        source: item.source,
+        score: mandatory.includes(item) ? 1000 : item.score,
         excerptSha256,
         characters: clipped.length,
         content: clipped
@@ -251,7 +276,7 @@ export async function loadRelevantSkills(workspaceRoot, goal) {
     return {
       status: selected.length ? "selected" : "no_match",
       reason: selected.length
-        ? "Loaded a bounded set of local skill references."
+        ? "Loaded a bounded set of local SYNTRA and workspace skill references."
         : "No relevant local skill references were selected.",
       discovered: discovered.length,
       skills: selected.map(({ content, ...metadata }) => metadata),
@@ -260,7 +285,7 @@ export async function loadRelevantSkills(workspaceRoot, goal) {
   } catch (error) {
     return empty(
       "unavailable",
-      "Local skill retrieval was skipped because the selected workspace skill library could not be read safely: "
+      "Local skill retrieval was skipped because the skill library could not be read safely: "
         + String(error instanceof Error ? error.message : error).slice(0, 240)
     );
   }
