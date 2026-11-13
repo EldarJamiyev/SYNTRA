@@ -41,6 +41,9 @@ function sameFileIdentity(left, right) {
   return left.isFile() && right.isFile()
     && left.dev === right.dev
     && left.ino === right.ino
+    && left.nlink === right.nlink
+    && left.nlink === 1
+    && right.nlink === 1
     && left.size === right.size
     && left.mtimeMs === right.mtimeMs
     && left.ctimeMs === right.ctimeMs;
@@ -62,7 +65,7 @@ async function readVerifiedPrefix(filePath, expectedParent, maxBytes) {
   let handle;
   try {
     const before = await fs.lstat(filePath);
-    if (!before.isFile() || before.isSymbolicLink() || before.size > MAX_SKILL_FILE_BYTES) return null;
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > MAX_SKILL_FILE_BYTES) return null;
     if (await fs.realpath(path.dirname(filePath)) !== expectedParent) return null;
 
     const flags = constants.O_RDONLY | (constants.O_NOFOLLOW || 0);
