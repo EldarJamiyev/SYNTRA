@@ -172,6 +172,21 @@ def load_instruction_examples(
             if isinstance(split_group_value, str) and split_group_value.strip()
             else None
         )
+        source_path_value = item.get("source_path")
+        if source_path_value is not None and (
+            not isinstance(source_path_value, str) or len(source_path_value) > 2048
+        ):
+            raise ValueError(f"source_path on line {line_number} must be a string of at most 2,048 characters.")
+        normalized_source_path = (
+            unicodedata.normalize("NFC", source_path_value.strip().replace("\\", "/"))
+            if isinstance(source_path_value, str) and source_path_value.strip()
+            else ""
+        )
+        source_path_group_id = (
+            hashlib.sha256(normalized_source_path.encode("utf-8")).hexdigest()
+            if normalized_source_path
+            else None
+        )
 
         prompt = tokenizer.encode(prompt_text)
         completion = tokenizer.encode(completion_text)
@@ -238,6 +253,7 @@ def load_instruction_examples(
                     "context_overlap_tokens": overlap_target_count,
                     "prompt_group_id": prompt_group_id,
                     "split_group_id": split_group_id,
+                    "source_path_group_id": source_path_group_id,
                     "source_example_id": source_example_id,
                     "source_row_id": source_row_id,
                     "example_id": chunk_example_id,
@@ -271,6 +287,12 @@ def _source_record_index(examples: list[dict]) -> dict[str, dict[str, Any]]:
             raise ValueError("Instruction context window has a malformed source-example identifier.")
         dataset_sha256 = example.get("dataset_sha256")
         dataset_bytes = example.get("dataset_bytes")
+        source_path_group_id = example.get("source_path_group_id")
+        if source_path_group_id is not None and (
+            not isinstance(source_path_group_id, str)
+            or re.fullmatch(r"[a-f0-9]{64}", source_path_group_id) is None
+        ):
+            raise ValueError("Instruction context window has a malformed source-path group hash.")
         if dataset_sha256 is not None and (
             not isinstance(dataset_sha256, str)
             or re.fullmatch(r"[a-f0-9]{64}", dataset_sha256) is None
@@ -284,6 +306,7 @@ def _source_record_index(examples: list[dict]) -> dict[str, dict[str, Any]]:
             "source_example_id": source_id,
             "prompt_group_id": example["prompt_group_id"],
             "split_group_id": example.get("split_group_id"),
+            "source_path_group_id": source_path_group_id,
             "dataset_sha256": dataset_sha256,
             "dataset_bytes": dataset_bytes,
         }
@@ -324,6 +347,7 @@ def split_instruction_examples(
     owners: dict[str, int] = {}
     record_keys: list[tuple[str, ...]] = []
     source_group_ids: set[str] = set()
+    source_path_group_ids: set[str] = set()
 
     for index, example in enumerate(examples):
         if not isinstance(example, dict):
@@ -336,11 +360,19 @@ def split_instruction_examples(
             not isinstance(split_group_id, str) or len(split_group_id) != 64
         ):
             raise ValueError("Instruction example has a malformed source-group hash.")
+        source_path_group_id = example.get("source_path_group_id")
+        if source_path_group_id is not None and (
+            not isinstance(source_path_group_id, str) or len(source_path_group_id) != 64
+        ):
+            raise ValueError("Instruction example has a malformed source-path group hash.")
 
         keys = ["prompt:" + prompt_group_id]
         if split_group_id:
             keys.append("source:" + split_group_id)
             source_group_ids.add(split_group_id)
+        if source_path_group_id:
+            keys.append("source-path:" + source_path_group_id)
+            source_path_group_ids.add(source_path_group_id)
         record_keys.append(tuple(keys))
         for key in keys:
             previous = owners.get(key)
@@ -430,6 +462,10 @@ def split_instruction_examples(
         warnings.append(
             "Curriculum source groups are kept intact across validation to reduce same-symbol/source leakage."
         )
+    if source_path_group_ids:
+        warnings.append(
+            "Records sharing an explicit source_path are kept together on one side of the train/validation split."
+        )
     if exact_duplicates:
         warnings.append(
             f"{exact_duplicates} exact prompt/completion duplicate(s) may overweight repeated records during training."
@@ -446,6 +482,7 @@ def split_instruction_examples(
         "dataset_bytes": dataset_bytes,
         "unique_prompt_count": unique_prompts,
         "source_group_count": len(source_group_ids),
+        "source_path_group_count": len(source_path_group_ids),
         "independent_split_group_count": len(groups),
         "repeated_prompt_example_count": duplicate_prompts,
         "exact_duplicate_example_count": exact_duplicates,
@@ -459,7 +496,7 @@ def split_instruction_examples(
         "validation_data_groups": len(validation_group_ids),
         "validation_fraction": round(validation_fraction_actual, 4),
         "requested_validation_fraction": float(validation_fraction),
-        "split_strategy": "deterministic-sha256-prompt-and-source-groups-v2",
+        "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v3",
         "split_seed": seed,
         "prompt_leakage_groups": prompt_leakage_groups,
         "warnings": warnings,
@@ -525,7 +562,7 @@ def audit_instruction_dataset(
             "training_context_windows": 0,
             "validation_context_windows": 0,
             "validation_fraction": 0.0,
-            "split_strategy": "deterministic-sha256-prompt-and-source-groups-v2",
+            "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v3",
             "split_seed": INSTRUCTION_SPLIT_SEED,
             "prompt_leakage_groups": None,
             "dataset_sha256": next(iter({item.get("dataset_sha256") for item in source_records.values()}), None),

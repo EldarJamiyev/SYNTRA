@@ -68,12 +68,12 @@ class TransformerCacheTests(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "Install the pinned PyTorch requirements to run brain training tests.")
 class LocalTrainingPipelineTests(unittest.TestCase):
-    def _config(self):
+    def _config(self, block_size: int = 16):
         from brain.model import TransformerConfig
 
         return TransformerConfig(
             vocab_size=270,
-            block_size=16,
+            block_size=block_size,
             n_layer=1,
             n_head=2,
             n_embd=32,
@@ -110,6 +110,44 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         self.assertNotEqual(targets[0][prompt_token_count], -100)
         self.assertIn(257, targets[0], "EOS must remain supervised after the response.")
 
+    def test_instruction_prompt_at_context_boundary_keeps_full_prefix(self):
+        from brain.tokenizer import BOS_ID, EOS_ID, BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        tokenizer = BytePairTokenizer.empty()
+        block_size = 64
+        fixed_prefix = "Instruction:\n" + "\nResponse:\n"
+        prompt = "p" * (block_size - 1 - len(fixed_prefix))
+        record = {"prompt": prompt, "completion": "ok"}
+
+        inputs, targets = _instruction_context_blocks(
+            [record], tokenizer, block_size=block_size
+        )
+
+        complete_prefix = "Instruction:\n" + prompt + "\nResponse:\n"
+        self.assertEqual(1 + len(tokenizer.encode(complete_prefix)), block_size)
+        self.assertEqual(inputs[0], [BOS_ID, *tokenizer.encode(complete_prefix)])
+        supervised = [
+            token for row in targets for token in row if token != -100
+        ]
+        self.assertEqual(supervised, tokenizer.encode("ok") + [EOS_ID])
+
+    def test_overlong_instruction_prompt_is_rejected_instead_of_truncated(self):
+        from brain.tokenizer import BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        tokenizer = BytePairTokenizer.empty()
+        block_size = 64
+        fixed_prefix = "Instruction:\n" + "\nResponse:\n"
+        prompt = "p" * (block_size - len(fixed_prefix))
+        record = {"prompt": prompt, "completion": "ok"}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Instruction prompt requires .*including BOS.*prompt was not truncated",
+        ):
+            _instruction_context_blocks([record], tokenizer, block_size=block_size)
+
     def test_structured_jsonl_reader_and_plain_text_fallback(self):
         from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets
 
@@ -117,7 +155,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             root = Path(temp)
             structured = root / "instructions.jsonl"
             structured.write_text(
-                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values."}) + "\n" +
+                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values.", "source_path": "src/math_utils.py"}) + "\n" +
                 json.dumps({"prompt": "Explain multiplication.", "completion": "Multiply the two values."}),
                 encoding="utf-8",
             )
@@ -137,6 +175,8 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             ) = _read_instruction_jsonl_datasets([root], 2 * 1024 * 1024)
             self.assertEqual(len(records), 2)
             self.assertEqual(records[0]["prompt"], "Explain addition.")
+            self.assertEqual(records[0]["source_path"], "src/math_utils.py")
+            self.assertEqual(records[0]["dataset_file_path"], "instructions.jsonl")
             self.assertEqual(records[1]["completion"], "Multiply the two values.")
             self.assertEqual(len(files), 1)
             self.assertGreater(byte_count, 0)
@@ -194,6 +234,18 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, r"split_group.*invalid-group.jsonl:1"):
                 _read_instruction_jsonl_datasets([invalid_group], 1024 * 1024)
+
+            invalid_source_path = root / "invalid-source-path.jsonl"
+            invalid_source_path.write_text(
+                json.dumps({
+                    "Instruction": "Explain alpha.",
+                    "Response": "Alpha is valid.",
+                    "source_path": {"not": "a path"},
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"source_path.*invalid-source-path.jsonl:1"):
+                _read_instruction_jsonl_datasets([invalid_source_path], 1024 * 1024)
 
             generic_jsonl = root / "generic.jsonl"
             generic_jsonl.write_text(
@@ -340,7 +392,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             result = train(
                 [dataset],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=2,
                 tokenizer_bytes=1024,
@@ -368,7 +420,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             resumed = train(
                 [dataset],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=2,
                 tokenizer_bytes=1024,
@@ -443,7 +495,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             train(
                 [dataset],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=2,
                 tokenizer_bytes=1024,
@@ -481,7 +533,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             result = train(
                 [root],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=64,
                 tokenizer_bytes=1024,
@@ -591,6 +643,47 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         ]
         self.assertEqual(supervised, tokenizer.encode(response) + [EOS_ID])
         self.assertTrue(all(len(row) == 64 for row in inputs))
+    def test_long_instruction_response_windows_overlap_context_without_duplicate_supervision(self):
+        from brain.tokenizer import BOS_ID, EOS_ID, BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        tokenizer = BytePairTokenizer.empty()
+        block_size = 64
+        response = "normalize(value): return value.strip().lower()\n" * 20
+        prompt = "Normalize text."
+        record = {"prompt": prompt, "completion": response}
+        inputs, targets = _instruction_context_blocks(
+            [record], tokenizer, block_size=block_size
+        )
+
+        self.assertGreater(len(inputs), 2)
+        stride = block_size // 2
+        self.assertEqual(
+            inputs[1][:stride],
+            inputs[0][stride:block_size],
+            "the next window must retain the previous window's recent context",
+        )
+        self.assertTrue(
+            all(token == -100 for token in targets[1][:stride]),
+            "overlap context targets must be masked instead of trained twice",
+        )
+        prefix = "Instruction:\n" + prompt + "\nResponse:\n"
+        sequence = [BOS_ID, *tokenizer.encode(prefix), *tokenizer.encode(response), EOS_ID]
+        supervised = [
+            token for row in targets for token in row if token != -100
+        ]
+        self.assertEqual(
+            supervised,
+            tokenizer.encode(response) + [EOS_ID],
+            "each completion token and EOS must be supervised once and in order",
+        )
+        prefix_length = 1 + len(tokenizer.encode(prefix))
+        self.assertEqual(
+            inputs[0][:prefix_length],
+            sequence[:prefix_length],
+            "the first window must preserve the entire conditioning prompt",
+        )
+
     def test_instruction_record_limit_is_enforced_during_jsonl_parsing(self):
         import importlib
         train_module = importlib.import_module("brain.train")
@@ -864,6 +957,25 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             if any(item["prompt"] == "Repeated generic prompt." for item in collection):
                 repeated_prompt_memberships.add(split_name)
         self.assertEqual(len(repeated_prompt_memberships), 1)
+
+    def test_source_path_related_instruction_examples_never_cross_validation_split(self):
+        from brain.train import _split_instruction_records
+
+        records = [
+            {"prompt": "Implement alpha.", "completion": "alpha()", "source_path": "src/alpha.py"},
+            {"prompt": "Explain alpha.", "completion": "alpha is a function.", "source_path": "src/alpha.py"},
+            {"prompt": "Implement beta.", "completion": "beta()", "source_path": "src/beta.py"},
+            {"prompt": "Explain beta.", "completion": "beta is a function.", "source_path": "src/beta.py"},
+            {"prompt": "Implement gamma.", "completion": "gamma()", "source_path": "src/gamma.py"},
+        ]
+        training, validation = _split_instruction_records(records)
+
+        memberships = {}
+        for split_name, collection in (("train", training), ("validation", validation)):
+            for record in collection:
+                memberships.setdefault(record["source_path"], set()).add(split_name)
+        self.assertEqual(set(memberships), {"src/alpha.py", "src/beta.py", "src/gamma.py"})
+        self.assertTrue(all(len(splits) == 1 for splits in memberships.values()))
 
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata
