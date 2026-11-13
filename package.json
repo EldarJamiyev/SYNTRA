@@ -39,5 +39,8 @@
     "@vitejs/plugin-react": "^6.1.2",
     "vite": "^8.3.5",
     "@playwright/test": "^1.64.1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

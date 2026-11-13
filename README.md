@@ -381,7 +381,7 @@ These workflows use separate staging/checkpoint paths and should be run with the
 
 ### Windows — one-click launch
 
-**Requirements:** Windows, PowerShell, Node.js 20 or newer, and Python 3.12 or newer.
+**Requirements:** Windows, PowerShell, Node.js 22.12.0 or newer (prefer a currently supported LTS release), and Python 3.12 or newer. The launcher checks the Node.js version before installing frontend dependencies.
 
 ~~~powershell
 git clone https://github.com/EldarJamiyev/SYNTRA.git
