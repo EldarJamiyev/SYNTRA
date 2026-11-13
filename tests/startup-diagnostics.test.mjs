@@ -14,7 +14,7 @@ test("Windows launcher enforces the same Node.js range declared by the package",
   const packageJson = JSON.parse(packageText);
   assert.equal(packageJson.engines?.node, SUPPORTED_NODE_RANGE);
   assert.match(launcher, /scripts\\node-version\.mjs/u);
-  assert.match(launcher, /Node\.js >=22\.12\.0/u);
+  assert.match(launcher, /Node\.js 22\.12\.0 or newer/u);
   assert.equal(isSupportedNodeVersion("22.12.0"), true);
   assert.equal(isSupportedNodeVersion("20.19.0"), false);
 });
