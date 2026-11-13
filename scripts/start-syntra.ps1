@@ -120,7 +120,7 @@ try {
 
     Write-Step "Checking prerequisites"
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        throw "Node.js is missing. Install Node.js 20 or newer from https://nodejs.org/ and double-click Start-SYNTRA.bat again."
+        throw "Node.js is missing. Install Node.js 22.12.0 or newer from https://nodejs.org/ and double-click Start-SYNTRA.bat again."
     }
     $nodeVersionText = (& node --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $nodeVersionText) {
