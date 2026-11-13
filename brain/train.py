@@ -692,21 +692,31 @@ def _instruction_context_blocks(
                 f"but the configured block_size is {block_size}; the prompt was not truncated. "
                 "Shorten the prompt or use a model with a larger context window."
             )
+        # Retain half a context of recent tokens between windows so later
+        # response sections keep local causal context. Prompt targets and
+        # previously supervised overlap targets are masked to count every
+        # completion/EOS token exactly once.
+        stride = max(1, block_size // 2)
         start = 0
-        while start < len(sequence) - 1:
+        last_supervised_target = first_response_target - 1
+        while start < len(sequence) - 1 and last_supervised_target < len(sequence) - 1:
             window = sequence[start:start + block_size + 1]
             if len(window) < 2:
                 break
             x, y = window[:-1], window[1:]
             for index in range(len(y)):
                 target_position = start + index + 1
-                if target_position < first_response_target:
+                if (
+                    target_position < first_response_target
+                    or target_position <= last_supervised_target
+                ):
                     y[index] = -100
             if any(token != -100 for token in y):
                 if (len(inputs) + 1) * block_size > max_context_tokens:
                     raise ValueError("Packed instruction contexts exceed the remaining SYNTRA training token budget.")
                 _append_context_block(x, y, block_size, inputs, targets)
-            start += block_size
+                last_supervised_target = start + len(y)
+            start += stride
     return inputs, targets
 
 

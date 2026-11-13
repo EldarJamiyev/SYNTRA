@@ -629,6 +629,47 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         ]
         self.assertEqual(supervised, tokenizer.encode(response) + [EOS_ID])
         self.assertTrue(all(len(row) == 64 for row in inputs))
+    def test_long_instruction_response_windows_overlap_context_without_duplicate_supervision(self):
+        from brain.tokenizer import BOS_ID, EOS_ID, BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        tokenizer = BytePairTokenizer.empty()
+        block_size = 64
+        response = "normalize(value): return value.strip().lower()\\n" * 20
+        prompt = "Normalize text."
+        record = {"prompt": prompt, "completion": response}
+        inputs, targets = _instruction_context_blocks(
+            [record], tokenizer, block_size=block_size
+        )
+
+        self.assertGreater(len(inputs), 2)
+        stride = block_size // 2
+        self.assertEqual(
+            inputs[1][:stride],
+            inputs[0][stride:block_size],
+            "the next window must retain the previous window's recent context",
+        )
+        self.assertTrue(
+            all(token == -100 for token in targets[1][:stride]),
+            "overlap context targets must be masked instead of trained twice",
+        )
+        prefix = "Instruction:\\n" + prompt + "\\nResponse:\\n"
+        sequence = [BOS_ID, *tokenizer.encode(prefix), *tokenizer.encode(response), EOS_ID]
+        supervised = [
+            token for row in targets for token in row if token != -100
+        ]
+        self.assertEqual(
+            supervised,
+            tokenizer.encode(response) + [EOS_ID],
+            "each completion token and EOS must be supervised once and in order",
+        )
+        prefix_length = 1 + len(tokenizer.encode(prefix))
+        self.assertEqual(
+            inputs[0][:prefix_length],
+            sequence[:prefix_length],
+            "the first window must preserve the entire conditioning prompt",
+        )
+
     def test_instruction_record_limit_is_enforced_during_jsonl_parsing(self):
         import importlib
         train_module = importlib.import_module("brain.train")
