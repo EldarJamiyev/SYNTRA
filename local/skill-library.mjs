@@ -1,0 +1,341 @@
+import fs from "node:fs/promises";
+import { constants } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+
+const SYNTRA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+export const MAX_SKILL_CONTEXT_CHARS = 7200;
+
+const MAX_DISCOVERED_SKILLS = 1024;
+const MAX_DISCOVERY_BYTES = 8 * 1024;
+const MAX_SELECTED_SOURCE_BYTES = 32 * 1024;
+const MAX_SKILL_FILE_BYTES = 1024 * 1024;
+const MAX_SELECTED_SKILLS = 3;
+const MAX_SKILL_BODY_CHARS = 2600;
+const ALWAYS_SELECTED = new Set([
+  "syntra-project-guardrails",
+  "verification-before-completion"
+]);
+const STOP_WORDS = new Set([
+  "about", "after", "again", "also", "and", "any", "are", "because", "before",
+  "being", "between", "both", "but", "can", "could", "does", "each", "from",
+  "have", "into", "just", "make", "more", "most", "need", "only", "other",
+  "our", "over", "please", "same", "should", "some", "such", "than", "that",
+  "the", "their", "them", "then", "there", "these", "they", "this", "those",
+  "through", "use", "using", "very", "want", "was", "were", "what", "when",
+  "where", "which", "while", "with", "would", "your"
+]);
+
+function isWithin(root, target) {
+  const relative = path.relative(root, target);
+  return relative === "" || (
+    relative !== ".."
+    && !relative.startsWith(".." + path.sep)
+    && !path.isAbsolute(relative)
+  );
+}
+
+function sameFileIdentity(left, right) {
+  return left.isFile() && right.isFile()
+    && left.dev === right.dev
+    && left.ino === right.ino
+    && left.nlink === right.nlink
+    && left.nlink === 1
+    && right.nlink === 1
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs;
+}
+
+async function realDirectory(directoryPath, expectedPath) {
+  try {
+    const info = await fs.lstat(directoryPath);
+    if (!info.isDirectory() || info.isSymbolicLink()) return null;
+    const resolved = await fs.realpath(directoryPath);
+    if (resolved !== expectedPath) return null;
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+async function readVerifiedPrefix(filePath, expectedParent, maxBytes) {
+  let handle;
+  try {
+    const before = await fs.lstat(filePath);
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > MAX_SKILL_FILE_BYTES) return null;
+    if (await fs.realpath(path.dirname(filePath)) !== expectedParent) return null;
+
+    const flags = constants.O_RDONLY | (constants.O_NOFOLLOW || 0);
+    handle = await fs.open(filePath, flags);
+    const opened = await handle.stat();
+    if (!sameFileIdentity(before, opened)) return null;
+
+    const length = Math.min(opened.size, maxBytes);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const { bytesRead } = await handle.read(buffer, offset, length - offset, offset);
+      if (bytesRead <= 0) return null;
+      offset += bytesRead;
+    }
+
+    const afterHandle = await handle.stat();
+    const afterPath = await fs.lstat(filePath);
+    if (!sameFileIdentity(opened, afterHandle) || !sameFileIdentity(opened, afterPath)) return null;
+    if (await fs.realpath(path.dirname(filePath)) !== expectedParent) return null;
+
+    return buffer.toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+function cleanScalar(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^(['"])(.*)\1$/u, "$2")
+    .replace(/\s+/gu, " ")
+    .slice(0, 600);
+}
+
+function parseSkillDocument(source, fallbackName) {
+  const lines = String(source || "").split(/\r?\n/u);
+  let bodyStart = 0;
+  let name = fallbackName;
+  let description = "";
+
+  if (lines[0]?.trim() === "---") {
+    const closing = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+    if (closing > 0 && closing <= 120) {
+      for (let index = 1; index < closing; index += 1) {
+        const match = lines[index].match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*)$/u);
+        if (!match) continue;
+        const key = match[1].toLowerCase();
+        const value = cleanScalar(match[2]);
+        if (key === "name" && value) name = value;
+        if (key === "description" && value) description = value;
+      }
+      bodyStart = closing + 1;
+    }
+  }
+
+  const body = lines.slice(bodyStart).join("\n").trim();
+  if (!description) {
+    const paragraph = body.split(/\n\s*\n/u).find(part => part.trim() && !part.trim().startsWith("#"));
+    description = cleanScalar(paragraph || "");
+  }
+  return {
+    name: cleanScalar(name || fallbackName),
+    description,
+    body
+  };
+}
+
+function termsOf(value) {
+  return new Set(
+    (String(value || "").toLowerCase().match(/[\p{L}\p{N}_]{2,}/gu) || [])
+      .filter(term => !STOP_WORDS.has(term))
+      .slice(0, 160)
+  );
+}
+
+function scoreSkill(goalTerms, skill) {
+  const nameTerms = termsOf(skill.name + " " + skill.slug);
+  const descriptionTerms = termsOf(skill.description);
+  let score = 0;
+  for (const term of goalTerms) {
+    if (nameTerms.has(term)) score += 5;
+    if (descriptionTerms.has(term)) score += 2;
+  }
+  return score;
+}
+
+async function discoverSkillDirectory(rootRealPath) {
+  const agentsPath = path.join(rootRealPath, ".agents");
+  const agentsReal = await realDirectory(agentsPath, agentsPath);
+  if (!agentsReal) return null;
+
+  const skillsPath = path.join(agentsReal, "skills");
+  const skillsReal = await realDirectory(skillsPath, skillsPath);
+  if (!skillsReal || !isWithin(rootRealPath, skillsReal)) return null;
+  return skillsReal;
+}
+
+export function compactSkillContext(context, maxChars) {
+  if (typeof context !== "string" || !context || !Number.isFinite(maxChars) || maxChars <= 0) return "";
+  if (context.length <= maxChars) return context;
+
+  const separator = "\n\n---\n\n";
+  const sections = context.split(separator).map(section => {
+    const boundary = section.indexOf("\n\n");
+    const header = boundary < 0 ? section : section.slice(0, boundary);
+    const body = boundary < 0 ? "" : section.slice(boundary + 2);
+    const slug = header.match(/^\[SKILL:\s*([^\]]+)\]/mu)?.[1] || "";
+    const weight = slug === "syntra-project-guardrails"
+      ? 1.35
+      : slug === "verification-before-completion" ? 1.15 : 1.5;
+    return { header, body, weight };
+  });
+
+  const separatorChars = Math.max(0, sections.length - 1) * separator.length;
+  const headerChars = sections.reduce((total, section) => total + section.header.length, 0);
+  if (separatorChars + headerChars > maxChars) return "";
+  const bodyBudget = Math.max(0, maxChars - separatorChars - headerChars);
+  const totalWeight = sections.reduce((total, section) => total + section.weight, 0);
+
+  const allocations = sections.map(section =>
+    Math.min(section.body.length, Math.floor(bodyBudget * section.weight / totalWeight))
+  );
+  let remaining = bodyBudget - allocations.reduce((total, value) => total + value, 0);
+
+  // Distribute rounding and unused short-section capacity without removing
+  // mandatory skill headers or allowing the final result to exceed the budget.
+  while (remaining > 0) {
+    let allocated = false;
+    for (let index = 0; index < sections.length && remaining > 0; index += 1) {
+      const capacity = sections[index].body.length - allocations[index];
+      if (capacity <= 0) continue;
+      allocations[index] += 1;
+      remaining -= 1;
+      allocated = true;
+    }
+    if (!allocated) break;
+  }
+
+  return sections.map((section, index) =>
+    section.header + (allocations[index] > 0 ? "\n\n" + section.body.slice(0, allocations[index]) : "")
+  ).join(separator).slice(0, maxChars);
+}
+
+export async function loadRelevantSkills(workspaceRoot, goal, { libraryRoot = SYNTRA_ROOT } = {}) {
+  const empty = (status, reason, discovered = 0) => ({
+    status,
+    reason,
+    discovered,
+    skills: [],
+    context: ""
+  });
+
+  try {
+    const roots = [];
+    const seenRoots = new Set();
+    for (const [candidate, source] of [[libraryRoot, "bundled"], [workspaceRoot, "workspace"]]) {
+      try {
+        const rootRealPath = await fs.realpath(candidate);
+        if (seenRoots.has(rootRealPath)) continue;
+        seenRoots.add(rootRealPath);
+        const skillsRoot = await discoverSkillDirectory(rootRealPath);
+        if (skillsRoot) roots.push({ skillsRoot, source });
+      } catch {
+        // A missing optional workspace skills directory must not block agent work.
+      }
+    }
+
+    if (!roots.length) {
+      return empty("not_available", "No safe SYNTRA or workspace .agents/skills directory was found.");
+    }
+
+    const discoveredBySlug = new Map();
+    for (const { skillsRoot, source } of roots) {
+      const entries = (await fs.readdir(skillsRoot, { withFileTypes: true }))
+        .filter(entry => entry.isDirectory() && /^[a-z0-9][a-z0-9._-]{0,79}$/u.test(entry.name))
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .slice(0, MAX_DISCOVERED_SKILLS);
+
+      for (const entry of entries) {
+        if (discoveredBySlug.has(entry.name)) continue;
+        const skillDirectory = path.join(skillsRoot, entry.name);
+        const expectedDirectory = path.join(skillsRoot, entry.name);
+        const realSkillDirectory = await realDirectory(skillDirectory, expectedDirectory);
+        if (!realSkillDirectory || !isWithin(skillsRoot, realSkillDirectory)) continue;
+
+        const skillPath = path.join(realSkillDirectory, "SKILL.md");
+        const prefix = await readVerifiedPrefix(skillPath, realSkillDirectory, MAX_DISCOVERY_BYTES);
+        if (prefix === null || !prefix.trim()) continue;
+
+        const parsed = parseSkillDocument(prefix, entry.name);
+        discoveredBySlug.set(entry.name, {
+          slug: entry.name,
+          path: skillPath,
+          source,
+          name: parsed.name,
+          description: parsed.description
+        });
+      }
+    }
+
+    const discovered = [...discoveredBySlug.values()];
+    if (!discovered.length) {
+      return empty("empty", "The available skill directories contain no readable SKILL.md files.");
+    }
+
+    const goalTerms = termsOf(goal);
+    const mandatory = discovered.filter(skill =>
+      skill.source === "bundled" && ALWAYS_SELECTED.has(skill.slug)
+    );
+    const ranked = discovered
+      .filter(skill => !mandatory.includes(skill))
+      .map(skill => ({ ...skill, score: scoreSkill(goalTerms, skill) }))
+      .filter(skill => skill.score > 0)
+      .sort((left, right) =>
+        right.score - left.score
+        || (left.source === right.source ? 0 : left.source === "bundled" ? -1 : 1)
+        || left.slug.localeCompare(right.slug)
+      );
+
+    const selectedMetadata = [...mandatory, ...ranked].slice(0, MAX_SELECTED_SKILLS);
+    const selected = [];
+    let remainingChars = MAX_SKILL_CONTEXT_CHARS;
+
+    for (const item of selectedMetadata) {
+      if (remainingChars <= 0) break;
+      const source = await readVerifiedPrefix(item.path, path.dirname(item.path), MAX_SELECTED_SOURCE_BYTES);
+      if (source === null) continue;
+
+      const parsed = parseSkillDocument(source, item.slug);
+      const excerpt = parsed.body.slice(0, MAX_SKILL_BODY_CHARS).trim();
+      const heading = [
+        "[SKILL: " + item.slug + "]",
+        parsed.description ? "Purpose: " + parsed.description : ""
+      ].filter(Boolean).join("\n");
+      const section = [heading, excerpt].filter(Boolean).join("\n\n");
+      const clipped = section.slice(0, remainingChars);
+      if (!clipped.trim()) continue;
+
+      const excerptSha256 = createHash("sha256").update(clipped, "utf8").digest("hex");
+      selected.push({
+        slug: item.slug,
+        name: parsed.name,
+        description: parsed.description,
+        source: item.source,
+        score: mandatory.includes(item) ? 1000 : item.score,
+        excerptSha256,
+        characters: clipped.length,
+        content: clipped
+      });
+      remainingChars -= clipped.length;
+    }
+
+    const context = selected.map(skill => skill.content).join("\n\n---\n\n");
+    return {
+      status: selected.length ? "selected" : "no_match",
+      reason: selected.length
+        ? "Loaded a bounded set of local SYNTRA and workspace skill references."
+        : "No relevant local skill references were selected.",
+      discovered: discovered.length,
+      skills: selected.map(({ content, ...metadata }) => metadata),
+      context
+    };
+  } catch (error) {
+    return empty(
+      "unavailable",
+      "Local skill retrieval was skipped because a filesystem read or path validation failed ("
+        + String(error instanceof Error && error.name ? error.name : "unknown error").slice(0, 80) + ")."
+    );
+  }
+}
