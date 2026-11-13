@@ -1569,7 +1569,6 @@ export async function runAgentTask({
   resumeCandidate = null, resumeBudget = null, onCandidateCheckpoint = async () => {}
 }) {
   const root = await resolveWorkspace(inputRoot);
-  const skillSelection = await loadRelevantSkills(root, goal);
   const emitProgress = async update => {
     throwIfAborted(signal);
     await onProgress(update);
@@ -1578,6 +1577,7 @@ export async function runAgentTask({
   throwIfAborted(signal);
   if (typeof goal !== "string" || !goal.trim() || goal.length > 5000) throw new Error("Enter a specific application/code task (maximum 5,000 characters).");
   if (typeof modelRequest !== "function") throw new Error("The local model request bridge is required.");
+  const skillSelection = await loadRelevantSkills(root, goal);
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
   if (!modelStatus.checkpoint_exists) throw new Error("No trained native SYNTRA checkpoint is available. Complete native model training before requesting an agent patch.");
