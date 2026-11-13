@@ -227,6 +227,22 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 
 **Acceptance:** A cancellation request stops cancellable in-flight work, prevents late completion from replacing the terminal cancelled state, and leaves workspace/proposal operations under their existing transactional and explicit-approval rules. Cancellation is not reported as successful application or completed work.
 
+### Phase 28 — Native task-aware skill retrieval
+
+**Objective:** Make SYNTRA's existing local engineering skill library operational in the native coding-agent workflow without introducing an alternate inference provider.
+
+- [x] Discover bundled SYNTRA skills and optional skills under the active workspace.
+- [x] Select the project guardrails and verification guidance when available, then rank task-specific playbooks deterministically.
+- [x] Reject symbolic-link skill folders/files, path escapes, unreadable entries, and oversized skill documents.
+- [x] Bound selected content and fit it with the native checkpoint tokenizer; compact or omit optional guidance before reducing the user's task or patch contract.
+- [x] Treat all skill text as untrusted reference context that cannot change the tool allowlist, permission boundary, or proposal workflow.
+- [x] Record selected skill identities, excerpt hashes, and retrieval/compaction outcomes with agent-run evidence.
+- [x] Add loader, filesystem-boundary, deterministic-ranking, context-compaction, and native-agent prompt integration tests.
+
+**Acceptance:** A task-relevant local skill reaches the actual native patch-generation prompt when the checkpoint context budget permits. Missing or unsafe skill libraries do not block coding tasks, and skill content never authorizes additional operations.
+
+**Limitation:** Skill retrieval supplies procedural guidance only; it does not provide pretrained weights or prove model-quality gains. Model capability must continue to be measured using real checkpoint benchmark runs.
+
 ## Definition of done for every phase
 
 A phase is not complete merely because the interface looks finished. It must include:
