@@ -181,6 +181,7 @@ export function compactSkillContext(context, maxChars) {
 
   const separatorChars = Math.max(0, sections.length - 1) * separator.length;
   const headerChars = sections.reduce((total, section) => total + section.header.length, 0);
+  if (separatorChars + headerChars > maxChars) return "";
   const bodyBudget = Math.max(0, maxChars - separatorChars - headerChars);
   const totalWeight = sections.reduce((total, section) => total + section.weight, 0);
 
