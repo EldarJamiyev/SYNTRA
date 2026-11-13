@@ -135,7 +135,7 @@ function parseSkillDocument(source, fallbackName) {
 
 function termsOf(value) {
   return new Set(
-    (String(value || "").toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) || [])
+    (String(value || "").toLowerCase().match(/[\p{L}\p{N}_]{2,}/gu) || [])
       .filter(term => !STOP_WORDS.has(term))
       .slice(0, 160)
   );
