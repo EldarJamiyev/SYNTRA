@@ -109,7 +109,7 @@ test("missing skill libraries are reported without failing the coding-agent task
   }
 });
 
-test("oversized skill files and symbolic-link skill folders are excluded", async () => {
+test("oversized skill files, symbolic-link folders, and hard-linked skill documents are excluded", async () => {
   const root = await createWorkspace();
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-skill-outside-"));
   try {
@@ -130,13 +130,27 @@ test("oversized skill files and symbolic-link skill folders are excluded", async
         "dir"
       );
     } catch {
-      // Symlink creation can be restricted on Windows hosts; the oversize-file
-      // boundary remains testable without elevated filesystem privileges.
+      // Symlink creation can be restricted on Windows hosts.
+    }
+
+    const hardlinkSource = path.join(outside, "shared-skill.md");
+    const hardlinkDirectory = path.join(root, ".agents", "skills", "hardlinked");
+    await fs.mkdir(hardlinkDirectory, { recursive: true });
+    await fs.writeFile(hardlinkSource,
+      "---\nname: hardlinked\ndescription: A hard-linked skill must be rejected.\n---\n\n# Hardlinked\nNo external aliases are allowed.\n",
+      "utf8");
+    let hardlinkCreated = false;
+    try {
+      await fs.link(hardlinkSource, path.join(hardlinkDirectory, "SKILL.md"));
+      hardlinkCreated = true;
+    } catch {
+      // Some Windows/filesystem configurations restrict hard-link creation.
     }
 
     const result = await loadRelevantSkills(root, "Debug a failing test.", { libraryRoot: root });
     assert.ok(!result.skills.some(skill => skill.slug === "oversized"));
     assert.ok(!result.skills.some(skill => skill.slug === "external-link"));
+    if (hardlinkCreated) assert.ok(!result.skills.some(skill => skill.slug === "hardlinked"));
     assert.ok(result.skills.some(skill => skill.slug === "syntra-project-guardrails"));
   } finally {
     await removeWorkspace(root);
