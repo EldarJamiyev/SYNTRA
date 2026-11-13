@@ -13,7 +13,7 @@ if ($launcher -notmatch 'Node\.js 22\.12\.0 or newer') {
     throw "The Windows launcher must show the supported Node.js minimum in prerequisite errors."
 }
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$nodeCheckOutput = & node (Join-Path $repositoryRoot "scripts\\node-version.mjs") 2>&1
+$nodeCheckOutput = & node (Join-Path $repositoryRoot "scripts\node-version.mjs") 2>&1
 if ($LASTEXITCODE -ne 0) {
     $nodeCheckOutput | ForEach-Object { Write-Host $_ }
     throw "The installed Node.js runtime failed SYNTRA's compatibility check."
