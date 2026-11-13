@@ -233,7 +233,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 
 - [x] Discover bundled SYNTRA skills and optional skills under the active workspace.
 - [x] Select the project guardrails and verification guidance when available, then rank task-specific playbooks deterministically.
-- [x] Reject symbolic-link skill folders/files, path escapes, unreadable entries, and oversized skill documents.
+- [x] Reject symbolic-link skill folders/files, hard-linked skill documents, path escapes, unreadable entries, and oversized skill documents.
 - [x] Bound selected content and fit it with the native checkpoint tokenizer; compact or omit optional guidance before reducing the user's task or patch contract.
 - [x] Treat all skill text as untrusted reference context that cannot change the tool allowlist, permission boundary, or proposal workflow.
 - [x] Record selected skill identities, excerpt hashes, and retrieval/compaction outcomes with agent-run evidence.
