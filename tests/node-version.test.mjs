@@ -33,6 +33,7 @@ test("SYNTRA rejects versions below the Vite 8 runtime floor and prereleases", (
     "22.0.0",
     "22.11.9",
     "22.12.0-rc.1",
+    "999999999999999999999999.0.0",
     "24.0.0-alpha.1",
     "27.0.0-alpha.1",
     "v22",
