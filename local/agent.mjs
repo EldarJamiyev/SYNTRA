@@ -4,7 +4,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { readWorkspaceFile, resolveWorkspace } from "./workspace.mjs";
 import { executeWorkspaceTool } from "./tool-runtime.mjs";
-import { loadRelevantSkills } from "./skill-library.mjs";
+import { compactSkillContext, loadRelevantSkills } from "./skill-library.mjs";
 
 const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts", ".py", ".pyi",
@@ -1972,12 +1972,31 @@ export async function runAgentTask({
             (sliceIndex + 1) + ", attempt " + sliceAttempt + "."
         });
         let selected = ranked.slice(0, 12);
-        let prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext, skillSelection.context);
+        let skillContextBudget = skillSelection.context.length;
+        let skillContext = skillSelection.context;
+        let prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext, skillContext);
         let tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
         while (tokenInfo.token_count > contextBudget && selected.length > 1) {
           selected = selected.slice(0, -1);
-          prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext, skillSelection.context);
+          prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext, skillContext);
           tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+        }
+        while (tokenInfo.token_count > contextBudget && skillContextBudget > 0) {
+          skillContextBudget = skillContextBudget > 320
+            ? Math.floor(skillContextBudget * 0.72)
+            : 0;
+          skillContext = compactSkillContext(skillSelection.context, skillContextBudget);
+          prompt = makePatchPrompt(sliceGoal, inventory, plan, graph, selected, feedback, repositoryState, modelSelectedContext, skillContext);
+          tokenInfo = await modelJson(modelRequest, "/model/tokenize", { text: prompt }, 30000, signal);
+        }
+        if (skillContext !== skillSelection.context) {
+          observations.push({
+            kind: "skill-library-context", stage: slice.id + "-attempt-" + sliceAttempt,
+            status: skillContext ? "compacted" : "omitted_for_context",
+            detail: skillContext
+              ? "Skill guidance was reduced to " + skillContext.length + " characters using the native tokenizer budget."
+              : "Optional skill guidance was omitted to preserve the task and patch contract inside the native context window."
+          });
         }
         if (tokenInfo.token_count > contextBudget) {
           feedback = "Context budget exceeded: need " + tokenInfo.token_count + " tokens but only " + contextBudget + " are available. Shorten this slice and focus on one file.";
