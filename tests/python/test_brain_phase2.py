@@ -110,6 +110,44 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         self.assertNotEqual(targets[0][prompt_token_count], -100)
         self.assertIn(257, targets[0], "EOS must remain supervised after the response.")
 
+    def test_instruction_prompt_at_context_boundary_keeps_full_prefix(self):
+        from brain.tokenizer import BOS_ID, EOS_ID, BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        tokenizer = BytePairTokenizer.empty()
+        block_size = 64
+        fixed_prefix = "Instruction:\n" + "\nResponse:\n"
+        prompt = "p" * (block_size - 1 - len(fixed_prefix))
+        record = {"prompt": prompt, "completion": "ok"}
+
+        inputs, targets = _instruction_context_blocks(
+            [record], tokenizer, block_size=block_size
+        )
+
+        complete_prefix = "Instruction:\n" + prompt + "\nResponse:\n"
+        self.assertEqual(1 + len(tokenizer.encode(complete_prefix)), block_size)
+        self.assertEqual(inputs[0], [BOS_ID, *tokenizer.encode(complete_prefix)])
+        supervised = [
+            token for row in targets for token in row if token != -100
+        ]
+        self.assertEqual(supervised, tokenizer.encode("ok") + [EOS_ID])
+
+    def test_overlong_instruction_prompt_is_rejected_instead_of_truncated(self):
+        from brain.tokenizer import BytePairTokenizer
+        from brain.train import _instruction_context_blocks
+
+        tokenizer = BytePairTokenizer.empty()
+        block_size = 64
+        fixed_prefix = "Instruction:\n" + "\nResponse:\n"
+        prompt = "p" * (block_size - len(fixed_prefix))
+        record = {"prompt": prompt, "completion": "ok"}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"Instruction prompt requires .*including BOS.*prompt was not truncated",
+        ):
+            _instruction_context_blocks([record], tokenizer, block_size=block_size)
+
     def test_structured_jsonl_reader_and_plain_text_fallback(self):
         from brain.train import _read_instruction_jsonl_datasets, _read_local_datasets
 

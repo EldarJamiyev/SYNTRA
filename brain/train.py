@@ -683,9 +683,16 @@ def _instruction_context_blocks(
             continue
         sequence = [BOS_ID, *prompt_ids, *response_ids, EOS_ID]
         first_response_target = 1 + len(prompt_ids)
-        # Start at the final context window before the response when instructions
-        # are longer than the model window. Subsequent blocks overlap by one token.
-        start = max(0, first_response_target - block_size)
+        # Never train a completion with a silently truncated conditioning prompt.
+        # The inference/SFT path preserves the complete prompt or rejects it; the
+        # legacy trainer must enforce the same boundary before packing any window.
+        if first_response_target > block_size:
+            raise ValueError(
+                f"Instruction prompt requires {first_response_target} tokens including BOS, "
+                f"but the configured block_size is {block_size}; the prompt was not truncated. "
+                "Shorten the prompt or use a model with a larger context window."
+            )
+        start = 0
         while start < len(sequence) - 1:
             window = sequence[start:start + block_size + 1]
             if len(window) < 2:
