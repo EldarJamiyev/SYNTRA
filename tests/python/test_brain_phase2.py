@@ -68,12 +68,12 @@ class TransformerCacheTests(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "Install the pinned PyTorch requirements to run brain training tests.")
 class LocalTrainingPipelineTests(unittest.TestCase):
-    def _config(self):
+    def _config(self, block_size: int = 16):
         from brain.model import TransformerConfig
 
         return TransformerConfig(
             vocab_size=270,
-            block_size=16,
+            block_size=block_size,
             n_layer=1,
             n_head=2,
             n_embd=32,
@@ -378,7 +378,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             result = train(
                 [dataset],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=2,
                 tokenizer_bytes=1024,
@@ -406,7 +406,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             resumed = train(
                 [dataset],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=2,
                 tokenizer_bytes=1024,
@@ -481,7 +481,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             train(
                 [dataset],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=2,
                 tokenizer_bytes=1024,
@@ -519,7 +519,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             result = train(
                 [root],
                 checkpoint_path=checkpoint,
-                config=self._config(),
+                config=self._config(block_size=64),
                 epochs=1,
                 batch_size=64,
                 tokenizer_bytes=1024,
