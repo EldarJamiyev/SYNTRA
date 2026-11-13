@@ -9,6 +9,15 @@ if ($package.engines.node -ne ">=22.12.0") {
 if ($launcher -notmatch 'scripts\\node-version\.mjs') {
     throw "The Windows launcher must run the shared Node.js compatibility check before installing dependencies."
 }
+if ($launcher -notmatch 'Node\.js 22\.12\.0 or newer') {
+    throw "The Windows launcher must show the supported Node.js minimum in prerequisite errors."
+}
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$nodeCheckOutput = & node (Join-Path $repositoryRoot "scripts\\node-version.mjs") 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $nodeCheckOutput | ForEach-Object { Write-Host $_ }
+    throw "The installed Node.js runtime failed SYNTRA's compatibility check."
+}
 
 if ($launcher -match "(?i)SYNTRA_MODEL_PROVIDER|SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|11434|UsePretrainedModel|launcher-helpers") {
     throw "The Windows launcher must not contain alternate AI providers or model selection."
