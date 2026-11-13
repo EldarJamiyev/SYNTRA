@@ -117,6 +117,11 @@ test("native agent grounds patch generation in bundled task-relevant skills", as
     assert.equal(result.observations.find(item => item.kind === "skill-library")?.status, "selected");
     assert.ok(result.selectedSkills.some(item => item.slug === "systematic-debugging"));
     assert.ok(result.selectedSkills.every(item => /^[a-f0-9]{64}$/u.test(item.excerptSha256)));
+    const contextEvidence = result.observations.find(item => item.kind === "skill-library-context");
+    assert.equal(contextEvidence?.status, "included");
+    const includedContext = JSON.parse(contextEvidence.detail);
+    assert.match(includedContext.sha256, /^[a-f0-9]{64}$/u);
+    assert.ok(includedContext.selectedSkills.includes("systematic-debugging"));
   } finally {
     await removeTemporaryProject(root);
   }
