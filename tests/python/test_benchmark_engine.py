@@ -535,6 +535,16 @@ class RawModelBenchmarkTests(unittest.TestCase):
         self.assertIsNone(summary["language_breakdown"]["typescript"]["regression_prevention_rate"])
         self.assertEqual(summary["language_breakdown"]["python"]["baseline_valid_task_count"], 0)
 
+        self.assertEqual(
+            runner.language_summary_lines(summary["language_breakdown"]),
+            [
+                "Language javascript: 0/1 fully verified; 1 selected",
+                "Language python: 0/0 fully verified; 1 selected",
+                "Language typescript: 0/1 fully verified; 1 selected",
+            ],
+            "CLI language summaries must use fully_verified_task_count, not target-only completion counts",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
