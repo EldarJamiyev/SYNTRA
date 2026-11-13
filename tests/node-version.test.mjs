@@ -66,7 +66,7 @@ test("Node version parsing preserves numeric components and prerelease identity"
 test("unsupported-version diagnostic states the accepted engine range and detected version", () => {
   assert.equal(
     getNodeVersionError("v20.19.0"),
-    "SYNTRA requires Node.js >=22.12.0 because its Vite 8 frontend does not support older runtimes. Detected: v20.19.0."
+    "SYNTRA requires Node.js >=22.12.0 to satisfy Vite 8 and SYNTRA's supported-runtime policy. Detected: v20.19.0."
   );
   assert.match(getNodeVersionError(""), /Detected: unknown/u);
 });
