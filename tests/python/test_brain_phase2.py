@@ -155,7 +155,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             root = Path(temp)
             structured = root / "instructions.jsonl"
             structured.write_text(
-                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values."}) + "\n" +
+                json.dumps({"Instruction": "Explain addition.", "Response": "Add the two values.", "source_path": "src/math_utils.py"}) + "\n" +
                 json.dumps({"prompt": "Explain multiplication.", "completion": "Multiply the two values."}),
                 encoding="utf-8",
             )
@@ -175,6 +175,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             ) = _read_instruction_jsonl_datasets([root], 2 * 1024 * 1024)
             self.assertEqual(len(records), 2)
             self.assertEqual(records[0]["prompt"], "Explain addition.")
+            self.assertEqual(records[0]["source_path"], "src/math_utils.py")
             self.assertEqual(records[1]["completion"], "Multiply the two values.")
             self.assertEqual(len(files), 1)
             self.assertGreater(byte_count, 0)
@@ -232,6 +233,18 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, r"split_group.*invalid-group.jsonl:1"):
                 _read_instruction_jsonl_datasets([invalid_group], 1024 * 1024)
+
+            invalid_source_path = root / "invalid-source-path.jsonl"
+            invalid_source_path.write_text(
+                json.dumps({
+                    "Instruction": "Explain alpha.",
+                    "Response": "Alpha is valid.",
+                    "source_path": {"not": "a path"},
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, r"source_path.*invalid-source-path.jsonl:1"):
+                _read_instruction_jsonl_datasets([invalid_source_path], 1024 * 1024)
 
             generic_jsonl = root / "generic.jsonl"
             generic_jsonl.write_text(
@@ -943,6 +956,25 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             if any(item["prompt"] == "Repeated generic prompt." for item in collection):
                 repeated_prompt_memberships.add(split_name)
         self.assertEqual(len(repeated_prompt_memberships), 1)
+
+    def test_source_path_related_instruction_examples_never_cross_validation_split(self):
+        from brain.train import _split_instruction_records
+
+        records = [
+            {"prompt": "Implement alpha.", "completion": "alpha()", "source_path": "src/alpha.py"},
+            {"prompt": "Explain alpha.", "completion": "alpha is a function.", "source_path": "src/alpha.py"},
+            {"prompt": "Implement beta.", "completion": "beta()", "source_path": "src/beta.py"},
+            {"prompt": "Explain beta.", "completion": "beta is a function.", "source_path": "src/beta.py"},
+            {"prompt": "Implement gamma.", "completion": "gamma()", "source_path": "src/gamma.py"},
+        ]
+        training, validation = _split_instruction_records(records)
+
+        memberships = {}
+        for split_name, collection in (("train", training), ("validation", validation)):
+            for record in collection:
+                memberships.setdefault(record["source_path"], set()).add(split_name)
+        self.assertEqual(set(memberships), {"src/alpha.py", "src/beta.py", "src/gamma.py"})
+        self.assertTrue(all(len(splits) == 1 for splits in memberships.values()))
 
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata

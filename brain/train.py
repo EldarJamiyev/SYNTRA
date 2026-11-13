@@ -503,11 +503,18 @@ def _read_instruction_jsonl_datasets(
                         raise ValueError(
                             f"split_group in {relative_name}:{line_number} must be a string of at most 2,048 characters."
                         )
+                    source_path = fields.get("source_path", "")
+                    if source_path is None:
+                        source_path = ""
+                    if not isinstance(source_path, str) or len(source_path) > 2048:
+                        raise ValueError(
+                            f"source_path in {relative_name}:{line_number} must be a string of at most 2,048 characters."
+                        )
                     schema_confirmed = True
                     file_records.append({
                         "prompt": instruction.strip(),
                         "completion": response.strip(),
-                        "source_path": relative_name,
+                        "source_path": source_path.strip(),
                         "source_line": str(line_number),
                         "split_group": split_group.strip(),
                     })
@@ -538,7 +545,7 @@ def _read_instruction_jsonl_datasets(
 def _split_instruction_records(
     records: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Split prompt duplicates and curriculum-related source groups together."""
+    """Keep duplicate prompts, curriculum groups and explicit source paths together."""
     if not records:
         return [], []
 
@@ -574,6 +581,12 @@ def _split_instruction_records(
             )
             if normalized_group:
                 keys.append("source:" + sha256(normalized_group.encode("utf-8")).hexdigest())
+
+        source_path = record.get("source_path")
+        if isinstance(source_path, str) and source_path.strip():
+            normalized_source_path = unicodedata.normalize("NFC", source_path.strip().replace("\\", "/"))
+            if normalized_source_path:
+                keys.append("source-path:" + sha256(normalized_source_path.encode("utf-8")).hexdigest())
 
         record_keys.append(tuple(keys))
         for key in keys:
@@ -1024,7 +1037,7 @@ def train(
         # Bump this fingerprint domain so old prompt-only-split checkpoints cannot
         # silently resume against a different train/validation assignment.
         dataset_hash = sha256(
-            ("syntra-brain-corpus-v3:source-group-split-v2:" + raw_hash + ":" + instruction_hash).encode("ascii")
+            ("syntra-brain-corpus-v3:source-and-source-path-group-split-v3:" + raw_hash + ":" + instruction_hash).encode("ascii")
         ).hexdigest()
     else:
         training_records, validation_records = [], []

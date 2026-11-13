@@ -93,6 +93,50 @@ class InstructionContextIntegrityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "one immutable dataset identity"):
                 split_instruction_examples(examples)
 
+    def test_source_path_related_records_never_cross_validation_split(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-source-path-split-") as temp:
+            root = Path(temp)
+            rows = [
+                {"prompt": "Implement alpha.", "completion": "alpha()", "source_path": "src/alpha.py"},
+                {"prompt": "Explain alpha.", "completion": "alpha is a function.", "source_path": "src/alpha.py"},
+                {"prompt": "Implement beta.", "completion": "beta()", "source_path": "src/beta.py"},
+                {"prompt": "Explain beta.", "completion": "beta is a function.", "source_path": "src/beta.py"},
+                {"prompt": "Implement gamma.", "completion": "gamma()", "source_path": "src/gamma.py"},
+            ]
+            dataset = root / "instructions.jsonl"
+            dataset.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(
+                    dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
+                )
+
+            training, validation, quality = split_instruction_examples(examples)
+            memberships = {}
+            for split_name, collection in (("train", training), ("validation", validation)):
+                for item in collection:
+                    memberships.setdefault(item["source_path_group_id"], set()).add(split_name)
+            self.assertEqual(len(memberships), 3)
+            self.assertTrue(all(len(splits) == 1 for splits in memberships.values()))
+            self.assertEqual(quality["source_path_group_count"], 3)
+            self.assertEqual(
+                quality["split_strategy"],
+                "deterministic-sha256-prompt-source-path-and-source-groups-v3",
+            )
+
+    def test_source_path_metadata_must_be_a_bounded_string(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-source-path-schema-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            dataset.write_text(
+                json.dumps({"prompt": "Explain alpha.", "completion": "Alpha is valid.", "source_path": []}) + "\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "source_path on line 1"):
+                    load_instruction_examples(
+                        dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
+                    )
+
     def test_long_completion_remains_fully_supervised_across_windows(self):
         with tempfile.TemporaryDirectory(prefix="syntra-completion-windows-") as temp:
             root = Path(temp)
