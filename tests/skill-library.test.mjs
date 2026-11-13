@@ -40,7 +40,7 @@ test("retrieval always includes SYNTRA guardrails and verification, then selects
       "Use when building a new user interface or designing visual layouts.",
       "# Frontend Design\nUse deliberate layout and typography choices.");
 
-    const result = await loadRelevantSkills(root, "Fix the failing test caused by unexpected behavior in the API service.");
+    const result = await loadRelevantSkills(root, "Fix the failing test caused by unexpected behavior in the API service.", { libraryRoot: root });
     const names = result.skills.map(skill => skill.slug);
 
     assert.equal(result.status, "selected");
@@ -67,8 +67,8 @@ test("skill ranking and selected excerpts are deterministic and bounded", async 
     await writeSkill(root, "api-and-interface-design", "Use when designing APIs and public interfaces.",
       "# API design\nDefine stable contracts and validate them at boundaries.");
 
-    const first = await loadRelevantSkills(root, "Harden API input validation and authorization.");
-    const second = await loadRelevantSkills(root, "Harden API input validation and authorization.");
+    const first = await loadRelevantSkills(root, "Harden API input validation and authorization.", { libraryRoot: root });
+    const second = await loadRelevantSkills(root, "Harden API input validation and authorization.", { libraryRoot: root });
 
     assert.deepEqual(first.skills.map(skill => skill.slug), second.skills.map(skill => skill.slug));
     assert.equal(first.context, second.context);
@@ -82,7 +82,7 @@ test("skill ranking and selected excerpts are deterministic and bounded", async 
 test("missing skill libraries are reported without failing the coding-agent task", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-no-skills-"));
   try {
-    const result = await loadRelevantSkills(root, "Implement a feature.");
+    const result = await loadRelevantSkills(root, "Implement a feature.", { libraryRoot: root });
     assert.equal(result.status, "not_available");
     assert.equal(result.skills.length, 0);
     assert.equal(result.context, "");
@@ -117,7 +117,7 @@ test("oversized skill files and symbolic-link skill folders are excluded", async
       // boundary remains testable without elevated filesystem privileges.
     }
 
-    const result = await loadRelevantSkills(root, "Debug a failing test.");
+    const result = await loadRelevantSkills(root, "Debug a failing test.", { libraryRoot: root });
     assert.ok(!result.skills.some(skill => skill.slug === "oversized"));
     assert.ok(!result.skills.some(skill => skill.slug === "external-link"));
     assert.ok(result.skills.some(skill => skill.slug === "syntra-project-guardrails"));
