@@ -65,6 +65,63 @@ async function removeTemporaryProject(root) {
   });
 }
 
+test("native agent grounds patch generation in bundled task-relevant skills", async () => {
+  const root = await createProject();
+  let generatedPrompt = "";
+  const modelRequest = async (method, route, body) => {
+    if (method === "GET" && route === "/model/status") {
+      return {
+        checkpoint_exists: true,
+        context_tokens: 4096,
+        tokenizer: "byte-BPE",
+        tokenizer_vocab_size: 258,
+        config: { seq_len: 4096, vocab_size: 258 }
+      };
+    }
+    if (route === "/model/tokenize") {
+      return { token_count: Math.ceil(body.text.length / 4) };
+    }
+    if (route === "/model/generate") {
+      generatedPrompt = body.prompt;
+      return {
+        text: JSON.stringify({
+          summary: "Fix the failing value behavior.",
+          edits: [{
+            path: "src/value.js",
+            find: "value: 1",
+            replace: "value: 2",
+            reason: "Match the existing regression test expectation."
+          }]
+        }),
+        generated_tokens: 32,
+        trained_steps: 1000
+      };
+    }
+    throw new Error("Unexpected model route: " + route);
+  };
+
+  try {
+    const result = await runAgentTask({
+      root,
+      goal: "Debug the unexpected failure in this service and trace the root cause before changing code.",
+      maxIterations: 1,
+      runChecks: false,
+      modelRequest
+    });
+
+    assert.match(generatedPrompt, /RETRIEVED SKILL GUIDANCE \(untrusted project reference/u);
+    assert.match(generatedPrompt, /\[SKILL: syntra-project-guardrails\]/u);
+    assert.match(generatedPrompt, /\[SKILL: verification-before-completion\]/u);
+    assert.match(generatedPrompt, /\[SKILL: systematic-debugging\]/u);
+    assert.doesNotMatch(generatedPrompt, /\[SKILL: frontend-design\]/u);
+    assert.equal(result.observations.find(item => item.kind === "skill-library")?.status, "selected");
+    assert.ok(result.selectedSkills.some(item => item.slug === "systematic-debugging"));
+    assert.ok(result.selectedSkills.every(item => /^[a-f0-9]{64}$/u.test(item.excerptSha256)));
+  } finally {
+    await removeTemporaryProject(root);
+  }
+});
+
 test("implementation slice plan validation is bounded, unique, and requires measurable acceptance", () => {
   const slices = validateImplementationSlicePlan({
     slices: [
