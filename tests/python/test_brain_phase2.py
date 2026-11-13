@@ -176,6 +176,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             self.assertEqual(len(records), 2)
             self.assertEqual(records[0]["prompt"], "Explain addition.")
             self.assertEqual(records[0]["source_path"], "src/math_utils.py")
+            self.assertEqual(records[0]["dataset_file_path"], "instructions.jsonl")
             self.assertEqual(records[1]["completion"], "Multiply the two values.")
             self.assertEqual(len(files), 1)
             self.assertGreater(byte_count, 0)

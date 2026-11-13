@@ -515,6 +515,7 @@ def _read_instruction_jsonl_datasets(
                         "prompt": instruction.strip(),
                         "completion": response.strip(),
                         "source_path": source_path.strip(),
+                        "dataset_file_path": relative_name,
                         "source_line": str(line_number),
                         "split_group": split_group.strip(),
                     })
