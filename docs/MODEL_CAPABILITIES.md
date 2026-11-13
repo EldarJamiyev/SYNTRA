@@ -12,6 +12,12 @@ SYNTRA's native model is a small, randomly initialized research model trained fr
 
 Native prompt token counts use SYNTRA's local tokenizer. Any byte-ratio estimate exposed by compatibility or diagnostic paths must remain clearly marked as an estimate and must not be presented as exact model tokenization.
 
+## Task-aware skill grounding
+
+The repository-aware coding agent discovers bounded `SKILL.md` references from SYNTRA's bundled `.agents/skills` library and the active workspace. It always selects the bundled project guardrails and verification guidance when present, then ranks task-relevant playbooks from their names and descriptions. Selection is deterministic and limited to three skills.
+
+Skill text is treated as untrusted reference context, not executable instructions or permission. Selected excerpt hashes and retrieval status are recorded with the agent run. The selected text is progressively compacted using the checkpoint's actual tokenizer budget and omitted when necessary to preserve the user's task and patch contract. This improves access to documented engineering procedures; it does not add model weights or prove the model followed a skill.
+
 ## Self-review
 
 Patch review runs before verification and uses the same native checkpoint as generation. It is a second reasoning pass, not an independent-model guarantee. If review is enabled and no accepted verdict is produced, the candidate is blocked rather than silently treated as reviewed.
