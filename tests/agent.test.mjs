@@ -103,7 +103,7 @@ test("native agent grounds patch generation in bundled task-relevant skills", as
   try {
     const result = await runAgentTask({
       root,
-      goal: "Debug the unexpected failure in this service and trace the root cause before changing code.",
+      goal: "Use systematic debugging to trace the root cause of an unexpected failure and fix the regression in this local service.",
       maxIterations: 1,
       runChecks: false,
       modelRequest
