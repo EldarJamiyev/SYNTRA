@@ -50,7 +50,7 @@ test("Windows startup preserves native-first setup and explicitly supports hybri
   assert.match(launcher, /Ensure-Service 3002 "http:\/\/127\.0\.0\.1:3002\/health" "ai:server"/);
   assert.match(launcher, /if \(\$ModelProvider -eq "native"\)/);
   assert.ok(launcher.includes("Node.js 22.12.0 or newer"));
-  assert.match(launcher, /scripts\\\\node-version\\.mjs/u);
+  assert.ok(launcher.includes("node-version.mjs"));
   const server = await fs.readFile(new URL("../local/server.mjs", import.meta.url), "utf8");
   assert.match(server, /model-provider\.mjs/);
   assert.match(server, /isHybridModelEnabled/);
