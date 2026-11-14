@@ -1,12 +1,13 @@
 # Release checklist and upgrade notes
 
-This checklist validates one AI runtime: SYNTRA's own local Python/PyTorch model, tokenizer, checkpoint, embeddings, and repository agent. No alternate model provider or external AI service is part of the supported application.
+This checklist validates SYNTRA's native Python/PyTorch model and the optional, explicitly configured OpenAI-compatible inference bridge. Provider identity, model ID, context assumptions, and data egress must be recorded separately.
 
 ## 1. Prepare the release candidate
 
 - Confirm the intended branch and commit. Do not publish a draft feature branch as a stable release.
 - Keep a recoverable copy of active project workspaces before upgrading. Do not delete a project's `.syntra` directory: it contains local proposals, run/checkpoint history, memory, indexes, and audit state.
 - Confirm release notes identify the release commit, supported operating systems, Node.js and Python requirements, and known model limitations.
+- Do not create a pretrained-checkpoint release asset unless an actual trained checkpoint exists, its SHA-256 and sidecar metadata validate, its tokenizer companion matches, and a complete benchmark report identifies those exact bytes. Never upload random-initialization or partially trained weights as a starter model.
 - Confirm `package-lock.json` is synchronized with `package.json` and use `npm ci` for a clean JavaScript dependency install.
 
 ## 2. Automated quality gates
@@ -27,8 +28,8 @@ On GitHub, require both the `SYNTRA checks` workflow and CodeQL to pass on the e
 
 ## 3. Verify the native runtime
 
-1. Confirm Node.js 20 or newer, Git, and Python 3.12 or newer are installed.
-2. Run `Start-SYNTRA.bat`. The launcher prepares the isolated Python environment, validates an existing checkpoint or trains SYNTRA's own checkpoint from approved local source data, and starts the native AI service.
+1. Confirm Node.js ^20.19.0 or >=22.12.0 and Git are installed. Python 3.12 or newer is required for native mode; it is not required for explicitly configured hybrid inference.
+2. In native mode, run `Start-SYNTRA.bat`. The launcher prepares the isolated Python environment, validates an existing checkpoint or trains SYNTRA's own checkpoint from approved local source data, and starts the native AI service. In hybrid mode, it verifies the exact configured model ID through /models, skips Python setup and checkpoint training, and starts the local workspace and frontend services.
 3. Confirm `http://127.0.0.1:3002/health` reports the SYNTRA native Transformer service and `http://127.0.0.1:3001/local-api/health` reports the workspace service.
 4. Open `http://127.0.0.1:3000`, run `/status`, and verify the active checkpoint, training step count, and context size are actual values read from local metadata.
 5. Test normal chat, tokenization, streamed generation, and a small repository-aware coding task in a disposable workspace. Review the proposed diff, candidate-check results, and source hashes before applying anything.
@@ -75,7 +76,7 @@ Release only when all applicable gates are recorded:
 - [ ] GitHub `SYNTRA checks` and CodeQL pass on that exact commit.
 - [ ] Local lint, Node/Python regression tests, browser E2E tests, and production build pass.
 - [ ] The Windows launcher and native service smoke test pass on the target machine.
-- [ ] A valid locally trained SYNTRA checkpoint is confirmed and used by normal chat, generation, review, and embedding paths.
+- [ ] A valid locally trained SYNTRA checkpoint is confirmed and used by normal chat, generation, review, and embedding paths, OR the explicitly selected hybrid endpoint is verified and the exact provider/model/context and data-egress boundary are recorded.
 - [ ] A disposable-project coding task has a reviewable diff and truthful verification result.
 - [ ] Check isolation is explicitly configured and the chosen trust boundary is understood.
 - [ ] Native semantic-index and project-memory behavior is checked.

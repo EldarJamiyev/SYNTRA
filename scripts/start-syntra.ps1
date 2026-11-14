@@ -117,23 +117,30 @@ function Ensure-Service([int]$Port, [string]$HealthUrl, [string]$NpmScript, [str
 try {
     Write-Host "SYNTRA - one-click local startup" -ForegroundColor Green
     Write-Host "Project: $Root"
+    $ModelProvider = ([string]$env:SYNTRA_MODEL_PROVIDER).Trim().ToLowerInvariant()
+    if (-not $ModelProvider) { $ModelProvider = "native" }
+    if ($ModelProvider -notin @("native", "openai-compatible")) {
+        throw "SYNTRA_MODEL_PROVIDER must be 'native' or the explicitly opt-in 'openai-compatible'."
+    }
 
     Write-Step "Checking prerequisites"
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         throw "Node.js is missing. Install Node.js 20 or newer from https://nodejs.org/ and double-click Start-SYNTRA.bat again."
     }
     $nodeVersionText = (& node --version 2>&1 | Out-String).Trim()
-    $nodeMatch = [regex]::Match($nodeVersionText, '^v?(\d+)\.')
+    $nodeMatch = [regex]::Match($nodeVersionText, '^v?(\d+)\.(\d+)\.(\d+)')
     if ($LASTEXITCODE -ne 0 -or -not $nodeMatch.Success) {
-        throw "Could not read the Node.js version. Reinstall Node.js 20 or newer."
+        throw "Could not read the Node.js version. Install Node.js 20.19 or newer within the supported Vite range."
     }
     $nodeMajor = [int]$nodeMatch.Groups[1].Value
-    if ($nodeMajor -lt 20) {
-        throw "SYNTRA needs Node.js 20 or newer. Installed version: $nodeVersionText"
+    $nodeMinor = [int]$nodeMatch.Groups[2].Value
+    $nodeSupported = ($nodeMajor -eq 20 -and $nodeMinor -ge 19) -or ($nodeMajor -ge 22 -and ($nodeMajor -gt 22 -or $nodeMinor -ge 12))
+    if (-not $nodeSupported) {
+        throw "SYNTRA needs Node.js ^20.19.0 or >=22.12.0. Installed version: $nodeVersionText"
     }
+    Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
 
-    # SYNTRA has one inference engine: its own local Python/PyTorch checkpoint.
-    $pythonVersionText = $null
+    if ($ModelProvider -eq "native") {
         if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
             throw "Python is missing. Install Python 3.12 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
         }
@@ -147,9 +154,10 @@ try {
         if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 12)) {
             throw "SYNTRA needs Python 3.12 or newer. Installed version: $pythonVersionText"
         }
-
-    Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
-    Write-Host "$pythonVersionText" -ForegroundColor Green
+        Write-Host "$pythonVersionText" -ForegroundColor Green
+    } else {
+        Write-Host "Hybrid mode selected. Python/PyTorch setup and local checkpoint training are skipped." -ForegroundColor Yellow
+    }
 
     Write-Step "Preparing the web application"
     $ProjectLock = Join-Path $Root "package-lock.json"
@@ -186,94 +194,108 @@ try {
         Write-Host "JavaScript dependencies match the committed npm lockfile." -ForegroundColor Green
     }
 
-    Write-Step "Preparing the isolated native AI environment"
-    $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
-    Write-Host "Checking the installed Python environment against requirements.lock.txt..."
-    & python (Join-Path $Root "scripts\setup_syntra_env.py")
-    if ($LASTEXITCODE -ne 0) {
-        throw "Python setup or lock validation failed. Check the installation error above, then double-click Start-SYNTRA.bat again."
-    }
+    if ($ModelProvider -eq "native") {
+        Write-Step "Preparing the isolated native AI environment"
+        $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
+        Write-Host "Checking the installed Python environment against requirements.lock.txt..."
+        & python (Join-Path $Root "scripts\setup_syntra_env.py")
+        if ($LASTEXITCODE -ne 0) {
+            throw "Python setup or lock validation failed. Check the installation error above, then double-click Start-SYNTRA.bat again."
+        }
 
-    $runtimeCheck = & $VenvPython -c "import torch, numpy; assert torch.version.cuda is None, 'SYNTRA requires CPU-only PyTorch'; print('READY PyTorch=' + torch.__version__ + ' NumPy=' + numpy.__version__ + ' CUDA=' + str(torch.version.cuda))" 2>&1
-    if ($LASTEXITCODE -ne 0 -or (($runtimeCheck | Out-String) -notmatch 'READY PyTorch=.*CUDA=None')) {
-        $runtimeCheck | ForEach-Object { Write-Host $_ }
-        throw "The local Python runtime failed its CPU-only health check. Run npm run ai:install and inspect the error."
-    }
-    $runtimeCheck | ForEach-Object { Write-Host $_ -ForegroundColor Green }
+        $runtimeCheck = & $VenvPython -c "import torch, numpy; assert torch.version.cuda is None, 'SYNTRA requires CPU-only PyTorch'; print('READY PyTorch=' + torch.__version__ + ' NumPy=' + numpy.__version__ + ' CUDA=' + str(torch.version.cuda))" 2>&1
+        if ($LASTEXITCODE -ne 0 -or (($runtimeCheck | Out-String) -notmatch 'READY PyTorch=.*CUDA=None')) {
+            $runtimeCheck | ForEach-Object { Write-Host $_ }
+            throw "The local Python runtime failed its CPU-only health check. Run npm run ai:install and inspect the error."
+        }
+        $runtimeCheck | ForEach-Object { Write-Host $_ -ForegroundColor Green }
 
-    Write-Step "Checking the local model"
-    $Checkpoint = Join-Path $Root "data\checkpoints\syntra.pt"
-    $CheckpointMetadata = $Checkpoint + ".json"
-    $checkpointValid = $false
-    if (Test-Path $Checkpoint) {
-        $validationOutput = & $VenvPython -c "from syntra_ai.runtime import _read_checkpoint; _read_checkpoint(); print('CHECKPOINT_OK')" 2>&1
-        $checkpointValid = ($LASTEXITCODE -eq 0 -and (($validationOutput | Out-String) -match 'CHECKPOINT_OK'))
-        if (-not $checkpointValid) {
-            $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-            Write-Warning "The saved model checkpoint is invalid. It will be backed up before a clean rebuild."
-            Move-Item -LiteralPath $Checkpoint -Destination ($Checkpoint + ".invalid-" + $stamp)
-            if (Test-Path $CheckpointMetadata) {
-                Move-Item -LiteralPath $CheckpointMetadata -Destination ($CheckpointMetadata + ".invalid-" + $stamp)
+        Write-Step "Checking the local model"
+        $Checkpoint = Join-Path $Root "data\checkpoints\syntra.pt"
+        $CheckpointMetadata = $Checkpoint + ".json"
+        $checkpointValid = $false
+        if (Test-Path $Checkpoint) {
+            $validationOutput = & $VenvPython -c "from syntra_ai.runtime import _read_checkpoint; _read_checkpoint(); print('CHECKPOINT_OK')" 2>&1
+            $checkpointValid = ($LASTEXITCODE -eq 0 -and (($validationOutput | Out-String) -match 'CHECKPOINT_OK'))
+            if (-not $checkpointValid) {
+                $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+                Write-Warning "The saved model checkpoint is invalid. It will be backed up before a clean rebuild."
+                Move-Item -LiteralPath $Checkpoint -Destination ($Checkpoint + ".invalid-" + $stamp)
+                if (Test-Path $CheckpointMetadata) {
+                    Move-Item -LiteralPath $CheckpointMetadata -Destination ($CheckpointMetadata + ".invalid-" + $stamp)
+                }
             }
         }
-    }
 
-    $targetSteps = 1000
-    $targetContext = 1024
-    $resumeTraining = $false
-    $stepsToRun = $targetSteps
+        $targetSteps = 1000
+        $targetContext = 1024
+        $resumeTraining = $false
+        $stepsToRun = $targetSteps
 
-    if ($checkpointValid) {
-        $statusOutput = & $VenvPython -m syntra_ai.cli status 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not read the existing model status. Checkpoint was preserved; see the error above."
+        if ($checkpointValid) {
+            $statusOutput = & $VenvPython -m syntra_ai.cli status 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not read the existing model status. Checkpoint was preserved; see the error above."
+            }
+            $modelStatus = (($statusOutput | Out-String) | ConvertFrom-Json)
+            $currentSteps = [int]$modelStatus.trained_steps
+            $currentContext = $modelStatus.context_tokens
+            if ((Test-Path $CheckpointMetadata) -and (($currentContext -eq 1024) -or ($currentContext -eq 256)) -and $currentSteps -lt $targetSteps) {
+                $targetContext = [int]$currentContext
+                $resumeTraining = $true
+                $stepsToRun = $targetSteps - $currentSteps
+                Write-Host "Resuming interrupted first-run training at step $currentSteps of $targetSteps." -ForegroundColor Yellow
+            } else {
+                Write-Host "Existing valid checkpoint found (saved steps: $currentSteps). Skipping first-run training." -ForegroundColor Green
+            }
         }
-        $modelStatus = (($statusOutput | Out-String) | ConvertFrom-Json)
-        $currentSteps = [int]$modelStatus.trained_steps
-        $currentContext = $modelStatus.context_tokens
-        if ((Test-Path $CheckpointMetadata) -and (($currentContext -eq 1024) -or ($currentContext -eq 256)) -and $currentSteps -lt $targetSteps) {
-            $targetContext = [int]$currentContext
-            $resumeTraining = $true
-            $stepsToRun = $targetSteps - $currentSteps
-            Write-Host "Resuming interrupted first-run training at step $currentSteps of $targetSteps." -ForegroundColor Yellow
-        } else {
-            Write-Host "Existing valid checkpoint found (saved steps: $currentSteps). Skipping first-run training." -ForegroundColor Green
-        }
-    }
 
-    if (-not $checkpointValid -or $resumeTraining) {
-        Write-Host ""
-        Write-Host "First-run local training is required because SYNTRA ships without pretrained weights." -ForegroundColor Yellow
-        Write-Host "Training uses source files in this repository. Progress appears below; checkpoints are saved periodically."
-        $trainArgs = @("-m", "syntra_ai.cli", "train", "--root", $Root, "--seq-len", "$targetContext", "--steps", "$stepsToRun", "--batch-size", "2")
-        if ($resumeTraining) { $trainArgs += "--resume" }
+        if (-not $checkpointValid -or $resumeTraining) {
+            Write-Host ""
+            Write-Host "First-run local training is required because SYNTRA ships without pretrained weights." -ForegroundColor Yellow
+            Write-Host "Training uses source files in this repository. Progress appears below; checkpoints are saved periodically."
+            $trainArgs = @("-m", "syntra_ai.cli", "train", "--root", $Root, "--seq-len", "$targetContext", "--steps", "$stepsToRun", "--batch-size", "2")
+            if ($resumeTraining) { $trainArgs += "--resume" }
 
-        $trainingOutput = @()
-        & $VenvPython @trainArgs 2>&1 | Tee-Object -Variable trainingOutput
-        $trainingExit = $LASTEXITCODE
-
-        if ($trainingExit -ne 0 -and -not $resumeTraining -and (($trainingOutput | Out-String) -match '80/20 split needs more than')) {
-            Write-Warning "The source corpus is too small for a 1,024-token context. Retrying with a smaller 256-token context."
             $trainingOutput = @()
-            $fallbackArgs = @("-m", "syntra_ai.cli", "train", "--root", $Root, "--seq-len", "256", "--steps", "$targetSteps", "--batch-size", "2")
-            & $VenvPython @fallbackArgs 2>&1 | Tee-Object -Variable trainingOutput
+            & $VenvPython @trainArgs 2>&1 | Tee-Object -Variable trainingOutput
             $trainingExit = $LASTEXITCODE
+
+            if ($trainingExit -ne 0 -and -not $resumeTraining -and (($trainingOutput | Out-String) -match '80/20 split needs more than')) {
+                Write-Warning "The source corpus is too small for a 1,024-token context. Retrying with a smaller 256-token context."
+                $trainingOutput = @()
+                $fallbackArgs = @("-m", "syntra_ai.cli", "train", "--root", $Root, "--seq-len", "256", "--steps", "$targetSteps", "--batch-size", "2")
+                & $VenvPython @fallbackArgs 2>&1 | Tee-Object -Variable trainingOutput
+                $trainingExit = $LASTEXITCODE
+            }
+
+            if ($trainingExit -ne 0) {
+                throw "Initial local training failed. The error is shown above. The launcher will keep any saved checkpoints; fix that error and double-click Start-SYNTRA.bat again."
+            }
         }
 
-        if ($trainingExit -ne 0) {
-            throw "Initial local training failed. The error is shown above. The launcher will keep any saved checkpoints; fix that error and double-click Start-SYNTRA.bat again."
+        $validationOutput = & $VenvPython -c "from syntra_ai.runtime import _read_checkpoint; _read_checkpoint(); print('CHECKPOINT_OK')" 2>&1
+        if ($LASTEXITCODE -ne 0 -or (($validationOutput | Out-String) -notmatch 'CHECKPOINT_OK')) {
+            $validationOutput | ForEach-Object { Write-Host $_ }
+            throw "SYNTRA could not validate the model checkpoint after setup."
         }
-    }
 
-    $validationOutput = & $VenvPython -c "from syntra_ai.runtime import _read_checkpoint; _read_checkpoint(); print('CHECKPOINT_OK')" 2>&1
-    if ($LASTEXITCODE -ne 0 -or (($validationOutput | Out-String) -notmatch 'CHECKPOINT_OK')) {
-        $validationOutput | ForEach-Object { Write-Host $_ }
-        throw "SYNTRA could not validate the model checkpoint after setup."
-    }
 
+
+    } else {
+        Write-Step "Verifying the explicitly configured hybrid model"
+        $hybridCheck = & node --input-type=module -e "import { getHybridModelStatus } from './local/model-provider.mjs'; const status = await getHybridModelStatus(); console.log('Verified hybrid model: ' + status.model_name + ' · context ' + status.context_tokens + ' tokens');" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $hybridCheck | ForEach-Object { Write-Host $_ }
+            throw "The explicitly configured hybrid model could not be verified. Check SYNTRA_HYBRID_BASE_URL, SYNTRA_HYBRID_MODEL, API credentials, and model availability."
+        }
+        $hybridCheck | ForEach-Object { Write-Host $_ -ForegroundColor Green }
+    }
 
     Write-Step "Starting the local services"
-    Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
+    if ($ModelProvider -eq "native") {
+        Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
+    }
     Ensure-Service 3001 "http://127.0.0.1:3001/local-api/health" "server"
     Ensure-Service 3000 "http://127.0.0.1:3000/" "dev" "SYNTRA Chat"
 

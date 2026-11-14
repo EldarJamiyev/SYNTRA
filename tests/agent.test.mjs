@@ -601,7 +601,7 @@ test("agent executes only model-selected read-only retrieval calls and feeds res
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(generated.length, 4, "three evidence-driven planning rounds should precede patch generation");
+    assert.equal(generated.length, 4, "three evidence-driven planning rounds should precede patch generation. Observations: " + JSON.stringify(result.observations));
     assert.equal(retrievalPrompts.length, 3);
     assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL CALLS/);
     assert.match(retrievalPrompts[1], /PREVIOUS RETRIEVAL EVIDENCE/);
@@ -677,7 +677,7 @@ test("iterative retrieval enforces the eight-call global limit and stops without
       modelToolSelection: true,
       modelRequest
     });
-    assert.equal(planningRounds, 3, "the twelve-call budget should stop planning after three rounds of four unique calls");
+    assert.equal(planningRounds, 3, "the twelve-call budget should stop planning after three rounds of four unique calls. Observations: " + JSON.stringify(result.observations));
     assert.equal(result.toolCalls.filter(call => call.name === "workspace.search").length, 12);
     const investigation = result.observations.find(item => item.kind === "model-readonly-investigation");
     assert.match(investigation.detail, /3 evidence-driven planning round\(s\), 12 unique read-only retrieval call/);

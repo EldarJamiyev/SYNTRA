@@ -1,0 +1,33 @@
+name: Feature request
+description: Propose a focused improvement to SYNTRA.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the real user or engineering problem.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected outcome
+      description: Describe observable behavior and how success can be verified.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Constraints and trust boundaries
+      description: Note compatibility, local-data, provider, security, and performance considerations.
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence
+      description: Logs, references, measurements, or reproduction steps. Do not include secrets or private source.
+    validations:
+      required: false
