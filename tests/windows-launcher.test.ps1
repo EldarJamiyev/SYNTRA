@@ -31,8 +31,6 @@ if ($launcher -notmatch 'scripts\\node-version\.mjs') {
 if ($launcher -notmatch 'Node\.js 22\.12\.0 or newer') {
     throw "The Windows launcher must report its supported Node.js minimum."
 }
-    throw "The Windows launcher must enforce the runtime range required by Vite 8."
-}
 foreach ($required in @(
     "scripts\setup_syntra_env.py",
     "local/model-provider.mjs",
