@@ -125,18 +125,17 @@ try {
 
     Write-Step "Checking prerequisites"
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        throw "Node.js is missing. Install Node.js 20 or newer from https://nodejs.org/ and double-click Start-SYNTRA.bat again."
+        throw "Node.js is missing. Install Node.js 22.12.0 or newer from https://nodejs.org/ and double-click Start-SYNTRA.bat again."
     }
     $nodeVersionText = (& node --version 2>&1 | Out-String).Trim()
-    $nodeMatch = [regex]::Match($nodeVersionText, '^v?(\d+)\.(\d+)\.(\d+)')
-    if ($LASTEXITCODE -ne 0 -or -not $nodeMatch.Success) {
-        throw "Could not read the Node.js version. Install Node.js 20.19 or newer within the supported Vite range."
+    if ($LASTEXITCODE -ne 0 -or -not $nodeVersionText) {
+        throw "Could not read the Node.js version. Reinstall Node.js 22.12.0 or newer."
     }
-    $nodeMajor = [int]$nodeMatch.Groups[1].Value
-    $nodeMinor = [int]$nodeMatch.Groups[2].Value
-    $nodeSupported = ($nodeMajor -eq 20 -and $nodeMinor -ge 19) -or ($nodeMajor -ge 22 -and ($nodeMajor -gt 22 -or $nodeMinor -ge 12))
-    if (-not $nodeSupported) {
-        throw "SYNTRA needs Node.js ^20.19.0 or >=22.12.0. Installed version: $nodeVersionText"
+    $nodeVersionCheck = & node (Join-Path $Root "scripts\node-version.mjs") 2>&1
+    $nodeVersionExitCode = $LASTEXITCODE
+    if ($nodeVersionExitCode -ne 0) {
+        $nodeVersionCheck | ForEach-Object { Write-Host $_ }
+        throw "SYNTRA needs Node.js 22.12.0 or newer. Installed version: $nodeVersionText"
     }
     Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
 
