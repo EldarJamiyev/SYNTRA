@@ -1657,7 +1657,7 @@ export async function runAgentTask({
     contextSafetyMarginTokens: contextPlan.safetyMarginTokens,
     contextBudgetProfile: contextPlan.budgetProfile,
     tokenizerIsExact: contextPlan.exactTokenCount,
-    contextCountIsEstimate: modelStatus.context_count_is_estimate === true
+    contextCountIsEstimate: modelStatus.context_count_is_estimate === true,
     selectedSkills: skillSelection.skills.map(({ slug, source, excerptSha256, score, characters }) => ({
       slug, source, excerptSha256, score, characters
     }))
