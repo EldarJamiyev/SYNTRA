@@ -93,6 +93,156 @@ class InstructionContextIntegrityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "one immutable dataset identity"):
                 split_instruction_examples(examples)
 
+    def test_source_path_related_records_never_cross_validation_split(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-source-path-split-") as temp:
+            root = Path(temp)
+            rows = [
+                {"prompt": "Implement alpha.", "completion": "alpha()", "source_path": "./src/alpha.py"},
+                {"prompt": "Explain alpha.", "completion": "alpha is a function.", "source_path": "src//alpha.py"},
+                {"prompt": "Repair alpha.", "completion": "alpha is repaired.", "source_path": "src\\alpha.py"},
+                {"prompt": "Implement beta.", "completion": "beta()", "source_path": "src/beta.py"},
+                {"prompt": "Implement gamma.", "completion": "gamma()", "source_path": "src/gamma.py"},
+            ]
+            dataset = root / "instructions.jsonl"
+            dataset.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(
+                    dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
+                )
+
+            training, validation, quality = split_instruction_examples(examples)
+            memberships = {}
+            for split_name, collection in (("train", training), ("validation", validation)):
+                for item in collection:
+                    memberships.setdefault(item["source_path_group_id"], set()).add(split_name)
+            self.assertEqual(len(memberships), 3)
+            self.assertTrue(all(len(splits) == 1 for splits in memberships.values()))
+            self.assertEqual(len(examples), 5)
+            self.assertEqual(examples[0]["source_path_group_id"], examples[1]["source_path_group_id"])
+            self.assertEqual(examples[1]["source_path_group_id"], examples[2]["source_path_group_id"])
+            self.assertNotEqual(examples[0]["source_path_group_id"], examples[3]["source_path_group_id"])
+            self.assertEqual(quality["source_path_group_count"], 3)
+            self.assertEqual(
+                quality["split_strategy"],
+                "deterministic-sha256-prompt-source-path-and-source-groups-v4",
+            )
+
+    def test_source_path_aliases_normalize_and_unsafe_paths_are_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-source-path-aliases-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            rows = [
+                {"prompt": "One.", "completion": "First.", "source_path": "src\\module.py"},
+                {"prompt": "Two.", "completion": "Second.", "source_path": "./src//module.py"},
+            ]
+            dataset.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                examples = load_instruction_examples(
+                    dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
+                )
+            self.assertEqual(
+                examples[0]["source_path_group_id"],
+                examples[1]["source_path_group_id"],
+            )
+            for unsafe_path in ("/etc/passwd", "C:\\repo\\module.py", "../outside.py", "src/../outside.py", "."):
+                dataset.write_text(
+                    json.dumps({"prompt": "Unsafe.", "completion": "Reject.", "source_path": unsafe_path}) + "\n",
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                    with self.subTest(source_path=unsafe_path), self.assertRaisesRegex(
+                        ValueError, "source_path on line 1 is invalid"
+                    ):
+                        load_instruction_examples(
+                            dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
+                        )
+
+    def test_source_path_metadata_must_be_a_bounded_string(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-source-path-schema-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            dataset.write_text(
+                json.dumps({"prompt": "Explain alpha.", "completion": "Alpha is valid.", "source_path": []}) + "\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+                with self.assertRaisesRegex(ValueError, "source_path on line 1"):
+                    load_instruction_examples(
+                        dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
+                    )
+
+    def test_validation_loss_evaluates_every_held_out_window_once_in_stable_order(self):
+        from syntra_ai import instruction as instruction_module
+
+        if instruction_module.torch is None:
+            self.skipTest("Install the pinned PyTorch requirements to run SFT validation tests.")
+        supervised_tokens = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        examples = [
+            {"input_ids": [1, 2, 3], "labels": [-100, 2, 3]},
+            {"input_ids": [1, 4], "labels": [-100, 4]},
+            {"input_ids": [1, 5, 6, 7], "labels": [-100, 5, 6, 7]},
+            {"input_ids": [1, 8], "labels": [-100, 8]},
+            {"input_ids": [1, 9, 10], "labels": [-100, 9, 10]},
+        ]
+
+        class RecordingModel:
+            def __init__(self):
+                self.training = True
+                self.seen_tokens = []
+
+            def eval(self):
+                self.training = False
+                return self
+
+            def train(self, mode=True):
+                self.training = mode
+                return self
+
+            def __call__(self, inputs, targets):
+                selected = targets[targets != -100]
+                self.seen_tokens.extend(selected.detach().cpu().tolist())
+                return None, selected.float().mean()
+
+        model = RecordingModel()
+        with patch.object(
+            instruction_module,
+            "_sample_instruction_examples",
+            side_effect=AssertionError("Validation must not sample examples randomly."),
+        ):
+            first_loss = instruction_module._instruction_loss(
+                model, examples, device="cpu", batch_size=2
+            )
+            self.assertEqual(model.seen_tokens, supervised_tokens)
+            self.assertTrue(model.training)
+
+            model.seen_tokens.clear()
+            second_loss = instruction_module._instruction_loss(
+                model, examples, device="cpu", batch_size=2
+            )
+
+        self.assertEqual(model.seen_tokens, supervised_tokens)
+        self.assertAlmostEqual(first_loss, sum(supervised_tokens) / len(supervised_tokens), places=6)
+        self.assertAlmostEqual(second_loss, first_loss, places=7)
+        self.assertTrue(model.training)
+
+    def test_validation_loss_rejects_an_empty_holdout(self):
+        from syntra_ai import instruction as instruction_module
+
+        if instruction_module.torch is None:
+            self.skipTest("Install the pinned PyTorch requirements to run SFT validation tests.")
+
+        class Model:
+            training = True
+
+            def eval(self):
+                self.training = False
+
+            def train(self, mode=True):
+                self.training = mode
+
+        with self.assertRaisesRegex(ValueError, "at least one held-out instruction example"):
+            instruction_module._instruction_loss(Model(), [], device="cpu", batch_size=2)
+
     def test_long_completion_remains_fully_supervised_across_windows(self):
         with tempfile.TemporaryDirectory(prefix="syntra-completion-windows-") as temp:
             root = Path(temp)

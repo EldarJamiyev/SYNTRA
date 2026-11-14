@@ -47,6 +47,28 @@ def _normalized_instruction_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def _normalized_source_path(value: str) -> str:
+    """Canonicalize a relative source identity without resolving it on the host filesystem."""
+    normalized = unicodedata.normalize("NFC", value.strip().replace("\\", "/"))
+    if (
+        not normalized
+        or "\x00" in normalized
+        or normalized.startswith("/")
+        or (len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":")
+    ):
+        raise ValueError("source_path must be a non-empty safe relative path.")
+    segments = []
+    for segment in normalized.split("/"):
+        if segment in {"", "."}:
+            continue
+        if segment == "..":
+            raise ValueError("source_path must not contain parent-directory traversal.")
+        segments.append(segment)
+    if not segments:
+        raise ValueError("source_path must identify a relative file path.")
+    return "/".join(segments)
+
+
 def load_instruction_examples(
     dataset_path: str | Path,
     seq_len: int,
@@ -172,6 +194,22 @@ def load_instruction_examples(
             if isinstance(split_group_value, str) and split_group_value.strip()
             else None
         )
+        source_path_value = item.get("source_path")
+        if source_path_value is not None and (
+            not isinstance(source_path_value, str) or len(source_path_value) > 2048
+        ):
+            raise ValueError(f"source_path on line {line_number} must be a string of at most 2,048 characters.")
+        normalized_source_path = ""
+        if isinstance(source_path_value, str) and source_path_value.strip():
+            try:
+                normalized_source_path = _normalized_source_path(source_path_value)
+            except ValueError as exc:
+                raise ValueError(f"source_path on line {line_number} is invalid: {exc}") from None
+        source_path_group_id = (
+            hashlib.sha256(normalized_source_path.encode("utf-8")).hexdigest()
+            if normalized_source_path
+            else None
+        )
 
         prompt = tokenizer.encode(prompt_text)
         completion = tokenizer.encode(completion_text)
@@ -238,6 +276,7 @@ def load_instruction_examples(
                     "context_overlap_tokens": overlap_target_count,
                     "prompt_group_id": prompt_group_id,
                     "split_group_id": split_group_id,
+                    "source_path_group_id": source_path_group_id,
                     "source_example_id": source_example_id,
                     "source_row_id": source_row_id,
                     "example_id": chunk_example_id,
@@ -271,6 +310,12 @@ def _source_record_index(examples: list[dict]) -> dict[str, dict[str, Any]]:
             raise ValueError("Instruction context window has a malformed source-example identifier.")
         dataset_sha256 = example.get("dataset_sha256")
         dataset_bytes = example.get("dataset_bytes")
+        source_path_group_id = example.get("source_path_group_id")
+        if source_path_group_id is not None and (
+            not isinstance(source_path_group_id, str)
+            or re.fullmatch(r"[a-f0-9]{64}", source_path_group_id) is None
+        ):
+            raise ValueError("Instruction context window has a malformed source-path group hash.")
         if dataset_sha256 is not None and (
             not isinstance(dataset_sha256, str)
             or re.fullmatch(r"[a-f0-9]{64}", dataset_sha256) is None
@@ -284,6 +329,7 @@ def _source_record_index(examples: list[dict]) -> dict[str, dict[str, Any]]:
             "source_example_id": source_id,
             "prompt_group_id": example["prompt_group_id"],
             "split_group_id": example.get("split_group_id"),
+            "source_path_group_id": source_path_group_id,
             "dataset_sha256": dataset_sha256,
             "dataset_bytes": dataset_bytes,
         }
@@ -324,6 +370,7 @@ def split_instruction_examples(
     owners: dict[str, int] = {}
     record_keys: list[tuple[str, ...]] = []
     source_group_ids: set[str] = set()
+    source_path_group_ids: set[str] = set()
 
     for index, example in enumerate(examples):
         if not isinstance(example, dict):
@@ -336,11 +383,19 @@ def split_instruction_examples(
             not isinstance(split_group_id, str) or len(split_group_id) != 64
         ):
             raise ValueError("Instruction example has a malformed source-group hash.")
+        source_path_group_id = example.get("source_path_group_id")
+        if source_path_group_id is not None and (
+            not isinstance(source_path_group_id, str) or len(source_path_group_id) != 64
+        ):
+            raise ValueError("Instruction example has a malformed source-path group hash.")
 
         keys = ["prompt:" + prompt_group_id]
         if split_group_id:
             keys.append("source:" + split_group_id)
             source_group_ids.add(split_group_id)
+        if source_path_group_id:
+            keys.append("source-path:" + source_path_group_id)
+            source_path_group_ids.add(source_path_group_id)
         record_keys.append(tuple(keys))
         for key in keys:
             previous = owners.get(key)
@@ -430,6 +485,10 @@ def split_instruction_examples(
         warnings.append(
             "Curriculum source groups are kept intact across validation to reduce same-symbol/source leakage."
         )
+    if source_path_group_ids:
+        warnings.append(
+            "Records sharing an explicit source_path are kept together on one side of the train/validation split."
+        )
     if exact_duplicates:
         warnings.append(
             f"{exact_duplicates} exact prompt/completion duplicate(s) may overweight repeated records during training."
@@ -446,6 +505,7 @@ def split_instruction_examples(
         "dataset_bytes": dataset_bytes,
         "unique_prompt_count": unique_prompts,
         "source_group_count": len(source_group_ids),
+        "source_path_group_count": len(source_path_group_ids),
         "independent_split_group_count": len(groups),
         "repeated_prompt_example_count": duplicate_prompts,
         "exact_duplicate_example_count": exact_duplicates,
@@ -459,7 +519,7 @@ def split_instruction_examples(
         "validation_data_groups": len(validation_group_ids),
         "validation_fraction": round(validation_fraction_actual, 4),
         "requested_validation_fraction": float(validation_fraction),
-        "split_strategy": "deterministic-sha256-prompt-and-source-groups-v2",
+        "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v4",
         "split_seed": seed,
         "prompt_leakage_groups": prompt_leakage_groups,
         "warnings": warnings,
@@ -525,7 +585,7 @@ def audit_instruction_dataset(
             "training_context_windows": 0,
             "validation_context_windows": 0,
             "validation_fraction": 0.0,
-            "split_strategy": "deterministic-sha256-prompt-and-source-groups-v2",
+            "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v4",
             "split_seed": INSTRUCTION_SPLIT_SEED,
             "prompt_leakage_groups": None,
             "dataset_sha256": next(iter({item.get("dataset_sha256") for item in source_records.values()}), None),
@@ -568,15 +628,32 @@ def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
     )
 
 
-def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int, batches: int = 4) -> float:
+def _instruction_loss(
+    model,
+    examples: list[dict],
+    device: Any,
+    batch_size: int,
+    batches: int | None = None,
+) -> float:
+    """Evaluate the complete holdout; retain batches as a legacy compatibility hint."""
+    # The previous helper accepted a random-batch count. Keep accepting that
+    # keyword for existing callers, but never let it omit held-out examples.
+    if batches is not None and (type(batches) is not int or batches < 1):
+        raise ValueError("The legacy validation batches hint must be a positive integer.")
+    if not isinstance(examples, list) or not examples:
+        raise ValueError("Validation requires at least one held-out instruction example.")
+    if type(batch_size) is not int or batch_size < 1:
+        raise ValueError("Validation batch_size must be a positive integer.")
+
     was_training = model.training
     model.eval()
     weighted_loss = 0.0
     supervised_tokens = 0
     try:
         with torch.no_grad():
-            for _ in range(batches):
-                x, y = _instruction_batch(examples, batch_size, device)
+            for offset in range(0, len(examples), batch_size):
+                chosen = examples[offset : offset + batch_size]
+                x, y = _instruction_batch_from_examples(chosen, device)
                 valid_count = int((y != -100).sum().item())
                 if valid_count < 1:
                     raise ValueError("Validation batch contained no supervised completion tokens.")
@@ -585,6 +662,7 @@ def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int,
                     raise RuntimeError("Validation produced a non-finite instruction loss.")
                 weighted_loss += float(loss.item()) * valid_count
                 supervised_tokens += valid_count
+                del x, y, loss
     finally:
         # Keep this helper safe for both training-time validation and standalone
         # evaluation of a model that may be resident in the inference process.
@@ -592,7 +670,6 @@ def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int,
     if supervised_tokens < 1:
         raise ValueError("Validation did not process any supervised completion tokens.")
     return weighted_loss / supervised_tokens
-
 
 def finetune(
     dataset_path: str | Path,
@@ -683,6 +760,8 @@ def finetune(
             "training_mode": "supervised-instruction-finetuning",
             "instruction_examples": dataset_quality["example_count"],
             "instruction_context_windows": len(examples),
+            "validation_context_windows_per_evaluation": len(validation_examples),
+            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
             "instruction_dataset_quality": dataset_quality,
             "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
             "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
@@ -746,7 +825,7 @@ def finetune(
         if sampled_memory is not None:
             peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
         if step == base_step + 1 or step % 25 == 0 or step == base_step + steps:
-            last_val_loss = _instruction_loss(model, validation_examples, device, batch_size, batches=2)
+            last_val_loss = _instruction_loss(model, validation_examples, device, batch_size)
             training_history = append_training_history(
                 training_history,
                 step=step,
@@ -766,6 +845,8 @@ def finetune(
                 "instruction_examples": dataset_quality["example_count"],
                 "training_history": training_history,
                 "instruction_context_windows": len(examples),
+            "validation_context_windows_per_evaluation": len(validation_examples),
+            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
                 "instruction_dataset_quality": dataset_quality,
                 "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
                 "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
@@ -785,6 +866,8 @@ def finetune(
                 "training_mode": "supervised-instruction-finetuning",
                 "instruction_examples": dataset_quality["example_count"],
                 "instruction_context_windows": len(examples),
+            "validation_context_windows_per_evaluation": len(validation_examples),
+            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
                 "instruction_dataset_quality": dataset_quality,
                 "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
                 "instruction_dataset_bytes": dataset_quality["dataset_bytes"],

@@ -368,6 +368,28 @@ def _read_local_datasets(
 
 
 
+def _normalized_instruction_source_path(value: str) -> str:
+    """Canonicalize a relative source identity without resolving a host path."""
+    normalized = unicodedata.normalize("NFC", value.strip().replace("\\", "/"))
+    if (
+        not normalized
+        or "\x00" in normalized
+        or normalized.startswith("/")
+        or (len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":")
+    ):
+        raise ValueError("source_path must be a non-empty safe relative path.")
+    segments = []
+    for segment in normalized.split("/"):
+        if segment in {"", "."}:
+            continue
+        if segment == "..":
+            raise ValueError("source_path must not contain parent-directory traversal.")
+        segments.append(segment)
+    if not segments:
+        raise ValueError("source_path must identify a relative file path.")
+    return "/".join(segments)
+
+
 def _read_instruction_jsonl_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
@@ -503,11 +525,27 @@ def _read_instruction_jsonl_datasets(
                         raise ValueError(
                             f"split_group in {relative_name}:{line_number} must be a string of at most 2,048 characters."
                         )
+                    source_path = fields.get("source_path", "")
+                    if source_path is None:
+                        source_path = ""
+                    if not isinstance(source_path, str) or len(source_path) > 2048:
+                        raise ValueError(
+                            f"source_path in {relative_name}:{line_number} must be a string of at most 2,048 characters."
+                        )
+                    normalized_source_path = ""
+                    if source_path.strip():
+                        try:
+                            normalized_source_path = _normalized_instruction_source_path(source_path)
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"source_path in {relative_name}:{line_number} is invalid: {exc}"
+                            ) from None
                     schema_confirmed = True
                     file_records.append({
                         "prompt": instruction.strip(),
                         "completion": response.strip(),
-                        "source_path": relative_name,
+                        "source_path": normalized_source_path,
+                        "dataset_file_path": relative_name,
                         "source_line": str(line_number),
                         "split_group": split_group.strip(),
                     })
@@ -538,7 +576,7 @@ def _read_instruction_jsonl_datasets(
 def _split_instruction_records(
     records: list[dict[str, str]],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Split prompt duplicates and curriculum-related source groups together."""
+    """Keep duplicate prompts, curriculum groups and explicit source paths together."""
     if not records:
         return [], []
 
@@ -574,6 +612,11 @@ def _split_instruction_records(
             )
             if normalized_group:
                 keys.append("source:" + sha256(normalized_group.encode("utf-8")).hexdigest())
+
+        source_path = record.get("source_path")
+        if isinstance(source_path, str) and source_path.strip():
+            normalized_source_path = _normalized_instruction_source_path(source_path)
+            keys.append("source-path:" + sha256(normalized_source_path.encode("utf-8")).hexdigest())
 
         record_keys.append(tuple(keys))
         for key in keys:
@@ -683,23 +726,40 @@ def _instruction_context_blocks(
             continue
         sequence = [BOS_ID, *prompt_ids, *response_ids, EOS_ID]
         first_response_target = 1 + len(prompt_ids)
-        # Start at the final context window before the response when instructions
-        # are longer than the model window. Subsequent blocks overlap by one token.
-        start = max(0, first_response_target - block_size)
-        while start < len(sequence) - 1:
+        # Never train a completion with a silently truncated conditioning prompt.
+        # The inference/SFT path preserves the complete prompt or rejects it; the
+        # legacy trainer must enforce the same boundary before packing any window.
+        if first_response_target > block_size:
+            raise ValueError(
+                f"Instruction prompt requires {first_response_target} tokens including BOS, "
+                f"but the configured block_size is {block_size}; the prompt was not truncated. "
+                "Shorten the prompt or use a model with a larger context window."
+            )
+        # Retain half a context of recent tokens between windows so later
+        # response sections keep local causal context. Prompt targets and
+        # previously supervised overlap targets are masked to count every
+        # completion/EOS token exactly once.
+        stride = max(1, block_size // 2)
+        start = 0
+        last_supervised_target = first_response_target - 1
+        while start < len(sequence) - 1 and last_supervised_target < len(sequence) - 1:
             window = sequence[start:start + block_size + 1]
             if len(window) < 2:
                 break
             x, y = window[:-1], window[1:]
             for index in range(len(y)):
                 target_position = start + index + 1
-                if target_position < first_response_target:
+                if (
+                    target_position < first_response_target
+                    or target_position <= last_supervised_target
+                ):
                     y[index] = -100
             if any(token != -100 for token in y):
                 if (len(inputs) + 1) * block_size > max_context_tokens:
                     raise ValueError("Packed instruction contexts exceed the remaining SYNTRA training token budget.")
                 _append_context_block(x, y, block_size, inputs, targets)
-            start += block_size
+                last_supervised_target = start + len(y)
+            start += stride
     return inputs, targets
 
 
@@ -1007,7 +1067,7 @@ def train(
         # Bump this fingerprint domain so old prompt-only-split checkpoints cannot
         # silently resume against a different train/validation assignment.
         dataset_hash = sha256(
-            ("syntra-brain-corpus-v3:source-group-split-v2:" + raw_hash + ":" + instruction_hash).encode("ascii")
+            ("syntra-brain-corpus-v3:canonical-source-path-group-split-v4:" + raw_hash + ":" + instruction_hash).encode("ascii")
         ).hexdigest()
     else:
         training_records, validation_records = [], []
