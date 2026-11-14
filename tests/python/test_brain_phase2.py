@@ -964,7 +964,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         records = [
             {"prompt": "Implement alpha.", "completion": "alpha()", "source_path": "./src/alpha.py"},
             {"prompt": "Explain alpha.", "completion": "alpha is a function.", "source_path": "src//alpha.py"},
-            {"prompt": "Repair alpha.", "completion": "alpha repaired.", "source_path": "src\alpha.py"},
+            {"prompt": "Repair alpha.", "completion": "alpha repaired.", "source_path": "src\\alpha.py"},
             {"prompt": "Implement beta.", "completion": "beta()", "source_path": "src/beta.py"},
             {"prompt": "Implement gamma.", "completion": "gamma()", "source_path": "src/gamma.py"},
         ]
@@ -991,7 +991,7 @@ class LocalTrainingPipelineTests(unittest.TestCase):
             root = Path(temp)
             dataset = root / "instructions.jsonl"
             good = [
-                {"prompt": "One.", "completion": "First.", "source_path": "src\module.py"},
+                {"prompt": "One.", "completion": "First.", "source_path": "src\\module.py"},
                 {"prompt": "Two.", "completion": "Second.", "source_path": "./src//module.py"},
             ]
             dataset.write_text("\n".join(json.dumps(row) for row in good) + "\n", encoding="utf-8")
