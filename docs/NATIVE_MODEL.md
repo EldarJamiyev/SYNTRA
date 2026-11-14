@@ -39,7 +39,7 @@ A trained checkpoint is required before chat or coding generation works. From-sc
 
 A valid benchmark report proves that a checkpoint was evaluated against the current hidden-baseline-validated suite. It does not, by itself, prove that fine-tuning improved the model. The promotion CLI now enforces a paired comparison before an SFT checkpoint can replace the active checkpoint.
 
-For an SFT candidate, the operator must provide both the candidate report and its pretraining baseline report using `--report` and `--baseline-report`. Both reports are independently verified against the current 13-task suite, immutable checkpoint snapshots, full SHA-256 identities, trained-step metadata, and Docker isolation evidence. The comparison uses the benchmark's fully verified task outcome (held-out target tests and regression-prevention tests both pass), not target-test completion alone. It then requires:
+For an SFT candidate, the operator must provide both the candidate report and its pretraining baseline report using `--report` and `--baseline-report`. Both reports are independently verified against the current 14-task suite, immutable checkpoint snapshots, full SHA-256 identities, trained-step metadata, and Docker isolation evidence. The comparison uses the benchmark's fully verified task outcome (held-out target tests and regression-prevention tests both pass), not target-test completion alone. It then requires:
 
 - Candidate and baseline reports use the same benchmark suite version and exact task-ID set.
 - The baseline checkpoint is a `pretraining` or `baseline` snapshot; the candidate checkpoint is an `sft` snapshot.
@@ -51,7 +51,7 @@ A first-ever pretraining checkpoint has a separate explicit path: `--allow-initi
 
 The `--dry-run` path performs all report, snapshot, paired-score, checkpoint-loadability, and destination checks without changing active files. Its output includes baseline/candidate task counts, score delta, improved task IDs, and an empty regression list. Existing atomic activation, previous-checkpoint archival, companion regeneration, and rollback behavior remain in place.
 
-This gate is intentionally strict but narrow: it measures the checked-in 13-task raw-model suite. It does not establish general coding competence, and passing a small controlled suite is not proof of production readiness. An SFT candidate that ties the baseline is not promoted; a candidate that loses even one previously passing task is not promoted.
+This gate is intentionally strict but narrow: it measures the checked-in 14-task raw-model suite. It does not establish general coding competence, and passing a small controlled suite is not proof of production readiness. An SFT candidate that ties the baseline is not promoted; a candidate that loses even one previously passing task is not promoted.
 
 
 ### Phase 10 — lossless instruction conditioning

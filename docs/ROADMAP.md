@@ -187,7 +187,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
 - [x] Add checkpoint-aware context sizing with output caps and safety reserves; derive exact prompt counts from SYNTRA's saved tokenizer.
 - [ ] Build a cross-language empirical model capability matrix from repeatable live-checkpoint runs across the available TypeScript, Python, Go and Rust fixtures. Implementation and fixture baselines are not a substitute for measured model outcomes.
-- [x] Expand the raw native-model suite from its initial Python-only baseline to version 1.3.0 with 13 independently validated held-out fixtures: nine Python tasks plus standalone JavaScript, TypeScript, Go and Rust tasks.
+- [x] Expand the raw native-model suite from its initial Python-only baseline to version 1.4.0 with 14 independently validated held-out fixtures: nine Python tasks, two JavaScript tasks, and one each for TypeScript, Go and Rust.
 - [x] Add coordinated multi-file tasks in Python and JavaScript; present connected modules together and require one exact, non-duplicated changed-path set.
 - [x] Add language-specific offline runtime selection, compiler/test validation, local-image-only Docker preflight, and per-language score breakdowns without combining the direct-model track with the full-agent suite.
 - [x] Record exact prompt-token count and context-window utilization per task; retain overflow-token evidence for context-rejected prompts and reject context overflow or truncated generation streams rather than silently dropping source context.
@@ -205,7 +205,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Add a CPU smoke profile (50 pretraining optimizer updates and 20 masked SFT updates) that exercises the real checkpoint snapshot and complete offline Docker evaluation handoff.
 - [x] Add low-memory CPU and scaled 8-layer/8-head, width-256, 1024-token GPU training profiles with true gradient accumulation at optimizer-step boundaries.
 - [x] Capture measured supervised tokens/second, optimizer-step latency, process peak RSS, and available CUDA/MPS allocator high-water telemetry in checkpoint-comparison Markdown/CSV and per-run JSON.
-- [x] Add benchmark-report-bound checkpoint promotion: require the complete current 13-task suite, valid hidden baselines, exact staged snapshot SHA-256, and successful native-runtime checkpoint loading.
+- [x] Add benchmark-report-bound checkpoint promotion: require the complete current 14-task suite, valid hidden baselines, exact staged snapshot SHA-256, and successful native-runtime checkpoint loading.
 - [x] Archive the previous active checkpoint, metadata and inference companion under a timestamped ID; provide hash-verified rollback and rebuild the derived inference companion against the restored checkpoint timestamp.
 - [x] Keep promotion explicit, local and offline; training never auto-promotes or modifies loopback service/network policy.
 
