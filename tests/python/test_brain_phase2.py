@@ -962,10 +962,10 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         from brain.train import _split_instruction_records
 
         records = [
-            {"prompt": "Implement alpha.", "completion": "alpha()", "source_path": "src/alpha.py"},
-            {"prompt": "Explain alpha.", "completion": "alpha is a function.", "source_path": "src/alpha.py"},
+            {"prompt": "Implement alpha.", "completion": "alpha()", "source_path": "./src/alpha.py"},
+            {"prompt": "Explain alpha.", "completion": "alpha is a function.", "source_path": "src//alpha.py"},
+            {"prompt": "Repair alpha.", "completion": "alpha repaired.", "source_path": "src\alpha.py"},
             {"prompt": "Implement beta.", "completion": "beta()", "source_path": "src/beta.py"},
-            {"prompt": "Explain beta.", "completion": "beta is a function.", "source_path": "src/beta.py"},
             {"prompt": "Implement gamma.", "completion": "gamma()", "source_path": "src/gamma.py"},
         ]
         training, validation = _split_instruction_records(records)
@@ -974,8 +974,42 @@ class LocalTrainingPipelineTests(unittest.TestCase):
         for split_name, collection in (("train", training), ("validation", validation)):
             for record in collection:
                 memberships.setdefault(record["source_path"], set()).add(split_name)
-        self.assertEqual(set(memberships), {"src/alpha.py", "src/beta.py", "src/gamma.py"})
+        self.assertEqual(set(memberships), {"./src/alpha.py", "src//alpha.py", "src\alpha.py", "src/beta.py", "src/gamma.py"})
         self.assertTrue(all(len(splits) == 1 for splits in memberships.values()))
+        alpha_splits = {
+            split_name
+            for split_name, collection in (("train", training), ("validation", validation))
+            for item in collection
+            if item["prompt"] in {"Implement alpha.", "Explain alpha.", "Repair alpha."}
+        }
+        self.assertEqual(len(alpha_splits), 1, "Equivalent source-path spellings must stay in one split.")
+
+    def test_legacy_source_path_aliases_normalize_and_unsafe_paths_fail_closed(self):
+        from brain.train import _read_instruction_jsonl_datasets
+
+        with tempfile.TemporaryDirectory(prefix="syntra-legacy-source-path-") as temp:
+            root = Path(temp)
+            dataset = root / "instructions.jsonl"
+            good = [
+                {"prompt": "One.", "completion": "First.", "source_path": "src\module.py"},
+                {"prompt": "Two.", "completion": "Second.", "source_path": "./src//module.py"},
+            ]
+            dataset.write_text("\n".join(json.dumps(row) for row in good) + "\n", encoding="utf-8")
+            parsed, *_ = _read_instruction_jsonl_datasets([dataset], 1024 * 1024)
+            self.assertEqual(
+                [record["source_path"] for record in parsed],
+                ["src/module.py", "src/module.py"],
+            )
+
+            for unsafe_path in ("/etc/passwd", "C:\\repo\\module.py", "../outside.py", "src/../outside.py", "."):
+                dataset.write_text(
+                    json.dumps({"prompt": "Unsafe.", "completion": "Reject.", "source_path": unsafe_path}) + "\n",
+                    encoding="utf-8",
+                )
+                with self.subTest(source_path=unsafe_path), self.assertRaisesRegex(
+                    ValueError, r"source_path in instructions.jsonl:1 is invalid"
+                ):
+                    _read_instruction_jsonl_datasets([dataset], 1024 * 1024)
 
     def test_train_checkpoint_resume_and_generation_pipeline(self):
         from brain.checkpoint import load_checkpoint, read_checkpoint_metadata

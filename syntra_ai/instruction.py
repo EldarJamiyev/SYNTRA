@@ -47,6 +47,28 @@ def _normalized_instruction_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def _normalized_source_path(value: str) -> str:
+    """Canonicalize a relative source identity without resolving it on the host filesystem."""
+    normalized = unicodedata.normalize("NFC", value.strip().replace("\\", "/"))
+    if (
+        not normalized
+        or "\x00" in normalized
+        or normalized.startswith("/")
+        or (len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":")
+    ):
+        raise ValueError("source_path must be a non-empty safe relative path.")
+    segments = []
+    for segment in normalized.split("/"):
+        if segment in {"", "."}:
+            continue
+        if segment == "..":
+            raise ValueError("source_path must not contain parent-directory traversal.")
+        segments.append(segment)
+    if not segments:
+        raise ValueError("source_path must identify a relative file path.")
+    return "/".join(segments)
+
+
 def load_instruction_examples(
     dataset_path: str | Path,
     seq_len: int,
@@ -177,11 +199,12 @@ def load_instruction_examples(
             not isinstance(source_path_value, str) or len(source_path_value) > 2048
         ):
             raise ValueError(f"source_path on line {line_number} must be a string of at most 2,048 characters.")
-        normalized_source_path = (
-            unicodedata.normalize("NFC", source_path_value.strip().replace("\\", "/"))
-            if isinstance(source_path_value, str) and source_path_value.strip()
-            else ""
-        )
+        normalized_source_path = ""
+        if isinstance(source_path_value, str) and source_path_value.strip():
+            try:
+                normalized_source_path = _normalized_source_path(source_path_value)
+            except ValueError as exc:
+                raise ValueError(f"source_path on line {line_number} is invalid: {exc}") from None
         source_path_group_id = (
             hashlib.sha256(normalized_source_path.encode("utf-8")).hexdigest()
             if normalized_source_path
@@ -496,7 +519,7 @@ def split_instruction_examples(
         "validation_data_groups": len(validation_group_ids),
         "validation_fraction": round(validation_fraction_actual, 4),
         "requested_validation_fraction": float(validation_fraction),
-        "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v3",
+        "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v4",
         "split_seed": seed,
         "prompt_leakage_groups": prompt_leakage_groups,
         "warnings": warnings,
@@ -562,7 +585,7 @@ def audit_instruction_dataset(
             "training_context_windows": 0,
             "validation_context_windows": 0,
             "validation_fraction": 0.0,
-            "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v3",
+            "split_strategy": "deterministic-sha256-prompt-source-path-and-source-groups-v4",
             "split_seed": INSTRUCTION_SPLIT_SEED,
             "prompt_leakage_groups": None,
             "dataset_sha256": next(iter({item.get("dataset_sha256") for item in source_records.values()}), None),

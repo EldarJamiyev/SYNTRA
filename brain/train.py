@@ -368,6 +368,28 @@ def _read_local_datasets(
 
 
 
+def _normalized_instruction_source_path(value: str) -> str:
+    """Canonicalize a relative source identity without resolving a host path."""
+    normalized = unicodedata.normalize("NFC", value.strip().replace("\\", "/"))
+    if (
+        not normalized
+        or "\x00" in normalized
+        or normalized.startswith("/")
+        or (len(normalized) >= 2 and normalized[0].isalpha() and normalized[1] == ":")
+    ):
+        raise ValueError("source_path must be a non-empty safe relative path.")
+    segments = []
+    for segment in normalized.split("/"):
+        if segment in {"", "."}:
+            continue
+        if segment == "..":
+            raise ValueError("source_path must not contain parent-directory traversal.")
+        segments.append(segment)
+    if not segments:
+        raise ValueError("source_path must identify a relative file path.")
+    return "/".join(segments)
+
+
 def _read_instruction_jsonl_datasets(
     paths: Iterable[str | os.PathLike[str]],
     max_dataset_bytes: int,
@@ -510,11 +532,19 @@ def _read_instruction_jsonl_datasets(
                         raise ValueError(
                             f"source_path in {relative_name}:{line_number} must be a string of at most 2,048 characters."
                         )
+                    normalized_source_path = ""
+                    if source_path.strip():
+                        try:
+                            normalized_source_path = _normalized_instruction_source_path(source_path)
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"source_path in {relative_name}:{line_number} is invalid: {exc}"
+                            ) from None
                     schema_confirmed = True
                     file_records.append({
                         "prompt": instruction.strip(),
                         "completion": response.strip(),
-                        "source_path": source_path.strip(),
+                        "source_path": normalized_source_path,
                         "dataset_file_path": relative_name,
                         "source_line": str(line_number),
                         "split_group": split_group.strip(),
@@ -585,9 +615,8 @@ def _split_instruction_records(
 
         source_path = record.get("source_path")
         if isinstance(source_path, str) and source_path.strip():
-            normalized_source_path = unicodedata.normalize("NFC", source_path.strip().replace("\\", "/"))
-            if normalized_source_path:
-                keys.append("source-path:" + sha256(normalized_source_path.encode("utf-8")).hexdigest())
+            normalized_source_path = _normalized_instruction_source_path(source_path)
+            keys.append("source-path:" + sha256(normalized_source_path.encode("utf-8")).hexdigest())
 
         record_keys.append(tuple(keys))
         for key in keys:
@@ -1038,7 +1067,7 @@ def train(
         # Bump this fingerprint domain so old prompt-only-split checkpoints cannot
         # silently resume against a different train/validation assignment.
         dataset_hash = sha256(
-            ("syntra-brain-corpus-v3:source-and-source-path-group-split-v3:" + raw_hash + ":" + instruction_hash).encode("ascii")
+            ("syntra-brain-corpus-v3:canonical-source-path-group-split-v4:" + raw_hash + ":" + instruction_hash).encode("ascii")
         ).hexdigest()
     else:
         training_records, validation_records = [], []
