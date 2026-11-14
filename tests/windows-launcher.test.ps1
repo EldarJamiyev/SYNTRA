@@ -25,7 +25,12 @@ if ($launcher -match "(?i)SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MO
 if ($launcher -notmatch "SYNTRA_MODEL_PROVIDER" -or $launcher -notmatch "openai-compatible") {
     throw "The Windows launcher must expose the explicit, opt-in hybrid provider mode."
 }
-if ($launcher -notmatch "\^20\.19\.0 or >=22\.12\.0") {
+if ($launcher -notmatch 'scripts\\node-version\.mjs') {
+    throw "The Windows launcher must invoke the shared supported-runtime validator."
+}
+if ($launcher -notmatch 'Node\.js 22\.12\.0 or newer') {
+    throw "The Windows launcher must report its supported Node.js minimum."
+}
     throw "The Windows launcher must enforce the runtime range required by Vite 8."
 }
 foreach ($required in @(
