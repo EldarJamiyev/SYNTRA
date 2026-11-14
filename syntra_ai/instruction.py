@@ -628,8 +628,18 @@ def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
     )
 
 
-def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int) -> float:
-    """Evaluate every held-out context window once in stable dataset order."""
+def _instruction_loss(
+    model,
+    examples: list[dict],
+    device: Any,
+    batch_size: int,
+    batches: int | None = None,
+) -> float:
+    """Evaluate the complete holdout; retain batches as a legacy compatibility hint."""
+    # The previous helper accepted a random-batch count. Keep accepting that
+    # keyword for existing callers, but never let it omit held-out examples.
+    if batches is not None and (type(batches) is not int or batches < 1):
+        raise ValueError("The legacy validation batches hint must be a positive integer.")
     if not isinstance(examples, list) or not examples:
         raise ValueError("Validation requires at least one held-out instruction example.")
     if type(batch_size) is not int or batch_size < 1:
