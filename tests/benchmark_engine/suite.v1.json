@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Held-out raw-native-model coding benchmark across JavaScript, TypeScript, Python, Go, and Rust. Evaluation scripts remain outside the model-visible workspace.",
-  "task_count": 13,
+  "task_count": 14,
   "tasks": [
     {
       "id": "python-slugify",
@@ -188,6 +188,20 @@
         "src/normalize-event.mjs"
       ],
       "goal": "Implement the event normalization contract across src/schema.mjs and src/normalize-event.mjs. isRecord must accept only non-null, non-array objects. normalizeEventType must require a non-empty string, trim it, and lowercase it. normalizeTimestamp must accept only finite non-negative numbers or valid date strings and return an integer epoch-millisecond value; reject booleans, negative values, non-finite values, and invalid dates. normalizeEvent must accept either a JSON string or an object, return null for malformed JSON, invalid root records, missing/blank type, invalid timestamp, or non-record payload, and return exactly {type, timestamp, payload} for a valid event. Deep-clone the payload so nested objects are not aliased or mutated. Keep shared validation in schema.mjs and make normalize-event.mjs use those shared functions; both modules must be updated in one response."
+    },
+    {
+      "id": "javascript-bounded-map",
+      "language": "javascript",
+      "category": "concurrency",
+      "title": "Map asynchronous inputs with bounded concurrency and stable ordering",
+      "workspace": "fixtures/javascript-bounded-map/workspace",
+      "hidden_evaluation": "hidden/javascript-bounded-map",
+      "target_test": "test_target.mjs",
+      "regression_test": "test_regression.mjs",
+      "expected_changed_paths": [
+        "src/map-concurrent.mjs"
+      ],
+      "goal": "Implement async mapConcurrent(items, mapper, options) in src/map-concurrent.mjs. Require an array and callable mapper; options must be a non-array object; default concurrency to 4 and require an integer from 1 through 64. Snapshot the input at call time, invoke mapper(value, index), run no more than concurrency mappers at once, and resolve to a result array in original input order even when individual operations finish out of order. Treat synchronous throws and rejected mapper promises identically: after the first rejection, start no queued items, wait for every mapper already in flight to settle, then reject with the first failure reason. Empty arrays resolve to an empty array. Do not mutate the caller's input or add dependencies."
     }
   ]
 }

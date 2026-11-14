@@ -64,14 +64,14 @@ class RawModelBenchmarkTests(unittest.TestCase):
     def setUpClass(cls):
         cls.suite = runner.load_suite()
 
-    def test_suite_has_thirteen_unique_held_out_tasks_across_five_languages(self):
-        self.assertEqual(self.suite["version"], "1.3.0")
-        self.assertEqual(len(self.suite["tasks"]), 13)
-        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 13)
+    def test_suite_has_fourteen_unique_held_out_tasks_across_five_languages(self):
+        self.assertEqual(self.suite["version"], "1.4.0")
+        self.assertEqual(len(self.suite["tasks"]), 14)
+        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 14)
         self.assertEqual({task["language"] for task in self.suite["tasks"]}, {"python", "javascript", "typescript", "go", "rust"})
         self.assertEqual(
             {language: sum(task["language"] == language for task in self.suite["tasks"]) for language in {"python", "javascript", "typescript", "go", "rust"}},
-            {"python": 9, "javascript": 1, "typescript": 1, "go": 1, "rust": 1},
+            {"python": 9, "javascript": 2, "typescript": 1, "go": 1, "rust": 1},
         )
         self.assertTrue(all(task["hidden_evaluation"].startswith("hidden/") for task in self.suite["tasks"]))
 
@@ -206,6 +206,7 @@ class RawModelBenchmarkTests(unittest.TestCase):
             "rust-safe-slice": {"Cargo.toml", "Cargo.lock", "src/lib.rs"},
             "python-multi-file-stream-state": {"src/limits.py", "src/state.py"},
             "javascript-event-normalizer": {"package.json", "src/schema.mjs", "src/normalize-event.mjs"},
+            "javascript-bounded-map": {"src/map-concurrent.mjs"},
         }
         by_id = {task["id"]: task for task in self.suite["tasks"]}
         for task_id, wanted in expected.items():
