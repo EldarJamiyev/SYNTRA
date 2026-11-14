@@ -2,6 +2,22 @@ $ErrorActionPreference = "Stop"
 
 $launcherPath = Join-Path $PSScriptRoot "..\scripts\start-syntra.ps1"
 $launcher = Get-Content -LiteralPath $launcherPath -Raw
+$package = Get-Content -LiteralPath (Join-Path $PSScriptRoot "..\package.json") -Raw | ConvertFrom-Json
+if ($package.engines.node -ne ">=22.12.0") {
+    throw "package.json must declare the same supported Node.js runtime as the Windows launcher."
+}
+if ($launcher -notmatch 'scripts\\node-version\.mjs') {
+    throw "The Windows launcher must run the shared Node.js compatibility check before installing dependencies."
+}
+if ($launcher -notmatch 'Node\.js 22\.12\.0 or newer') {
+    throw "The Windows launcher must show the supported Node.js minimum in prerequisite errors."
+}
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$nodeCheckOutput = & node (Join-Path $repositoryRoot "scripts\node-version.mjs") 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $nodeCheckOutput | ForEach-Object { Write-Host $_ }
+    throw "The installed Node.js runtime failed SYNTRA's compatibility check."
+}
 
 if ($launcher -match "(?i)SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|11434|UsePretrainedModel|launcher-helpers") {
     throw "The Windows launcher must not contain legacy model selectors or alternate-provider launcher helpers."
@@ -9,8 +25,11 @@ if ($launcher -match "(?i)SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MO
 if ($launcher -notmatch "SYNTRA_MODEL_PROVIDER" -or $launcher -notmatch "openai-compatible") {
     throw "The Windows launcher must expose the explicit, opt-in hybrid provider mode."
 }
-if ($launcher -notmatch "\^20\.19\.0 or >=22\.12\.0") {
-    throw "The Windows launcher must enforce the runtime range required by Vite 8."
+if ($launcher -notmatch 'scripts\\node-version\.mjs') {
+    throw "The Windows launcher must invoke the shared supported-runtime validator."
+}
+if ($launcher -notmatch 'Node\.js 22\.12\.0 or newer') {
+    throw "The Windows launcher must report its supported Node.js minimum."
 }
 foreach ($required in @(
     "scripts\setup_syntra_env.py",

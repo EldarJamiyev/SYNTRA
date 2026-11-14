@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
+import { isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "../scripts/node-version.mjs";
 
 const launcherPath = new URL("../scripts/start-syntra.ps1", import.meta.url);
+
+
+test("Windows launcher enforces the same Node.js range declared by the package", async () => {
+  const [launcher, packageText] = await Promise.all([
+    fs.readFile(launcherPath, "utf8"),
+    fs.readFile(new URL("../package.json", import.meta.url), "utf8")
+  ]);
+  const packageJson = JSON.parse(packageText);
+  assert.equal(packageJson.engines?.node, SUPPORTED_NODE_RANGE);
+  assert.ok(launcher.includes("node-version.mjs"));
+  assert.ok(launcher.includes("Node.js 22.12.0 or newer"));
+  assert.equal(isSupportedNodeVersion("22.12.0"), true);
+  assert.equal(isSupportedNodeVersion("20.19.0"), false);
+});
 
 test("Windows startup verifies the expected SYNTRA page after starting Vite", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
@@ -34,7 +49,8 @@ test("Windows startup preserves native-first setup and explicitly supports hybri
   assert.match(launcher, /npm ci/);
   assert.match(launcher, /Ensure-Service 3002 "http:\/\/127\.0\.0\.1:3002\/health" "ai:server"/);
   assert.match(launcher, /if \(\$ModelProvider -eq "native"\)/);
-  assert.match(launcher, /Node\.js \^20\.19\.0 or >=22\.12\.0/);
+  assert.ok(launcher.includes("Node.js 22.12.0 or newer"));
+  assert.ok(launcher.includes("node-version.mjs"));
   const server = await fs.readFile(new URL("../local/server.mjs", import.meta.url), "utf8");
   assert.match(server, /model-provider\.mjs/);
   assert.match(server, /isHybridModelEnabled/);
