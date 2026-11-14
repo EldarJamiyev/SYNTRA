@@ -628,15 +628,22 @@ def _instruction_batch(examples: list[dict], batch_size: int, device: Any):
     )
 
 
-def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int, batches: int = 4) -> float:
+def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int) -> float:
+    """Evaluate every held-out context window once in stable dataset order."""
+    if not isinstance(examples, list) or not examples:
+        raise ValueError("Validation requires at least one held-out instruction example.")
+    if type(batch_size) is not int or batch_size < 1:
+        raise ValueError("Validation batch_size must be a positive integer.")
+
     was_training = model.training
     model.eval()
     weighted_loss = 0.0
     supervised_tokens = 0
     try:
         with torch.no_grad():
-            for _ in range(batches):
-                x, y = _instruction_batch(examples, batch_size, device)
+            for offset in range(0, len(examples), batch_size):
+                chosen = examples[offset : offset + batch_size]
+                x, y = _instruction_batch_from_examples(chosen, device)
                 valid_count = int((y != -100).sum().item())
                 if valid_count < 1:
                     raise ValueError("Validation batch contained no supervised completion tokens.")
@@ -645,6 +652,7 @@ def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int,
                     raise RuntimeError("Validation produced a non-finite instruction loss.")
                 weighted_loss += float(loss.item()) * valid_count
                 supervised_tokens += valid_count
+                del x, y, loss
     finally:
         # Keep this helper safe for both training-time validation and standalone
         # evaluation of a model that may be resident in the inference process.
@@ -652,7 +660,6 @@ def _instruction_loss(model, examples: list[dict], device: Any, batch_size: int,
     if supervised_tokens < 1:
         raise ValueError("Validation did not process any supervised completion tokens.")
     return weighted_loss / supervised_tokens
-
 
 def finetune(
     dataset_path: str | Path,
@@ -743,6 +750,8 @@ def finetune(
             "training_mode": "supervised-instruction-finetuning",
             "instruction_examples": dataset_quality["example_count"],
             "instruction_context_windows": len(examples),
+            "validation_context_windows_per_evaluation": len(validation_examples),
+            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
             "instruction_dataset_quality": dataset_quality,
             "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
             "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
@@ -806,7 +815,7 @@ def finetune(
         if sampled_memory is not None:
             peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
         if step == base_step + 1 or step % 25 == 0 or step == base_step + steps:
-            last_val_loss = _instruction_loss(model, validation_examples, device, batch_size, batches=2)
+            last_val_loss = _instruction_loss(model, validation_examples, device, batch_size)
             training_history = append_training_history(
                 training_history,
                 step=step,
@@ -826,6 +835,8 @@ def finetune(
                 "instruction_examples": dataset_quality["example_count"],
                 "training_history": training_history,
                 "instruction_context_windows": len(examples),
+            "validation_context_windows_per_evaluation": len(validation_examples),
+            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
                 "instruction_dataset_quality": dataset_quality,
                 "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
                 "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
@@ -845,6 +856,8 @@ def finetune(
                 "training_mode": "supervised-instruction-finetuning",
                 "instruction_examples": dataset_quality["example_count"],
                 "instruction_context_windows": len(examples),
+            "validation_context_windows_per_evaluation": len(validation_examples),
+            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
                 "instruction_dataset_quality": dataset_quality,
                 "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
                 "instruction_dataset_bytes": dataset_quality["dataset_bytes"],

@@ -171,6 +171,78 @@ class InstructionContextIntegrityTests(unittest.TestCase):
                         dataset, seq_len=64, tokenizer=ByteBPETokenizer.empty()
                     )
 
+    def test_validation_loss_evaluates_every_held_out_window_once_in_stable_order(self):
+        from syntra_ai import instruction as instruction_module
+
+        if instruction_module.torch is None:
+            self.skipTest("Install the pinned PyTorch requirements to run SFT validation tests.")
+        supervised_tokens = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        examples = [
+            {"input_ids": [1, 2, 3], "labels": [-100, 2, 3]},
+            {"input_ids": [1, 4], "labels": [-100, 4]},
+            {"input_ids": [1, 5, 6, 7], "labels": [-100, 5, 6, 7]},
+            {"input_ids": [1, 8], "labels": [-100, 8]},
+            {"input_ids": [1, 9, 10], "labels": [-100, 9, 10]},
+        ]
+
+        class RecordingModel:
+            def __init__(self):
+                self.training = True
+                self.seen_tokens = []
+
+            def eval(self):
+                self.training = False
+                return self
+
+            def train(self, mode=True):
+                self.training = mode
+                return self
+
+            def __call__(self, inputs, targets):
+                selected = targets[targets != -100]
+                self.seen_tokens.extend(selected.detach().cpu().tolist())
+                return None, selected.float().mean()
+
+        model = RecordingModel()
+        with patch.object(
+            instruction_module,
+            "_sample_instruction_examples",
+            side_effect=AssertionError("Validation must not sample examples randomly."),
+        ):
+            first_loss = instruction_module._instruction_loss(
+                model, examples, device="cpu", batch_size=2
+            )
+            self.assertEqual(model.seen_tokens, supervised_tokens)
+            self.assertTrue(model.training)
+
+            model.seen_tokens.clear()
+            second_loss = instruction_module._instruction_loss(
+                model, examples, device="cpu", batch_size=2
+            )
+
+        self.assertEqual(model.seen_tokens, supervised_tokens)
+        self.assertAlmostEqual(first_loss, sum(supervised_tokens) / len(supervised_tokens), places=6)
+        self.assertAlmostEqual(second_loss, first_loss, places=7)
+        self.assertTrue(model.training)
+
+    def test_validation_loss_rejects_an_empty_holdout(self):
+        from syntra_ai import instruction as instruction_module
+
+        if instruction_module.torch is None:
+            self.skipTest("Install the pinned PyTorch requirements to run SFT validation tests.")
+
+        class Model:
+            training = True
+
+            def eval(self):
+                self.training = False
+
+            def train(self, mode=True):
+                self.training = mode
+
+        with self.assertRaisesRegex(ValueError, "at least one held-out instruction example"):
+            instruction_module._instruction_loss(Model(), [], device="cpu", batch_size=2)
+
     def test_long_completion_remains_fully_supervised_across_windows(self):
         with tempfile.TemporaryDirectory(prefix="syntra-completion-windows-") as temp:
             root = Path(temp)
