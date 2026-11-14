@@ -35,3 +35,19 @@ Patch review runs before verification and uses the same native checkpoint as gen
 The benchmark command evaluates a local agent against versioned fixtures and stores machine-readable reports. The eight-task suite includes simple JavaScript utilities, a TypeScript compiler-checked contract task, a multi-file API change, and a Python task; it remains a development baseline rather than a broad coding benchmark. A passing SYNTRA unit-test suite validates SYNTRA's implementation and test harness; it does not establish coding ability of a live model. Run `npm run benchmark` on the target hardware with the actual installed model and preserve the JSON report to compare model, prompt, and agent changes. Benchmark process memory measurements do not include all system-level runtime allocations or GPU VRAM.
 
 The current benchmark fixtures are a development baseline, not a representative coding benchmark. Broader coverage is still required for multi-file changes, repository debugging, dependency/build failures, API work, mixed-language workspaces, security fixes, and regression prevention.
+
+## Task-aware skill grounding
+
+The repository-aware coding agent discovers bounded `SKILL.md` references from SYNTRA's bundled `.agents/skills` library and the active workspace. It always selects the bundled project guardrails and verification guidance when present, then ranks task-relevant playbooks from their names and descriptions. Selection is deterministic and limited to three skills.
+
+Skill text is treated as untrusted reference context, not executable instructions or permission. Selected excerpt hashes and retrieval status are recorded with the agent run. The selected text is progressively compacted using the checkpoint's actual tokenizer budget and omitted when necessary to preserve the user's task and patch contract. This improves access to documented engineering procedures; it does not add model weights or prove the model followed a skill.
+
+## Self-review
+
+Patch review runs before verification and uses the same native checkpoint as generation. It is a second reasoning pass, not an independent-model guarantee. If review is enabled and no accepted verdict is produced, the candidate is blocked rather than silently treated as reviewed.
+
+## Benchmark evidence
+
+The benchmark command evaluates a local agent against versioned fixtures and stores machine-readable reports. The eight-task suite includes simple JavaScript utilities, a TypeScript compiler-checked contract task, a multi-file API change, and a Python task; it remains a development baseline rather than a broad coding benchmark. A passing SYNTRA unit-test suite validates SYNTRA's implementation and test harness; it does not establish coding ability of a live model. Run `npm run benchmark` on the target hardware with the actual installed model and preserve the JSON report to compare model, prompt, and agent changes. Benchmark process memory measurements do not include all system-level runtime allocations or GPU VRAM.
+
+The current benchmark fixtures are a development baseline, not a representative coding benchmark. Broader coverage is still required for multi-file changes, repository debugging, dependency/build failures, API work, mixed-language workspaces, security fixes, and regression prevention.

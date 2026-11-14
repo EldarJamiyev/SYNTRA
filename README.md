@@ -126,7 +126,7 @@ These are real local checks, not simulated network telemetry. Diagnostic limits 
 
 ### Agent skill library
 
-SYNTRA includes a curated local skill library for repeatable engineering workflows. Skills provide task procedures and domain guidance; they do not replace source inspection, real execution, or verification.
+SYNTRA includes a curated local skill library for repeatable engineering workflows. Each coding-agent run discovers the bundled library and any skill library in the active workspace, always includes the SYNTRA guardrails and verification guidance when available, and ranks up to one additional playbook against the task. Selected excerpts are hashed, recorded in run evidence, and fitted to the checkpoint tokenizer budget. Skills are untrusted reference material: they cannot grant tools or permissions, replace source inspection, or substitute for real execution and verification.
 
 ---
 
