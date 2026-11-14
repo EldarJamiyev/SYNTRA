@@ -109,8 +109,8 @@ class Phase4Milestone4ProfileTests(unittest.TestCase):
     def test_repository_benchmark_runner_loads_without_importing_a_site_packages_tests_package(self):
         runner = evaluate_epochs._load_benchmark_runner()
         suite = runner.load_suite()
-        self.assertEqual(suite["version"], "1.3.0")
-        self.assertEqual(len(suite["tasks"]), 13)
+        self.assertEqual(suite["version"], "1.4.0")
+        self.assertEqual(len(suite["tasks"]), 14)
 
     def test_profile_paths_cannot_escape_the_repository(self):
         with self.assertRaisesRegex(evaluate_epochs.OrchestrationError, "inside the SYNTRA repository"):
