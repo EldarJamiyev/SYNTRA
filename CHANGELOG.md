@@ -9,6 +9,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
+- Reconcile stale SFT JSON progress from the authoritative full checkpoint after interrupted writes, with checkpoint-identity verification and explicit stale-status reporting.
 - Add dataset-bound supervised fine-tuning resume: restore AdamW, stage scheduler, and CPU/CUDA RNG state from an atomic per-update checkpoint, with strict dataset/settings/device validation and explicit CLI/API resume controls.
 - Use a persisted global-step warmup/cosine schedule in the application’s native source-pretraining path, retain the legacy linear-warmup trajectory for older checkpoints, and reject non-finite pre-clipping gradient norms.
 - Make native source-pretraining and fresh corpus evaluation document-isolated: deduplicate exact source copies, learn BPE merges from training documents only, preserve complete files under the token budget, and record holdout provenance.
