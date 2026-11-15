@@ -151,15 +151,15 @@ class DocumentPartitionTests(unittest.TestCase):
     def test_exact_duplicate_files_do_not_consume_the_corpus_token_budget(self):
         from syntra_ai.data import load_corpus
 
-        repeated = "same independent document\n" * 5
-        additional = "another independent document\n" * 5
+        repeated = "same independent document\n" * 25
+        additional = "another independent document\n" * 20
         with tempfile.TemporaryDirectory(prefix="syntra-document-dedup-budget-") as temp:
             root = Path(temp) / "corpus"
             root.mkdir()
             (root / "a.txt").write_text(repeated, encoding="utf-8")
             (root / "b.txt").write_text(repeated, encoding="utf-8")
             (root / "c.txt").write_text(additional, encoding="utf-8")
-            token_budget = 2 * (len(repeated.encode("utf-8")) + 2) + 2
+            token_budget = len(repeated.encode("utf-8")) + len(additional.encode("utf-8")) + 4
             with patch.dict(
                 os.environ,
                 {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)},
