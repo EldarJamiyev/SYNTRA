@@ -79,6 +79,31 @@ def _cpu_model() -> str | None:
         processor = host_platform.processor().strip()
     except (OSError, RuntimeError, TypeError, ValueError):
         processor = ""
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            ) as key:
+                processor_name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            if isinstance(processor_name, str) and processor_name.strip():
+                candidates.insert(0, processor_name.strip())
+        except (ImportError, OSError, TypeError, ValueError):
+            pass
+    elif sys.platform == "darwin":
+        try:
+            output = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if output.returncode == 0 and output.stdout.strip():
+                candidates.insert(0, output.stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
     if processor:
         candidates.append(processor)
     identifier = os.environ.get("PROCESSOR_IDENTIFIER", "").strip()
