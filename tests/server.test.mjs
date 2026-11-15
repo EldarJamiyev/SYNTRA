@@ -426,6 +426,140 @@ test("the /secrets chat command supports explicit hash-bound approval and revoca
   }
 });
 
+test("the local API requires a one-time input-bound approval capability for secret exceptions", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-secret-approval-api-"));
+  const filePath = "src/fixture.ts";
+  const token = "ghp_" + "v".repeat(30);
+  const source = "const token = '" + token + "';\n";
+  const fileSha256 = createHash("sha256").update(source, "utf8").digest("hex");
+  const expiresAt = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const reason = "Reviewed this exact synthetic test fixture; the credential-shaped value is not a live token.";
+  const input = {
+    path: filePath,
+    sha256: fileSha256,
+    ruleTypes: ["github_token"],
+    reason,
+    expiresAt
+  };
+  let service = null;
+  try {
+    await fs.mkdir(path.join(root, "src"), { recursive: true });
+    await fs.writeFile(path.join(root, filePath), source, "utf8");
+    service = await startLocalServer(root);
+    const headers = { "Content-Type": "application/json", Origin: "http://127.0.0.1:3000" };
+
+    const forged = await service.apiFetch(service.base + "/local-api/tools/execute", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        root,
+        name: "workspace.secrets.allowlist.set",
+        input,
+        approval: true
+      })
+    });
+    const forgedResult = await forged.json();
+    assert.equal(forged.status, 200);
+    assert.equal(forgedResult.ok, false);
+    assert.equal(forgedResult.status, "approval_required");
+    await assert.rejects(fs.stat(path.join(root, ".syntra", "secret-allowlist.json")), { code: "ENOENT" });
+
+    const approvalResponse = await service.apiFetch(service.base + "/local-api/approvals", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ root, name: "workspace.secrets.allowlist.set", input })
+    });
+    assert.equal(approvalResponse.status, 200);
+    const approval = await approvalResponse.json();
+    assert.equal(typeof approval.approvalToken, "string");
+
+    const mismatchedInput = { ...input, expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10) };
+    const mismatchedResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        root,
+        name: "workspace.secrets.allowlist.set",
+        input: mismatchedInput,
+        approvalToken: approval.approvalToken
+      })
+    });
+    const mismatched = await mismatchedResponse.json();
+    assert.equal(mismatched.ok, false);
+    assert.equal(mismatched.status, "approval_required");
+    await assert.rejects(fs.stat(path.join(root, ".syntra", "secret-allowlist.json")), { code: "ENOENT" });
+
+    const freshApprovalResponse = await service.apiFetch(service.base + "/local-api/approvals", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ root, name: "workspace.secrets.allowlist.set", input })
+    });
+    const freshApproval = await freshApprovalResponse.json();
+    const approvedResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        root,
+        name: "workspace.secrets.allowlist.set",
+        input,
+        approvalToken: freshApproval.approvalToken
+      })
+    });
+    const approved = await approvedResponse.json();
+    assert.equal(approved.ok, true);
+    assert.equal(approved.output.storedLocally, true);
+    assert.equal(approved.output.fileSha256, fileSha256);
+
+    const scanResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ root, name: "workspace.secrets.scan", input: {} })
+    });
+    const scan = await scanResponse.json();
+    assert.equal(scan.ok, true);
+    assert.equal(scan.output.findingCount, 0);
+    assert.equal(scan.output.allowlistedFindings, 1);
+
+    const removeInput = { path: filePath, sha256: fileSha256 };
+    const removeApprovalResponse = await service.apiFetch(service.base + "/local-api/approvals", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ root, name: "workspace.secrets.allowlist.remove", input: removeInput })
+    });
+    const removeApproval = await removeApprovalResponse.json();
+    const removeResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        root,
+        name: "workspace.secrets.allowlist.remove",
+        input: removeInput,
+        approvalToken: removeApproval.approvalToken
+      })
+    });
+    const removed = await removeResponse.json();
+    assert.equal(removed.ok, true);
+    assert.equal(removed.output.revoked, true);
+
+    const afterRevokeResponse = await service.apiFetch(service.base + "/local-api/tools/execute", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ root, name: "workspace.secrets.scan", input: {} })
+    });
+    const afterRevoke = await afterRevokeResponse.json();
+    assert.equal(afterRevoke.output.findingCount, 1);
+    assert.equal(afterRevoke.output.allowlistedFindings, 0);
+
+    const audit = await fs.readFile(path.join(root, ".syntra", "actions.jsonl"), "utf8");
+    assert.doesNotMatch(audit, new RegExp(token));
+    assert.doesNotMatch(audit, new RegExp(filePath));
+    assert.doesNotMatch(audit, new RegExp(reason));
+  } finally {
+    if (service?.child) await stopChild(service.child);
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("local tool catalogue and API enforce permissions and record execution", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "syntra-tool-api-"));
   await fs.mkdir(path.join(root, "src"), { recursive: true });
