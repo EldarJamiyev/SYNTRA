@@ -17,7 +17,12 @@ import {
   runProjectCheck,
   searchWorkspace
 } from "./workspace.mjs";
-import { scanWorkspaceSecrets } from "./secret-scanner.mjs";
+import {
+  SECRET_RULE_TYPES,
+  removeWorkspaceSecretAllowlist,
+  scanWorkspaceSecrets,
+  setWorkspaceSecretAllowlist
+} from "./secret-scanner.mjs";
 import {
   getWorkspaceIndexStatus,
   refreshWorkspaceIndex,
@@ -46,10 +51,48 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: "workspace.secrets.scan",
-    description: "Scan bounded readable workspace text files for common credential patterns. Returns file paths, line numbers, and rule types only; never returns secret values.",
+    description: "Scan bounded readable workspace text files for common credential patterns. Returns file paths, line numbers, detector IDs, and file fingerprints only; never returns secret values.",
     permission: "read_only",
     approvalRequired: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "workspace.secrets.allowlist.set",
+    description: "Approve detector exceptions for one exact workspace file SHA-256 with a reviewer reason and expiry. Requires explicit user approval.",
+    permission: "local_state_write",
+    approvalRequired: true,
+    inputSchema: {
+      type: "object",
+      required: ["path", "sha256", "ruleTypes", "reason", "expiresAt"],
+      properties: {
+        path: { type: "string", minLength: 1, maxLength: 4096 },
+        sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        ruleTypes: {
+          type: "array",
+          minItems: 1,
+          maxItems: SECRET_RULE_TYPES.length,
+          items: { pattern: "^(?:" + SECRET_RULE_TYPES.join("|") + ")$" }
+        },
+        reason: { type: "string", minLength: 20, maxLength: 500 },
+        expiresAt: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "workspace.secrets.allowlist.remove",
+    description: "Revoke one exact workspace file SHA-256 allowlist exception. Requires explicit user approval.",
+    permission: "destructive_state_write",
+    approvalRequired: true,
+    inputSchema: {
+      type: "object",
+      required: ["path", "sha256"],
+      properties: {
+        path: { type: "string", minLength: 1, maxLength: 4096 },
+        sha256: { type: "string", pattern: "^[a-f0-9]{64}$" }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: "workspace.index.status",
@@ -366,6 +409,16 @@ function summarizeInput(name, input) {
     case "workspace.memory.add": return { category: input.category, titleLength: input.title.length, contentCharacters: input.content.length, tagCount: input.tags?.length || 0 };
     case "workspace.memory.update": return { noteId: input.id, fieldsUpdated: ["title", "content", "category", "tags"].filter(key => input[key] !== undefined) };
     case "workspace.memory.delete": return { noteId: input.id };
+    case "workspace.secrets.allowlist.set": return {
+      fileFingerprint: input.sha256.slice(0, 12),
+      ruleTypes: [...input.ruleTypes],
+      reasonCharacters: input.reason.length,
+      expiresAt: input.expiresAt
+    };
+    case "workspace.secrets.allowlist.remove": return {
+      fileFingerprint: input.sha256.slice(0, 12),
+      revocationRequested: true
+    };
     case "workspace.search": return { queryLength: input.query.length, limit: input.limit || 20 };
     case "workspace.read": return { path: input.path, startLine: input.startLine || 1, endLine: input.endLine || null };
     case "workspace.plan": return { goalLength: input.goal.length };
@@ -464,6 +517,10 @@ async function invokeTool(root, name, input, signal) {
       return inspectWorkspace(root);
     case "workspace.secrets.scan":
       return scanWorkspaceSecrets(root);
+    case "workspace.secrets.allowlist.set":
+      return setWorkspaceSecretAllowlist(root, input);
+    case "workspace.secrets.allowlist.remove":
+      return removeWorkspaceSecretAllowlist(root, input);
     case "workspace.index.status":
       return getWorkspaceIndexStatus(root);
     case "workspace.index.refresh":
@@ -551,7 +608,26 @@ function summarizeOutput(name, output) {
         returnedFindings: output.returnedFindings,
         typeCounts: output.typeCounts,
         severityCounts: output.severityCounts,
+        allowlistStatus: output.allowlistStatus,
+        allowlistEntries: output.allowlistEntries,
+        allowlistExpiredEntries: output.allowlistExpiredEntries,
+        staleAllowlistEntries: output.staleAllowlistEntries,
+        allowlistedFindings: output.allowlistedFindings,
         truncated: output.truncated
+      };
+    case "workspace.secrets.allowlist.set":
+      return {
+        fileFingerprint: output.fileSha256.slice(0, 12),
+        ruleTypes: output.ruleTypes,
+        expiresAt: output.expiresAt,
+        entryCount: output.entryCount,
+        storedLocally: output.storedLocally
+      };
+    case "workspace.secrets.allowlist.remove":
+      return {
+        fileFingerprint: output.fileSha256.slice(0, 12),
+        revoked: output.revoked,
+        entryCount: output.entryCount
       };
     case "workspace.index.status":
       return {

@@ -410,22 +410,62 @@ function formatSecretScan(result) {
     "",
     "Scanned " + result.scannedFiles.toLocaleString() + " readable text file(s) (" +
       (result.scannedBytes / 1024).toFixed(1) + " KB).",
-    "Potential findings: " + result.findingCount + "."
+    "Potential findings: " + result.findingCount + ".",
+    "Allowlist: " + result.allowlistStatus +
+      " · entries " + result.allowlistEntries +
+      " · suppressed matches " + result.allowlistedFindings +
+      " · stale entries " + result.staleAllowlistEntries +
+      " · expired entries " + result.allowlistExpiredEntries + "."
   ];
+  if (result.allowlistWarning) lines.push("Allowlist warning: " + result.allowlistWarning);
   if (result.findings.length) {
-    lines.push("", "**Findings** (matching values are intentionally hidden):");
+    lines.push("", "**Findings** (matching values and source lines are intentionally hidden):");
     for (const finding of result.findings) {
-      const safePath = String(finding.path || "unknown").replace(/[`\r\n]/g, "");
-      lines.push("- `" + safePath + ":" + finding.line + "` — " +
-        finding.type.replaceAll("_", " ") + " (" + finding.severity + ")");
+      const safePath = String(finding.path || "unknown").replace(/[\`\r\n]/g, "");
+      lines.push(
+        "- " + safePath + ":" + finding.line + " — " +
+        finding.type + " (" + finding.severity + ")",
+        "  File SHA-256: " + finding.fileSha256
+      );
     }
   } else {
-    lines.push("", "No supported secret patterns were detected in the scanned files.");
+    lines.push("", "No unallowlisted supported secret patterns were detected in the scanned files.");
   }
-  if (result.skippedFiles) lines.push("", "Skipped files: " + result.skippedFiles + " (" + result.unreadableFiles + " unreadable or no longer accessible).");
+  if (result.allowlistEntryDetails?.length) {
+    lines.push("", "**Reviewed exceptions** (paths, fingerprints, detector IDs, and expiry only):");
+    for (const entry of result.allowlistEntryDetails) {
+      const safePath = String(entry.path || "unknown").replace(/[\`\r\n]/g, "");
+      lines.push(
+        "- " + (entry.applied ? "applied" : "stale") + " — " + safePath + " — " +
+        entry.ruleTypes.join(", ") + " — expires " + entry.expiresAt,
+        "  SHA-256: " + entry.sha256
+      );
+    }
+  }
+  if (result.skippedFiles) lines.push("", "Skipped files: " + result.skippedFiles.toLocaleString() + " (" + result.unreadableFiles + " unreadable or no longer accessible).");
   if (result.truncated) lines.push("Scan reached a file, byte, or finding limit; not every readable file may have been checked.");
-  lines.push("", "This is best-effort pattern detection, not proof that the workspace is secret-free. Rotate any exposed credential and remove it from source history where appropriate.");
+  lines.push(
+    "",
+    "To approve a match, use /secrets allow followed by a JSON object with the exact path, full SHA-256, detector ID(s), expiry (maximum 366 days), and a review reason of at least 20 characters.",
+    "To revoke an exception, use /secrets unallow followed by a JSON object with its exact path and SHA-256.",
+    "This is best-effort pattern detection, not proof that the workspace is secret-free. Rotate exposed credentials and remove them from source history where appropriate."
+  );
   return lines.join("\n");
+}
+
+function parseSecretReviewPayload(raw, operation) {
+  if (!raw || raw.length > 6000) {
+    throw new Error("Supply a bounded JSON object after /secrets " + operation + "; run /secrets first to review the exact file SHA-256.");
+  }
+  let value;
+  try { value = JSON.parse(raw); }
+  catch {
+    throw new Error("The secret allowlist command requires valid JSON. Run /secrets for the required fields and current file SHA-256.");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("The secret allowlist command must contain a JSON object.");
+  }
+  return value;
 }
 
 async function runChatTurn(jobId, message, history, signal) {
@@ -443,6 +483,45 @@ async function runChatTurn(jobId, message, history, signal) {
       if (signal?.aborted) throw Object.assign(new Error("Chat turn was cancelled."), { name: "AbortError" });
       activeWorkspace = resolvedWorkspace;
       finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
+      return;
+    }
+    const secretApprovalCommand = message.trim().match(/^\/secrets\s+(allow|unallow)(?:\s+([\s\S]+))?$/i);
+    if (secretApprovalCommand) {
+      const operation = secretApprovalCommand[1].toLowerCase();
+      const input = parseSecretReviewPayload((secretApprovalCommand[2] || "").trim(), operation);
+      const name = operation === "allow"
+        ? "workspace.secrets.allowlist.set"
+        : "workspace.secrets.allowlist.remove";
+      updateChat(jobId, {
+        phase: "reviewing",
+        message: operation === "allow"
+          ? "Verifying the exact file fingerprint and recording an explicit detector exception"
+          : "Revoking the exact file-fingerprint exception"
+      });
+      const result = await executeWorkspaceTool({
+        root: activeWorkspace,
+        auditRoot: activeWorkspace,
+        name,
+        input,
+        approval: true,
+        signal
+      });
+      if (!result.ok) throw new Error(result.error || result.message || "The secret allowlist operation failed.");
+      const output = result.output;
+      const safePath = String(output.path || "unknown").replace(/[`\r\n]/g, "");
+      const summary = operation === "allow"
+        ? "Approved " + output.ruleTypes.join(", ") + " for " + safePath + " (SHA-256 " + output.fileSha256 + ") until " + output.expiresAt + ". The exact current file content was verified before saving the exception."
+        : "Revoked the exception for " + safePath + " (SHA-256 " + output.fileSha256 + ").";
+      const auditStatus = result.auditRecorded
+        ? "The operation required explicit approval; its completion event was recorded in .syntra/actions.jsonl."
+        : "The operation required explicit approval and its start event was recorded, but the completion audit event could not be persisted.";
+      finishChat(jobId, summary + "\n\n" + auditStatus, {
+        toolCalls: [{
+          runId: result.runId, name: result.name, status: result.status,
+          permission: result.permission, durationMs: result.durationMs,
+          auditRecorded: result.auditRecorded
+        }]
+      });
       return;
     }
     if (/^\/secrets\s*$/i.test(message.trim())) {
@@ -541,6 +620,8 @@ async function runChatTurn(jobId, message, history, signal) {
         "- /workspace followed by an absolute folder path switches the active project.",
         "- /proposals lists saved proposals after a service restart.",
         "- /secrets scans supported text files for common exposed credential patterns; secret values are never shown.",
+        "- /secrets allow {JSON} approves detector IDs for one exact file hash with a reason and expiry; the command is audited.",
+        "- /secrets unallow {JSON} revokes an exact file-hash exception; edited files no longer match old exceptions.",
         "- /apply applies pending proposals only after you review and explicitly request it.",
         "- /discard removes pending/stale proposal records without changing project files.",
         "- /status checks whether the local model backend is reachable.",
@@ -959,7 +1040,7 @@ const routeHandlers = {
     service: "SYNTRA local chat and coding agent",
     host: HOST,
     port: PORT,
-    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning", "failure-root-cause-diagnosis", "repository-curriculum-synthesis", "native-semantic-embeddings"]
+    capabilities: ["local-chat", "local-network-diagnostics", "repository-import-graph", "structured-patches", "bounded-repair-loop", "sandbox-build-tests", "persistent-proposal-review", "permissioned-tool-runtime", "audited-tool-execution", "durable-agent-runs", "checkpoint-resume", "chat-cancellation", "evidence-driven-check-discovery", "candidate-integrity-observation", "model-selected-readonly-retrieval", "verified-implementation-slices", "workspace-secret-scanning", "workspace-secret-exception-review", "failure-root-cause-diagnosis", "repository-curriculum-synthesis", "native-semantic-embeddings"]
   }),
   "POST /local-api/chat": startChat,
   "POST /local-api/chat/status": readChatStatus,

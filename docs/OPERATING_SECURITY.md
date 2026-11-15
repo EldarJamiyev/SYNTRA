@@ -36,3 +36,12 @@ Chat sessions are held in the browser's local storage and are not encrypted at r
 ## Residual risks
 
 The local session is a bearer secret available to JavaScript running in the same origin. Preventing same-origin script injection remains important. The loopback API and origin checks reduce browser-origin attack surface but are not a substitute for operating-system account isolation. The Docker runner still trusts the Docker engine and the mounted candidate directory.
+
+
+## Workspace secret scanning and reviewed exceptions
+
+The on-demand `/secrets` command scans bounded readable workspace text files and respects workspace exclusions. Detection is best-effort pattern matching for common private-key headers and provider credentials; it is not a secret manager, does not inspect every binary or credential format, and cannot prove a repository is clean. Findings expose only relative path, line number, detector ID, severity, and the full SHA-256 of the exact file content. Matched values and source lines are never returned.
+
+Exceptions are stored locally in `.syntra/secret-allowlist.json`. An exception is scoped to one workspace-relative file path, its exact SHA-256, and explicitly selected detector IDs; it also requires a reviewer reason and an expiry date no more than 366 days ahead. The file hash is rechecked immediately before the exception is written. Editing or replacing that file invalidates the exception automatically, and expired or malformed entries do not suppress findings.
+
+Creating or changing an exception requires the explicit `/secrets allow` command; revocation requires `/secrets unallow`. Both route through approval-required, audited workspace tools. The audit event records the detector IDs, expiry, and a short fingerprint only; it does not record the file path, reviewer reason, matched value, or source line. The local allowlist is written atomically with restrictive permissions where the operating system supports them, and symlinked or malformed state is rejected. Review each exception carefully; allowing a detector may hide every current match of that detector in that one exact file version until expiry or revocation.
