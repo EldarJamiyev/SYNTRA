@@ -6,6 +6,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Callable
 import json
+import math
 import os
 import random
 import tempfile
@@ -25,6 +26,12 @@ from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training_history import append_training_history, validate_training_history
 
 ProgressCallback = Callable[[dict], None]
+LEGACY_SOURCE_TRAINING_SCHEDULER = "linear-warmup-v1"
+SOURCE_TRAINING_SCHEDULER = "global-cosine-warmup-v2"
+SOURCE_SCHEDULER_WARMUP_STEPS = 100
+SOURCE_SCHEDULER_DECAY_STEPS = 10_000
+SOURCE_MINIMUM_LEARNING_RATE = 1e-5
+SOURCE_GRADIENT_CLIP_NORM = 1.0
 SOURCE_VALIDATION_STRATEGY = "sha256-grouped-document-holdout-v1"
 TRAINING_FRACTION = 0.8
 VALIDATION_FRACTION = 0.2
@@ -164,6 +171,62 @@ def _encode_document_partition(
         validation_document_hashes=partition.validation_document_hashes,
         duplicate_documents_excluded=partition.duplicate_documents_excluded,
         token_budget_documents_excluded=partition.token_budget_documents_excluded,
+    )
+
+
+def _scheduled_learning_rate(
+    base_learning_rate: float,
+    global_step: int,
+    minimum_learning_rate: float = SOURCE_MINIMUM_LEARNING_RATE,
+    warmup_steps: int = SOURCE_SCHEDULER_WARMUP_STEPS,
+    decay_steps: int = SOURCE_SCHEDULER_DECAY_STEPS,
+) -> float:
+    """Warm up from the configured floor, then cosine-decay to that floor."""
+    for name, value in (
+        ("base_learning_rate", base_learning_rate),
+        ("minimum_learning_rate", minimum_learning_rate),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(name + " must be a finite positive number.")
+    if minimum_learning_rate > base_learning_rate:
+        raise ValueError("minimum_learning_rate cannot exceed base_learning_rate.")
+    if type(global_step) is not int or global_step < 1:
+        raise ValueError("global_step must be a positive integer.")
+    if type(warmup_steps) is not int or warmup_steps < 1:
+        raise ValueError("warmup_steps must be a positive integer.")
+    if type(decay_steps) is not int or decay_steps <= warmup_steps:
+        raise ValueError("decay_steps must be greater than warmup_steps.")
+    base = float(base_learning_rate)
+    floor = float(minimum_learning_rate)
+    if global_step <= warmup_steps:
+        return floor + (base - floor) * (global_step / warmup_steps)
+    progress = min(
+        (global_step - warmup_steps) / (decay_steps - warmup_steps),
+        1.0,
+    )
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return floor + (base - floor) * cosine
+
+
+def _legacy_scheduled_learning_rate(base_learning_rate: float, global_step: int) -> float:
+    """Preserve the pre-cosine application trainer's linear warmup trajectory."""
+    if (
+        isinstance(base_learning_rate, bool)
+        or not isinstance(base_learning_rate, (int, float))
+        or not math.isfinite(base_learning_rate)
+        or base_learning_rate <= 0
+    ):
+        raise ValueError("base_learning_rate must be a finite positive number.")
+    if type(global_step) is not int or global_step < 1:
+        raise ValueError("global_step must be a positive integer.")
+    return float(base_learning_rate) * min(
+        1.0,
+        global_step / SOURCE_SCHEDULER_WARMUP_STEPS,
     )
 
 
