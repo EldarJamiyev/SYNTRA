@@ -75,7 +75,10 @@ def _now() -> str:
 def _cpu_model() -> str | None:
     """Read a local CPU model identifier when the current OS exposes one."""
     candidates: list[str] = []
-    processor = host_platform.processor().strip()
+    try:
+        processor = host_platform.processor().strip()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        processor = ""
     if processor:
         candidates.append(processor)
     identifier = os.environ.get("PROCESSOR_IDENTIFIER", "").strip()
@@ -1273,12 +1276,13 @@ def assess_loss_intelligence_divergence(summary: dict[str, Any], checkpoint: dic
 
 
 def _report_number(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-        and float(value) >= 0
-    )
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        normalized = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return math.isfinite(normalized) and normalized >= 0
 
 
 def _report_rate(value: Any, numerator: int, denominator: int) -> bool:
