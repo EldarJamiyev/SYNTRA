@@ -407,7 +407,10 @@ INFERENCE_CHECKPOINT_FIELDS = (
     "token_budget_documents_excluded", "validation_strategy", "training_settings",
     "learning_rate", "gradient_norm_before_clip", "finetuning_settings",
     "finetuning_learning_rate", "finetuning_gradient_norm_before_clip",
-    "finetuning_stage_steps",
+    "finetuning_stage_steps", "finetuning_resume_schema",
+    "finetuning_optimizer_scope", "finetuning_stage_base_step",
+    "finetuning_stage_target_steps", "finetuning_validation_stage_step",
+    "finetuning_resume_supported",
 )
 
 
