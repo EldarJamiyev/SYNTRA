@@ -22,7 +22,13 @@ from .checkpoint_io import load_torch_checkpoint_snapshot
 from .config import ModelConfig
 from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
-from .runtime import _normalize_checkpoint_payload, _read_checkpoint, checkpoint_path, clear_resident_cache
+from .runtime import (
+    _file_stat_identity_record,
+    _normalize_checkpoint_payload,
+    _read_checkpoint,
+    checkpoint_path,
+    clear_resident_cache,
+)
 from .safe_paths import (
     PROJECT_ROOT, _approved_roots, resolve_corpus_root,
     resolve_instruction_dataset, resolve_curriculum_output_path,
@@ -1098,7 +1104,10 @@ def finetune(
 
         metadata_path = checkpoint_path_value.with_suffix(checkpoint_path_value.suffix + ".json")
         metadata = {
-            "checkpoint": str(checkpoint_path_value), "step": step, "config": config.to_dict(),
+            "checkpoint": str(checkpoint_path_value),
+            "checkpoint_identity": _file_stat_identity_record(checkpoint_path_value),
+            "step": step,
+            "config": config.to_dict(),
             "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
             "train_loss": last_train_loss, "validation_loss": last_val_loss,
             "tokenizer": "byte-BPE", "tokenizer_vocab_size": tokenizer.vocab_size,
