@@ -22,7 +22,7 @@ from .checkpoint_io import load_torch_checkpoint_snapshot
 from .config import ModelConfig
 from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
-from .runtime import _normalize_checkpoint_payload, checkpoint_path, clear_resident_cache
+from .runtime import _normalize_checkpoint_payload, _read_checkpoint, checkpoint_path, clear_resident_cache
 from .safe_paths import (
     PROJECT_ROOT, _approved_roots, resolve_corpus_root,
     resolve_instruction_dataset, resolve_curriculum_output_path,
@@ -833,16 +833,17 @@ def finetune(
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
     resume_supported = device.type in {"cpu", "cuda"}
-    # Resume must load the full training checkpoint, never the model-only
-    # inference companion. The snapshot loader validates and deserializes the
-    # same bounded bytes to avoid checkpoint-path replacement races.
-    load_target = checkpoint_path_value if resume else select_inference_checkpoint(checkpoint_path_value)
-    validate_checkpoint_load_budget(load_target)
     if resume:
-        raw_saved = load_torch_checkpoint_snapshot(load_target)
+        # Resume must load the full training checkpoint, never the model-only
+        # inference companion. The snapshot loader validates and deserializes
+        # the same bounded bytes to avoid checkpoint-path replacement races.
+        validate_checkpoint_load_budget(checkpoint_path_value)
+        raw_saved = load_torch_checkpoint_snapshot(checkpoint_path_value)
+        saved = _normalize_checkpoint_payload(raw_saved)
     else:
-        raw_saved = torch.load(load_target, map_location="cpu", weights_only=True)
-    saved = _normalize_checkpoint_payload(raw_saved)
+        # Runtime loading verifies the inference companion's source identity
+        # and falls back to the full checkpoint if that companion is stale.
+        _, saved, _, _ = _read_checkpoint(checkpoint_path_value)
     config = ModelConfig.from_dict(saved["config"])
     config.validate()
     # Accumulation keeps only one physical micro-batch and its activations on
