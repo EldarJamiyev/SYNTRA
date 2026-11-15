@@ -160,5 +160,134 @@ class SftStatusCheckpointReconciliationTests(unittest.TestCase):
             self.assertEqual(result["trained_steps"], 11)
 
 
+
+@unittest.skipIf(torch is None, "Install the pinned PyTorch requirements to test source checkpoint reconciliation.")
+class SourceTrainingStatusReconciliationTests(unittest.TestCase):
+    @staticmethod
+    def _payload(step: int) -> dict:
+        return {
+            "format": "syntra-transformer-v1",
+            "config": {
+                "vocab_size": 300,
+                "seq_len": 32,
+                "n_layer": 1,
+                "n_head": 1,
+                "n_embd": 32,
+            },
+            "tokenizer": {"vocab_size": 300},
+            "model_state": {"embedding.weight": torch.ones(300, 32)},
+            "optimizer_state": {"state": {}, "param_groups": []},
+            "rng_state": {"cpu": torch.get_rng_state()},
+            "step": step,
+            "train_loss": 1.2 - step * 0.01,
+            "validation_loss": 1.4 - step * 0.01,
+            "learning_rate": 2.5e-4,
+            "training_scheduler": "global-cosine-warmup-v2",
+            "minimum_learning_rate": 1e-5,
+            "warmup_steps": 100,
+            "decay_steps": 10_000,
+            "gradient_clip_norm": 1.0,
+            "gradient_norm_before_clip": 0.5,
+            "training_mode": "causal-source-pretraining",
+            "training_settings": {
+                "batch_size": 1,
+                "learning_rate": 3e-4,
+                "seed": 31,
+                "max_tokens": 4096,
+                "scheduler": "global-cosine-warmup-v2",
+                "minimum_learning_rate": 1e-5,
+                "warmup_steps": 100,
+                "decay_steps": 10_000,
+                "gradient_clip_norm": 1.0,
+            },
+            "training_data_sha256": "c" * 64,
+            "validation_strategy": "sha256-grouped-document-holdout-v1",
+            "corpus_files": 6,
+            "corpus_tokens": 1024,
+            "training_documents": 5,
+            "validation_documents": 1,
+            "duplicate_documents_excluded": 0,
+            "token_budget_documents_excluded": 0,
+            "training_history": [
+                {
+                    "step": step,
+                    "phase": "causal-source-pretraining",
+                    "train_loss": 1.2 - step * 0.01,
+                    "validation_loss": 1.4 - step * 0.01,
+                }
+            ],
+        }
+
+    def test_status_recovers_stale_source_pretraining_progress(self):
+        from syntra_ai.runtime import _file_stat_identity_record, status
+        from syntra_ai.training import _atomic_checkpoint
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-status-reconcile-") as temp:
+            checkpoint = Path(temp) / "source-model.pt"
+            metadata_path = checkpoint.with_suffix(checkpoint.suffix + ".json")
+            _atomic_checkpoint(checkpoint, self._payload(step=10))
+            previous_identity = _file_stat_identity_record(checkpoint)
+            metadata_path.write_text(
+                json.dumps({
+                    "checkpoint_identity": previous_identity,
+                    "step": 10,
+                    "training_mode": "causal-source-pretraining",
+                    "training_history": self._payload(step=10)["training_history"],
+                }),
+                encoding="utf-8",
+            )
+
+            # Simulate a crash after replacing the full checkpoint but before
+            # updating the JSON metadata or the inference companion.
+            _atomic_checkpoint(checkpoint, self._payload(step=11))
+            current_identity = _file_stat_identity_record(checkpoint)
+
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(checkpoint)}):
+                recovered = status()
+                repaired = json.loads(metadata_path.read_text(encoding="utf-8"))
+                second_read = status()
+
+            self.assertEqual(recovered["trained_steps"], 11)
+            self.assertEqual(recovered["training_mode"], "causal-source-pretraining")
+            self.assertEqual(recovered["training_scheduler"], "global-cosine-warmup-v2")
+            self.assertEqual(recovered["validation_strategy"], "sha256-grouped-document-holdout-v1")
+            self.assertEqual(recovered["training_documents"], 5)
+            self.assertTrue(recovered["checkpoint_metadata_reconciled"])
+            self.assertTrue(recovered["checkpoint_metadata_identity_verified"])
+            self.assertEqual(repaired["checkpoint_identity"], current_identity)
+            self.assertEqual(repaired["training_data_sha256"], "c" * 64)
+            self.assertEqual(repaired["training_settings"]["batch_size"], 1)
+            self.assertEqual(second_read["trained_steps"], 11)
+            self.assertFalse(second_read["checkpoint_metadata_reconciled"])
+            self.assertFalse(second_read["checkpoint_metadata_stale"])
+
+    def test_status_can_upgrade_legacy_source_metadata_without_identity(self):
+        from syntra_ai.runtime import status
+        from syntra_ai.training import _atomic_checkpoint
+
+        with tempfile.TemporaryDirectory(prefix="syntra-source-legacy-status-") as temp:
+            checkpoint = Path(temp) / "source-model.pt"
+            metadata_path = checkpoint.with_suffix(checkpoint.suffix + ".json")
+            _atomic_checkpoint(checkpoint, self._payload(step=7))
+            metadata_path.write_text(
+                json.dumps({
+                    "step": 6,
+                    "training_mode": "causal-source-pretraining",
+                    "training_history": [],
+                }),
+                encoding="utf-8",
+            )
+
+            with patch.dict(os.environ, {"SYNTRA_CHECKPOINT": str(checkpoint)}):
+                upgraded = status()
+                persisted = json.loads(metadata_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(upgraded["trained_steps"], 7)
+            self.assertTrue(upgraded["checkpoint_metadata_reconciled"])
+            self.assertTrue(upgraded["checkpoint_metadata_identity_verified"])
+            self.assertIn("checkpoint_identity", persisted)
+            self.assertEqual(persisted["training_data_sha256"], "c" * 64)
+
+
 if __name__ == "__main__":
     unittest.main()
