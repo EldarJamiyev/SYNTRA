@@ -669,6 +669,62 @@ def train(
     last_val_loss = None
     last_learning_rate = None
     last_gradient_norm = None
+    source_training_settings = {
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "seed": seed,
+        "max_tokens": max_tokens,
+        "scheduler": effective_scheduler,
+        "minimum_learning_rate": effective_minimum_learning_rate,
+        "warmup_steps": effective_warmup_steps,
+        "decay_steps": effective_decay_steps,
+        "gradient_clip_norm": effective_gradient_clip_norm,
+    }
+
+    def persist_status_metadata(global_step: int) -> None:
+        """Publish source-training progress bound to the current full checkpoint."""
+        metadata = {
+            "checkpoint": str(checkpoint_path),
+            "step": global_step,
+            "config": config.to_dict(),
+            "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+            "train_loss": last_train_loss,
+            "validation_loss": last_val_loss,
+            "learning_rate": last_learning_rate,
+            "training_scheduler": effective_scheduler,
+            "minimum_learning_rate": effective_minimum_learning_rate,
+            "warmup_steps": effective_warmup_steps,
+            "decay_steps": effective_decay_steps,
+            "gradient_clip_norm": effective_gradient_clip_norm,
+            "gradient_norm_before_clip": last_gradient_norm,
+            "corpus_files": len(corpus.files),
+            "corpus_tokens": corpus_tokens,
+            "training_documents": len(document_split.training_document_hashes),
+            "validation_documents": len(document_split.validation_document_hashes),
+            "duplicate_documents_excluded": document_split.duplicate_documents_excluded,
+            "token_budget_documents_excluded": document_split.token_budget_documents_excluded,
+            "validation_strategy": SOURCE_VALIDATION_STRATEGY,
+            "training_data_sha256": training_data_sha256,
+            "requested_config": requested_config_payload or config.to_dict(),
+            "training_settings": source_training_settings,
+            "tokenizer": "byte-BPE",
+            "tokenizer_vocab_size": tokenizer.vocab_size,
+            "context_tokens": config.seq_len,
+            "training_mode": "causal-source-pretraining",
+            "created_by": "SYNTRA from-scratch trainer",
+            "pretrained_weights": False,
+            "training_history": training_history,
+            "training_history_points": len(training_history),
+        }
+        try:
+            metadata["checkpoint_identity"] = checkpoint_file_identity(checkpoint_path)
+        except FileNotFoundError:
+            # Fresh from-scratch training has no checkpoint until its first
+            # measured validation commit. The known mode lets status validate
+            # and recover from that first committed full checkpoint.
+            pass
+        metadata_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".json")
+        _atomic_json(metadata_path, metadata)
 
     def report(status: str, step: int, message: str = ""):
         current = {
@@ -703,6 +759,10 @@ def train(
             callback(current)
         return current
 
+    # Create a mode-aware status record before the first optimizer update.
+    # For a new model it has no checkpoint identity yet; after the first full
+    # checkpoint commit status can validate and recover directly from that file.
+    persist_status_metadata(start_step)
     report(
         "running",
         start_step,
@@ -769,17 +829,7 @@ def train(
                 "requested_config": requested_config_payload or config.to_dict(),
                 "learning_rate": last_learning_rate,
                 "gradient_norm_before_clip": last_gradient_norm,
-                "training_settings": {
-                    "batch_size": batch_size,
-                    "learning_rate": learning_rate,
-                    "seed": seed,
-                    "max_tokens": max_tokens,
-                    "scheduler": effective_scheduler,
-                    "minimum_learning_rate": effective_minimum_learning_rate,
-                    "warmup_steps": effective_warmup_steps,
-                    "decay_steps": effective_decay_steps,
-                    "gradient_clip_norm": effective_gradient_clip_norm,
-                },
+                "training_settings": source_training_settings,
                 "rng_state": _rng_state(device),
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
@@ -788,38 +838,7 @@ def train(
             }
             _atomic_checkpoint(checkpoint_path, payload)
             _save_inference_checkpoint(checkpoint_path, payload)
-            metadata = {
-                "checkpoint": str(checkpoint_path),
-                "checkpoint_identity": checkpoint_file_identity(checkpoint_path),
-                "step": step,
-                "config": config.to_dict(),
-                "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
-                "train_loss": last_train_loss,
-                "validation_loss": last_val_loss,
-                "learning_rate": last_learning_rate,
-                "training_scheduler": effective_scheduler,
-                "minimum_learning_rate": effective_minimum_learning_rate,
-                "warmup_steps": effective_warmup_steps,
-                "decay_steps": effective_decay_steps,
-                "gradient_clip_norm": effective_gradient_clip_norm,
-                "gradient_norm_before_clip": last_gradient_norm,
-                "corpus_files": len(corpus.files),
-                "corpus_tokens": corpus_tokens,
-                "training_documents": len(document_split.training_document_hashes),
-                "validation_documents": len(document_split.validation_document_hashes),
-                "duplicate_documents_excluded": document_split.duplicate_documents_excluded,
-                "token_budget_documents_excluded": document_split.token_budget_documents_excluded,
-                "validation_strategy": SOURCE_VALIDATION_STRATEGY,
-                "tokenizer": "byte-BPE",
-                "tokenizer_vocab_size": tokenizer.vocab_size,
-                "context_tokens": config.seq_len,
-                "created_by": "SYNTRA from-scratch trainer",
-                "pretrained_weights": False,
-                "training_history": training_history,
-                "training_history_points": len(training_history),
-            }
-            metadata_path = checkpoint_path.with_suffix(checkpoint_path.suffix + ".json")
-            _atomic_json(metadata_path, metadata)
+            persist_status_metadata(step)
             report(
                 "running" if step < start_step + steps else "completed",
                 step,
