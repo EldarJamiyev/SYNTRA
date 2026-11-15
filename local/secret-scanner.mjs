@@ -196,7 +196,7 @@ function validateAllowlistEntry(entry, now) {
   if (typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) return null;
   if (!Array.isArray(entry.ruleTypes) || !entry.ruleTypes.length || entry.ruleTypes.length > SECRET_RULES.length) return null;
   if (new Set(entry.ruleTypes).size !== entry.ruleTypes.length
-    || entry.ruleTypes.some(type => typeof type !== "string" || !SECRET_RULE_TYPES.has(type))) return null;
+    || entry.ruleTypes.some(type => typeof type !== "string" || !SECRET_RULE_TYPE_SET.has(type))) return null;
   if (typeof entry.reason !== "string" || entry.reason.trim().length < 20
     || entry.reason.trim().length > 500 || /[\0\r\n]/.test(entry.reason)) return null;
   if (typeof entry.expiresAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(entry.expiresAt)) return null;
