@@ -404,7 +404,8 @@ INFERENCE_CHECKPOINT_FIELDS = (
     "validation_loss", "training_mode", "instruction_examples", "training_history",
     "instruction_dataset_sha256", "instruction_dataset_bytes",
     "training_documents", "validation_documents", "duplicate_documents_excluded",
-    "token_budget_documents_excluded", "validation_strategy",
+    "token_budget_documents_excluded", "validation_strategy", "training_settings",
+    "learning_rate", "gradient_norm_before_clip",
 )
 
 
@@ -487,6 +488,14 @@ def train(
     if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     requested_config = config
+    effective_scheduler = SOURCE_TRAINING_SCHEDULER
+    effective_minimum_learning_rate = min(
+        SOURCE_MINIMUM_LEARNING_RATE,
+        float(learning_rate),
+    )
+    effective_warmup_steps = SOURCE_SCHEDULER_WARMUP_STEPS
+    effective_decay_steps = SOURCE_SCHEDULER_DECAY_STEPS
+    effective_gradient_clip_norm = SOURCE_GRADIENT_CLIP_NORM
     checkpoint_path = Path(checkpoint).expanduser().absolute()
     device = choose_device(device_name)
     random.seed(seed)
@@ -595,6 +604,50 @@ def train(
                 + ", ".join(changed_settings)
                 + ". Use the original settings or start a new checkpoint."
             )
+
+        # Pre-scheduler application checkpoints used a linear 100-step warmup
+        # followed by a constant rate. Preserve that trajectory on resume.
+        saved_scheduler = saved_settings.get(
+            "scheduler",
+            LEGACY_SOURCE_TRAINING_SCHEDULER,
+        )
+        if saved_scheduler == LEGACY_SOURCE_TRAINING_SCHEDULER:
+            effective_scheduler = LEGACY_SOURCE_TRAINING_SCHEDULER
+            effective_minimum_learning_rate = None
+        elif saved_scheduler == SOURCE_TRAINING_SCHEDULER:
+            required_scheduler_settings = {
+                "minimum_learning_rate",
+                "warmup_steps",
+                "decay_steps",
+                "gradient_clip_norm",
+            }
+            if not required_scheduler_settings.issubset(saved_settings):
+                raise ValueError("The cosine-scheduler checkpoint is missing scheduler or gradient-clip settings.")
+            expected_scheduler_settings = {
+                "minimum_learning_rate": effective_minimum_learning_rate,
+                "warmup_steps": effective_warmup_steps,
+                "decay_steps": effective_decay_steps,
+                "gradient_clip_norm": effective_gradient_clip_norm,
+            }
+            changed_scheduler_settings = [
+                name
+                for name, expected in expected_scheduler_settings.items()
+                if (
+                    type(saved_settings.get(name)) not in (int, float)
+                    or isinstance(saved_settings.get(name), bool)
+                    or saved_settings.get(name) != expected
+                )
+            ]
+            if changed_scheduler_settings:
+                raise ValueError(
+                    "Training resume settings differ from the checkpoint: "
+                    + ", ".join(changed_scheduler_settings)
+                    + ". Use the original settings or start a new checkpoint."
+                )
+            effective_scheduler = SOURCE_TRAINING_SCHEDULER
+        else:
+            raise ValueError("Checkpoint contains an unsupported source-training scheduler; start a new run.")
+
     train_data = torch.tensor(document_split.training_tokens, dtype=torch.long)
     val_data = torch.tensor(document_split.validation_tokens, dtype=torch.long)
     start_step = 0
@@ -609,6 +662,8 @@ def train(
     started = monotonic()
     last_train_loss = None
     last_val_loss = None
+    last_learning_rate = None
+    last_gradient_norm = None
 
     def report(status: str, step: int, message: str = ""):
         current = {
@@ -617,6 +672,11 @@ def train(
             "max_steps": start_step + steps,
             "train_loss": last_train_loss,
             "validation_loss": last_val_loss,
+            "learning_rate": last_learning_rate,
+            "training_scheduler": effective_scheduler,
+            "minimum_learning_rate": effective_minimum_learning_rate,
+            "gradient_clip_norm": effective_gradient_clip_norm,
+            "gradient_norm_before_clip": last_gradient_norm,
             "device": str(device),
             "elapsed_seconds": round(monotonic() - started, 2),
             "message": message,
@@ -646,16 +706,32 @@ def train(
     )
     model.train()
     for step in range(start_step + 1, start_step + steps + 1):
-        learning_rate_now = learning_rate * min(1.0, step / 100.0)
+        if effective_scheduler == SOURCE_TRAINING_SCHEDULER:
+            learning_rate_now = _scheduled_learning_rate(
+                learning_rate,
+                step,
+                minimum_learning_rate=effective_minimum_learning_rate,
+                warmup_steps=effective_warmup_steps,
+                decay_steps=effective_decay_steps,
+            )
+        else:
+            learning_rate_now = _legacy_scheduled_learning_rate(learning_rate, step)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate_now
+        last_learning_rate = learning_rate_now
         x, y = _batch(train_data, batch_size, config.seq_len, device)
         optimizer.zero_grad(set_to_none=True)
         _, loss = model(x, y)
         if loss is None or not torch.isfinite(loss):
             raise RuntimeError("Training loss became non-finite.")
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            effective_gradient_clip_norm,
+        )
+        if not torch.isfinite(gradient_norm).item():
+            raise RuntimeError("Gradient norm became non-finite before clipping.")
+        last_gradient_norm = float(gradient_norm.item())
         optimizer.step()
         last_train_loss = float(loss.item())
 
