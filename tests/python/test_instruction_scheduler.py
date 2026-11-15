@@ -41,7 +41,12 @@ class InstructionFineTuningSchedulerTests(unittest.TestCase):
                 )
                 self.assertGreaterEqual(first_rate, settings["minimum_learning_rate"])
                 self.assertLessEqual(first_rate, learning_rate)
-                self.assertAlmostEqual(final_rate, settings["minimum_learning_rate"])
+                if steps == 1:
+                    # A one-update stage is consumed entirely by warmup; it
+                    # must not pretend to have performed a cosine-decay update.
+                    self.assertAlmostEqual(final_rate, learning_rate)
+                else:
+                    self.assertAlmostEqual(final_rate, settings["minimum_learning_rate"])
 
     def test_one_step_sft_stage_uses_full_base_rate_without_fake_decay(self):
         from syntra_ai.instruction import _finetuning_scheduler_settings
