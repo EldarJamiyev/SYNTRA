@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 
 import {
+  ensureWorkspaceStateDirectory,
   listWorkspaceTextFiles,
   readWorkspaceFile,
   resolveWorkspace
@@ -47,7 +49,116 @@ const SECRET_RULES = [
   }
 ];
 
-const SECRET_RULE_TYPES = new Set(SECRET_RULES.map(rule => rule.type));
+export const SECRET_RULE_TYPES = Object.freeze(SECRET_RULES.map(rule => rule.type));
+const SECRET_RULE_TYPE_SET = new Set(SECRET_RULE_TYPES);
+const allowlistWriteQueues = new Map();
+
+function withAllowlistQueue(root, action) {
+  const previous = allowlistWriteQueues.get(root) || Promise.resolve();
+  const queued = previous.catch(() => {}).then(action);
+  allowlistWriteQueues.set(root, queued);
+  return queued.finally(() => {
+    if (allowlistWriteQueues.get(root) === queued) allowlistWriteQueues.delete(root);
+  });
+}
+
+function exactObjectKeys(value, expected) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).sort().join(",") === [...expected].sort().join(",");
+}
+
+async function readAllowlistForWrite(root) {
+  const current = await readSecretAllowlist(root);
+  if (current.status === "invalid") {
+    throw new Error(current.warning || "The existing secret allowlist is invalid; no change was written.");
+  }
+  return current.entries;
+}
+
+async function writeAllowlistAtomically(root, entries) {
+  const stateRoot = await ensureWorkspaceStateDirectory(root);
+  const realStateRoot = await fs.realpath(stateRoot);
+  const relative = path.relative(root, realStateRoot);
+  if (relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
+    throw new Error("The .syntra state directory resolves outside the selected workspace.");
+  }
+
+  const target = path.join(realStateRoot, "secret-allowlist.json");
+  let before = null;
+  try {
+    before = await fs.lstat(target, { bigint: true });
+    if (!before.isFile() || before.isSymbolicLink() || before.size > BigInt(MAX_ALLOWLIST_BYTES)) {
+      throw new Error("The local secret allowlist must be a bounded regular file, not a link.");
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  const serialized = JSON.stringify({ schema: ALLOWLIST_SCHEMA, entries }, null, 2) + "\n";
+  if (Buffer.byteLength(serialized, "utf8") > MAX_ALLOWLIST_BYTES) {
+    throw new Error("The local secret allowlist exceeds its storage limit.");
+  }
+
+  const temporary = path.join(realStateRoot, "secret-allowlist." + process.pid + "." + crypto.randomUUID() + ".tmp");
+  let handle;
+  try {
+    handle = await fs.open(temporary, "wx", 0o600);
+    await handle.writeFile(serialized, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = null;
+
+    const latestDirectory = await fs.lstat(path.join(root, ".syntra"), { bigint: true });
+    const latestRealDirectory = await fs.realpath(path.join(root, ".syntra"));
+    if (!latestDirectory.isDirectory() || latestDirectory.isSymbolicLink() || latestRealDirectory !== realStateRoot) {
+      throw new Error("The .syntra state directory changed during allowlist update.");
+    }
+
+    let current = null;
+    try {
+      current = await fs.lstat(target, { bigint: true });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    if (before === null ? current !== null : (
+      current === null
+      || !current.isFile()
+      || current.isSymbolicLink()
+      || current.dev !== before.dev
+      || current.ino !== before.ino
+      || current.size !== before.size
+      || current.mtimeNs !== before.mtimeNs
+      || current.ctimeNs !== before.ctimeNs
+    )) {
+      throw new Error("The secret allowlist changed during update; reload and review it again.");
+    }
+
+    await fs.rename(temporary, target);
+    const after = await fs.lstat(target, { bigint: true });
+    if (!after.isFile() || after.isSymbolicLink()) {
+      throw new Error("The updated secret allowlist is not a regular file.");
+    }
+  } finally {
+    await handle?.close().catch(() => {});
+    await fs.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+function validateRequestedExpiry(expiresAt) {
+  const now = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  if (typeof expiresAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(expiresAt)) {
+    throw new Error("expiresAt must use YYYY-MM-DD.");
+  }
+  const expiration = Date.parse(expiresAt + "T00:00:00.000Z");
+  if (!Number.isFinite(expiration) || new Date(expiration).toISOString().slice(0, 10) !== expiresAt) {
+    throw new Error("expiresAt is not a valid calendar date.");
+  }
+  if (expiration < today) throw new Error("The allowlist expiry date is already past.");
+  if (expiration > today + MAX_ALLOWLIST_DAYS * 24 * 60 * 60 * 1000) {
+    throw new Error("Secret allowlist exceptions may not exceed 366 days.");
+  }
+}
 
 function sameFileIdentity(left, right) {
   return left.isFile()
@@ -189,6 +300,101 @@ async function readSecretAllowlist(root) {
   } finally {
     await handle?.close().catch(() => {});
   }
+}
+
+export async function setWorkspaceSecretAllowlist(inputRoot, input) {
+  const root = await resolveWorkspace(inputRoot);
+  return withAllowlistQueue(root, async () => {
+    if (!exactObjectKeys(input, ["path", "sha256", "ruleTypes", "reason", "expiresAt"])) {
+      throw new Error("Secret allowlist approval requires exactly path, sha256, ruleTypes, reason, and expiresAt.");
+    }
+    if (!validRelativeAllowlistPath(input.path)) {
+      throw new Error("The allowlist path must be a normalized workspace-relative file path.");
+    }
+    if (typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256)) {
+      throw new Error("A full lowercase SHA-256 file fingerprint is required.");
+    }
+    if (!Array.isArray(input.ruleTypes) || input.ruleTypes.length < 1 || input.ruleTypes.length > SECRET_RULE_TYPES.length
+      || new Set(input.ruleTypes).size !== input.ruleTypes.length
+      || input.ruleTypes.some(type => typeof type !== "string" || !SECRET_RULE_TYPE_SET.has(type))) {
+      throw new Error("Select one or more unique supported detector IDs.");
+    }
+    if (typeof input.reason !== "string" || input.reason.trim().length < 20
+      || input.reason.trim().length > 500 || /[\0\r\n]/.test(input.reason)) {
+      throw new Error("A review reason of 20-500 characters on one line is required.");
+    }
+    validateRequestedExpiry(input.expiresAt);
+
+    const source = await readWorkspaceFile(root, input.path);
+    if (source.path !== input.path || source.sha256 !== input.sha256) {
+      throw new Error("The file path or SHA-256 changed since the scan. Run /secrets again and review the current findings.");
+    }
+    const matchedTypes = new Set();
+    const contentLines = source.content.split(/\r?\n/);
+    for (const rule of SECRET_RULES) {
+      if (!input.ruleTypes.includes(rule.type)) continue;
+      if (contentLines.some(line => rule.expression.test(line))) matchedTypes.add(rule.type);
+    }
+    const missing = input.ruleTypes.filter(type => !matchedTypes.has(type));
+    if (missing.length) {
+      throw new Error("The selected detector(s) do not currently match this exact file: " + missing.join(", "));
+    }
+
+    const currentEntries = await readAllowlistForWrite(root);
+    const nextEntry = {
+      path: input.path,
+      sha256: input.sha256,
+      ruleTypes: [...input.ruleTypes].sort(),
+      approved: true,
+      reason: input.reason.trim(),
+      expiresAt: input.expiresAt
+    };
+    const existingIndex = currentEntries.findIndex(entry =>
+      entry.path === nextEntry.path && entry.sha256 === nextEntry.sha256
+    );
+    const nextEntries = [...currentEntries];
+    if (existingIndex >= 0) nextEntries[existingIndex] = nextEntry;
+    else nextEntries.push(nextEntry);
+    if (nextEntries.length > MAX_ALLOWLIST_ENTRIES) {
+      throw new Error("The local secret allowlist reached its maximum of 500 entries.");
+    }
+    await writeAllowlistAtomically(root, nextEntries);
+    return {
+      root,
+      path: source.path,
+      fileSha256: source.sha256,
+      ruleTypes: nextEntry.ruleTypes,
+      expiresAt: nextEntry.expiresAt,
+      approved: true,
+      entryCount: nextEntries.length,
+      storedLocally: true
+    };
+  });
+}
+
+export async function removeWorkspaceSecretAllowlist(inputRoot, input) {
+  const root = await resolveWorkspace(inputRoot);
+  return withAllowlistQueue(root, async () => {
+    if (!exactObjectKeys(input, ["path", "sha256"]) || !validRelativeAllowlistPath(input.path)
+      || typeof input.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256)) {
+      throw new Error("Revocation requires exactly a normalized relative path and full lowercase SHA-256.");
+    }
+    const currentEntries = await readAllowlistForWrite(root);
+    const nextEntries = currentEntries.filter(entry =>
+      !(entry.path === input.path && entry.sha256 === input.sha256)
+    );
+    if (nextEntries.length === currentEntries.length) {
+      throw new Error("No active allowlist exception matches that exact path and SHA-256.");
+    }
+    await writeAllowlistAtomically(root, nextEntries);
+    return {
+      root,
+      path: input.path,
+      fileSha256: input.sha256,
+      revoked: true,
+      entryCount: nextEntries.length
+    };
+  });
 }
 
 export async function scanWorkspaceSecrets(inputRoot) {
