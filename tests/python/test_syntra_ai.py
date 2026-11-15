@@ -1776,6 +1776,9 @@ class TransformerTests(unittest.TestCase):
                     os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = previous_allowed_roots
             self.assertTrue(fresh_evaluation["evaluation_performed"])
             self.assertTrue(torch.isfinite(torch.tensor(fresh_evaluation["validation_loss"])).item())
+            self.assertEqual(fresh_evaluation["validation_strategy"], "sha256-grouped-document-holdout-v1")
+            self.assertGreater(fresh_evaluation["training_documents"], 0)
+            self.assertGreater(fresh_evaluation["validation_documents"], 0)
             model, saved, device = load_model(checkpoint, "cpu")
             self.assertFalse(model.training, "fresh evaluation must leave the resident inference model in eval mode")
             self.assertEqual(saved["training_mode"], "supervised-instruction-finetuning")
