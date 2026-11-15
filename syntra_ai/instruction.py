@@ -36,7 +36,6 @@ from .training import (
     _save_inference_checkpoint,
     _scheduled_learning_rate,
     choose_device,
-    select_inference_checkpoint,
     append_training_history,
     validate_training_history,
     _restore_rng_state,
