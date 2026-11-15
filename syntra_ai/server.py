@@ -98,11 +98,11 @@ def _run_finetuning(body: dict) -> None:
         result = finetune(
             dataset_path=body["dataset"],
             checkpoint=_default_checkpoint(),
-            steps=int(body.get("steps", 1000)),
-            batch_size=int(body.get("batch_size", 4)),
-            gradient_accumulation_steps=int(body.get("gradient_accumulation_steps", 1)),
-            learning_rate=float(body.get("learning_rate", 1e-4)),
-            device_name=str(body.get("device", "auto")),
+            steps=body.get("steps", 1000),
+            batch_size=body.get("batch_size", 4),
+            gradient_accumulation_steps=body.get("gradient_accumulation_steps", 1),
+            learning_rate=body.get("learning_rate", 1e-4),
+            device_name=body.get("device", "auto"),
             callback=_set_job,
             resume=body.get("resume", False),
         )
