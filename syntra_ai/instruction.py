@@ -28,8 +28,16 @@ from .safe_paths import (
 )
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
-    _atomic_checkpoint, _atomic_json, _save_inference_checkpoint, choose_device, select_inference_checkpoint,
-    append_training_history, validate_training_history,
+    SOURCE_GRADIENT_CLIP_NORM,
+    SOURCE_MINIMUM_LEARNING_RATE,
+    _atomic_checkpoint,
+    _atomic_json,
+    _save_inference_checkpoint,
+    _scheduled_learning_rate,
+    choose_device,
+    select_inference_checkpoint,
+    append_training_history,
+    validate_training_history,
 )
 
 
@@ -41,6 +49,33 @@ MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
 MAX_INSTRUCTION_FIELD_BYTES = 512 * 1024
 INSTRUCTION_VALIDATION_FRACTION = 0.1
 INSTRUCTION_SPLIT_SEED = "syntra-instruction-split-v1"
+SFT_STAGE_COSINE_SCHEDULER = "stage-cosine-warmup-v1"
+SFT_STAGE_WARMUP_CAP = 100
+
+
+def _finetuning_scheduler_settings(steps: int, learning_rate: float) -> dict[str, Any]:
+    """Return a deterministic schedule scoped to one fresh SFT optimizer stage."""
+    if type(steps) is not int or not 1 <= steps <= 1_000_000:
+        raise ValueError("SFT scheduler steps must be an integer between 1 and 1,000,000.")
+    if (
+        isinstance(learning_rate, bool)
+        or not isinstance(learning_rate, (int, float))
+        or not math.isfinite(learning_rate)
+        or learning_rate <= 0
+    ):
+        raise ValueError("SFT scheduler learning rate must be finite and positive.")
+    warmup_steps = min(SFT_STAGE_WARMUP_CAP, max(1, steps // 10))
+    decay_steps = max(steps, warmup_steps + 1)
+    return {
+        "scheduler": SFT_STAGE_COSINE_SCHEDULER,
+        "optimizer_scope": "fresh-per-finetune-invocation",
+        "steps": steps,
+        "base_learning_rate": float(learning_rate),
+        "minimum_learning_rate": min(SOURCE_MINIMUM_LEARNING_RATE, float(learning_rate)),
+        "warmup_steps": warmup_steps,
+        "decay_steps": decay_steps,
+        "gradient_clip_norm": SOURCE_GRADIENT_CLIP_NORM,
+    }
 
 
 def _normalized_instruction_text(value: str) -> str:
@@ -716,6 +751,7 @@ def finetune(
         raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
     model = SyntraTransformer(config).to(device)
     model.load_state_dict(saved["model_state"])
+    finetuning_settings = _finetuning_scheduler_settings(steps, learning_rate)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
     examples = load_instruction_examples(dataset_path, config.seq_len, tokenizer)
     training_examples, validation_examples, dataset_quality = split_instruction_examples(examples)
@@ -729,6 +765,8 @@ def finetune(
     reset_device_peak_stats(device, torch)
     last_train_loss = None
     last_val_loss = None
+    last_learning_rate = None
+    last_gradient_norm = None
     supervised_tokens_processed = 0
     last_step_latency_ms = None
     step_latency_total_ms = 0.0
@@ -742,6 +780,10 @@ def finetune(
             "max_steps": base_step + steps,
             "train_loss": last_train_loss,
             "validation_loss": last_val_loss,
+            "learning_rate": last_learning_rate,
+            "finetuning_settings": finetuning_settings,
+            "gradient_clip_norm": finetuning_settings["gradient_clip_norm"],
+            "gradient_norm_before_clip": last_gradient_norm,
             "device": str(device),
             "elapsed_seconds": round(monotonic() - started, 2),
             "tokens_per_second": round(supervised_tokens_processed / max(monotonic() - started, 1e-9), 2),
@@ -785,6 +827,17 @@ def finetune(
     for step in range(base_step + 1, base_step + steps + 1):
         from time import perf_counter
 
+        stage_step = step - base_step
+        learning_rate_now = _scheduled_learning_rate(
+            learning_rate,
+            stage_step,
+            minimum_learning_rate=finetuning_settings["minimum_learning_rate"],
+            warmup_steps=finetuning_settings["warmup_steps"],
+            decay_steps=finetuning_settings["decay_steps"],
+        )
+        for group in optimizer.param_groups:
+            group["lr"] = learning_rate_now
+        last_learning_rate = learning_rate_now
         step_started = perf_counter()
         optimizer.zero_grad(set_to_none=True)
         weighted_loss_total = 0.0
@@ -815,7 +868,14 @@ def finetune(
             if sampled_memory is not None:
                 peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
             del x, y, loss
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            finetuning_settings["gradient_clip_norm"],
+            error_if_nonfinite=True,
+        )
+        if not torch.isfinite(gradient_norm).item():
+            raise RuntimeError("SFT gradient norm became non-finite before clipping.")
+        last_gradient_norm = float(gradient_norm.item())
         optimizer.step()
         last_train_loss = weighted_loss_total / max(1, batch_supervised_tokens)
         supervised_tokens_processed += batch_supervised_tokens
