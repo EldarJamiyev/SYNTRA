@@ -1742,6 +1742,13 @@ class TransformerTests(unittest.TestCase):
                 )
             self.assertEqual(tuned["status"], "completed")
             self.assertEqual(tuned["gradient_accumulation_steps"], 2)
+            self.assertEqual(tuned["finetuning_settings"]["scheduler"], "stage-cosine-warmup-v1")
+            self.assertEqual(tuned["finetuning_settings"]["optimizer_scope"], "fresh-per-finetune-invocation")
+            self.assertEqual(tuned["finetuning_settings"]["steps"], 1)
+            self.assertEqual(tuned["finetuning_settings"]["warmup_steps"], 1)
+            self.assertEqual(tuned["finetuning_settings"]["decay_steps"], 2)
+            self.assertEqual(tuned["learning_rate"], 1e-4)
+            self.assertGreaterEqual(tuned["gradient_norm_before_clip"], 0.0)
             self.assertGreater(tuned["tokens_per_second"], 0)
             self.assertGreater(tuned["step_latency_ms"], 0)
             self.assertGreater(tuned["mean_step_latency_ms"], 0)
@@ -1755,6 +1762,14 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(tuned["instruction_dataset_sha256"], instruction_dataset_sha256)
             self.assertEqual(tuned["instruction_dataset_bytes"], instruction_dataset_bytes)
             self.assertEqual(inference_saved["step"], tuned["step"])
+            self.assertEqual(full_sft_saved["finetuning_settings"], tuned["finetuning_settings"])
+            self.assertEqual(inference_saved["finetuning_settings"], tuned["finetuning_settings"])
+            self.assertEqual(full_sft_saved["finetuning_learning_rate"], tuned["learning_rate"])
+            self.assertEqual(
+                full_sft_saved["finetuning_gradient_norm_before_clip"],
+                tuned["gradient_norm_before_clip"],
+            )
+            self.assertEqual(full_sft_saved["finetuning_stage_steps"], 1)
             self.assertNotIn("optimizer_state", inference_saved)
             self.assertEqual(len(inference_saved["training_history"]), 2)
             self.assertEqual(
@@ -1764,6 +1779,16 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual([point["step"] for point in inference_saved["training_history"]], [1, 2])
             updated_metadata = json.loads(checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
             self.assertEqual(updated_metadata["training_history"], inference_saved["training_history"])
+            self.assertEqual(updated_metadata["finetuning_settings"], tuned["finetuning_settings"])
+            with patch.dict(
+                os.environ,
+                {"SYNTRA_CHECKPOINT": str(checkpoint)},
+            ):
+                from syntra_ai.runtime import status
+                sft_status = status()
+            self.assertEqual(sft_status["finetuning_settings"], tuned["finetuning_settings"])
+            self.assertEqual(sft_status["finetuning_learning_rate"], tuned["learning_rate"])
+            self.assertEqual(sft_status["finetuning_stage_steps"], 1)
             from syntra_ai.runtime import evaluate
             previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)

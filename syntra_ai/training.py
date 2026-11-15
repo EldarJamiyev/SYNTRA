@@ -405,7 +405,9 @@ INFERENCE_CHECKPOINT_FIELDS = (
     "instruction_dataset_sha256", "instruction_dataset_bytes",
     "training_documents", "validation_documents", "duplicate_documents_excluded",
     "token_budget_documents_excluded", "validation_strategy", "training_settings",
-    "learning_rate", "gradient_norm_before_clip",
+    "learning_rate", "gradient_norm_before_clip", "finetuning_settings",
+    "finetuning_learning_rate", "finetuning_gradient_norm_before_clip",
+    "finetuning_stage_steps",
 )
 
 

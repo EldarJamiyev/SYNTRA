@@ -9,6 +9,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
+- Apply a stage-scoped warmup/cosine schedule to supervised instruction fine-tuning and persist its stage settings and gradient telemetry without claiming cross-invocation optimizer resume.
 - Use a persisted global-step warmup/cosine schedule in the application’s native source-pretraining path, retain the legacy linear-warmup trajectory for older checkpoints, and reject non-finite pre-clipping gradient norms.
 - Make native source-pretraining and fresh corpus evaluation document-isolated: deduplicate exact source copies, learn BPE merges from training documents only, preserve complete files under the token budget, and record holdout provenance.
 - Enforce the Node.js version range required by the current Vite runtime in package metadata, startup validation, and CI.
