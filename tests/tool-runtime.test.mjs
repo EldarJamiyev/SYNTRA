@@ -36,10 +36,18 @@ async function readAudit(root) {
 test("tool registry exposes structured schemas and explicit permission metadata", () => {
   const tools = listWorkspaceTools();
   const byName = new Map(tools.map(item => [item.name, item]));
-  assert.equal(tools.length, 25);
+  assert.equal(tools.length, 27);
   assert.equal(byName.get("workspace.inspect").approvalRequired, false);
   assert.equal(byName.get("workspace.secrets.scan").permission, "read_only");
   assert.equal(byName.get("workspace.secrets.scan").approvalRequired, false);
+  assert.equal(byName.get("workspace.secrets.allowlist.set").permission, "local_state_write");
+  assert.equal(byName.get("workspace.secrets.allowlist.set").approvalRequired, true);
+  assert.deepEqual(byName.get("workspace.secrets.allowlist.set").inputSchema.required,
+    ["path", "sha256", "ruleTypes", "reason", "expiresAt"]);
+  assert.equal(byName.get("workspace.secrets.allowlist.remove").permission, "destructive_state_write");
+  assert.equal(byName.get("workspace.secrets.allowlist.remove").approvalRequired, true);
+  assert.deepEqual(byName.get("workspace.secrets.allowlist.remove").inputSchema.required,
+    ["path", "sha256"]);
   assert.equal(byName.get("workspace.index.status").permission, "read_only");
   assert.equal(byName.get("workspace.index.refresh").permission, "local_state_write");
   assert.equal(byName.get("workspace.index.refresh").approvalRequired, false);
