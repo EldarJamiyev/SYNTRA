@@ -222,7 +222,7 @@ def collect_hardware_identity(requested_device: str, resolved_device: Any, torch
     }
     python_record = {
         "implementation": host_platform.python_implementation(),
-        "version": platform_version = sys.version.split()[0],
+        "version": sys.version.split()[0],
     }
     identity_complete = bool(
         host_record["system"]
