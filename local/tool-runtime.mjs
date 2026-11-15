@@ -608,6 +608,11 @@ function summarizeOutput(name, output) {
         returnedFindings: output.returnedFindings,
         typeCounts: output.typeCounts,
         severityCounts: output.severityCounts,
+        allowlistStatus: output.allowlistStatus,
+        allowlistEntries: output.allowlistEntries,
+        allowlistExpiredEntries: output.allowlistExpiredEntries,
+        staleAllowlistEntries: output.staleAllowlistEntries,
+        allowlistedFindings: output.allowlistedFindings,
         truncated: output.truncated
       };
     case "workspace.secrets.allowlist.set":
