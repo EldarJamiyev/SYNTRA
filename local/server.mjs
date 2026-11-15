@@ -619,6 +619,8 @@ async function runChatTurn(jobId, message, history, signal) {
         "- /workspace followed by an absolute folder path switches the active project.",
         "- /proposals lists saved proposals after a service restart.",
         "- /secrets scans supported text files for common exposed credential patterns; secret values are never shown.",
+        "- /secrets allow {JSON} approves detector IDs for one exact file hash with a reason and expiry; the command is audited.",
+        "- /secrets unallow {JSON} revokes an exact file-hash exception; edited files no longer match old exceptions.",
         "- /apply applies pending proposals only after you review and explicitly request it.",
         "- /discard removes pending/stale proposal records without changing project files.",
         "- /status checks whether the local model backend is reachable.",
