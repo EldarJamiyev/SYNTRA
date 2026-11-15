@@ -38,7 +38,6 @@ The product is designed around a strict engineering principle: **an operation mu
 
 | Principle | Implementation |
 | --- | --- |
-| Native model ownership | Inference, tokenization, training, embeddings, and checkpoints belong to SYNTRA's PyTorch runtime. |
 | Self-owned native model | Inference, tokenization, training, embeddings, and checkpoints run through SYNTRA's own local PyTorch model. No external model provider or registry is supported. |
 | Local source of truth | Repository context is read from the selected local workspace and treated as untrusted project content. |
 | Review before mutation | Generated edits are structured candidate patches; they are not silently applied as trusted changes. |

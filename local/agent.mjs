@@ -1546,8 +1546,7 @@ export function deriveModelContextBudget(modelStatus = {}) {
   // Native checkpoint architecture and positional embeddings are authoritative.
   const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
   const maximumContext = 16_384;
-  // The installed checkpoint (or explicitly configured provider limit) remains
-  // authoritative. Never enlarge a 256/512-token native checkpoint.
+  // The installed checkpoint remains authoritative. Never enlarge a 256/512-token native checkpoint.
   const contextWindowTokens = Number.isFinite(rawContext) && rawContext > 0
     ? Math.max(16, Math.min(maximumContext, Math.floor(rawContext)))
     : 4096;

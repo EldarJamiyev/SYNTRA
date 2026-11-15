@@ -324,6 +324,7 @@ export async function runBenchmarkSuite({ suite, suiteDir, taskIds = null, model
       name: String(selectedModel?.name || modelStatus.model_name || "SYNTRA native Transformer"),
       contextWindowTokens: Number(selectedModel?.contextWindowTokens || modelStatus.context_tokens || 0) || null,
       tokenizerIsExact: modelStatus.tokenizer === "byte-BPE",
+      contextCountIsEstimate: modelStatus.context_count_is_estimate === true,
     },
     summary: summarizeBenchmarkResults(results), tasks: results,
     measurementNotes: [
