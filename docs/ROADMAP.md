@@ -307,3 +307,17 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [ ] Measure schedule variants on the same raw native-model benchmark suite and target hardware before changing the fixed defaults or claiming a quality improvement.
 
 **Acceptance:** A training run resumed across process boundaries computes the same learning rate as one uninterrupted global-step trajectory. Old checkpoints retain their original schedule; new checkpoints carry enough metadata to reject incompatible scheduler changes. Non-finite gradients cannot silently enter the optimizer.
+
+
+### Phase 32 — Stage-scoped instruction fine-tuning schedule
+
+**Objective:** Replace the active application SFT path's constant learning rate with a bounded warmup/cosine schedule while making the optimizer lifecycle explicit.
+
+- [x] Derive a deterministic per-stage warmup from the requested optimizer-step budget (10%, capped at 100 steps) and decay to the configured floor at the stage boundary.
+- [x] Use the same validated native scheduler implementation as source pretraining without coupling SFT steps to the source-pretraining global step.
+- [x] Persist the exact SFT schedule, stage step, current learning rate, clipping threshold, and measured pre-clipping gradient norm in full/inference checkpoints and model status.
+- [x] Keep each fine-tuning invocation's fresh AdamW optimizer lifecycle explicit in checkpoint metadata; do not claim optimizer-state resume between invocations.
+- [x] Add schedule-boundary and invalid-configuration tests plus a real SFT checkpoint/status integration assertion.
+- [ ] Implement explicit dataset-bound SFT optimizer/RNG resume only as a separate feature with an operator-visible resume contract and mismatch rejection.
+
+**Acceptance:** The SFT learning rate follows the requested stage's optimizer-step budget, prompt-mask/response-only loss and gradient accumulation remain unchanged, and checkpoint/status records distinguish stage-scoped scheduling from resumable source pretraining.
