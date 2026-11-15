@@ -463,6 +463,7 @@ def train(
         config.validate()
         validate_training_memory_budget(config, batch_size, device)
         corpus = load_corpus(roots, max_tokens=max_tokens)
+        document_partition = _partition_source_documents(corpus.documents, max_tokens=max_tokens)
         tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
         if tokenizer.vocab_size != config.vocab_size:
             if "tokenizer" in saved:
@@ -475,13 +476,22 @@ def train(
         requested_config_payload = config.to_dict()
         validate_training_memory_budget(config, batch_size, device)
         corpus = load_corpus(roots, max_tokens=max_tokens)
-        tokenizer = ByteBPETokenizer.train(corpus.documents, vocab_size=config.vocab_size)
+        document_partition = _partition_source_documents(corpus.documents, max_tokens=max_tokens)
+        # The validation documents must not influence the learned BPE vocabulary.
+        tokenizer = ByteBPETokenizer.train(
+            document_partition.training_documents,
+            vocab_size=config.vocab_size,
+        )
         config = replace(config, vocab_size=tokenizer.vocab_size)
 
     config.validate()
-    if corpus is None:
-        corpus = load_corpus(roots, max_tokens=max_tokens)
-    token_ids = _encode_documents(corpus.documents, tokenizer, max_tokens=max_tokens)
+    document_split = _encode_document_partition(
+        document_partition,
+        tokenizer,
+        max_tokens=max_tokens,
+        seq_len=config.seq_len,
+    )
+    corpus_tokens = len(document_split.training_tokens) + len(document_split.validation_tokens)
     training_data_sha256 = _training_data_fingerprint(corpus, max_tokens, config, tokenizer)
     training_history = validate_training_history(saved.get("training_history") if saved is not None else None)
     if saved is not None:
@@ -492,8 +502,9 @@ def train(
             )
         if saved.get("training_data_sha256") != training_data_sha256:
             raise ValueError(
-                "The selected source corpus, token budget, or tokenizer differs from the checkpoint's "
-                "training corpus. Select the original source set and settings or start a new checkpoint."
+                "The selected source corpus, token budget, tokenizer, or document-isolated validation "
+                "strategy differs from the checkpoint. Select the original source set and settings or "
+                "start a new checkpoint; token-offset validation checkpoints are not compatible."
             )
         if not isinstance(saved.get("optimizer_state"), dict):
             raise ValueError("Resume checkpoint is missing its optimizer state.")
@@ -521,15 +532,8 @@ def train(
                 + ", ".join(changed_settings)
                 + ". Use the original settings or start a new checkpoint."
             )
-    split = int(len(token_ids) * 0.8)
-    if split <= config.seq_len + 1 or len(token_ids) - split <= config.seq_len + 1:
-        raise ValueError(
-            f"Corpus produced {len(token_ids)} BPE tokens. With context={config.seq_len}, "
-            f"the 80/20 split needs more than {5 * (config.seq_len + 1)} tokens. "
-            "Use a larger local source corpus, reduce --seq-len, or lower the UI context setting."
-        )
-    train_data = torch.tensor(token_ids[:split], dtype=torch.long)
-    val_data = torch.tensor(token_ids[split:], dtype=torch.long)
+    train_data = torch.tensor(document_split.training_tokens, dtype=torch.long)
+    val_data = torch.tensor(document_split.validation_tokens, dtype=torch.long)
     start_step = 0
     model = SyntraTransformer(config).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
@@ -556,7 +560,12 @@ def train(
             "checkpoint": str(checkpoint_path),
             "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
             "corpus_files": len(corpus.files),
-            "corpus_tokens": len(token_ids),
+            "corpus_tokens": corpus_tokens,
+            "training_documents": len(document_split.training_document_hashes),
+            "validation_documents": len(document_split.validation_document_hashes),
+            "duplicate_documents_excluded": document_split.duplicate_documents_excluded,
+            "token_budget_documents_excluded": document_split.token_budget_documents_excluded,
+            "validation_strategy": SOURCE_VALIDATION_STRATEGY,
             "tokenizer": "byte-BPE",
             "vocabulary_size": tokenizer.vocab_size,
             "context_tokens": config.seq_len,
@@ -569,7 +578,7 @@ def train(
     report(
         "running",
         start_step,
-        "Training randomly initialized Transformer weights with corpus-trained byte-BPE tokens."
+        "Training randomly initialized Transformer weights with train-only byte-BPE and document-isolated validation."
         if start_step == 0 else "Resuming the saved BPE tokenizer/model/optimizer checkpoint.",
     )
     model.train()
@@ -606,7 +615,12 @@ def train(
                 "created_by": "SYNTRA from-scratch trainer",
                 "device_at_training": str(device),
                 "corpus_files": len(corpus.files),
-                "corpus_tokens": len(token_ids),
+                "corpus_tokens": corpus_tokens,
+                "training_documents": len(document_split.training_document_hashes),
+                "validation_documents": len(document_split.validation_document_hashes),
+                "duplicate_documents_excluded": document_split.duplicate_documents_excluded,
+                "token_budget_documents_excluded": document_split.token_budget_documents_excluded,
+                "validation_strategy": SOURCE_VALIDATION_STRATEGY,
                 "training_data_sha256": training_data_sha256,
                 "requested_config": requested_config_payload or config.to_dict(),
                 "training_settings": {
@@ -631,7 +645,12 @@ def train(
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
                 "corpus_files": len(corpus.files),
-                "corpus_tokens": len(token_ids),
+                "corpus_tokens": corpus_tokens,
+                "training_documents": len(document_split.training_document_hashes),
+                "validation_documents": len(document_split.validation_document_hashes),
+                "duplicate_documents_excluded": document_split.duplicate_documents_excluded,
+                "token_budget_documents_excluded": document_split.token_budget_documents_excluded,
+                "validation_strategy": SOURCE_VALIDATION_STRATEGY,
                 "tokenizer": "byte-BPE",
                 "tokenizer_vocab_size": tokenizer.vocab_size,
                 "context_tokens": config.seq_len,
@@ -645,7 +664,7 @@ def train(
             report(
                 "running" if step < start_step + steps else "completed",
                 step,
-                "Checkpoint saved; sampled held-out BPE-token validation loss measured.",
+                "Checkpoint saved; document-isolated held-out BPE-token validation loss measured.",
             )
 
     return report("completed", start_step + steps, "Training finished. Model, tokenizer, optimizer, and measured metrics saved locally.")
