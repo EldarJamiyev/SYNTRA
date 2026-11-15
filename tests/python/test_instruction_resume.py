@@ -232,7 +232,7 @@ class FineTuningResumeIntegrationTests(unittest.TestCase):
             torch.manual_seed(123456)
             initial_rng_state = torch.get_rng_state().clone()
             settings = {
-                "steps": 3,
+                "steps": 4,
                 "batch_size": 1,
                 "gradient_accumulation_steps": 2,
                 "learning_rate": 1e-4,
@@ -252,7 +252,7 @@ class FineTuningResumeIntegrationTests(unittest.TestCase):
                 def interrupt_after_saved_step(progress: dict) -> None:
                     if (
                         progress.get("status") == "running"
-                        and progress.get("finetuning_stage_steps") == 1
+                        and progress.get("finetuning_stage_steps") == 2
                         and progress.get("finetuning_remaining_steps") == 2
                     ):
                         raise StopAfterFirstCommittedUpdate()
@@ -270,10 +270,29 @@ class FineTuningResumeIntegrationTests(unittest.TestCase):
                     map_location="cpu",
                     weights_only=True,
                 )
-                self.assertEqual(partial["finetuning_stage_steps"], 1)
+                self.assertEqual(partial["finetuning_stage_steps"], 2)
+                self.assertEqual(partial["finetuning_validation_stage_step"], 1)
                 self.assertIn("optimizer_state", partial)
                 self.assertIn("finetuning_rng_state", partial)
-                self.assertEqual(partial["step"], partial["finetuning_stage_base_step"] + 1)
+                self.assertEqual(partial["step"], partial["finetuning_stage_base_step"] + 2)
+
+                # The lightweight inference companion intentionally remains at
+                # the last validation boundary (stage step 1). Resume must read
+                # the newer full recovery checkpoint at stage step 2 instead.
+                from syntra_ai.training import inference_checkpoint_path
+                inference_snapshot = torch.load(
+                    inference_checkpoint_path(interrupted_checkpoint),
+                    map_location="cpu",
+                    weights_only=True,
+                )
+                self.assertEqual(inference_snapshot["step"], partial["finetuning_stage_base_step"] + 1)
+                metadata = json.loads(
+                    interrupted_checkpoint.with_suffix(interrupted_checkpoint.suffix + ".json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(metadata["finetuning_stage_steps"], 2)
+                self.assertEqual(metadata["finetuning_validation_stage_step"], 1)
 
                 # The caller's current process RNG is deliberately changed.
                 # Resume must restore the checkpoint's actual CPU RNG state.
@@ -288,7 +307,7 @@ class FineTuningResumeIntegrationTests(unittest.TestCase):
             self.assertEqual(uninterrupted["status"], "completed")
             self.assertEqual(resumed["status"], "completed")
             self.assertTrue(resumed["finetuning_resume"])
-            self.assertEqual(resumed["finetuning_stage_steps"], 3)
+            self.assertEqual(resumed["finetuning_stage_steps"], 4)
             self.assertEqual(resumed["finetuning_remaining_steps"], 0)
 
             continuous_saved = torch.load(
