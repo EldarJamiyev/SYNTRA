@@ -274,13 +274,18 @@ def _reconcile_checkpoint_status_metadata(
 
     training_mode = payload.get("training_mode")
     if training_mode == "supervised-instruction-finetuning":
+        instruction_fingerprint = payload.get("instruction_dataset_sha256")
+        instruction_bytes = payload.get("instruction_dataset_bytes")
         supported = (
             payload.get("finetuning_resume_schema") == "syntra-sft-resume-v1"
             and isinstance(payload.get("optimizer_state"), dict)
             and isinstance(payload.get("finetuning_rng_state"), dict)
             and isinstance(payload.get("finetuning_settings"), dict)
-            and isinstance(payload.get("instruction_dataset_sha256"), str)
-            and len(payload["instruction_dataset_sha256"]) == 64
+            and isinstance(instruction_fingerprint, str)
+            and len(instruction_fingerprint) == 64
+            and all(char in "0123456789abcdef" for char in instruction_fingerprint)
+            and type(instruction_bytes) is int
+            and instruction_bytes > 0
         )
     elif training_mode == "causal-source-pretraining":
         source_fingerprint = payload.get("training_data_sha256")
@@ -290,7 +295,8 @@ def _reconcile_checkpoint_status_metadata(
             and isinstance(payload.get("training_settings"), dict)
             and isinstance(source_fingerprint, str)
             and len(source_fingerprint) == 64
-            and isinstance(payload.get("validation_strategy"), str)
+            and all(char in "0123456789abcdef" for char in source_fingerprint)
+            and payload.get("validation_strategy") == SOURCE_VALIDATION_STRATEGY
         )
     else:
         supported = False
@@ -390,30 +396,43 @@ def status() -> dict:
     checkpoint_metadata_warning = None
     saved_identity = metadata.get("checkpoint_identity")
     if checkpoint_exists:
-        identity_matches = (
-            isinstance(saved_identity, dict)
-            and saved_identity == current_checkpoint_identity
-        )
+        has_saved_identity = isinstance(saved_identity, dict)
+        identity_matches = has_saved_identity and saved_identity == current_checkpoint_identity
         checkpoint_metadata_stale = (
-            False if identity_matches else True if isinstance(saved_identity, dict) else None
+            False if identity_matches else True if has_saved_identity else None
         )
         checkpoint_metadata_identity_verified = identity_matches
         if not identity_matches:
-            try:
-                metadata = _reconcile_checkpoint_status_metadata(
-                    path,
-                    metadata_path,
-                    metadata,
-                    current_checkpoint_identity,
+            training_mode = metadata.get("training_mode")
+            resumable_metadata_contract = (
+                training_mode == "causal-source-pretraining"
+                or (
+                    training_mode == "supervised-instruction-finetuning"
+                    and metadata.get("finetuning_resume_schema") == "syntra-sft-resume-v1"
                 )
-                checkpoint_metadata_stale = False
-                checkpoint_metadata_reconciled = True
-                checkpoint_metadata_identity_verified = True
-            except Exception as exc:
+            )
+            if not resumable_metadata_contract:
                 checkpoint_metadata_warning = (
-                    "Checkpoint progress metadata is unverified or stale and could not be reconciled: "
-                    + str(exc)
+                    "Checkpoint metadata has no verified file identity or recognized recovery contract."
+                    if not has_saved_identity else
+                    "Checkpoint file identity differs from metadata, and its training mode is not recoverable."
                 )
+            else:
+                try:
+                    metadata = _reconcile_checkpoint_status_metadata(
+                        path,
+                        metadata_path,
+                        metadata,
+                        current_checkpoint_identity,
+                    )
+                    checkpoint_metadata_stale = False
+                    checkpoint_metadata_reconciled = True
+                    checkpoint_metadata_identity_verified = True
+                except Exception as exc:
+                    checkpoint_metadata_warning = (
+                        "Checkpoint progress metadata is unverified or stale and could not be reconciled: "
+                        + str(exc)
+                    )
 
     raw_config = metadata.get("config") or {}
     context_tokens = metadata.get("context_tokens") or raw_config.get("seq_len") or raw_config.get("block_size")
