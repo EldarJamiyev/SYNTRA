@@ -334,6 +334,8 @@ def _reconcile_sft_status_metadata(
     refreshed["checkpoint_identity"] = current_identity
     refreshed["status_reconciled_from_checkpoint"] = True
     _atomic_json(metadata_path, refreshed)
+    if _file_stat_identity_record(checkpoint) != current_identity:
+        raise RuntimeError("The checkpoint advanced again while its status metadata was being repaired.")
     return refreshed
 
 
@@ -358,37 +360,37 @@ def status() -> dict:
     except OSError:
         checkpoint_exists = False
 
-    checkpoint_metadata_stale = False
+    checkpoint_metadata_stale: bool | None = None
     checkpoint_metadata_reconciled = False
+    checkpoint_metadata_identity_verified = False
     checkpoint_metadata_warning = None
     saved_identity = metadata.get("checkpoint_identity")
-    if (
-        checkpoint_exists
-        and isinstance(saved_identity, dict)
-        and saved_identity != current_checkpoint_identity
-    ):
-        checkpoint_metadata_stale = True
-        if (
-            metadata.get("training_mode") == "supervised-instruction-finetuning"
-            and metadata.get("finetuning_resume_schema") == "syntra-sft-resume-v1"
-        ):
-            try:
-                metadata = _reconcile_sft_status_metadata(
-                    path,
-                    metadata_path,
-                    metadata,
-                    current_checkpoint_identity,
-                )
-                checkpoint_metadata_stale = False
-                checkpoint_metadata_reconciled = True
-            except Exception as exc:
+    if checkpoint_exists and isinstance(saved_identity, dict):
+        checkpoint_metadata_stale = saved_identity != current_checkpoint_identity
+        checkpoint_metadata_identity_verified = not checkpoint_metadata_stale
+        if checkpoint_metadata_stale:
+            if (
+                metadata.get("training_mode") == "supervised-instruction-finetuning"
+                and metadata.get("finetuning_resume_schema") == "syntra-sft-resume-v1"
+            ):
+                try:
+                    metadata = _reconcile_sft_status_metadata(
+                        path,
+                        metadata_path,
+                        metadata,
+                        current_checkpoint_identity,
+                    )
+                    checkpoint_metadata_stale = False
+                    checkpoint_metadata_reconciled = True
+                    checkpoint_metadata_identity_verified = True
+                except Exception as exc:
+                    checkpoint_metadata_warning = (
+                        "Checkpoint progress metadata is stale and could not be reconciled: " + str(exc)
+                    )
+            else:
                 checkpoint_metadata_warning = (
-                    "Checkpoint progress metadata is stale and could not be reconciled: " + str(exc)
+                    "Checkpoint file identity differs from the metadata identity; progress may be stale."
                 )
-        else:
-            checkpoint_metadata_warning = (
-                "Checkpoint file identity differs from the metadata identity; progress may be stale."
-            )
 
     raw_config = metadata.get("config") or {}
     context_tokens = metadata.get("context_tokens") or raw_config.get("seq_len") or raw_config.get("block_size")
@@ -410,6 +412,7 @@ def status() -> dict:
         "checkpoint_exists": checkpoint_exists,
         "checkpoint_metadata_stale": checkpoint_metadata_stale,
         "checkpoint_metadata_reconciled": checkpoint_metadata_reconciled,
+        "checkpoint_metadata_identity_verified": checkpoint_metadata_identity_verified,
         "checkpoint_metadata_warning": checkpoint_metadata_warning,
         "trained_steps": int(metadata.get("step", 0)),
         "parameter_count": int(metadata.get("parameter_count", 0)),
