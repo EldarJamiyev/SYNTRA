@@ -75,10 +75,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def format_metric(metric: dict[str, Any]) -> str:
     before, after = metric["baseline"], metric["candidate"]
-    if before is None or after is None:
-        values = "unavailable → unavailable"
-    else:
-        values = str(round(before, 4)) + " → " + str(round(after, 4))
+    display = lambda value: "unavailable" if value is None else str(round(value, 4))
+    values = display(before) + " → " + display(after)
     delta = metric["relative_change_percent"]
     change = "n/a" if delta is None else (("+" if delta > 0 else "") + str(delta) + "%")
     return metric["key"] + ": " + values + " | " + change + " | " + metric["direction"]
