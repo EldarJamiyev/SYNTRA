@@ -293,3 +293,17 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [ ] Run a fresh target-hardware raw-checkpoint baseline and compare actual coding-task outcomes before claiming a model-quality improvement.
 
 **Acceptance:** No exact source document or byte-identical copy crosses the training/validation boundary. The tokenizer is fitted only on training content. The split is reproducible, bounded by the configured source budget, independently tested, and explicitly reported. Historical token-offset checkpoints cannot silently resume under the new validation strategy.
+
+
+### Phase 31 — Resumable cosine scheduling in the application trainer
+
+**Objective:** Align the production `syntra_ai` source-pretraining path with the tested global warmup/cosine scheduler used by the standalone native trainer, without changing the optimizer trajectory of existing checkpoints.
+
+- [x] Replace the active trainer’s warmup-then-constant learning rate for new checkpoints with a global-step warmup/cosine schedule, 100 warmup steps, a 10,000-step decay horizon, and an explicit learning-rate floor.
+- [x] Persist scheduler identity and exact schedule/gradient-clipping settings in full and inference checkpoints and expose them through model status.
+- [x] Preserve the pre-existing linear-warmup/constant schedule when resuming checkpoints that predate scheduler metadata.
+- [x] Reject non-finite gradient norms before optimizer updates and record actual pre-clipping gradient norm telemetry.
+- [x] Test scheduler boundaries, invalid settings, checkpoint persistence, global-step resume continuity, and legacy checkpoint compatibility.
+- [ ] Measure schedule variants on the same raw native-model benchmark suite and target hardware before changing the fixed defaults or claiming a quality improvement.
+
+**Acceptance:** A training run resumed across process boundaries computes the same learning rate as one uninterrupted global-step trajectory. Old checkpoints retain their original schedule; new checkpoints carry enough metadata to reject incompatible scheduler changes. Non-finite gradients cannot silently enter the optimizer.

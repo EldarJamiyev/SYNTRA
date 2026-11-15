@@ -6,6 +6,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Callable
 import json
+import math
 import os
 import random
 import tempfile
@@ -25,6 +26,12 @@ from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training_history import append_training_history, validate_training_history
 
 ProgressCallback = Callable[[dict], None]
+LEGACY_SOURCE_TRAINING_SCHEDULER = "linear-warmup-v1"
+SOURCE_TRAINING_SCHEDULER = "global-cosine-warmup-v2"
+SOURCE_SCHEDULER_WARMUP_STEPS = 100
+SOURCE_SCHEDULER_DECAY_STEPS = 10_000
+SOURCE_MINIMUM_LEARNING_RATE = 1e-5
+SOURCE_GRADIENT_CLIP_NORM = 1.0
 SOURCE_VALIDATION_STRATEGY = "sha256-grouped-document-holdout-v1"
 TRAINING_FRACTION = 0.8
 VALIDATION_FRACTION = 0.2
@@ -164,6 +171,62 @@ def _encode_document_partition(
         validation_document_hashes=partition.validation_document_hashes,
         duplicate_documents_excluded=partition.duplicate_documents_excluded,
         token_budget_documents_excluded=partition.token_budget_documents_excluded,
+    )
+
+
+def _scheduled_learning_rate(
+    base_learning_rate: float,
+    global_step: int,
+    minimum_learning_rate: float = SOURCE_MINIMUM_LEARNING_RATE,
+    warmup_steps: int = SOURCE_SCHEDULER_WARMUP_STEPS,
+    decay_steps: int = SOURCE_SCHEDULER_DECAY_STEPS,
+) -> float:
+    """Warm up from the configured floor, then cosine-decay to that floor."""
+    for name, value in (
+        ("base_learning_rate", base_learning_rate),
+        ("minimum_learning_rate", minimum_learning_rate),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(name + " must be a finite positive number.")
+    if minimum_learning_rate > base_learning_rate:
+        raise ValueError("minimum_learning_rate cannot exceed base_learning_rate.")
+    if type(global_step) is not int or global_step < 1:
+        raise ValueError("global_step must be a positive integer.")
+    if type(warmup_steps) is not int or warmup_steps < 1:
+        raise ValueError("warmup_steps must be a positive integer.")
+    if type(decay_steps) is not int or decay_steps <= warmup_steps:
+        raise ValueError("decay_steps must be greater than warmup_steps.")
+    base = float(base_learning_rate)
+    floor = float(minimum_learning_rate)
+    if global_step <= warmup_steps:
+        return floor + (base - floor) * (global_step / warmup_steps)
+    progress = min(
+        (global_step - warmup_steps) / (decay_steps - warmup_steps),
+        1.0,
+    )
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return floor + (base - floor) * cosine
+
+
+def _legacy_scheduled_learning_rate(base_learning_rate: float, global_step: int) -> float:
+    """Preserve the pre-cosine application trainer's linear warmup trajectory."""
+    if (
+        isinstance(base_learning_rate, bool)
+        or not isinstance(base_learning_rate, (int, float))
+        or not math.isfinite(base_learning_rate)
+        or base_learning_rate <= 0
+    ):
+        raise ValueError("base_learning_rate must be a finite positive number.")
+    if type(global_step) is not int or global_step < 1:
+        raise ValueError("global_step must be a positive integer.")
+    return float(base_learning_rate) * min(
+        1.0,
+        global_step / SOURCE_SCHEDULER_WARMUP_STEPS,
     )
 
 
@@ -341,7 +404,8 @@ INFERENCE_CHECKPOINT_FIELDS = (
     "validation_loss", "training_mode", "instruction_examples", "training_history",
     "instruction_dataset_sha256", "instruction_dataset_bytes",
     "training_documents", "validation_documents", "duplicate_documents_excluded",
-    "token_budget_documents_excluded", "validation_strategy",
+    "token_budget_documents_excluded", "validation_strategy", "training_settings",
+    "learning_rate", "gradient_norm_before_clip",
 )
 
 
@@ -424,6 +488,14 @@ def train(
     if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     requested_config = config
+    effective_scheduler = SOURCE_TRAINING_SCHEDULER
+    effective_minimum_learning_rate = min(
+        SOURCE_MINIMUM_LEARNING_RATE,
+        float(learning_rate),
+    )
+    effective_warmup_steps = SOURCE_SCHEDULER_WARMUP_STEPS
+    effective_decay_steps = SOURCE_SCHEDULER_DECAY_STEPS
+    effective_gradient_clip_norm = SOURCE_GRADIENT_CLIP_NORM
     checkpoint_path = Path(checkpoint).expanduser().absolute()
     device = choose_device(device_name)
     random.seed(seed)
@@ -532,6 +604,50 @@ def train(
                 + ", ".join(changed_settings)
                 + ". Use the original settings or start a new checkpoint."
             )
+
+        # Pre-scheduler application checkpoints used a linear 100-step warmup
+        # followed by a constant rate. Preserve that trajectory on resume.
+        saved_scheduler = saved_settings.get(
+            "scheduler",
+            LEGACY_SOURCE_TRAINING_SCHEDULER,
+        )
+        if saved_scheduler == LEGACY_SOURCE_TRAINING_SCHEDULER:
+            effective_scheduler = LEGACY_SOURCE_TRAINING_SCHEDULER
+            effective_minimum_learning_rate = None
+        elif saved_scheduler == SOURCE_TRAINING_SCHEDULER:
+            required_scheduler_settings = {
+                "minimum_learning_rate",
+                "warmup_steps",
+                "decay_steps",
+                "gradient_clip_norm",
+            }
+            if not required_scheduler_settings.issubset(saved_settings):
+                raise ValueError("The cosine-scheduler checkpoint is missing scheduler or gradient-clip settings.")
+            expected_scheduler_settings = {
+                "minimum_learning_rate": effective_minimum_learning_rate,
+                "warmup_steps": effective_warmup_steps,
+                "decay_steps": effective_decay_steps,
+                "gradient_clip_norm": effective_gradient_clip_norm,
+            }
+            changed_scheduler_settings = [
+                name
+                for name, expected in expected_scheduler_settings.items()
+                if (
+                    type(saved_settings.get(name)) not in (int, float)
+                    or isinstance(saved_settings.get(name), bool)
+                    or saved_settings.get(name) != expected
+                )
+            ]
+            if changed_scheduler_settings:
+                raise ValueError(
+                    "Training resume settings differ from the checkpoint: "
+                    + ", ".join(changed_scheduler_settings)
+                    + ". Use the original settings or start a new checkpoint."
+                )
+            effective_scheduler = SOURCE_TRAINING_SCHEDULER
+        else:
+            raise ValueError("Checkpoint contains an unsupported source-training scheduler; start a new run.")
+
     train_data = torch.tensor(document_split.training_tokens, dtype=torch.long)
     val_data = torch.tensor(document_split.validation_tokens, dtype=torch.long)
     start_step = 0
@@ -546,6 +662,8 @@ def train(
     started = monotonic()
     last_train_loss = None
     last_val_loss = None
+    last_learning_rate = None
+    last_gradient_norm = None
 
     def report(status: str, step: int, message: str = ""):
         current = {
@@ -554,6 +672,11 @@ def train(
             "max_steps": start_step + steps,
             "train_loss": last_train_loss,
             "validation_loss": last_val_loss,
+            "learning_rate": last_learning_rate,
+            "training_scheduler": effective_scheduler,
+            "minimum_learning_rate": effective_minimum_learning_rate,
+            "gradient_clip_norm": effective_gradient_clip_norm,
+            "gradient_norm_before_clip": last_gradient_norm,
             "device": str(device),
             "elapsed_seconds": round(monotonic() - started, 2),
             "message": message,
@@ -583,16 +706,32 @@ def train(
     )
     model.train()
     for step in range(start_step + 1, start_step + steps + 1):
-        learning_rate_now = learning_rate * min(1.0, step / 100.0)
+        if effective_scheduler == SOURCE_TRAINING_SCHEDULER:
+            learning_rate_now = _scheduled_learning_rate(
+                learning_rate,
+                step,
+                minimum_learning_rate=effective_minimum_learning_rate,
+                warmup_steps=effective_warmup_steps,
+                decay_steps=effective_decay_steps,
+            )
+        else:
+            learning_rate_now = _legacy_scheduled_learning_rate(learning_rate, step)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate_now
+        last_learning_rate = learning_rate_now
         x, y = _batch(train_data, batch_size, config.seq_len, device)
         optimizer.zero_grad(set_to_none=True)
         _, loss = model(x, y)
         if loss is None or not torch.isfinite(loss):
             raise RuntimeError("Training loss became non-finite.")
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            effective_gradient_clip_norm,
+        )
+        if not torch.isfinite(gradient_norm).item():
+            raise RuntimeError("Gradient norm became non-finite before clipping.")
+        last_gradient_norm = float(gradient_norm.item())
         optimizer.step()
         last_train_loss = float(loss.item())
 
@@ -623,11 +762,18 @@ def train(
                 "validation_strategy": SOURCE_VALIDATION_STRATEGY,
                 "training_data_sha256": training_data_sha256,
                 "requested_config": requested_config_payload or config.to_dict(),
+                "learning_rate": last_learning_rate,
+                "gradient_norm_before_clip": last_gradient_norm,
                 "training_settings": {
                     "batch_size": batch_size,
                     "learning_rate": learning_rate,
                     "seed": seed,
                     "max_tokens": max_tokens,
+                    "scheduler": effective_scheduler,
+                    "minimum_learning_rate": effective_minimum_learning_rate,
+                    "warmup_steps": effective_warmup_steps,
+                    "decay_steps": effective_decay_steps,
+                    "gradient_clip_norm": effective_gradient_clip_norm,
                 },
                 "rng_state": _rng_state(device),
                 "train_loss": last_train_loss,
@@ -644,6 +790,13 @@ def train(
                 "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
                 "train_loss": last_train_loss,
                 "validation_loss": last_val_loss,
+                "learning_rate": last_learning_rate,
+                "training_scheduler": effective_scheduler,
+                "minimum_learning_rate": effective_minimum_learning_rate,
+                "warmup_steps": effective_warmup_steps,
+                "decay_steps": effective_decay_steps,
+                "gradient_clip_norm": effective_gradient_clip_norm,
+                "gradient_norm_before_clip": last_gradient_norm,
                 "corpus_files": len(corpus.files),
                 "corpus_tokens": corpus_tokens,
                 "training_documents": len(document_split.training_document_hashes),
