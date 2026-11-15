@@ -216,7 +216,7 @@ class FineTuningResumeIntegrationTests(unittest.TestCase):
                         dropout=0.0,
                     ),
                     learning_rate=3e-4,
-                    max_tokens=4096,
+                    max_tokens=20_000,
                     device_name="cpu",
                     seed=41,
                 )
@@ -359,7 +359,7 @@ class FineTuningResumeIntegrationTests(unittest.TestCase):
                         n_embd=32,
                         dropout=0.0,
                     ),
-                    max_tokens=4096,
+                    max_tokens=20_000,
                     device_name="cpu",
                     seed=53,
                 )
