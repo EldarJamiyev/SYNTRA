@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -475,6 +476,99 @@ class RawModelReportComparisonTests(unittest.TestCase):
         self.assertEqual(regression["direction"], "incomparable")
         self.assertEqual(throughput["direction"], "incomparable")
         self.assertEqual(latency["direction"], "incomparable")
+
+
+    def test_raw_benchmark_compare_cli_compares_content_addressed_reports(self):
+        hardware = self._hardware()
+        baseline = self._report(
+            run_id="baseline-cli",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=False,
+            total_ms=120,
+            generation_ms=60,
+            generated_tokens=12,
+            hardware=hardware,
+        )
+        candidate = self._report(
+            run_id="candidate-cli",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=15,
+            hardware=copy.deepcopy(hardware),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-benchmark-compare-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+                    "--baseline", str(baseline_path),
+                    "--candidate", str(candidate_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Quality outcome: improved", result.stdout)
+        self.assertIn("Hardware-controlled performance: yes", result.stdout)
+        self.assertIn("task_completion_rate", result.stdout)
+
+    def test_raw_benchmark_compare_cli_rejects_protocol_mismatch(self):
+        baseline = self._report(
+            run_id="baseline-protocol",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=self._hardware(),
+        )
+        candidate = self._report(
+            run_id="candidate-protocol",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=90,
+            generation_ms=45,
+            generated_tokens=12,
+            hardware=self._hardware(),
+        )
+        candidate["evaluation_protocol"]["sha256"] = "d" * 64
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-benchmark-invalid-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+                    "--baseline", str(baseline_path),
+                    "--candidate", str(candidate_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("different evaluation protocols", result.stderr)
 
 
 class RawModelBenchmarkTests(unittest.TestCase):
