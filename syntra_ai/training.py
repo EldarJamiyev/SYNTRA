@@ -462,7 +462,7 @@ def train(
         config = stored_config
         config.validate()
         validate_training_memory_budget(config, batch_size, device)
-        corpus = load_corpus(roots, max_tokens=max_tokens)
+        corpus = load_corpus(roots, max_tokens=max_tokens, include_tokens=False)
         document_partition = _partition_source_documents(corpus.documents, max_tokens=max_tokens)
         tokenizer = ByteBPETokenizer.from_dict(saved.get("tokenizer"))
         if tokenizer.vocab_size != config.vocab_size:
@@ -475,7 +475,7 @@ def train(
         config.validate()
         requested_config_payload = config.to_dict()
         validate_training_memory_budget(config, batch_size, device)
-        corpus = load_corpus(roots, max_tokens=max_tokens)
+        corpus = load_corpus(roots, max_tokens=max_tokens, include_tokens=False)
         document_partition = _partition_source_documents(corpus.documents, max_tokens=max_tokens)
         # The validation documents must not influence the learned BPE vocabulary.
         tokenizer = ByteBPETokenizer.train(
