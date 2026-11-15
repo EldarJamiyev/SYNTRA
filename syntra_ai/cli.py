@@ -143,8 +143,14 @@ def _parser() -> argparse.ArgumentParser:
     fine.add_argument("--dataset", required=True, help="Absolute path to a JSONL prompt/completion dataset.")
     fine.add_argument("--steps", type=int, default=1000)
     fine.add_argument("--batch-size", type=int, default=4)
+    fine.add_argument("--gradient-accumulation-steps", type=int, default=1)
     fine.add_argument("--learning-rate", type=float, default=1e-4)
     fine.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
+    fine.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an interrupted SFT stage using the same dataset and all original settings.",
+    )
 
     sub.add_parser("status", help="Report actual local checkpoint and training metrics.")
     evaluation = sub.add_parser("evaluate", help="Run a fresh sampled loss evaluation on a local corpus.")
@@ -218,9 +224,11 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint=checkpoint,
             steps=args.steps,
             batch_size=args.batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
             device_name=args.device,
             callback=lambda item: print(json.dumps(item), flush=True),
+            resume=args.resume,
         )
         print(json.dumps(result, indent=2))
         return 0
