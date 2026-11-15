@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -168,6 +169,12 @@ class NativeTrainingSchedulerCheckpointTests(unittest.TestCase):
                 self.assertEqual(model_status["training_scheduler"], SOURCE_TRAINING_SCHEDULER)
                 self.assertEqual(model_status["learning_rate"], first["learning_rate"])
                 self.assertEqual(model_status["gradient_clip_norm"], SOURCE_GRADIENT_CLIP_NORM)
+                self.assertTrue(model_status["checkpoint_metadata_identity_verified"])
+                metadata = json.loads(
+                    checkpoint.with_suffix(checkpoint.suffix + ".json").read_text(encoding="utf-8")
+                )
+                from syntra_ai.runtime import _file_stat_identity_record
+                self.assertEqual(metadata["checkpoint_identity"], _file_stat_identity_record(checkpoint))
 
                 resumed = train(
                     roots=[str(root)],
