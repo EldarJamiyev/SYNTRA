@@ -47,10 +47,22 @@ class NativeTrainingSchedulerTests(unittest.TestCase):
         self.assertLess(midpoint, first_decay)
         self.assertAlmostEqual(decay_end, floor)
         self.assertAlmostEqual(after_end, floor)
+        uninterrupted = [
+            _scheduled_learning_rate(base, step, floor, warmup_steps, decay_steps)
+            for step in range(1, 201)
+        ]
+        split_before_restart = [
+            _scheduled_learning_rate(base, step, floor, warmup_steps, decay_steps)
+            for step in range(1, 101)
+        ]
+        split_after_restart = [
+            _scheduled_learning_rate(base, step, floor, warmup_steps, decay_steps)
+            for step in range(101, 201)
+        ]
         self.assertEqual(
-            _scheduled_learning_rate(base, 101, floor, warmup_steps, decay_steps),
-            _scheduled_learning_rate(base, 101, floor, warmup_steps, decay_steps),
-            "a resumed process must calculate the same rate from the persisted global step",
+            uninterrupted,
+            split_before_restart + split_after_restart,
+            "segmenting training at a process boundary must not restart the global schedule",
         )
 
     def test_cosine_scheduler_rejects_invalid_or_incompatible_settings(self):
