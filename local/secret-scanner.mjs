@@ -482,6 +482,13 @@ export async function scanWorkspaceSecrets(inputRoot) {
   }
 
   const staleAllowlistEntries = allowlist.entries.length - usedAllowlistEntries.size;
+  const allowlistEntryDetails = allowlist.entries.map(entry => ({
+    path: entry.path,
+    sha256: entry.sha256,
+    ruleTypes: [...entry.ruleTypes],
+    expiresAt: entry.expiresAt,
+    applied: usedAllowlistEntries.has(entry.path + "\0" + entry.sha256)
+  }));
   return {
     root,
     scannedFiles,
@@ -498,6 +505,7 @@ export async function scanWorkspaceSecrets(inputRoot) {
     allowlistEntries: allowlist.entries.length + allowlist.expiredEntries,
     allowlistExpiredEntries: allowlist.expiredEntries,
     staleAllowlistEntries,
+    allowlistEntryDetails,
     allowlistedFiles,
     allowlistedFindings,
     allowlistedTypeCounts,
