@@ -1,6 +1,6 @@
 """Neural training loop with corpus-trained BPE tokenization and local checkpoints."""
 from __future__ import annotations
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from time import monotonic
@@ -25,6 +25,146 @@ from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training_history import append_training_history, validate_training_history
 
 ProgressCallback = Callable[[dict], None]
+SOURCE_VALIDATION_STRATEGY = "sha256-grouped-document-holdout-v1"
+TRAINING_FRACTION = 0.8
+VALIDATION_FRACTION = 0.2
+
+
+@dataclass(frozen=True)
+class DocumentPartition:
+    """Deterministic, whole-document train/validation membership."""
+
+    training_documents: tuple[str, ...]
+    validation_documents: tuple[str, ...]
+    training_document_hashes: tuple[str, ...]
+    validation_document_hashes: tuple[str, ...]
+    duplicate_documents_excluded: int
+    token_budget_documents_excluded: int
+
+
+@dataclass(frozen=True)
+class DocumentTokenSplit:
+    """Encoded whole-document token streams for causal training and validation."""
+
+    training_tokens: list[int]
+    validation_tokens: list[int]
+    training_document_hashes: tuple[str, ...]
+    validation_document_hashes: tuple[str, ...]
+    duplicate_documents_excluded: int
+    token_budget_documents_excluded: int
+
+
+def _partition_source_documents(
+    documents: list[str],
+    *,
+    max_tokens: int,
+) -> DocumentPartition:
+    """Deduplicate and deterministically assign complete documents to 80/20 splits.
+
+    UTF-8 byte length is a conservative token-budget bound for the byte-BPE
+    tokenizer. The tokenizer is learned only from the training partition.
+    """
+    if type(max_tokens) is not int or max_tokens < 4:
+        raise ValueError("max_tokens must be an integer of at least four.")
+
+    unique: dict[str, str] = {}
+    duplicate_count = 0
+    for document in documents:
+        if not isinstance(document, str):
+            raise ValueError("Every source document must be valid UTF-8 text.")
+        raw = document.encode("utf-8")
+        if not raw.strip():
+            continue
+        digest = sha256(raw).hexdigest()
+        if digest in unique:
+            duplicate_count += 1
+        else:
+            unique[digest] = document
+
+    selected: list[tuple[str, str, int]] = []
+    used_bytes = 0
+    budget_excluded = 0
+    for digest in sorted(unique):
+        document = unique[digest]
+        byte_length = len(document.encode("utf-8"))
+        cost = byte_length + 2  # BOS and EOS.
+        if cost > max_tokens - used_bytes:
+            budget_excluded += 1
+            continue
+        selected.append((digest, document, byte_length))
+        used_bytes += cost
+
+    if len(selected) < 2:
+        raise ValueError(
+            "Document-isolated validation requires at least two independent source documents "
+            "after exact-content deduplication and the configured token budget."
+        )
+
+    # Largest documents are placed first; hashes make all ties deterministic.
+    ordered = sorted(selected, key=lambda item: (-item[2], item[0]))
+    training: list[tuple[str, str, int]] = [ordered[0]]
+    validation: list[tuple[str, str, int]] = []
+    training_weight = ordered[0][2] + 2
+    validation_weight = 0
+
+    for item in ordered[1:]:
+        digest, document, byte_length = item
+        weight = byte_length + 2
+        training_fill = training_weight / TRAINING_FRACTION
+        validation_fill = validation_weight / VALIDATION_FRACTION
+        if validation_fill <= training_fill:
+            validation.append((digest, document, byte_length))
+            validation_weight += weight
+        else:
+            training.append((digest, document, byte_length))
+            training_weight += weight
+
+    training.sort(key=lambda item: item[0])
+    validation.sort(key=lambda item: item[0])
+    return DocumentPartition(
+        training_documents=tuple(item[1] for item in training),
+        validation_documents=tuple(item[1] for item in validation),
+        training_document_hashes=tuple(item[0] for item in training),
+        validation_document_hashes=tuple(item[0] for item in validation),
+        duplicate_documents_excluded=duplicate_count,
+        token_budget_documents_excluded=budget_excluded,
+    )
+
+
+def _encode_document_partition(
+    partition: DocumentPartition,
+    tokenizer: ByteBPETokenizer,
+    *,
+    max_tokens: int,
+    seq_len: int,
+) -> DocumentTokenSplit:
+    """Encode the already separated documents without truncating any document."""
+    def encode(documents: tuple[str, ...]) -> list[int]:
+        output: list[int] = []
+        for document in documents:
+            encoded = [BOS_ID, *tokenizer.encode(document), EOS_ID]
+            if len(output) + len(encoded) > max_tokens:
+                raise RuntimeError("Encoded document tokens exceeded the validated raw-byte token budget.")
+            output.extend(encoded)
+        return output
+
+    training_tokens = encode(partition.training_documents)
+    validation_tokens = encode(partition.validation_documents)
+    if len(training_tokens) <= seq_len + 1 or len(validation_tokens) <= seq_len + 1:
+        raise ValueError(
+            "Document-isolated validation does not contain enough independent tokens for the configured context. "
+            f"Training: {len(training_tokens)} tokens across {len(partition.training_documents)} documents; "
+            f"validation: {len(validation_tokens)} tokens across {len(partition.validation_documents)} documents; "
+            f"context: {seq_len}. Add independent source files or reduce the context length."
+        )
+    return DocumentTokenSplit(
+        training_tokens=training_tokens,
+        validation_tokens=validation_tokens,
+        training_document_hashes=partition.training_document_hashes,
+        validation_document_hashes=partition.validation_document_hashes,
+        duplicate_documents_excluded=partition.duplicate_documents_excluded,
+        token_budget_documents_excluded=partition.token_budget_documents_excluded,
+    )
 
 
 def choose_device(requested: str = "auto") -> torch.device:
@@ -45,7 +185,8 @@ def choose_device(requested: str = "auto") -> torch.device:
 def _training_data_fingerprint(corpus, max_tokens: int, config: ModelConfig, tokenizer: ByteBPETokenizer) -> str:
     """Bind a training checkpoint to the exact selected corpus, limits, config and tokenizer."""
     payload = {
-        "schema": "syntra-causal-source-corpus-v1",
+        "schema": "syntra-document-heldout-source-corpus-v2",
+        "validation_strategy": SOURCE_VALIDATION_STRATEGY,
         "source_sha256": corpus.source_sha256,
         "max_tokens": max_tokens,
         "config": config.to_dict(),
@@ -198,7 +339,9 @@ INFERENCE_CHECKPOINT_FIELDS = (
     "format", "config", "tokenizer", "model_state", "step", "created_by",
     "device_at_training", "corpus_files", "corpus_tokens", "train_loss",
     "validation_loss", "training_mode", "instruction_examples", "training_history",
-    "instruction_dataset_sha256", "instruction_dataset_bytes"
+    "instruction_dataset_sha256", "instruction_dataset_bytes",
+    "training_documents", "validation_documents", "duplicate_documents_excluded",
+    "token_budget_documents_excluded", "validation_strategy",
 )
 
 
