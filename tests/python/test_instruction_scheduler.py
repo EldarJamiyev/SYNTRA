@@ -19,10 +19,10 @@ class InstructionFineTuningSchedulerTests(unittest.TestCase):
                 self.assertEqual(settings["steps"], steps)
                 self.assertEqual(settings["warmup_steps"], expected_warmup)
                 self.assertEqual(settings["decay_steps"], expected_decay)
-                self.assertEqual(settings["scheduler"], "stage-cosine-warmup-v1")
+                self.assertEqual(settings["scheduler"], "stage-cosine-warmup-v2")
                 self.assertEqual(
                     settings["optimizer_scope"],
-                    "fresh-per-finetune-invocation",
+                    "resumable-stage",
                 )
 
                 first_rate = _scheduled_learning_rate(
