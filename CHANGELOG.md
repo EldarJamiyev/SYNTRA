@@ -5,6 +5,7 @@ All notable user-facing changes will be documented here.
 ## Unreleased
 
 ### Added
+- Expand workspace secret scanning patterns and add approved, time-limited, file-SHA-256-bound detector exceptions with explicit revoke commands and audit redaction.
 - A real browser-based React UI screenshot capture in CI and a visual architecture overview.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
