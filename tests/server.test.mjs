@@ -239,6 +239,8 @@ test("local API health, origin protections, and chat validation work over HTTP",
     assert.ok((helpStatus?.reply || "").includes("/dns example.com"));
     assert.ok((helpStatus?.reply || "").includes("/proposals"));
     assert.ok((helpStatus?.reply || "").includes("/discard"));
+    assert.ok((helpStatus?.reply || "").includes("/secrets allow"));
+    assert.ok((helpStatus?.reply || "").includes("/secrets unallow"));
 
     const naturalHelpResponse = await apiFetch(base + "/local-api/chat", {
       method: "POST",
