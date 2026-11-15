@@ -824,6 +824,7 @@ def finetune(
     if not checkpoint_path_value.is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
+    resume_supported = device.type in {"cpu", "cuda"}
     # Resume must load the full training checkpoint, never the model-only
     # inference companion. The snapshot loader validates and deserializes the
     # same bounded bytes to avoid checkpoint-path replacement races.
@@ -909,7 +910,7 @@ def finetune(
             "validation_loss": last_val_loss,
             "learning_rate": last_learning_rate,
             "finetuning_settings": finetuning_settings,
-            "finetuning_resume_supported": True,
+            "finetuning_resume_supported": resume_supported,
             "finetuning_resume": resume,
             "finetuning_stage_base_step": stage_base_step,
             "finetuning_stage_steps": max(stage_start_step, step - stage_base_step),
@@ -1053,6 +1054,7 @@ def finetune(
             "finetuning_stage_steps": stage_step,
             "finetuning_stage_target_steps": steps,
             "finetuning_validation_stage_step": last_validation_stage_step,
+            "finetuning_resume_supported": resume_supported,
             "finetuning_learning_rate": last_learning_rate,
             "finetuning_gradient_norm_before_clip": last_gradient_norm,
             "finetuning_rng_state": _rng_state(device),
@@ -1089,7 +1091,7 @@ def finetune(
             "finetuning_stage_steps": stage_step,
             "finetuning_stage_target_steps": steps,
             "finetuning_validation_stage_step": last_validation_stage_step,
-            "finetuning_resume_supported": True,
+            "finetuning_resume_supported": resume_supported,
             "finetuning_learning_rate": last_learning_rate,
             "finetuning_gradient_norm_before_clip": last_gradient_norm,
             "instruction_examples": dataset_quality["example_count"],
