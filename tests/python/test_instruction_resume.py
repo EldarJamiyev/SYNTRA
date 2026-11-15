@@ -35,6 +35,7 @@ class FineTuningResumeValidationTests(unittest.TestCase):
         saved = {
             "training_mode": "supervised-instruction-finetuning",
             "finetuning_resume_schema": SFT_RESUME_SCHEMA,
+            "finetuning_resume_supported": True,
             "finetuning_settings": settings,
             "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
             "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
