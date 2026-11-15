@@ -320,6 +320,7 @@ def status() -> dict:
         "finetuning_stage_steps": metadata.get("finetuning_stage_steps"),
         "finetuning_stage_target_steps": metadata.get("finetuning_stage_target_steps"),
         "finetuning_validation_stage_step": metadata.get("finetuning_validation_stage_step"),
+        "finetuning_remaining_steps": metadata.get("finetuning_remaining_steps"),
         "finetuning_resume_supported": metadata.get("finetuning_resume_supported"),
         "training_history": training_history,
         "training_history_points": len(training_history),
