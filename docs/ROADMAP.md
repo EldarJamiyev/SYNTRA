@@ -316,8 +316,23 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Derive a deterministic per-stage warmup from the requested optimizer-step budget (10%, capped at 100 steps) and decay to the configured floor at the stage boundary.
 - [x] Use the same validated native scheduler implementation as source pretraining without coupling SFT steps to the source-pretraining global step.
 - [x] Persist the exact SFT schedule, stage step, current learning rate, clipping threshold, and measured pre-clipping gradient norm in full/inference checkpoints and model status.
-- [x] Keep each fine-tuning invocation's fresh AdamW optimizer lifecycle explicit in checkpoint metadata; do not claim optimizer-state resume between invocations.
+- [x] Keep new SFT stages distinct while making each stage's AdamW optimizer state resumable across an interrupted invocation.
 - [x] Add schedule-boundary and invalid-configuration tests plus a real SFT checkpoint/status integration assertion.
-- [ ] Implement explicit dataset-bound SFT optimizer/RNG resume only as a separate feature with an operator-visible resume contract and mismatch rejection.
+- [x] Implement explicit dataset-bound SFT optimizer/RNG resume with an operator-visible resume contract and mismatch rejection.
 
 **Acceptance:** The SFT learning rate follows the requested stage's optimizer-step budget, prompt-mask/response-only loss and gradient accumulation remain unchanged, and checkpoint/status records distinguish stage-scoped scheduling from resumable source pretraining.
+
+
+### Phase 33 — Resumable supervised fine-tuning checkpoints
+
+**Objective:** Make an interrupted instruction fine-tuning stage recoverable without silently resetting AdamW, scheduler position, or random sampling state.
+
+- [x] Add an explicit `resume` argument to the native trainer, CLI, and local API; preserve fresh-optimizer behavior when starting a new stage.
+- [x] Load the full training checkpoint through the bounded snapshot loader for resume; never use the inference-only companion as a source of optimizer state.
+- [x] Bind resume to the exact instruction-dataset SHA-256 and byte count, original target step count, learning rate, batch size, gradient accumulation, weight decay, schedule, device type, and CUDA device count.
+- [x] Restore AdamW and CPU/CUDA RNG state, keep the original stage-relative cosine schedule, and reject missing/legacy/incompatible state or completed stages.
+- [x] Atomically persist model, optimizer, scheduler position, dataset identity, and RNG state after every optimizer update; refresh inference snapshots at validation points.
+- [x] Add CPU interrupted-versus-uninterrupted weight/optimizer equivalence coverage, mismatch rejection tests, and API/CLI contract tests.
+- [x] Document the total-target `steps` semantics, CPU/CUDA resume scope, and MPS limitation.
+
+**Acceptance:** An interrupted CPU SFT stage resumes from its last committed optimizer update and reaches the same model/optimizer state as an uninterrupted run. Changed data/settings, incomplete state, unsupported devices, or a completed stage must fail explicitly instead of silently starting over.

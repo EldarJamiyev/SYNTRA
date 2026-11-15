@@ -153,10 +153,6 @@ class LocalApiSmokeTests(unittest.TestCase):
                     os.environ["SYNTRA_CHECKPOINT"] = old_checkpoint
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class NativeApiPathBoundaryTests(unittest.TestCase):
     def test_training_and_finetuning_reject_unapproved_absolute_paths(self):
         from syntra_ai.server import start_finetuning, start_training
@@ -177,6 +173,55 @@ class NativeApiPathBoundaryTests(unittest.TestCase):
             else:
                 os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = previous
 
+
+class FineTuningApiResumeContractTests(unittest.TestCase):
+    def test_resume_is_boolean_and_worker_receives_resolved_dataset_path(self):
+        from unittest.mock import patch
+        from syntra_ai import server
+
+        with tempfile.TemporaryDirectory(prefix="syntra-finetune-api-") as temp:
+            resolved_dataset = Path(temp) / "canonical-instructions.jsonl"
+            resolved_dataset.write_text('{"prompt":"p","completion":"c"}\n', encoding="utf-8")
+
+            with patch.object(server, "resolve_instruction_dataset", return_value=resolved_dataset):
+                with patch.object(server, "_worker", None):
+                    with self.assertRaisesRegex(ValueError, "resume must be a boolean"):
+                        server.start_finetuning({
+                            "dataset": str(resolved_dataset),
+                            "resume": "true",
+                        })
+
+                with patch.object(server, "_worker", None):
+                    with patch.object(server, "Thread") as worker:
+                        started = server.start_finetuning({
+                            "dataset": "untrusted-input-path.jsonl",
+                            "resume": True,
+                            "gradient_accumulation_steps": 2,
+                        })
+                        worker_body = worker.call_args.kwargs["args"][0]
+
+            self.assertEqual(started["status"], "starting")
+            self.assertEqual(worker_body["dataset"], str(resolved_dataset))
+            self.assertTrue(worker_body["resume"])
+            self.assertEqual(worker_body["gradient_accumulation_steps"], 2)
+
+
+class FineTuningCliResumeContractTests(unittest.TestCase):
+    def test_finetune_cli_exposes_explicit_resume_and_accumulation_settings(self):
+        from syntra_ai.cli import _parser
+
+        args = _parser().parse_args([
+            "finetune",
+            "--dataset", "instructions.jsonl",
+            "--steps", "100",
+            "--batch-size", "2",
+            "--gradient-accumulation-steps", "3",
+            "--resume",
+        ])
+        self.assertEqual(args.command, "finetune")
+        self.assertTrue(args.resume)
+        self.assertEqual(args.gradient_accumulation_steps, 3)
+        self.assertEqual(args.steps, 100)
 
 if __name__ == "__main__":
     unittest.main()

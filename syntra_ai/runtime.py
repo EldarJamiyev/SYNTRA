@@ -142,7 +142,11 @@ def _normalize_checkpoint_payload(payload: dict) -> dict:
     raise ValueError("The selected file is not a SYNTRA Transformer checkpoint.")
 
 
-def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelConfig, ByteBPETokenizer]:
+def _read_checkpoint(
+    path: str | Path | None = None,
+    *,
+    validate_tokenizer_vocab: bool = True,
+) -> tuple[Path, dict, ModelConfig, ByteBPETokenizer]:
     target = Path(path).expanduser().absolute() if path else checkpoint_path()
     if not target.is_file():
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
@@ -153,7 +157,7 @@ def _read_checkpoint(path: str | Path | None = None) -> tuple[Path, dict, ModelC
         payload = _normalize_checkpoint_payload(raw_payload)
         config = ModelConfig.from_dict(payload["config"])
         tokenizer = ByteBPETokenizer.from_dict(payload.get("tokenizer"))
-        if tokenizer.vocab_size != config.vocab_size:
+        if validate_tokenizer_vocab and tokenizer.vocab_size != config.vocab_size:
             raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
         return payload, config, tokenizer
 
@@ -314,7 +318,14 @@ def status() -> dict:
         "finetuning_settings": metadata.get("finetuning_settings"),
         "finetuning_learning_rate": metadata.get("finetuning_learning_rate"),
         "finetuning_gradient_norm_before_clip": metadata.get("finetuning_gradient_norm_before_clip"),
+        "finetuning_resume_schema": metadata.get("finetuning_resume_schema"),
+        "finetuning_optimizer_scope": metadata.get("finetuning_optimizer_scope"),
+        "finetuning_stage_base_step": metadata.get("finetuning_stage_base_step"),
         "finetuning_stage_steps": metadata.get("finetuning_stage_steps"),
+        "finetuning_stage_target_steps": metadata.get("finetuning_stage_target_steps"),
+        "finetuning_validation_stage_step": metadata.get("finetuning_validation_stage_step"),
+        "finetuning_remaining_steps": metadata.get("finetuning_remaining_steps"),
+        "finetuning_resume_supported": metadata.get("finetuning_resume_supported"),
         "training_history": training_history,
         "training_history_points": len(training_history),
         "training_history_valid": history_error is None,
