@@ -26,7 +26,7 @@ const SECRET_RULES = [
   { type: "google_api_key", severity: "high", expression: /\bAIza[0-9A-Za-z_-]{35}\b/ },
   { type: "google_oauth_client_secret", severity: "high", expression: /\bGOCSPX-[A-Za-z0-9_-]{20,}\b/ },
   { type: "stripe_live_secret", severity: "critical", expression: /\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b/ },
-  { type: "openai_api_key", severity: "high", expression: /\bsk-(?:proj-)?[A-Za-z0-9_-]{24,}\b/ },
+  { type: "openai_api_key", severity: "high", expression: /\bsk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{24,}\b/ },
   { type: "anthropic_api_key", severity: "high", expression: /\bsk-ant-(?:api\d{2}-)?[A-Za-z0-9_-]{24,}\b/ },
   { type: "huggingface_token", severity: "high", expression: /\bhf_[A-Za-z0-9]{30,}\b/ },
   { type: "aws_access_key_id", severity: "medium", expression: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/ },
