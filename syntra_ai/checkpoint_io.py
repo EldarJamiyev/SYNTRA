@@ -43,6 +43,24 @@ def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
+def checkpoint_file_identity(path: str | os.PathLike[str]) -> dict[str, int]:
+    """Return a no-follow identity record for one regular checkpoint file."""
+    source = _preserve_final_path(path)
+    try:
+        info = os.stat(source, follow_symlinks=False)
+    except OSError:
+        raise
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("Checkpoint path must identify a regular file.")
+    return {
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "size": info.st_size,
+        "mtime_ns": info.st_mtime_ns,
+        "ctime_ns": info.st_ctime_ns,
+    }
+
+
 def load_torch_checkpoint_snapshot(
     path: str | os.PathLike[str],
     *,
@@ -133,4 +151,4 @@ def load_torch_checkpoint_snapshot(
     return payload
 
 
-__all__ = ["MAX_CHECKPOINT_BYTES", "load_torch_checkpoint_snapshot"]
+__all__ = ["MAX_CHECKPOINT_BYTES", "checkpoint_file_identity", "load_torch_checkpoint_snapshot"]
