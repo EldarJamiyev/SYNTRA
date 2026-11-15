@@ -140,10 +140,14 @@ class NativeTrainingSchedulerCheckpointTests(unittest.TestCase):
                 "SYNTRA_CHECKPOINT": str(checkpoint),
             }
             initial_status = {}
+            initial_metadata_snapshot = {}
 
             def inspect_initial_progress(progress):
                 if progress.get("status") == "running" and progress.get("step") == 0:
                     initial_status.update(status())
+                    initial_metadata_snapshot.update(json.loads(
+                        checkpoint.with_suffix(checkpoint.suffix + ".json").read_text(encoding="utf-8")
+                    ))
 
             with patch.dict(os.environ, environment):
                 first = train(
@@ -164,12 +168,9 @@ class NativeTrainingSchedulerCheckpointTests(unittest.TestCase):
                 self.assertEqual(initial_status["trained_steps"], 0)
                 self.assertFalse(initial_status["checkpoint_exists"])
                 self.assertEqual(initial_status["training_mode"], "causal-source-pretraining")
-                initial_metadata = json.loads(
-                    checkpoint.with_suffix(checkpoint.suffix + ".json").read_text(encoding="utf-8")
-                )
-                self.assertEqual(initial_metadata["step"], 0)
-                self.assertEqual(initial_metadata["training_mode"], "causal-source-pretraining")
-                self.assertNotIn("checkpoint_identity", initial_metadata)
+                self.assertEqual(initial_metadata_snapshot["step"], 0)
+                self.assertEqual(initial_metadata_snapshot["training_mode"], "causal-source-pretraining")
+                self.assertNotIn("checkpoint_identity", initial_metadata_snapshot)
 
                 self.assertEqual(first["status"], "completed")
                 self.assertEqual(first["training_scheduler"], SOURCE_TRAINING_SCHEDULER)
