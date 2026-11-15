@@ -410,7 +410,7 @@ INFERENCE_CHECKPOINT_FIELDS = (
     "finetuning_stage_steps", "finetuning_resume_schema",
     "finetuning_optimizer_scope", "finetuning_stage_base_step",
     "finetuning_stage_target_steps", "finetuning_validation_stage_step",
-    "finetuning_resume_supported",
+    "finetuning_remaining_steps", "finetuning_resume_supported",
 )
 
 
