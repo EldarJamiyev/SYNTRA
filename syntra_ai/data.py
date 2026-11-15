@@ -153,6 +153,7 @@ def load_corpus(
     documents: list[str] = []
     digest = sha256()
     seen: set[str] = set()
+    seen_content: set[str] = set()
     if max_files < 1 or max_files > MAX_CORPUS_FILES:
         raise ValueError(f"max_files must be between 1 and {MAX_CORPUS_FILES:,}.")
     if max_file_bytes < 1 or max_file_bytes > MAX_CORPUS_FILE_BYTES:
@@ -244,24 +245,29 @@ def load_corpus(
                 normalized_key = os.path.normcase(resolved)
                 if normalized_key in seen:
                     continue
+                content_hash = sha256(raw).hexdigest()
+                duplicate_content = content_hash in seen_content
                 remaining = max_tokens - token_count
                 added_tokens = len(raw) + 2
                 # A source document is atomic for both training and validation.
-                # Never append a truncated file to the token stream or documents list.
-                if added_tokens > remaining:
+                # Exact copies remain visible for provenance, but consume no
+                # additional corpus-token budget and are removed before training.
+                if not duplicate_content and added_tokens > remaining:
                     skipped += 1
                     continue
                 seen.add(normalized_key)
+                seen_content.add(content_hash)
                 path_bytes = normalized_key.encode("utf-8")
                 digest.update(len(path_bytes).to_bytes(8, "big"))
                 digest.update(path_bytes)
                 digest.update(len(raw).to_bytes(8, "big"))
                 digest.update(raw)
-                if include_tokens:
+                if include_tokens and not duplicate_content:
                     tokens.append(BOS_ID)
                     tokens.extend(raw)
                     tokens.append(EOS_ID)
-                token_count += added_tokens
+                if not duplicate_content:
+                    token_count += added_tokens
                 files.append(resolved)
                 documents.append(text)
                 total_bytes += len(raw)
