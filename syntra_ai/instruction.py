@@ -56,6 +56,8 @@ SFT_STAGE_COSINE_SCHEDULER = "stage-cosine-warmup-v2"
 SFT_STAGE_WARMUP_CAP = 100
 SFT_RESUME_SCHEMA = "syntra-sft-resume-v1"
 SFT_WEIGHT_DECAY = 0.01
+SFT_ADAMW_BETAS = (0.9, 0.999)
+SFT_ADAMW_EPS = 1e-8
 
 
 def _finetuning_scheduler_settings(
@@ -89,6 +91,10 @@ def _finetuning_scheduler_settings(
         "warmup_steps": warmup_steps,
         "decay_steps": decay_steps,
         "gradient_clip_norm": SOURCE_GRADIENT_CLIP_NORM,
+        "optimizer": "AdamW",
+        "betas": SFT_ADAMW_BETAS,
+        "eps": SFT_ADAMW_EPS,
+        "amsgrad": False,
         "weight_decay": SFT_WEIGHT_DECAY,
         "batch_size": batch_size,
         "gradient_accumulation_steps": gradient_accumulation_steps,
@@ -109,6 +115,8 @@ def _validate_finetuning_resume_state(
             "This SFT checkpoint does not contain resumable optimizer/RNG state. "
             "Start a new fine-tuning stage with resume=False."
         )
+    if saved.get("finetuning_resume_supported") is not True:
+        raise ValueError("This SFT checkpoint is marked as unsupported for exact resume.")
     if saved.get("finetuning_settings") != settings:
         saved_settings = saved.get("finetuning_settings")
         if isinstance(saved_settings, dict):
@@ -853,7 +861,14 @@ def finetune(
         batch_size,
         gradient_accumulation_steps,
     )
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=SFT_WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        betas=SFT_ADAMW_BETAS,
+        eps=SFT_ADAMW_EPS,
+        weight_decay=SFT_WEIGHT_DECAY,
+        amsgrad=False,
+    )
     examples = load_instruction_examples(dataset_path, config.seq_len, tokenizer)
     training_examples, validation_examples, dataset_quality = split_instruction_examples(examples)
     training_history = validate_training_history(saved.get("training_history"))
