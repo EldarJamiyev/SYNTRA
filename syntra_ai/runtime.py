@@ -23,7 +23,7 @@ except ImportError:
         return fn
 
 from .config import ModelConfig
-from .checkpoint_io import load_torch_checkpoint_snapshot
+from .checkpoint_io import checkpoint_file_identity, load_torch_checkpoint_snapshot
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
     SOURCE_VALIDATION_STRATEGY,
@@ -74,14 +74,7 @@ def _file_stat_identity(path: Path) -> tuple[int, int, int, int, int]:
 
 
 def _file_stat_identity_record(path: Path) -> dict[str, int]:
-    info = _checkpoint_stat(path)
-    return {
-        "device": info.st_dev,
-        "inode": info.st_ino,
-        "size": info.st_size,
-        "mtime_ns": info.st_mtime_ns,
-        "ctime_ns": info.st_ctime_ns,
-    }
+    return checkpoint_file_identity(path)
 
 
 def checkpoint_path() -> Path:
