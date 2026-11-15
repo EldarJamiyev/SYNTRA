@@ -59,6 +59,106 @@ class TrainingHistoryTests(unittest.TestCase):
             )
 
 
+class BenchmarkHardwareIdentityTests(unittest.TestCase):
+    def _mock_torch(self, *, cuda_runtime=None, hip_runtime=None):
+        version = type("TorchVersion", (), {
+            "cuda": cuda_runtime,
+            "hip": hip_runtime,
+        })()
+        return type("TorchModule", (), {
+            "__version__": "2.7.1+test",
+            "version": version,
+        })()
+
+    def test_cpu_identity_records_measured_host_and_selected_runtime(self):
+        device = type("Device", (), {"type": "cpu", "index": None})()
+        torch_module = self._mock_torch()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Test CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=16 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=12),
+            mock.patch.object(runner.host_platform, "system", return_value="TestOS"),
+            mock.patch.object(runner.host_platform, "release", return_value="1.2"),
+            mock.patch.object(runner.host_platform, "machine", return_value="x86_64"),
+        ):
+            identity = runner.collect_hardware_identity("auto", device, torch_module)
+            repeated = runner.collect_hardware_identity("cpu", device, torch_module)
+
+        self.assertTrue(identity["identity_complete"])
+        self.assertEqual(identity["host"]["cpu_model"], "Measured Test CPU")
+        self.assertEqual(identity["host"]["logical_cores"], 12)
+        self.assertEqual(identity["host"]["physical_memory_bytes"], 16 * 1024 ** 3)
+        self.assertEqual(identity["device"]["resolved"], "cpu")
+        self.assertEqual(identity["device"]["name"], "Measured Test CPU")
+        self.assertEqual(identity["pytorch"]["version"], "2.7.1+test")
+        self.assertEqual(identity["fingerprint_sha256"], repeated["fingerprint_sha256"])
+        self.assertEqual(identity["device"]["requested"], "auto")
+        self.assertEqual(repeated["device"]["requested"], "cpu")
+
+    def test_cuda_identity_records_selected_gpu_but_marks_missing_driver_evidence_incomplete(self):
+        device = type("Device", (), {"type": "cuda", "index": None})()
+        torch_module = self._mock_torch(cuda_runtime="12.4")
+        torch_module.cuda = mock.Mock()
+        torch_module.cuda.device_count.return_value = 2
+        torch_module.cuda.current_device.return_value = 1
+        torch_module.cuda.get_device_name.return_value = "Measured Test Accelerator"
+        torch_module.cuda.get_device_properties.return_value = type(
+            "CudaProperties",
+            (),
+            {"total_memory": 24 * 1024 ** 3, "major": 9, "minor": 0},
+        )()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Host CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=64 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=32),
+        ):
+            identity = runner.collect_hardware_identity("auto", device, torch_module)
+
+        self.assertEqual(identity["device"]["resolved"], "cuda:1")
+        self.assertEqual(identity["device"]["index"], 1)
+        self.assertEqual(identity["device"]["vendor"], "nvidia_cuda")
+        self.assertEqual(identity["device"]["name"], "Measured Test Accelerator")
+        self.assertEqual(identity["device"]["total_memory_bytes"], 24 * 1024 ** 3)
+        self.assertEqual(identity["device"]["compute_capability"], "9.0")
+        self.assertEqual(identity["device"]["cuda_runtime_version"], "12.4")
+        self.assertIsNone(identity["device"]["driver_version"])
+        self.assertFalse(identity["identity_complete"])
+        self.assertTrue(any("driver version" in item.lower() for item in identity["limitations"]))
+
+    def test_mps_identity_does_not_invent_gpu_model_or_total_memory(self):
+        device = type("Device", (), {"type": "mps", "index": None})()
+        torch_module = self._mock_torch()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Apple Host CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=32 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=10),
+        ):
+            identity = runner.collect_hardware_identity("mps", device, torch_module)
+
+        self.assertEqual(identity["device"]["resolved"], "mps")
+        self.assertEqual(identity["device"]["vendor"], "apple_mps")
+        self.assertIsNone(identity["device"]["name"])
+        self.assertIsNone(identity["device"]["total_memory_bytes"])
+        self.assertFalse(identity["identity_complete"])
+        self.assertTrue(any("apple gpu" in item.lower() for item in identity["limitations"]))
+
+    def test_missing_host_measurements_remain_null_and_identity_incomplete(self):
+        device = type("Device", (), {"type": "cpu", "index": None})()
+        torch_module = self._mock_torch()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value=None),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=None),
+            mock.patch.object(runner.os, "cpu_count", return_value=None),
+        ):
+            identity = runner.collect_hardware_identity("cpu", device, torch_module)
+
+        self.assertIsNone(identity["host"]["cpu_model"])
+        self.assertIsNone(identity["host"]["physical_memory_bytes"])
+        self.assertIsNone(identity["host"]["logical_cores"])
+        self.assertFalse(identity["identity_complete"])
+        self.assertTrue(identity["limitations"])
+
+
 class RawModelBenchmarkTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
