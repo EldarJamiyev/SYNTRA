@@ -485,10 +485,10 @@ async function runChatTurn(jobId, message, history, signal) {
       finishChat(jobId, "Workspace changed to:\n" + activeWorkspace);
       return;
     }
-    const secretApprovalCommand = message.trim().match(/^\/secrets\s+(allow|unallow)\s+([\s\S]+)$/i);
+    const secretApprovalCommand = message.trim().match(/^\/secrets\s+(allow|unallow)(?:\s+([\s\S]+))?$/i);
     if (secretApprovalCommand) {
       const operation = secretApprovalCommand[1].toLowerCase();
-      const input = parseSecretReviewPayload(secretApprovalCommand[2].trim(), operation);
+      const input = parseSecretReviewPayload((secretApprovalCommand[2] || "").trim(), operation);
       const name = operation === "allow"
         ? "workspace.secrets.allowlist.set"
         : "workspace.secrets.allowlist.remove";
@@ -508,9 +508,10 @@ async function runChatTurn(jobId, message, history, signal) {
       });
       if (!result.ok) throw new Error(result.error || result.message || "The secret allowlist operation failed.");
       const output = result.output;
+      const safePath = String(output.path || "unknown").replace(/[`\r\n]/g, "");
       const summary = operation === "allow"
-        ? "Approved " + output.ruleTypes.join(", ") + " for " + output.path + " (SHA-256 " + output.fileSha256 + ") until " + output.expiresAt + ". The exact current file content was verified before saving the exception."
-        : "Revoked the exception for " + output.path + " (SHA-256 " + output.fileSha256 + ").";
+        ? "Approved " + output.ruleTypes.join(", ") + " for " + safePath + " (SHA-256 " + output.fileSha256 + ") until " + output.expiresAt + ". The exact current file content was verified before saving the exception."
+        : "Revoked the exception for " + safePath + " (SHA-256 " + output.fileSha256 + ").";
       const auditStatus = result.auditRecorded
         ? "The operation required explicit approval; its completion event was recorded in .syntra/actions.jsonl."
         : "The operation required explicit approval and its start event was recorded, but the completion audit event could not be persisted.";
