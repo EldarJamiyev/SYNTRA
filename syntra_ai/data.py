@@ -211,7 +211,7 @@ def load_corpus(
                 except (OSError, RuntimeError, ValueError):
                     continue
                 safe_directories.append(name)
-            dirnames[:] = safe_directories
+            dirnames[:] = sorted(safe_directories, key=lambda name: (name.casefold(), name))
 
             for filename in sorted(filenames):
                 if len(files) >= max_files or token_count >= max_tokens:
@@ -244,28 +244,23 @@ def load_corpus(
                 normalized_key = os.path.normcase(resolved)
                 if normalized_key in seen:
                     continue
+                remaining = max_tokens - token_count
+                added_tokens = len(raw) + 2
+                # A source document is atomic for both training and validation.
+                # Never append a truncated file to the token stream or documents list.
+                if added_tokens > remaining:
+                    skipped += 1
+                    continue
                 seen.add(normalized_key)
                 path_bytes = normalized_key.encode("utf-8")
                 digest.update(len(path_bytes).to_bytes(8, "big"))
                 digest.update(path_bytes)
                 digest.update(len(raw).to_bytes(8, "big"))
                 digest.update(raw)
-                remaining = max_tokens - token_count
-                if not include_tokens and len(raw) + 2 > remaining:
-                    skipped += 1
-                    continue
-                added_tokens = min(len(raw) + 2, remaining)
-                if include_tokens and added_tokens:
-                    # Materialize only the retained prefix instead of allocating a
-                    # second full Python-int list for a large source file.
-                    append_bos = min(1, added_tokens)
-                    if append_bos:
-                        tokens.append(BOS_ID)
-                    retained_bytes = min(len(raw), added_tokens - append_bos)
-                    if retained_bytes:
-                        tokens.extend(raw[:retained_bytes])
-                    if added_tokens > append_bos + retained_bytes:
-                        tokens.append(EOS_ID)
+                if include_tokens:
+                    tokens.append(BOS_ID)
+                    tokens.extend(raw)
+                    tokens.append(EOS_ID)
                 token_count += added_tokens
                 files.append(resolved)
                 documents.append(text)
