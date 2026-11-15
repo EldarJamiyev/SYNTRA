@@ -1651,6 +1651,12 @@ class TransformerTests(unittest.TestCase):
                  "def clamp(value, low, high):\n    return min(max(value, low), high)\n") * 80,
                 encoding="utf-8",
             )
+            independent_source = root / "helper.py"
+            independent_source.write_text(
+                ("def normalize(value):\n    return value / 100\n\n"
+                 "def format_value(value):\n    return str(value)\n") * 40,
+                encoding="utf-8",
+            )
             checkpoint = root / "checkpoints" / "model.pt"
             config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
