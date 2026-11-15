@@ -242,6 +242,9 @@ def collect_hardware_identity(requested_device: str, resolved_device: Any, torch
             )
         )
     )
+    fingerprint_device_record = {
+        key: value for key, value in device_record.items() if key != "requested"
+    }
     fingerprint_payload = {
         "schema_version": 1,
         "host": host_record,
@@ -251,7 +254,7 @@ def collect_hardware_identity(requested_device: str, resolved_device: Any, torch
             "cuda_runtime_version": cuda_runtime,
             "rocm_runtime_version": hip_runtime,
         },
-        "device": device_record,
+        "device": fingerprint_device_record,
     }
     fingerprint = hashlib.sha256(
         json.dumps(
