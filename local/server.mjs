@@ -511,7 +511,10 @@ async function runChatTurn(jobId, message, history, signal) {
       const summary = operation === "allow"
         ? "Approved " + output.ruleTypes.join(", ") + " for " + output.path + " (SHA-256 " + output.fileSha256 + ") until " + output.expiresAt + ". The exact current file content was verified before saving the exception."
         : "Revoked the exception for " + output.path + " (SHA-256 " + output.fileSha256 + ").";
-      finishChat(jobId, summary + "\n\nThe operation required explicit approval and was audited under .syntra/actions.jsonl.", {
+      const auditStatus = result.auditRecorded
+        ? "The operation required explicit approval; its completion event was recorded in .syntra/actions.jsonl."
+        : "The operation required explicit approval and its start event was recorded, but the completion audit event could not be persisted.";
+      finishChat(jobId, summary + "\n\n" + auditStatus, {
         toolCalls: [{
           runId: result.runId, name: result.name, status: result.status,
           permission: result.permission, durationMs: result.durationMs,
