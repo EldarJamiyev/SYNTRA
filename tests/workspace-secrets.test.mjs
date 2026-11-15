@@ -108,6 +108,7 @@ test("secret scanner detects additional provider tokens and private-key formats 
     ]) {
       assert.ok(types.has(type), "expected detection rule: " + type);
     }
+    assert.equal(types.has("openai_api_key"), false, "Anthropic sk-ant tokens must not also match the OpenAI detector.");
     const serialized = JSON.stringify(result);
     for (const value of samples) assert.equal(serialized.includes(value), false);
     assert.equal(serialized.includes("ENCRYPTED PRIVATE KEY"), false);
