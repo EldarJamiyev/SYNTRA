@@ -503,7 +503,7 @@ def train(
         if saved.get("training_data_sha256") != training_data_sha256:
             raise ValueError(
                 "The selected source corpus, token budget, tokenizer, or document-isolated validation "
-                "strategy differs from the checkpoint. Select the original source set and settings or "
+                "strategy differs from the checkpoint's training corpus. Select the original source set and settings or "
                 "start a new checkpoint; token-offset validation checkpoints are not compatible."
             )
         if not isinstance(saved.get("optimizer_state"), dict):
