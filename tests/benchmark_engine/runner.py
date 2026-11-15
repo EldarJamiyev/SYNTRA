@@ -1289,7 +1289,9 @@ def _report_rate(value: Any, numerator: int, denominator: int) -> bool:
     expected = round(numerator / denominator, 4) if denominator else None
     if expected is None:
         return value is None
-    return _report_number(value) and float(value) == expected
+    if not _report_number(value):
+        return False
+    return float(value) == expected
 
 
 def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
