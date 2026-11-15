@@ -336,3 +336,17 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Document the total-target `steps` semantics, CPU/CUDA resume scope, and MPS limitation.
 
 **Acceptance:** An interrupted CPU SFT stage resumes from its last committed optimizer update and reaches the same model/optimizer state as an uninterrupted run. Changed data/settings, incomplete state, unsupported devices, or a completed stage must fail explicitly instead of silently starting over.
+
+
+### Phase 34 — Recover authoritative SFT progress in model status
+
+**Objective:** Prevent a process interruption between the full-checkpoint commit and the JSON progress write from leaving a stale optimizer step silently visible.
+
+- [x] Bind each new SFT JSON progress record to the full checkpoint's device/inode/size/mtime/ctime identity.
+- [x] Detect checkpoint/metadata identity mismatches in the status path; treat legacy metadata without an identity record as unverified.
+- [x] Reconcile stale resumable-SFT metadata from the bounded, same-bytes checkpoint snapshot and verify the checkpoint identity again after metadata repair.
+- [x] Atomically repair allowlisted progress fields from the full checkpoint, including global step, SFT stage position, loss, and training history.
+- [x] Report an explicit stale warning when reconciliation fails, the checkpoint is malformed, or the checkpoint changes during reconciliation.
+- [x] Add regressions for successful repair, idempotent subsequent reads, and fail-closed stale reporting.
+
+**Acceptance:** A checkpoint committed ahead of its JSON sidecar is never silently reported as the older step. Status reconciles only from a stable, verified resumable-SFT checkpoint; otherwise it exposes the stale/unknown identity state honestly.
