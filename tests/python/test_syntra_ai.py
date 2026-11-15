@@ -1768,7 +1768,7 @@ class TransformerTests(unittest.TestCase):
             previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
             try:
-                fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000, checkpoint=checkpoint)
+                fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=20000, checkpoint=checkpoint)
             finally:
                 if previous_allowed_roots is None:
                     os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
@@ -1792,7 +1792,7 @@ class TransformerTests(unittest.TestCase):
                         steps=1,
                         batch_size=1,
                         config=config,
-                        max_tokens=10000,
+                        max_tokens=20000,
                         device_name="cpu",
                         resume=True,
                     )
