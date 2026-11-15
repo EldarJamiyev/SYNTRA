@@ -1272,6 +1272,418 @@ def assess_loss_intelligence_divergence(summary: dict[str, Any], checkpoint: dic
     }
 
 
+def _report_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= 0
+    )
+
+
+def _report_rate(value: Any, numerator: int, denominator: int) -> bool:
+    expected = round(numerator / denominator, 4) if denominator else None
+    if expected is None:
+        return value is None
+    return _report_number(value) and float(value) == expected
+
+
+def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
+    """Validate report provenance and recompute its task-denominator invariants."""
+    if not isinstance(report, dict) or report.get("schema_version") != 1:
+        raise BenchmarkError("Raw benchmark report must use schema_version 1.")
+    if report.get("benchmark_track") != "raw-native-model":
+        raise BenchmarkError("The selected report is not from the raw-native-model benchmark track.")
+    suite_version = report.get("suite_version")
+    if not isinstance(suite_version, str) or re.fullmatch(r"\d+\.\d+\.\d+", suite_version) is None:
+        raise BenchmarkError("Raw benchmark report contains an invalid suite version.")
+    if not isinstance(report.get("run_id"), str) or not report["run_id"].strip():
+        raise BenchmarkError("Raw benchmark report is missing its run ID.")
+    protocol = report.get("evaluation_protocol")
+    if (
+        not isinstance(protocol, dict)
+        or protocol.get("schema_version") != 1
+        or not isinstance(protocol.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", protocol["sha256"]) is None
+        or type(protocol.get("file_count")) is not int
+        or protocol["file_count"] < 1
+        or type(protocol.get("total_bytes")) is not int
+        or protocol["total_bytes"] < 1
+    ):
+        raise BenchmarkError("Raw benchmark report is missing complete evaluation-protocol identity.")
+
+    model = report.get("model")
+    if (
+        not isinstance(model, dict)
+        or model.get("engine") != "syntra-native-pytorch"
+        or not isinstance(model.get("checkpoint_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", model["checkpoint_sha256"]) is None
+    ):
+        raise BenchmarkError("Raw benchmark report is missing native checkpoint identity.")
+
+    tasks = report.get("tasks")
+    if not isinstance(tasks, list) or not 1 <= len(tasks) <= 100:
+        raise BenchmarkError("Raw benchmark report must contain between 1 and 100 task results.")
+    seen: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise BenchmarkError("Raw benchmark task result must be an object.")
+        task_id = task.get("id")
+        if not isinstance(task_id, str) or re.fullmatch(r"[a-z0-9][a-z0-9-]{1,63}", task_id) is None or task_id in seen:
+            raise BenchmarkError("Raw benchmark report contains an invalid or duplicate task ID.")
+        seen.add(task_id)
+        if not isinstance(task.get("language"), str) or not task["language"]:
+            raise BenchmarkError("Raw benchmark task " + task_id + " is missing its language.")
+        for key in ("baseline_validated", "patch_correctness", "task_completion"):
+            if type(task.get(key)) is not bool:
+                raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid " + key + " value.")
+        if task.get("regression_prevention") is not None and type(task["regression_prevention"]) is not bool:
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid regression-prevention measurement.")
+        speed = task.get("execution_speed")
+        if not isinstance(speed, dict) or not _report_number(speed.get("total_ms")):
+            raise BenchmarkError("Raw benchmark task " + task_id + " is missing valid total execution time.")
+        if speed.get("generation_ms") is not None and not _report_number(speed["generation_ms"]):
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generation-time measurement.")
+        generated_tokens = speed.get("generated_tokens")
+        if type(generated_tokens) is not int or generated_tokens < 0:
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generated-token count.")
+        if speed.get("output_tokens_per_second") is not None and not _report_number(speed["output_tokens_per_second"]):
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generation-throughput measurement.")
+
+    valid = [task for task in tasks if task["baseline_validated"] is True]
+    valid_count = len(valid)
+    completed_count = sum(task["task_completion"] is True for task in valid)
+    patch_count = sum(task["patch_correctness"] is True for task in valid)
+    regression_measured = [task for task in valid if task["regression_prevention"] is not None]
+    regression_count = sum(task["regression_prevention"] is True for task in regression_measured)
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        raise BenchmarkError("Raw benchmark report is missing its measured summary.")
+    expected_counts = {
+        "task_count": len(tasks),
+        "baseline_valid_task_count": valid_count,
+        "invalid_fixture_count": len(tasks) - valid_count,
+        "completed_task_count": completed_count,
+        "patch_correct_count": patch_count,
+        "regression_measured_count": len(regression_measured),
+        "regression_prevented_count": regression_count,
+    }
+    for key, expected in expected_counts.items():
+        if type(summary.get(key)) is not int or summary[key] != expected:
+            raise BenchmarkError("Raw benchmark summary has inconsistent " + key + " evidence.")
+    expected_rates = {
+        "task_completion_rate": (completed_count, valid_count),
+        "patch_correctness_rate": (patch_count, valid_count),
+        "regression_prevention_rate": (regression_count, len(regression_measured)),
+    }
+    for key, (numerator, denominator) in expected_rates.items():
+        if not _report_rate(summary.get(key), numerator, denominator):
+            raise BenchmarkError("Raw benchmark summary has an inconsistent " + key + " denominator or rate.")
+
+    hardware = report.get("hardware")
+    if hardware is not None:
+        if (
+            not isinstance(hardware, dict)
+            or hardware.get("schema_version") != 1
+            or type(hardware.get("identity_complete")) is not bool
+            or not isinstance(hardware.get("fingerprint_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", hardware["fingerprint_sha256"]) is None
+        ):
+            raise BenchmarkError("Raw benchmark report contains malformed hardware identity.")
+        host = hardware.get("host")
+        python_info = hardware.get("python")
+        pytorch = hardware.get("pytorch")
+        device = hardware.get("device")
+        if not all(isinstance(value, dict) for value in (host, python_info, pytorch, device)):
+            raise BenchmarkError("Raw benchmark hardware identity is missing host, Python, PyTorch, or device fields.")
+        if device.get("type") not in {"cpu", "cuda", "mps"} or not isinstance(device.get("resolved"), str):
+            raise BenchmarkError("Raw benchmark hardware identity contains an invalid resolved device.")
+        if model.get("device_resolved") != device.get("resolved"):
+            raise BenchmarkError("Raw benchmark model and hardware records disagree about the resolved device.")
+        fingerprint_device = {key: value for key, value in device.items() if key != "requested"}
+        fingerprint_payload = {
+            "schema_version": 1,
+            "host": host,
+            "python": python_info,
+            "pytorch": pytorch,
+            "device": fingerprint_device,
+        }
+        expected_fingerprint = hashlib.sha256(
+            json.dumps(
+                fingerprint_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if expected_fingerprint != hardware["fingerprint_sha256"]:
+            raise BenchmarkError("Raw benchmark hardware fingerprint does not match its recorded fields.")
+        if not isinstance(hardware.get("limitations"), list) or any(not isinstance(item, str) for item in hardware["limitations"]):
+            raise BenchmarkError("Raw benchmark hardware limitations must be a list of strings.")
+    return report
+
+
+def _comparison_metric(
+    key: str,
+    baseline: float | None,
+    candidate: float | None,
+    *,
+    higher_is_better: bool,
+    comparable: bool = True,
+) -> dict[str, Any]:
+    if baseline is None or candidate is None:
+        direction = "unavailable"
+    elif not comparable:
+        direction = "incomparable"
+    else:
+        delta = candidate - baseline
+        direction = (
+            "unchanged" if delta == 0
+            else "improved" if ((delta > 0) == higher_is_better)
+            else "regressed"
+        )
+    delta = candidate - baseline if baseline is not None and candidate is not None else None
+    relative = (
+        round((delta / baseline) * 100, 2)
+        if delta is not None and baseline not in (None, 0)
+        else None
+    )
+    return {
+        "key": key,
+        "baseline": baseline,
+        "candidate": candidate,
+        "delta": delta,
+        "relative_change_percent": relative,
+        "direction": direction,
+    }
+
+
+def compare_raw_benchmark_reports(baseline_input: Any, candidate_input: Any) -> dict[str, Any]:
+    """Compare same-protocol raw-model reports without hiding denominator or hardware changes."""
+    baseline = validate_raw_benchmark_report(baseline_input)
+    candidate = validate_raw_benchmark_report(candidate_input)
+    if baseline["suite_version"] != candidate["suite_version"]:
+        raise BenchmarkError("Cannot compare raw-model reports from different suite versions.")
+    if baseline["evaluation_protocol"]["sha256"] != candidate["evaluation_protocol"]["sha256"]:
+        raise BenchmarkError("Cannot compare raw-model reports from different evaluation protocols; rerun both against the same protocol identity.")
+
+    baseline_tasks = {task["id"]: task for task in baseline["tasks"]}
+    candidate_tasks = {task["id"]: task for task in candidate["tasks"]}
+    if set(baseline_tasks) != set(candidate_tasks):
+        raise BenchmarkError("Cannot compare different raw-model task selections.")
+    baseline_valid = {task_id for task_id, task in baseline_tasks.items() if task["baseline_validated"]}
+    candidate_valid = {task_id for task_id, task in candidate_tasks.items() if task["baseline_validated"]}
+    if baseline_valid != candidate_valid:
+        raise BenchmarkError("Cannot compare reports whose hidden-baseline-valid task sets differ.")
+
+    baseline_hardware = baseline.get("hardware") or {}
+    candidate_hardware = candidate.get("hardware") or {}
+    hardware_comparable = bool(
+        baseline_hardware.get("identity_complete") is True
+        and candidate_hardware.get("identity_complete") is True
+        and baseline_hardware.get("fingerprint_sha256") == candidate_hardware.get("fingerprint_sha256")
+    )
+    baseline_device = baseline_hardware.get("device", {})
+    candidate_device = candidate_hardware.get("device", {})
+    if baseline_device.get("resolved") != candidate_device.get("resolved"):
+        hardware_comparable = False
+
+    ordered_valid = sorted(baseline_valid)
+    count = len(ordered_valid)
+    baseline_completion = sum(baseline_tasks[task_id]["task_completion"] for task_id in ordered_valid)
+    candidate_completion = sum(candidate_tasks[task_id]["task_completion"] for task_id in ordered_valid)
+    baseline_patch = sum(baseline_tasks[task_id]["patch_correctness"] for task_id in ordered_valid)
+    candidate_patch = sum(candidate_tasks[task_id]["patch_correctness"] for task_id in ordered_valid)
+
+    baseline_regression_ids = {
+        task_id for task_id in ordered_valid
+        if baseline_tasks[task_id]["regression_prevention"] is not None
+    }
+    candidate_regression_ids = {
+        task_id for task_id in ordered_valid
+        if candidate_tasks[task_id]["regression_prevention"] is not None
+    }
+    regression_comparable = baseline_regression_ids == candidate_regression_ids
+    baseline_regression_count = sum(
+        baseline_tasks[task_id]["regression_prevention"] is True
+        for task_id in sorted(baseline_regression_ids)
+    )
+    candidate_regression_count = sum(
+        candidate_tasks[task_id]["regression_prevention"] is True
+        for task_id in sorted(candidate_regression_ids)
+    )
+
+    baseline_generation_ids = {
+        task_id for task_id in ordered_valid
+        if baseline_tasks[task_id]["execution_speed"]["generation_ms"] is not None
+    }
+    candidate_generation_ids = {
+        task_id for task_id in ordered_valid
+        if candidate_tasks[task_id]["execution_speed"]["generation_ms"] is not None
+    }
+    generation_denominators_match = baseline_generation_ids == candidate_generation_ids
+    baseline_generation_ms = sum(
+        float(baseline_tasks[task_id]["execution_speed"]["generation_ms"])
+        for task_id in sorted(baseline_generation_ids)
+    )
+    candidate_generation_ms = sum(
+        float(candidate_tasks[task_id]["execution_speed"]["generation_ms"])
+        for task_id in sorted(candidate_generation_ids)
+    )
+    baseline_generated_tokens = sum(
+        baseline_tasks[task_id]["execution_speed"]["generated_tokens"]
+        for task_id in sorted(baseline_generation_ids)
+    )
+    candidate_generated_tokens = sum(
+        candidate_tasks[task_id]["execution_speed"]["generated_tokens"]
+        for task_id in sorted(candidate_generation_ids)
+    )
+    baseline_throughput = (
+        baseline_generated_tokens / (baseline_generation_ms / 1000)
+        if baseline_generation_ms > 0 else None
+    )
+    candidate_throughput = (
+        candidate_generated_tokens / (candidate_generation_ms / 1000)
+        if candidate_generation_ms > 0 else None
+    )
+
+    baseline_total_ms = sum(
+        float(baseline_tasks[task_id]["execution_speed"]["total_ms"])
+        for task_id in ordered_valid
+    ) / count if count else None
+    candidate_total_ms = sum(
+        float(candidate_tasks[task_id]["execution_speed"]["total_ms"])
+        for task_id in ordered_valid
+    ) / count if count else None
+
+    metrics = [
+        _comparison_metric(
+            "task_completion_rate",
+            baseline_completion / count if count else None,
+            candidate_completion / count if count else None,
+            higher_is_better=True,
+        ),
+        _comparison_metric(
+            "patch_correctness_rate",
+            baseline_patch / count if count else None,
+            candidate_patch / count if count else None,
+            higher_is_better=True,
+        ),
+        _comparison_metric(
+            "regression_prevention_rate",
+            baseline_regression_count / len(baseline_regression_ids) if baseline_regression_ids else None,
+            candidate_regression_count / len(candidate_regression_ids) if candidate_regression_ids else None,
+            higher_is_better=True,
+            comparable=regression_comparable,
+        ),
+        _comparison_metric(
+            "mean_total_task_ms",
+            baseline_total_ms,
+            candidate_total_ms,
+            higher_is_better=False,
+            comparable=hardware_comparable,
+        ),
+        _comparison_metric(
+            "generation_tokens_per_second",
+            baseline_throughput,
+            candidate_throughput,
+            higher_is_better=True,
+            comparable=hardware_comparable and generation_denominators_match,
+        ),
+    ]
+    quality_directions = [
+        metric["direction"] for metric in metrics[:3]
+        if metric["direction"] not in {"unavailable", "incomparable"}
+    ]
+    improved = sum(value == "improved" for value in quality_directions)
+    regressed = sum(value == "regressed" for value in quality_directions)
+    quality_status = (
+        "unavailable" if not quality_directions
+        else "mixed" if improved and regressed
+        else "improved" if improved
+        else "regressed" if regressed
+        else "unchanged"
+    )
+
+    warnings = []
+    if count == 0:
+        warnings.append("No task has a valid hidden baseline in both reports; task-quality comparison is unavailable.")
+    if not hardware_comparable:
+        warnings.append("Hardware/device identity is missing, incomplete, or different. Latency and throughput are reported but marked incomparable.")
+    if not regression_comparable:
+        warnings.append("Regression-prevention measurements cover different task subsets; regression rates are incomparable.")
+    if not generation_denominators_match:
+        warnings.append("Generated-token throughput covers different task subsets; throughput is incomparable.")
+    if baseline["model"]["checkpoint_sha256"] == candidate["model"]["checkpoint_sha256"]:
+        warnings.append("Both reports use the same checkpoint SHA-256; this is a repeatability comparison, not a checkpoint-change comparison.")
+    if quality_status in {"improved", "regressed"} and not hardware_comparable:
+        warnings.append("Task-outcome differences are measured observations, not a controlled causal quality claim, because execution environments differ or are incomplete.")
+
+    tasks = []
+    for task_id in sorted(baseline_tasks):
+        before = baseline_tasks[task_id]
+        after = candidate_tasks[task_id]
+        if task_id not in baseline_valid:
+            task_status = "excluded-invalid-baseline"
+        else:
+            changes = []
+            for field in ("task_completion", "patch_correctness"):
+                if before[field] != after[field]:
+                    changes.append("improved" if after[field] else "regressed")
+            if before["regression_prevention"] is not None and after["regression_prevention"] is not None:
+                if before["regression_prevention"] != after["regression_prevention"]:
+                    changes.append("improved" if after["regression_prevention"] else "regressed")
+            task_status = (
+                "mixed" if "improved" in changes and "regressed" in changes
+                else changes[0] if changes
+                else "unchanged"
+            )
+        tasks.append({
+            "id": task_id,
+            "language": before["language"],
+            "baseline_validated": task_id in baseline_valid,
+            "baseline_task_completion": before["task_completion"],
+            "candidate_task_completion": after["task_completion"],
+            "baseline_patch_correctness": before["patch_correctness"],
+            "candidate_patch_correctness": after["patch_correctness"],
+            "baseline_regression_prevention": before["regression_prevention"],
+            "candidate_regression_prevention": after["regression_prevention"],
+            "status": task_status,
+        })
+
+    return {
+        "schema_version": 1,
+        "comparison_track": "raw-native-model",
+        "suite_version": baseline["suite_version"],
+        "evaluation_protocol_sha256": baseline["evaluation_protocol"]["sha256"],
+        "compared_at": _now(),
+        "baseline": {
+            "run_id": baseline["run_id"],
+            "checkpoint_sha256": baseline["model"]["checkpoint_sha256"],
+            "device_resolved": baseline.get("model", {}).get("device_resolved"),
+            "hardware_fingerprint_sha256": baseline_hardware.get("fingerprint_sha256"),
+            "baseline_valid_task_count": count,
+        },
+        "candidate": {
+            "run_id": candidate["run_id"],
+            "checkpoint_sha256": candidate["model"]["checkpoint_sha256"],
+            "device_resolved": candidate.get("model", {}).get("device_resolved"),
+            "hardware_fingerprint_sha256": candidate_hardware.get("fingerprint_sha256"),
+            "baseline_valid_task_count": count,
+        },
+        "environment": {
+            "hardware_comparable": hardware_comparable,
+            "generation_task_denominators_match": generation_denominators_match,
+            "regression_task_denominators_match": regression_comparable,
+        },
+        "quality_status": quality_status,
+        "metrics": metrics,
+        "tasks": tasks,
+        "warnings": warnings,
+    }
+
+
 def write_report(path: Path, report: dict[str, Any]) -> Path:
     requested = path.expanduser()
     if not requested.is_absolute():
