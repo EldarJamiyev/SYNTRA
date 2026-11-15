@@ -153,10 +153,6 @@ class LocalApiSmokeTests(unittest.TestCase):
                     os.environ["SYNTRA_CHECKPOINT"] = old_checkpoint
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class NativeApiPathBoundaryTests(unittest.TestCase):
     def test_training_and_finetuning_reject_unapproved_absolute_paths(self):
         from syntra_ai.server import start_finetuning, start_training
@@ -176,10 +172,6 @@ class NativeApiPathBoundaryTests(unittest.TestCase):
                 os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
             else:
                 os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = previous
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class FineTuningApiResumeContractTests(unittest.TestCase):
@@ -230,3 +222,6 @@ class FineTuningCliResumeContractTests(unittest.TestCase):
         self.assertTrue(args.resume)
         self.assertEqual(args.gradient_accumulation_steps, 3)
         self.assertEqual(args.steps, 100)
+
+if __name__ == "__main__":
+    unittest.main()
