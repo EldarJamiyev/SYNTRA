@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 import os
 from pathlib import Path
 import tempfile
@@ -317,7 +318,28 @@ class NativeTrainingHoldoutIntegrationTests(unittest.TestCase):
                     seed=23,
                 )
                 saved = load_torch_checkpoint_snapshot(checkpoint)
-                saved["training_data_sha256"] = "0" * 64
+                from syntra_ai.data import load_corpus
+                corpus = load_corpus(
+                    [str(root)],
+                    max_tokens=4096,
+                    include_tokens=False,
+                )
+                legacy_fingerprint_payload = {
+                    "schema": "syntra-causal-source-corpus-v1",
+                    "source_sha256": corpus.source_sha256,
+                    "max_tokens": 4096,
+                    "config": saved["config"],
+                    "tokenizer": saved["tokenizer"],
+                }
+                legacy_fingerprint = sha256(
+                    json.dumps(
+                        legacy_fingerprint_payload,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                saved["training_data_sha256"] = legacy_fingerprint
                 torch.save(saved, checkpoint)
                 with self.assertRaisesRegex(ValueError, "token-offset validation checkpoints are not compatible"):
                     train(
