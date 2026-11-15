@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -157,6 +158,323 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
         self.assertIsNone(identity["host"]["logical_cores"])
         self.assertFalse(identity["identity_complete"])
         self.assertTrue(identity["limitations"])
+
+
+class RawModelReportComparisonTests(unittest.TestCase):
+    @staticmethod
+    def _hardware(*, cpu_model="Test CPU", logical_cores=8, torch_version="2.7.1+cpu", complete=True):
+        host = {
+            "system": "TestOS",
+            "release": "1.0",
+            "machine": "x86_64",
+            "cpu_model": cpu_model,
+            "logical_cores": logical_cores,
+            "physical_memory_bytes": 16 * 1024 ** 3,
+        }
+        python_info = {"implementation": "CPython", "version": "3.12.8"}
+        pytorch = {
+            "version": torch_version,
+            "cuda_runtime_version": None,
+            "rocm_runtime_version": None,
+        }
+        device = {
+            "requested": "auto",
+            "resolved": "cpu",
+            "type": "cpu",
+            "index": None,
+            "vendor": "cpu",
+            "name": cpu_model,
+            "total_memory_bytes": None,
+            "compute_capability": None,
+            "available_device_count": None,
+            "cuda_runtime_version": None,
+            "rocm_runtime_version": None,
+            "driver_version": None,
+        }
+        fingerprint_payload = {
+            "schema_version": 1,
+            "host": host,
+            "python": python_info,
+            "pytorch": pytorch,
+            "device": {key: value for key, value in device.items() if key != "requested"},
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                fingerprint_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        return {
+            "schema_version": 1,
+            "identity_complete": complete,
+            "fingerprint_sha256": fingerprint,
+            **fingerprint_payload,
+            "limitations": [] if complete else ["Hardware identity is incomplete in this fixture."],
+            "device": device,
+        }
+
+    @classmethod
+    def _report(
+        cls,
+        *,
+        run_id,
+        checkpoint,
+        task_completion,
+        patch_correctness,
+        regression_prevention,
+        total_ms,
+        generation_ms,
+        generated_tokens,
+        hardware=None,
+        protocol="c" * 64,
+        baseline_validated=True,
+    ):
+        output_rate = (
+            generated_tokens / (generation_ms / 1000)
+            if generation_ms is not None and generation_ms > 0
+            else None
+        )
+        task = {
+            "id": "python-clamp",
+            "language": "python",
+            "status": "completed" if task_completion else "target-failed",
+            "baseline_validated": baseline_validated,
+            "patch_correctness": patch_correctness,
+            "task_completion": task_completion,
+            "regression_prevention": regression_prevention,
+            "execution_speed": {
+                "total_ms": total_ms,
+                "generation_ms": generation_ms,
+                "generated_tokens": generated_tokens,
+                "output_tokens_per_second": output_rate,
+            },
+        }
+        valid = int(baseline_validated)
+        completed = int(baseline_validated and task_completion)
+        patch_count = int(baseline_validated and patch_correctness)
+        regression_measured = int(baseline_validated and regression_prevention is not None)
+        regression_count = int(baseline_validated and regression_prevention is True)
+        report = {
+            "schema_version": 1,
+            "benchmark_track": "raw-native-model",
+            "suite_version": "1.4.0",
+            "evaluation_protocol": {
+                "schema_version": 1,
+                "sha256": protocol,
+                "file_count": 100,
+                "total_bytes": 1_000_000,
+            },
+            "run_id": run_id,
+            "model": {
+                "engine": "syntra-native-pytorch",
+                "name": run_id,
+                "checkpoint_sha256": checkpoint,
+                "device_resolved": "cpu" if hardware else None,
+            },
+            "hardware": hardware,
+            "summary": {
+                "task_count": 1,
+                "baseline_valid_task_count": valid,
+                "invalid_fixture_count": 1 - valid,
+                "completed_task_count": completed,
+                "task_completion_rate": round(completed / valid, 4) if valid else None,
+                "patch_correct_count": patch_count,
+                "patch_correctness_rate": round(patch_count / valid, 4) if valid else None,
+                "regression_measured_count": regression_measured,
+                "regression_prevented_count": regression_count,
+                "regression_prevention_rate": round(regression_count / regression_measured, 4) if regression_measured else None,
+            },
+            "tasks": [task],
+        }
+        return report
+
+    def test_report_validation_recomputes_denominators_and_hardware_fingerprint(self):
+        hardware = self._hardware()
+        valid = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        self.assertIs(runner.validate_raw_benchmark_report(valid), valid)
+
+        inconsistent = copy.deepcopy(valid)
+        inconsistent["summary"]["completed_task_count"] = 0
+        with self.assertRaisesRegex(runner.BenchmarkError, "completed_task_count"):
+            runner.validate_raw_benchmark_report(inconsistent)
+
+        altered_hardware = copy.deepcopy(valid)
+        altered_hardware["hardware"]["host"]["cpu_model"] = "Different CPU"
+        with self.assertRaisesRegex(runner.BenchmarkError, "fingerprint"):
+            runner.validate_raw_benchmark_report(altered_hardware)
+
+    def test_same_protocol_and_complete_same_hardware_reports_compare_task_quality_and_performance(self):
+        hardware = self._hardware()
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=False,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=copy.deepcopy(hardware),
+        )
+        result = runner.compare_raw_benchmark_reports(baseline, candidate)
+        self.assertEqual(result["quality_status"], "improved")
+        self.assertTrue(result["environment"]["hardware_comparable"])
+        self.assertEqual(
+            result["metrics"][0]["direction"],
+            "improved",
+        )
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "mean_total_task_ms")["direction"],
+            "improved",
+        )
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "generation_tokens_per_second")["direction"],
+            "improved",
+        )
+        self.assertEqual(result["tasks"][0]["status"], "improved")
+
+    def test_different_or_incomplete_hardware_keeps_quality_but_blocks_performance_claims(self):
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=200,
+            generation_ms=100,
+            generated_tokens=10,
+            hardware=self._hardware(),
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=20,
+            hardware=self._hardware(cpu_model="Different CPU"),
+        )
+        result = runner.compare_raw_benchmark_reports(baseline, candidate)
+        self.assertEqual(result["quality_status"], "improved")
+        self.assertFalse(result["environment"]["hardware_comparable"])
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "mean_total_task_ms")["direction"],
+            "incomparable",
+        )
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "generation_tokens_per_second")["direction"],
+            "incomparable",
+        )
+        self.assertTrue(any("incomparable" in warning.lower() for warning in result["warnings"]))
+
+    def test_comparison_rejects_protocol_task_selection_and_baseline_denominator_changes(self):
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=self._hardware(),
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=self._hardware(),
+        )
+        with self.assertRaisesRegex(runner.BenchmarkError, "different evaluation protocols"):
+            runner.compare_raw_benchmark_reports(baseline, {
+                **candidate,
+                "evaluation_protocol": {**candidate["evaluation_protocol"], "sha256": "d" * 64},
+            })
+        with self.assertRaisesRegex(runner.BenchmarkError, "different raw-model task selections"):
+            runner.compare_raw_benchmark_reports(baseline, {
+                **candidate,
+                "tasks": [{**candidate["tasks"][0], "id": "different-task"}],
+                "summary": {**candidate["summary"]},
+            })
+        with self.assertRaisesRegex(runner.BenchmarkError, "baseline-valid task sets differ"):
+            runner.compare_raw_benchmark_reports(baseline, {
+                **candidate,
+                "tasks": [{**candidate["tasks"][0], "baseline_validated": False, "task_completion": False, "patch_correctness": False}],
+                "summary": {
+                    **candidate["summary"],
+                    "baseline_valid_task_count": 0,
+                    "invalid_fixture_count": 1,
+                    "completed_task_count": 0,
+                    "task_completion_rate": None,
+                    "patch_correct_count": 0,
+                    "patch_correctness_rate": None,
+                    "regression_measured_count": 0,
+                    "regression_prevented_count": 0,
+                    "regression_prevention_rate": None,
+                },
+            })
+
+    def test_unavailable_hardware_and_unequal_measurement_denominators_remain_incomparable(self):
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=None,
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=None,
+            generated_tokens=0,
+            hardware=None,
+        )
+        result = runner.compare_raw_benchmark_reports(baseline, candidate)
+        regression = next(metric for metric in result["metrics"] if metric["key"] == "regression_prevention_rate")
+        throughput = next(metric for metric in result["metrics"] if metric["key"] == "generation_tokens_per_second")
+        latency = next(metric for metric in result["metrics"] if metric["key"] == "mean_total_task_ms")
+        self.assertEqual(regression["direction"], "incomparable")
+        self.assertEqual(throughput["direction"], "incomparable")
+        self.assertEqual(latency["direction"], "incomparable")
 
 
 class RawModelBenchmarkTests(unittest.TestCase):
