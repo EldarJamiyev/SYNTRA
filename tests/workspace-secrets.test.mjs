@@ -264,3 +264,177 @@ test("scanner gives an explicit empty result for a workspace with no supported m
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+test("secret allowlist changes require explicit audited approval and can be revoked", async () => {
+  const root = await createWorkspace();
+  const token = "ghp_" + "r".repeat(30);
+  const source = "const token = '" + token + "';\n";
+  const filePath = "src/config.ts";
+  const fileSha256 = createHash("sha256").update(source, "utf8").digest("hex");
+  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const input = {
+    path: filePath,
+    sha256: fileSha256,
+    ruleTypes: ["github_token"],
+    reason: "Reviewed local integration-test fixture; this value is intentionally non-production test data.",
+    expiresAt
+  };
+  try {
+    await fs.writeFile(path.join(root, filePath), source, "utf8");
+    const setDefinition = listWorkspaceTools().find(tool => tool.name === "workspace.secrets.allowlist.set");
+    const removeDefinition = listWorkspaceTools().find(tool => tool.name === "workspace.secrets.allowlist.remove");
+    assert.equal(setDefinition.permission, "local_state_write");
+    assert.equal(setDefinition.approvalRequired, true);
+    assert.equal(removeDefinition.permission, "destructive_state_write");
+    assert.equal(removeDefinition.approvalRequired, true);
+
+    const denied = await executeWorkspaceTool({
+      root,
+      name: "workspace.secrets.allowlist.set",
+      input
+    });
+    assert.equal(denied.ok, false);
+    assert.equal(denied.status, "approval_required");
+    await assert.rejects(fs.stat(path.join(root, ".syntra", "secret-allowlist.json")), { code: "ENOENT" });
+
+    const approved = await executeWorkspaceTool({
+      root,
+      name: "workspace.secrets.allowlist.set",
+      input,
+      approval: true
+    });
+    assert.equal(approved.ok, true);
+    assert.deepEqual(approved.output.ruleTypes, ["github_token"]);
+    assert.equal(approved.output.expiresAt, expiresAt);
+    assert.equal(approved.output.fileSha256, fileSha256);
+
+    const scan = await scanWorkspaceSecrets(root);
+    assert.equal(scan.findingCount, 0);
+    assert.equal(scan.allowlistedFindings, 1);
+    assert.equal(scan.allowlistEntries, 1);
+    assert.equal(scan.allowlistEntryDetails[0].applied, true);
+
+    const allowlistPath = path.join(root, ".syntra", "secret-allowlist.json");
+    const persisted = await fs.readFile(allowlistPath, "utf8");
+    assert.equal(persisted.includes(token), false);
+    assert.equal(persisted.includes(input.reason), true);
+    if (process.platform !== "win32") {
+      const stat = await fs.stat(allowlistPath);
+      assert.equal(stat.mode & 0o077, 0, "allowlist state must not be group/world readable");
+    }
+
+    const deniedRemove = await executeWorkspaceTool({
+      root,
+      name: "workspace.secrets.allowlist.remove",
+      input: { path: filePath, sha256: fileSha256 }
+    });
+    assert.equal(deniedRemove.ok, false);
+    assert.equal(deniedRemove.status, "approval_required");
+    assert.equal((await scanWorkspaceSecrets(root)).findingCount, 0);
+
+    const removed = await executeWorkspaceTool({
+      root,
+      name: "workspace.secrets.allowlist.remove",
+      input: { path: filePath, sha256: fileSha256 },
+      approval: true
+    });
+    assert.equal(removed.ok, true);
+    assert.equal(removed.output.revoked, true);
+    assert.equal((await scanWorkspaceSecrets(root)).findingCount, 1);
+
+    const audit = await fs.readFile(path.join(root, ".syntra", "actions.jsonl"), "utf8");
+    assert.equal(audit.includes(token), false);
+    assert.equal(audit.includes(filePath), false);
+    assert.equal(audit.includes(input.reason), false);
+    assert.match(audit, /workspace\.secrets\.allowlist\.set/);
+    assert.match(audit, /workspace\.secrets\.allowlist\.remove/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("secret allowlist refuses changed file hashes and selected rules that do not match", async () => {
+  const root = await createWorkspace();
+  const token = "ghp_" + "s".repeat(30);
+  const original = "const token = '" + token + "';\n";
+  const filePath = "src/config.ts";
+  const originalHash = createHash("sha256").update(original, "utf8").digest("hex");
+  const input = {
+    path: filePath,
+    sha256: originalHash,
+    ruleTypes: ["github_token"],
+    reason: "Reviewed an exact non-production fixture for a narrowly scoped test exception.",
+    expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  };
+  try {
+    await fs.writeFile(path.join(root, filePath), original + "// modified after the scan\n", "utf8");
+    const changed = await executeWorkspaceTool({
+      root,
+      name: "workspace.secrets.allowlist.set",
+      input,
+      approval: true
+    });
+    assert.equal(changed.ok, false);
+    assert.match(changed.error, /SHA-256 changed/);
+    assert.equal((await scanWorkspaceSecrets(root)).findingCount, 1);
+
+    const current = await fs.readFile(path.join(root, filePath), "utf8");
+    const currentHash = createHash("sha256").update(current, "utf8").digest("hex");
+    const wrongRule = await executeWorkspaceTool({
+      root,
+      name: "workspace.secrets.allowlist.set",
+      input: { ...input, sha256: currentHash, ruleTypes: ["stripe_live_secret"] },
+      approval: true
+    });
+    assert.equal(wrongRule.ok, false);
+    assert.match(wrongRule.error, /do not currently match/);
+    assert.equal((await scanWorkspaceSecrets(root)).findingCount, 1);
+    await assert.rejects(fs.stat(path.join(root, ".syntra", "secret-allowlist.json")), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("secret allowlist update refuses symlinked or malformed local state", async () => {
+  const root = await createWorkspace();
+  const token = "ghp_" + "t".repeat(30);
+  const source = "const token = '" + token + "';\n";
+  const filePath = "src/config.ts";
+  const sha256 = createHash("sha256").update(source, "utf8").digest("hex");
+  const input = {
+    path: filePath,
+    sha256,
+    ruleTypes: ["github_token"],
+    reason: "Reviewed a test-only fixture with a clear reason and narrow scope.",
+    expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  };
+  try {
+    await fs.writeFile(path.join(root, filePath), source, "utf8");
+    await fs.mkdir(path.join(root, ".syntra"), { recursive: true });
+    const outside = path.join(root, "outside.json");
+    await fs.writeFile(outside, JSON.stringify({ schema: "syntra-secret-allowlist-v1", entries: [] }), "utf8");
+    const target = path.join(root, ".syntra", "secret-allowlist.json");
+    try {
+      await fs.symlink(outside, target);
+    } catch (error) {
+      if (error && ["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) {
+        await fs.rm(path.join(root, ".syntra"), { recursive: true, force: true });
+        await fs.mkdir(path.join(root, ".syntra"), { recursive: true });
+        await fs.writeFile(target, "{malformed", "utf8");
+      } else {
+        throw error;
+      }
+    }
+    const result = await executeWorkspaceTool({
+      root,
+      name: "workspace.secrets.allowlist.set",
+      input,
+      approval: true
+    });
+    assert.equal(result.ok, false);
+    assert.equal((await scanWorkspaceSecrets(root)).findingCount, 1);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
