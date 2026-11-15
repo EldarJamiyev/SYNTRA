@@ -1798,6 +1798,9 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(sft_status["finetuning_settings"], tuned["finetuning_settings"])
             self.assertEqual(sft_status["finetuning_learning_rate"], tuned["learning_rate"])
             self.assertEqual(sft_status["finetuning_stage_steps"], 1)
+            self.assertEqual(sft_status["finetuning_stage_target_steps"], 1)
+            self.assertEqual(sft_status["finetuning_remaining_steps"], 0)
+            self.assertTrue(sft_status["finetuning_resume_supported"])
             from syntra_ai.runtime import evaluate
             previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
