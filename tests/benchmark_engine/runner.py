@@ -1438,10 +1438,10 @@ def _comparison_metric(
     higher_is_better: bool,
     comparable: bool = True,
 ) -> dict[str, Any]:
-    if baseline is None or candidate is None:
-        direction = "unavailable"
-    elif not comparable:
+    if not comparable:
         direction = "incomparable"
+    elif baseline is None or candidate is None:
+        direction = "unavailable"
     else:
         delta = candidate - baseline
         direction = (
