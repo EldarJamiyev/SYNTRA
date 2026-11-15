@@ -148,6 +148,39 @@ class DocumentPartitionTests(unittest.TestCase):
         self.assertEqual(corpus.skipped_files, 1)
         self.assertEqual(corpus.token_ids, [])
 
+    def test_exact_duplicate_files_do_not_consume_the_corpus_token_budget(self):
+        from syntra_ai.data import load_corpus
+
+        repeated = "same independent document\n" * 5
+        additional = "another independent document\n" * 5
+        with tempfile.TemporaryDirectory(prefix="syntra-document-dedup-budget-") as temp:
+            root = Path(temp) / "corpus"
+            root.mkdir()
+            (root / "a.txt").write_text(repeated, encoding="utf-8")
+            (root / "b.txt").write_text(repeated, encoding="utf-8")
+            (root / "c.txt").write_text(additional, encoding="utf-8")
+            token_budget = 2 * (len(repeated.encode("utf-8")) + 2) + 2
+            with patch.dict(
+                os.environ,
+                {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)},
+            ):
+                corpus = load_corpus(
+                    [root],
+                    max_tokens=token_budget,
+                    include_tokens=False,
+                )
+
+        self.assertEqual(corpus.documents, [repeated, repeated, additional])
+        self.assertEqual(corpus.token_count, token_budget)
+        self.assertEqual(len(corpus.files), 3)
+        from syntra_ai.training import _partition_source_documents
+        partition = _partition_source_documents(corpus.documents, max_tokens=token_budget)
+        self.assertEqual(partition.duplicate_documents_excluded, 1)
+        self.assertEqual(
+            len(partition.training_documents) + len(partition.validation_documents),
+            2,
+        )
+
     def test_directory_traversal_order_is_stable_under_a_bounded_file_count(self):
         from syntra_ai.data import load_corpus
 
