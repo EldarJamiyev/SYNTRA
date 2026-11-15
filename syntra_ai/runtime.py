@@ -27,6 +27,7 @@ from .checkpoint_io import load_torch_checkpoint_snapshot
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
     SOURCE_VALIDATION_STRATEGY,
+    _atomic_json,
     _batch,
     _encode_document_partition,
     _estimate_loss,
@@ -266,6 +267,76 @@ def _resident_cache_matches_checkpoint(path: str | Path) -> bool:
     return isinstance(signature, tuple) and signature[:3] == current_files
 
 
+def _reconcile_sft_status_metadata(
+    checkpoint: Path,
+    metadata_path: Path,
+    metadata: dict,
+    expected_identity: dict[str, int],
+) -> dict:
+    """Recover stale SFT JSON progress from the verified authoritative checkpoint."""
+    payload = load_torch_checkpoint_snapshot(checkpoint)
+    current_identity = _file_stat_identity_record(checkpoint)
+    if current_identity != expected_identity:
+        raise RuntimeError("The checkpoint changed while status metadata was being reconciled.")
+    if (
+        payload.get("training_mode") != "supervised-instruction-finetuning"
+        or payload.get("finetuning_resume_schema") != "syntra-sft-resume-v1"
+    ):
+        raise ValueError("The newer checkpoint does not contain a supported resumable SFT status record.")
+
+    refreshed = dict(metadata)
+    fields = (
+        "config",
+        "step",
+        "train_loss",
+        "validation_loss",
+        "training_mode",
+        "training_history",
+        "corpus_files",
+        "corpus_tokens",
+        "training_documents",
+        "validation_documents",
+        "duplicate_documents_excluded",
+        "token_budget_documents_excluded",
+        "validation_strategy",
+        "instruction_examples",
+        "instruction_context_windows",
+        "instruction_dataset_quality",
+        "instruction_dataset_sha256",
+        "instruction_dataset_bytes",
+        "finetuning_resume_schema",
+        "finetuning_settings",
+        "finetuning_optimizer_scope",
+        "finetuning_stage_base_step",
+        "finetuning_stage_steps",
+        "finetuning_stage_target_steps",
+        "finetuning_validation_stage_step",
+        "finetuning_remaining_steps",
+        "finetuning_resume_supported",
+        "finetuning_learning_rate",
+        "finetuning_gradient_norm_before_clip",
+    )
+    for field in fields:
+        if field in payload:
+            refreshed[field] = payload[field]
+
+    config = payload.get("config")
+    if isinstance(config, dict):
+        refreshed["context_tokens"] = config.get("seq_len") or config.get("block_size")
+    tokenizer = payload.get("tokenizer")
+    if isinstance(tokenizer, dict):
+        refreshed["tokenizer_vocab_size"] = tokenizer.get("vocab_size")
+    model_state = payload.get("model_state")
+    if isinstance(model_state, dict) and torch is not None:
+        refreshed["parameter_count"] = sum(
+            tensor.numel() for tensor in model_state.values() if torch.is_tensor(tensor)
+        )
+    refreshed["checkpoint_identity"] = current_identity
+    refreshed["status_reconciled_from_checkpoint"] = True
+    _atomic_json(metadata_path, refreshed)
+    return refreshed
+
+
 def status() -> dict:
     path = checkpoint_path()
     metadata_path = path.with_suffix(path.suffix + ".json")
@@ -279,11 +350,46 @@ def status() -> dict:
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             metadata = {}
             metadata_error = str(exc)
+    current_checkpoint_identity = None
     try:
         _checkpoint_stat(path)
         checkpoint_exists = True
+        current_checkpoint_identity = _file_stat_identity_record(path)
     except OSError:
         checkpoint_exists = False
+
+    checkpoint_metadata_stale = False
+    checkpoint_metadata_reconciled = False
+    checkpoint_metadata_warning = None
+    saved_identity = metadata.get("checkpoint_identity")
+    if (
+        checkpoint_exists
+        and isinstance(saved_identity, dict)
+        and saved_identity != current_checkpoint_identity
+    ):
+        checkpoint_metadata_stale = True
+        if (
+            metadata.get("training_mode") == "supervised-instruction-finetuning"
+            and metadata.get("finetuning_resume_schema") == "syntra-sft-resume-v1"
+        ):
+            try:
+                metadata = _reconcile_sft_status_metadata(
+                    path,
+                    metadata_path,
+                    metadata,
+                    current_checkpoint_identity,
+                )
+                checkpoint_metadata_stale = False
+                checkpoint_metadata_reconciled = True
+            except Exception as exc:
+                checkpoint_metadata_warning = (
+                    "Checkpoint progress metadata is stale and could not be reconciled: " + str(exc)
+                )
+        else:
+            checkpoint_metadata_warning = (
+                "Checkpoint file identity differs from the metadata identity; progress may be stale."
+            )
+
     raw_config = metadata.get("config") or {}
     context_tokens = metadata.get("context_tokens") or raw_config.get("seq_len") or raw_config.get("block_size")
     vocab_size = metadata.get("tokenizer_vocab_size") or metadata.get("vocab_size") or raw_config.get("vocab_size")
@@ -302,6 +408,9 @@ def status() -> dict:
         "checkpoint": str(path),
         "checkpoint_identity": _checkpoint_identity(path) if checkpoint_exists else None,
         "checkpoint_exists": checkpoint_exists,
+        "checkpoint_metadata_stale": checkpoint_metadata_stale,
+        "checkpoint_metadata_reconciled": checkpoint_metadata_reconciled,
+        "checkpoint_metadata_warning": checkpoint_metadata_warning,
         "trained_steps": int(metadata.get("step", 0)),
         "parameter_count": int(metadata.get("parameter_count", 0)),
         "config": raw_config if raw_config else None,
