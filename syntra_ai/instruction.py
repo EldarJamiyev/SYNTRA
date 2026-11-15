@@ -22,7 +22,7 @@ from .checkpoint_io import load_torch_checkpoint_snapshot
 from .config import ModelConfig
 from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
-from .runtime import _normalize_checkpoint_payload, _read_checkpoint, checkpoint_path, clear_resident_cache
+from .runtime import _normalize_checkpoint_payload, checkpoint_path, clear_resident_cache
 from .safe_paths import (
     PROJECT_ROOT, _approved_roots, resolve_corpus_root,
     resolve_instruction_dataset, resolve_curriculum_output_path,
@@ -91,7 +91,7 @@ def _finetuning_scheduler_settings(
         "decay_steps": decay_steps,
         "gradient_clip_norm": SOURCE_GRADIENT_CLIP_NORM,
         "optimizer": "AdamW",
-        "betas": SFT_ADAMW_BETAS,
+        "betas": [SFT_ADAMW_BETAS[0], SFT_ADAMW_BETAS[1]],
         "eps": SFT_ADAMW_EPS,
         "amsgrad": False,
         "weight_decay": SFT_WEIGHT_DECAY,
@@ -832,17 +832,12 @@ def finetune(
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
     resume_supported = device.type in {"cpu", "cuda"}
-    if resume:
-        # Resume must load the full training checkpoint, never the model-only
-        # inference companion. The snapshot loader validates and deserializes
-        # the same bounded bytes to avoid checkpoint-path replacement races.
-        validate_checkpoint_load_budget(checkpoint_path_value)
-        raw_saved = load_torch_checkpoint_snapshot(checkpoint_path_value)
-        saved = _normalize_checkpoint_payload(raw_saved)
-    else:
-        # Runtime loading verifies the inference companion's source identity
-        # and falls back to the full checkpoint if that companion is stale.
-        _, saved, _, _ = _read_checkpoint(checkpoint_path_value)
+    # SFT training always reads the full bounded training checkpoint. The
+    # snapshot loader deserializes the same verified bytes and avoids mutable
+    # path races. Validate the memory budget before tokenizer/weight handling.
+    validate_checkpoint_load_budget(checkpoint_path_value)
+    raw_saved = load_torch_checkpoint_snapshot(checkpoint_path_value)
+    saved = _normalize_checkpoint_payload(raw_saved)
     config = ModelConfig.from_dict(saved["config"])
     config.validate()
     # Accumulation keeps only one physical micro-batch and its activations on
