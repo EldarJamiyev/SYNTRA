@@ -1735,11 +1735,29 @@ class TransformerTests(unittest.TestCase):
             self.assertTrue(all(token == -100 for token in first["labels"][:prompt_tokens]))
             self.assertTrue(any(token != -100 for token in first["labels"][prompt_tokens:]))
 
-            with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
+            stage_start_status = {}
+
+            def inspect_sft_stage_start(progress):
+                if (
+                    progress.get("status") == "running"
+                    and progress.get("finetuning_stage_steps") == 0
+                ):
+                    from syntra_ai.runtime import status
+                    stage_start_status.update(status())
+
+            with patch.dict(os.environ, {
+                "SYNTRA_ALLOWED_CORPUS_ROOTS": str(root),
+                "SYNTRA_CHECKPOINT": str(checkpoint),
+            }):
                 tuned = finetune(
                     dataset, steps=1, batch_size=1, gradient_accumulation_steps=2,
                     learning_rate=1e-4, device_name="cpu", checkpoint=checkpoint,
+                    callback=inspect_sft_stage_start,
                 )
+            self.assertEqual(stage_start_status["finetuning_stage_steps"], 0)
+            self.assertEqual(stage_start_status["finetuning_remaining_steps"], 1)
+            self.assertTrue(stage_start_status["checkpoint_metadata_identity_verified"])
+            self.assertFalse(stage_start_status["checkpoint_metadata_reconciled"])
             self.assertEqual(tuned["status"], "completed")
             self.assertEqual(tuned["gradient_accumulation_steps"], 2)
             self.assertEqual(tuned["finetuning_settings"]["scheduler"], "stage-cosine-warmup-v2")
@@ -1787,6 +1805,8 @@ class TransformerTests(unittest.TestCase):
             )
             self.assertEqual([point["step"] for point in inference_saved["training_history"]], [1, 2])
             updated_metadata = json.loads(checkpoint.with_suffix(".pt.json").read_text(encoding="utf-8"))
+            from syntra_ai.runtime import _file_stat_identity_record
+            self.assertEqual(updated_metadata["checkpoint_identity"], _file_stat_identity_record(checkpoint))
             self.assertEqual(updated_metadata["training_history"], inference_saved["training_history"])
             self.assertEqual(updated_metadata["finetuning_settings"], tuned["finetuning_settings"])
             with patch.dict(
