@@ -974,6 +974,50 @@ def finetune(
             callback(value)
         return value
 
+    def persist_status_metadata(global_step: int, completed_stage_steps: int) -> None:
+        """Atomically publish SFT progress bound to the exact full-checkpoint file."""
+        metadata = {
+            "checkpoint": str(checkpoint_path_value),
+            "checkpoint_identity": _file_stat_identity_record(checkpoint_path_value),
+            "step": global_step,
+            "config": config.to_dict(),
+            "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+            "train_loss": last_train_loss,
+            "validation_loss": last_val_loss,
+            "tokenizer": "byte-BPE",
+            "tokenizer_vocab_size": tokenizer.vocab_size,
+            "context_tokens": config.seq_len,
+            "training_mode": "supervised-instruction-finetuning",
+            "finetuning_resume_schema": SFT_RESUME_SCHEMA,
+            "finetuning_settings": finetuning_settings,
+            "finetuning_optimizer_scope": "resumable-stage",
+            "finetuning_stage_base_step": stage_base_step,
+            "finetuning_stage_steps": completed_stage_steps,
+            "finetuning_stage_target_steps": steps,
+            "finetuning_validation_stage_step": last_validation_stage_step,
+            "finetuning_remaining_steps": max(0, steps - completed_stage_steps),
+            "finetuning_resume_supported": resume_supported,
+            "finetuning_learning_rate": last_learning_rate,
+            "finetuning_gradient_norm_before_clip": last_gradient_norm,
+            "instruction_examples": dataset_quality["example_count"],
+            "instruction_context_windows": len(examples),
+            "validation_context_windows_per_evaluation": len(validation_examples),
+            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
+            "instruction_dataset_quality": dataset_quality,
+            "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
+            "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
+            "pretrained_weights": False,
+            "training_history": training_history,
+            "training_history_points": len(training_history),
+        }
+        metadata_path = checkpoint_path_value.with_suffix(checkpoint_path_value.suffix + ".json")
+        _atomic_json(metadata_path, metadata)
+
+    # Establish a matching identity-bound status record before the first
+    # optimizer update. This also covers a process stopping before the first
+    # SFT checkpoint has been written.
+    persist_status_metadata(base_step, stage_start_step)
+
     model.train()
     report(
         "running",
@@ -1102,40 +1146,7 @@ def finetune(
             _save_inference_checkpoint(checkpoint_path_value, payload)
             clear_resident_cache()
 
-        metadata_path = checkpoint_path_value.with_suffix(checkpoint_path_value.suffix + ".json")
-        metadata = {
-            "checkpoint": str(checkpoint_path_value),
-            "checkpoint_identity": _file_stat_identity_record(checkpoint_path_value),
-            "step": step,
-            "config": config.to_dict(),
-            "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
-            "train_loss": last_train_loss, "validation_loss": last_val_loss,
-            "tokenizer": "byte-BPE", "tokenizer_vocab_size": tokenizer.vocab_size,
-            "context_tokens": config.seq_len,
-            "training_mode": "supervised-instruction-finetuning",
-            "finetuning_resume_schema": SFT_RESUME_SCHEMA,
-            "finetuning_settings": finetuning_settings,
-            "finetuning_optimizer_scope": "resumable-stage",
-            "finetuning_stage_base_step": stage_base_step,
-            "finetuning_stage_steps": stage_step,
-            "finetuning_stage_target_steps": steps,
-            "finetuning_validation_stage_step": last_validation_stage_step,
-            "finetuning_remaining_steps": max(0, steps - stage_step),
-            "finetuning_resume_supported": resume_supported,
-            "finetuning_learning_rate": last_learning_rate,
-            "finetuning_gradient_norm_before_clip": last_gradient_norm,
-            "instruction_examples": dataset_quality["example_count"],
-            "instruction_context_windows": len(examples),
-            "validation_context_windows_per_evaluation": len(validation_examples),
-            "validation_scope": "all-held-out-context-windows-once-in-dataset-order",
-            "instruction_dataset_quality": dataset_quality,
-            "instruction_dataset_sha256": dataset_quality["dataset_sha256"],
-            "instruction_dataset_bytes": dataset_quality["dataset_bytes"],
-            "pretrained_weights": False,
-            "training_history": training_history,
-            "training_history_points": len(training_history),
-        }
-        _atomic_json(metadata_path, metadata)
+        persist_status_metadata(step, stage_step)
         report(
             "completed" if stage_step == steps else "running",
             step,
