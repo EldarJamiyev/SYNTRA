@@ -18,6 +18,7 @@ except ImportError:
     torch = None  # type: ignore[assignment]
     SyntraTransformer = None  # type: ignore[assignment]
 
+from .checkpoint_io import load_torch_checkpoint_snapshot
 from .config import ModelConfig
 from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
@@ -38,6 +39,8 @@ from .training import (
     select_inference_checkpoint,
     append_training_history,
     validate_training_history,
+    _restore_rng_state,
+    _rng_state,
 )
 
 
@@ -49,12 +52,19 @@ MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
 MAX_INSTRUCTION_FIELD_BYTES = 512 * 1024
 INSTRUCTION_VALIDATION_FRACTION = 0.1
 INSTRUCTION_SPLIT_SEED = "syntra-instruction-split-v1"
-SFT_STAGE_COSINE_SCHEDULER = "stage-cosine-warmup-v1"
+SFT_STAGE_COSINE_SCHEDULER = "stage-cosine-warmup-v2"
 SFT_STAGE_WARMUP_CAP = 100
+SFT_RESUME_SCHEMA = "syntra-sft-resume-v1"
+SFT_WEIGHT_DECAY = 0.01
 
 
-def _finetuning_scheduler_settings(steps: int, learning_rate: float) -> dict[str, Any]:
-    """Return a deterministic schedule scoped to one fresh SFT optimizer stage."""
+def _finetuning_scheduler_settings(
+    steps: int,
+    learning_rate: float,
+    batch_size: int = 4,
+    gradient_accumulation_steps: int = 1,
+) -> dict[str, Any]:
+    """Return a deterministic stage schedule and the optimizer settings it binds."""
     if type(steps) is not int or not 1 <= steps <= 1_000_000:
         raise ValueError("SFT scheduler steps must be an integer between 1 and 1,000,000.")
     if (
@@ -64,18 +74,96 @@ def _finetuning_scheduler_settings(steps: int, learning_rate: float) -> dict[str
         or learning_rate <= 0
     ):
         raise ValueError("SFT scheduler learning rate must be finite and positive.")
+    if type(batch_size) is not int or not 1 <= batch_size <= 128:
+        raise ValueError("SFT scheduler batch_size must be an integer between 1 and 128.")
+    if type(gradient_accumulation_steps) is not int or not 1 <= gradient_accumulation_steps <= 128:
+        raise ValueError("SFT scheduler gradient_accumulation_steps must be an integer between 1 and 128.")
     warmup_steps = min(SFT_STAGE_WARMUP_CAP, max(1, steps // 10))
     decay_steps = max(steps, warmup_steps + 1)
     return {
         "scheduler": SFT_STAGE_COSINE_SCHEDULER,
-        "optimizer_scope": "fresh-per-finetune-invocation",
+        "optimizer_scope": "resumable-stage",
         "steps": steps,
         "base_learning_rate": float(learning_rate),
         "minimum_learning_rate": min(SOURCE_MINIMUM_LEARNING_RATE, float(learning_rate)),
         "warmup_steps": warmup_steps,
         "decay_steps": decay_steps,
         "gradient_clip_norm": SOURCE_GRADIENT_CLIP_NORM,
+        "weight_decay": SFT_WEIGHT_DECAY,
+        "batch_size": batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
     }
+
+
+def _validate_finetuning_resume_state(
+    saved: dict[str, Any],
+    settings: dict[str, Any],
+    dataset_quality: dict[str, Any],
+    device: Any,
+) -> tuple[int, int]:
+    """Validate that a full checkpoint can resume this exact SFT stage."""
+    if saved.get("training_mode") != "supervised-instruction-finetuning":
+        raise ValueError("Resume requires a checkpoint from supervised instruction fine-tuning.")
+    if saved.get("finetuning_resume_schema") != SFT_RESUME_SCHEMA:
+        raise ValueError(
+            "This SFT checkpoint does not contain resumable optimizer/RNG state. "
+            "Start a new fine-tuning stage with resume=False."
+        )
+    if saved.get("finetuning_settings") != settings:
+        saved_settings = saved.get("finetuning_settings")
+        if isinstance(saved_settings, dict):
+            changed = sorted(
+                key for key in set(saved_settings) | set(settings)
+                if saved_settings.get(key) != settings.get(key)
+            )
+        else:
+            changed = ["finetuning_settings"]
+        raise ValueError(
+            "SFT resume settings differ from the checkpoint: "
+            + ", ".join(changed)
+            + ". Use the original dataset and settings, or start a new stage."
+        )
+    if (
+        saved.get("instruction_dataset_sha256") != dataset_quality.get("dataset_sha256")
+        or saved.get("instruction_dataset_bytes") != dataset_quality.get("dataset_bytes")
+    ):
+        raise ValueError(
+            "The instruction dataset differs from the SFT checkpoint. "
+            "Restore the exact dataset or start a new fine-tuning stage."
+        )
+    if not isinstance(saved.get("optimizer_state"), dict):
+        raise ValueError("SFT resume checkpoint is missing optimizer state.")
+    if not isinstance(saved.get("finetuning_rng_state"), dict):
+        raise ValueError("SFT resume checkpoint is missing random-generator state.")
+    device_type = getattr(device, "type", None)
+    if device_type not in {"cpu", "cuda"}:
+        raise ValueError("Exact SFT resume currently supports CPU and CUDA devices only.")
+    if saved.get("finetuning_device_type") != device_type:
+        raise ValueError(
+            "SFT resume device type differs from the checkpoint. "
+            "Use the same device type to preserve the saved RNG trajectory."
+        )
+    cuda_count = torch.cuda.device_count() if device_type == "cuda" else 0
+    saved_cuda_count = saved.get("finetuning_cuda_device_count")
+    if type(saved_cuda_count) is not int or saved_cuda_count != cuda_count:
+        raise ValueError(
+            "SFT resume CUDA device count differs from the checkpoint. "
+            "Use the original CUDA device count to preserve the saved RNG trajectory."
+        )
+    stage_base_step = saved.get("finetuning_stage_base_step")
+    stage_step = saved.get("finetuning_stage_steps")
+    global_step = saved.get("step")
+    if (
+        type(stage_base_step) is not int or stage_base_step < 0
+        or type(stage_step) is not int or stage_step < 0
+        or type(global_step) is not int or global_step != stage_base_step + stage_step
+    ):
+        raise ValueError("SFT resume checkpoint contains an invalid stage/global optimizer-step position.")
+    if stage_step >= settings["steps"]:
+        raise ValueError(
+            "The saved SFT stage is already complete. Start a new fine-tuning stage with resume=False."
+        )
+    return stage_base_step, stage_step
 
 
 def _normalized_instruction_text(value: str) -> str:
@@ -715,6 +803,7 @@ def finetune(
     device_name: str = "auto",
     checkpoint: str | Path | None = None,
     callback: Callable[[dict], None] | None = None,
+    resume: bool = False,
 ) -> dict:
     if type(steps) is not int or steps < 1 or steps > 1_000_000:
         raise ValueError("steps must be an integer between 1 and 1,000,000.")
@@ -729,15 +818,21 @@ def finetune(
         or not 1e-6 <= learning_rate <= 1e-2
     ):
         raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.")
+    if type(resume) is not bool:
+        raise ValueError("resume must be a boolean.")
     checkpoint_path_value = Path(checkpoint).expanduser().resolve() if checkpoint else checkpoint_path()
     if not checkpoint_path_value.is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     device = choose_device(device_name)
-    load_target = select_inference_checkpoint(checkpoint_path_value)
+    # Resume must load the full training checkpoint, never the model-only
+    # inference companion. The snapshot loader validates and deserializes the
+    # same bounded bytes to avoid checkpoint-path replacement races.
+    load_target = checkpoint_path_value if resume else select_inference_checkpoint(checkpoint_path_value)
     validate_checkpoint_load_budget(load_target)
-    # Read model-only checkpoint tensors on CPU first; run the resource guard before
-    # moving weights, gradients, and optimizer state to an accelerator.
-    raw_saved = torch.load(load_target, map_location="cpu", weights_only=True)
+    if resume:
+        raw_saved = load_torch_checkpoint_snapshot(load_target)
+    else:
+        raw_saved = torch.load(load_target, map_location="cpu", weights_only=True)
     saved = _normalize_checkpoint_payload(raw_saved)
     config = ModelConfig.from_dict(saved["config"])
     config.validate()
@@ -751,22 +846,54 @@ def finetune(
         raise ValueError("Checkpoint tokenizer vocabulary does not match the model architecture.")
     model = SyntraTransformer(config).to(device)
     model.load_state_dict(saved["model_state"])
-    finetuning_settings = _finetuning_scheduler_settings(steps, learning_rate)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.01)
+    finetuning_settings = _finetuning_scheduler_settings(
+        steps,
+        learning_rate,
+        batch_size,
+        gradient_accumulation_steps,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=SFT_WEIGHT_DECAY)
     examples = load_instruction_examples(dataset_path, config.seq_len, tokenizer)
     training_examples, validation_examples, dataset_quality = split_instruction_examples(examples)
-    base_step = int(saved.get("step", 0))
     training_history = validate_training_history(saved.get("training_history"))
+
+    if resume:
+        stage_base_step, stage_start_step = _validate_finetuning_resume_state(
+            saved,
+            finetuning_settings,
+            dataset_quality,
+            device,
+        )
+        try:
+            optimizer.load_state_dict(saved["optimizer_state"])
+            _restore_rng_state(saved["finetuning_rng_state"], device)
+        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+            raise ValueError(f"SFT optimizer/RNG state could not be restored safely: {exc}") from None
+        base_step = int(saved["step"])
+        last_saved_train_loss = saved.get("train_loss")
+        last_saved_validation_loss = saved.get("validation_loss")
+        last_saved_learning_rate = saved.get("finetuning_learning_rate")
+        last_saved_gradient_norm = saved.get("finetuning_gradient_norm_before_clip")
+        last_validation_stage_step = saved.get("finetuning_validation_stage_step", 0)
+    else:
+        base_step = int(saved.get("step", 0))
+        stage_base_step = base_step
+        stage_start_step = 0
+        last_saved_train_loss = None
+        last_saved_validation_loss = None
+        last_saved_learning_rate = None
+        last_saved_gradient_norm = None
+        last_validation_stage_step = 0
     from .hardware_telemetry import (
         device_memory_sample, process_peak_rss_bytes, reset_device_peak_stats,
     )
 
     started = monotonic()
     reset_device_peak_stats(device, torch)
-    last_train_loss = None
-    last_val_loss = None
-    last_learning_rate = None
-    last_gradient_norm = None
+    last_train_loss = last_saved_train_loss
+    last_val_loss = last_saved_validation_loss
+    last_learning_rate = last_saved_learning_rate
+    last_gradient_norm = last_saved_gradient_norm
     supervised_tokens_processed = 0
     last_step_latency_ms = None
     step_latency_total_ms = 0.0
@@ -777,11 +904,17 @@ def finetune(
         value = {
             "status": status,
             "step": step,
-            "max_steps": base_step + steps,
+            "max_steps": stage_base_step + steps,
             "train_loss": last_train_loss,
             "validation_loss": last_val_loss,
             "learning_rate": last_learning_rate,
             "finetuning_settings": finetuning_settings,
+            "finetuning_resume_supported": True,
+            "finetuning_resume": resume,
+            "finetuning_stage_base_step": stage_base_step,
+            "finetuning_stage_steps": max(stage_start_step, step - stage_base_step),
+            "finetuning_stage_target_steps": steps,
+            "finetuning_remaining_steps": max(0, steps - max(stage_start_step, step - stage_base_step)),
             "gradient_clip_norm": finetuning_settings["gradient_clip_norm"],
             "gradient_norm_before_clip": last_gradient_norm,
             "device": str(device),
@@ -817,17 +950,22 @@ def finetune(
 
     model.train()
     report(
-        "running", base_step,
-        f"Supervised fine-tuning started with {len(training_examples)} training and "
-        f"{len(validation_examples)} validation context windows across "
-        f"{dataset_quality['training_examples']} training and "
-        f"{dataset_quality['validation_examples']} validation source records. "
+        "running",
+        base_step,
+        (
+            f"Resuming SFT stage at optimizer step {stage_start_step}/{steps}; "
+            f"{steps - stage_start_step} updates remain. "
+            if resume else
+            f"Starting a new SFT stage of {steps} optimizer steps. "
+        )
+        + f"{len(training_examples)} training and {len(validation_examples)} validation context windows across "
+        + f"{dataset_quality['training_examples']} training and {dataset_quality['validation_examples']} validation source records. "
         + ("Dataset warnings: " + " ".join(dataset_quality["warnings"]) if dataset_quality["warnings"] else "No basic dataset-quality warnings.")
     )
-    for step in range(base_step + 1, base_step + steps + 1):
+    for stage_step in range(stage_start_step + 1, steps + 1):
         from time import perf_counter
 
-        stage_step = step - base_step
+        step = stage_base_step + stage_step
         learning_rate_now = _scheduled_learning_rate(
             learning_rate,
             stage_step,
@@ -884,8 +1022,10 @@ def finetune(
         sampled_memory, device_memory_metric = device_memory_sample(device, torch)
         if sampled_memory is not None:
             peak_device_memory_bytes = max(peak_device_memory_bytes or 0, sampled_memory)
-        if step == base_step + 1 or step % 25 == 0 or step == base_step + steps:
+        should_validate = stage_step == 1 or stage_step % 25 == 0 or stage_step == steps
+        if should_validate:
             last_val_loss = _instruction_loss(model, validation_examples, device, batch_size)
+            last_validation_stage_step = stage_step
             training_history = append_training_history(
                 training_history,
                 step=step,
@@ -902,10 +1042,18 @@ def finetune(
                 "optimizer_state": optimizer.state_dict(),
                 "step": step,
                 "training_mode": "supervised-instruction-finetuning",
+                "finetuning_resume_schema": SFT_RESUME_SCHEMA,
                 "finetuning_settings": finetuning_settings,
+                "finetuning_optimizer_scope": "resumable-stage",
+                "finetuning_stage_base_step": stage_base_step,
+                "finetuning_stage_steps": stage_step,
+                "finetuning_stage_target_steps": steps,
+                "finetuning_validation_stage_step": last_validation_stage_step,
                 "finetuning_learning_rate": last_learning_rate,
                 "finetuning_gradient_norm_before_clip": last_gradient_norm,
-                "finetuning_stage_steps": stage_step,
+                "finetuning_rng_state": _rng_state(device),
+                "finetuning_device_type": device.type,
+                "finetuning_cuda_device_count": torch.cuda.device_count() if device.type == "cuda" else 0,
                 "instruction_examples": dataset_quality["example_count"],
                 "training_history": training_history,
                 "instruction_context_windows": len(examples),
@@ -918,7 +1066,8 @@ def finetune(
                 "validation_loss": last_val_loss,
             }
             _atomic_checkpoint(checkpoint_path_value, payload)
-            _save_inference_checkpoint(checkpoint_path_value, payload)
+            if should_validate:
+                _save_inference_checkpoint(checkpoint_path_value, payload)
             clear_resident_cache()
             metadata_path = checkpoint_path_value.with_suffix(checkpoint_path_value.suffix + ".json")
             metadata = {
@@ -928,10 +1077,16 @@ def finetune(
                 "tokenizer": "byte-BPE", "tokenizer_vocab_size": tokenizer.vocab_size,
                 "context_tokens": config.seq_len,
                 "training_mode": "supervised-instruction-finetuning",
+                "finetuning_resume_schema": SFT_RESUME_SCHEMA,
                 "finetuning_settings": finetuning_settings,
+                "finetuning_optimizer_scope": "resumable-stage",
+                "finetuning_stage_base_step": stage_base_step,
+                "finetuning_stage_steps": stage_step,
+                "finetuning_stage_target_steps": steps,
+                "finetuning_validation_stage_step": last_validation_stage_step,
+                "finetuning_resume_supported": True,
                 "finetuning_learning_rate": last_learning_rate,
                 "finetuning_gradient_norm_before_clip": last_gradient_norm,
-                "finetuning_stage_steps": stage_step,
                 "instruction_examples": dataset_quality["example_count"],
                 "instruction_context_windows": len(examples),
                 "validation_context_windows_per_evaluation": len(validation_examples),
@@ -944,8 +1099,20 @@ def finetune(
                 "training_history_points": len(training_history),
             }
             _atomic_json(metadata_path, metadata)
-            report("running" if step < base_step + steps else "completed", step, "Checkpoint saved with measured supervised validation loss.")
-    return report("completed", base_step + steps, "Supervised fine-tuning finished; the local BPE-tokenized checkpoint was updated.")
+        report(
+            "completed" if stage_step == steps else "running",
+            step,
+            (
+                "SFT stage completed; the full checkpoint contains optimizer/RNG state and measured validation provenance."
+                if stage_step == steps else
+                "SFT optimizer step checkpointed; the stage can resume from this exact update."
+            ),
+        )
+    return report(
+        "completed",
+        stage_base_step + steps,
+        "Supervised fine-tuning stage finished; model, optimizer, scheduler position, and RNG state are saved locally.",
+    )
 
 
 def synthesize_repository_curriculum(
