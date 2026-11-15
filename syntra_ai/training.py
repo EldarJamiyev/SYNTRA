@@ -19,7 +19,7 @@ except ImportError:
     SyntraTransformer = None  # type: ignore[assignment]
 
 from .config import ModelConfig
-from .checkpoint_io import load_torch_checkpoint_snapshot
+from .checkpoint_io import checkpoint_file_identity, load_torch_checkpoint_snapshot
 from .data import MAX_CORPUS_TOKENS, load_corpus
 from .resources import validate_training_memory_budget
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
@@ -790,6 +790,7 @@ def train(
             _save_inference_checkpoint(checkpoint_path, payload)
             metadata = {
                 "checkpoint": str(checkpoint_path),
+                "checkpoint_identity": checkpoint_file_identity(checkpoint_path),
                 "step": step,
                 "config": config.to_dict(),
                 "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
