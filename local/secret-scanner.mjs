@@ -341,6 +341,12 @@ export async function setWorkspaceSecretAllowlist(inputRoot, input) {
     }
 
     const currentEntries = await readAllowlistForWrite(root);
+    // Re-read immediately before committing the exception. If the file changed
+    // after the reviewer supplied its scan fingerprint, do not persist approval.
+    const verifiedSource = await readWorkspaceFile(root, input.path);
+    if (verifiedSource.path !== input.path || verifiedSource.sha256 !== input.sha256) {
+      throw new Error("The file changed during allowlist review. Run /secrets again and review the current findings.");
+    }
     const nextEntry = {
       path: input.path,
       sha256: input.sha256,
