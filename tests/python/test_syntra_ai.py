@@ -1661,7 +1661,7 @@ class TransformerTests(unittest.TestCase):
             config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 result = train([str(root)], checkpoint, steps=1, batch_size=1, config=config,
-                               max_tokens=10000, device_name="cpu")
+                               max_tokens=20000, device_name="cpu")
             self.assertEqual(result["status"], "completed")
             self.assertTrue(checkpoint.is_file())
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
@@ -1699,7 +1699,7 @@ class TransformerTests(unittest.TestCase):
                         steps=1,
                         batch_size=1,
                         config=config,
-                        max_tokens=10000,
+                        max_tokens=20000,
                         device_name="cpu",
                         resume=True,
                     )
@@ -1712,7 +1712,7 @@ class TransformerTests(unittest.TestCase):
                         steps=1,
                         batch_size=2,
                         config=config,
-                        max_tokens=10000,
+                        max_tokens=20000,
                         device_name="cpu",
                         resume=True,
                     )
