@@ -100,9 +100,11 @@ def _run_finetuning(body: dict) -> None:
             checkpoint=_default_checkpoint(),
             steps=int(body.get("steps", 1000)),
             batch_size=int(body.get("batch_size", 4)),
+            gradient_accumulation_steps=int(body.get("gradient_accumulation_steps", 1)),
             learning_rate=float(body.get("learning_rate", 1e-4)),
             device_name=str(body.get("device", "auto")),
             callback=_set_job,
+            resume=body.get("resume", False),
         )
         _set_job(result)
     except Exception as exc:
@@ -114,16 +116,28 @@ def _run_finetuning(body: dict) -> None:
 def start_finetuning(body: dict) -> dict:
     global _worker
     dataset_path = resolve_instruction_dataset(body.get("dataset"))
+    resume = body.get("resume", False)
+    accumulation = body.get("gradient_accumulation_steps", 1)
+    if type(resume) is not bool:
+        raise ValueError("resume must be a boolean.")
+    if type(accumulation) is not int or not 1 <= accumulation <= 128:
+        raise ValueError("gradient_accumulation_steps must be an integer between 1 and 128.")
+    worker_body = dict(body)
+    worker_body["dataset"] = str(dataset_path)
+    worker_body["resume"] = resume
     with _job_lock:
         if _worker is not None and _worker.is_alive():
             raise ValueError("SYNTRA training is already running.")
         _job.update({
             "status": "starting", "step": 0, "max_steps": int(body.get("steps", 1000)),
             "train_loss": None, "validation_loss": None,
-            "message": "Supervised instruction-tuning worker is starting."
+            "message": (
+                "Resuming the saved supervised fine-tuning stage."
+                if resume else "Supervised instruction-tuning worker is starting."
+            )
         })
         _worker = Thread(
-            target=_run_finetuning, args=({"dataset": str(dataset_path), **body},),
+            target=_run_finetuning, args=(worker_body,),
             daemon=True, name="syntra-instruction-finetuning"
         )
         _worker.start()
