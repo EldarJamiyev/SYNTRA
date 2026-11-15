@@ -134,20 +134,20 @@ try {
     Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
 
     if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-            throw "Python is missing. Install Python 3.12 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
-        }
-        $pythonVersionText = (& python --version 2>&1 | Out-String).Trim()
-        $pythonMatch = [regex]::Match($pythonVersionText, 'Python\s+(\d+)\.(\d+)')
-        if ($LASTEXITCODE -ne 0 -or -not $pythonMatch.Success) {
-            throw "Could not read the Python version. Install Python 3.12 or newer."
-        }
-        $pythonMajor = [int]$pythonMatch.Groups[1].Value
-        $pythonMinor = [int]$pythonMatch.Groups[2].Value
-        if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 12)) {
-            throw "SYNTRA needs Python 3.12 or newer. Installed version: $pythonVersionText"
-        }
-        Write-Host "$pythonVersionText" -ForegroundColor Green
-    
+        throw "Python is missing. Install Python 3.12 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
+    }
+    $pythonVersionText = (& python --version 2>&1 | Out-String).Trim()
+    $pythonMatch = [regex]::Match($pythonVersionText, 'Python\s+(\d+)\.(\d+)')
+    if ($LASTEXITCODE -ne 0 -or -not $pythonMatch.Success) {
+        throw "Could not read the Python version. Install Python 3.12 or newer."
+    }
+    $pythonMajor = [int]$pythonMatch.Groups[1].Value
+    $pythonMinor = [int]$pythonMatch.Groups[2].Value
+    if (($pythonMajor -lt 3) -or ($pythonMajor -eq 3 -and $pythonMinor -lt 12)) {
+        throw "SYNTRA needs Python 3.12 or newer. Installed version: $pythonVersionText"
+    }
+    Write-Host "$pythonVersionText" -ForegroundColor Green
+
     Write-Step "Preparing the web application"
     $ProjectLock = Join-Path $Root "package-lock.json"
     $InstalledLock = Join-Path $Root "node_modules\.package-lock.json"
