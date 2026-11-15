@@ -139,6 +139,12 @@ class NativeTrainingSchedulerCheckpointTests(unittest.TestCase):
                 "SYNTRA_ALLOWED_CORPUS_ROOTS": str(root),
                 "SYNTRA_CHECKPOINT": str(checkpoint),
             }
+            initial_status = {}
+
+            def inspect_initial_progress(progress):
+                if progress.get("status") == "running" and progress.get("step") == 0:
+                    initial_status.update(status())
+
             with patch.dict(os.environ, environment):
                 first = train(
                     roots=[str(root)],
@@ -150,9 +156,20 @@ class NativeTrainingSchedulerCheckpointTests(unittest.TestCase):
                     max_tokens=4096,
                     device_name="cpu",
                     seed=31,
+                    callback=inspect_initial_progress,
                 )
                 saved = load_torch_checkpoint_snapshot(checkpoint)
                 model_status = status()
+
+                self.assertEqual(initial_status["trained_steps"], 0)
+                self.assertFalse(initial_status["checkpoint_exists"])
+                self.assertEqual(initial_status["training_mode"], "causal-source-pretraining")
+                initial_metadata = json.loads(
+                    checkpoint.with_suffix(checkpoint.suffix + ".json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(initial_metadata["step"], 0)
+                self.assertEqual(initial_metadata["training_mode"], "causal-source-pretraining")
+                self.assertNotIn("checkpoint_identity", initial_metadata)
 
                 self.assertEqual(first["status"], "completed")
                 self.assertEqual(first["training_scheduler"], SOURCE_TRAINING_SCHEDULER)
