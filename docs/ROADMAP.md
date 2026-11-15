@@ -146,7 +146,7 @@ Still outstanding in this phase: model-selected execution/source-modification to
 - [x] Capture measured supervised tokens/second, optimizer-step latency, process peak RSS, CUDA allocator peak or sampled MPS high-water, estimated working-set size, and gradient-accumulation factor in checkpoint-matched Markdown/CSV evaluation trends.
 - [x] Add low-memory CPU and 1024-token GPU architecture profiles, with true optimizer-step gradient accumulation that keeps only one micro-batch of activations on the selected device at a time.
 - [x] Add explicit checkpoint promotion and rollback. Promotion verifies complete current-suite benchmark evidence, hidden baseline validity, immutable snapshot manifest, SHA-256 identity, and runtime loadability; it archives the previous active checkpoint and reconstructs its inference companion on rollback.
-- [ ] Expand secret-pattern coverage and add optional allowlists with safe, explicit review. Pattern scanning remains best-effort and is not a substitute for a secret manager.
+- [x] Expand provider-specific credential and private-key pattern coverage; add explicit approval-required, hash-bound, detector-scoped secret allowlists with reason, expiry, atomic local storage, fail-closed validation, revocation, and audit redaction. Pattern scanning remains best-effort and is not a substitute for a secret manager.
 
 **Acceptance:** Context selection is explainable, reproducible, workspace-scoped, and covered by tests for stale-index invalidation, explicit memory approval, audit redaction, workspace isolation, and best-effort secret detection.
 
@@ -350,3 +350,19 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for successful repair, idempotent subsequent reads, and fail-closed stale reporting.
 
 **Acceptance:** A checkpoint committed ahead of its JSON sidecar is never silently reported as the older step. Status reconciles only from a stable, verified native source-pretraining or resumable-SFT checkpoint; otherwise it exposes the stale/unknown identity state honestly.
+
+
+### Phase 35 — Expand secret detection with reviewed, hash-bound exceptions
+
+**Objective:** Improve common credential coverage without silently suppressing findings or weakening the existing workspace boundary.
+
+- [x] Add provider-specific token patterns and encrypted/PGP private-key header detection while retaining generic credential-assignment and connection-string patterns.
+- [x] Keep findings metadata-only: relative path, line, detector ID, severity, and exact file SHA-256; never return matching values or source lines.
+- [x] Add a versioned local allowlist scoped to one workspace-relative file, exact SHA-256, and explicitly selected detector IDs.
+- [x] Require a reviewer reason, a strict expiry date with a maximum 366-day lifetime, and an explicit approval-required tool call for every allowlist write or revocation.
+- [x] Re-read and hash the source file immediately before approval is persisted; any file change invalidates the exception.
+- [x] Store allowlist updates atomically under the workspace's validated .syntra state directory, reject symlink/malformed state, and write restrictive POSIX permissions.
+- [x] Record audit metadata without the source path, reason, matched value, or source line; preserve fail-closed behavior when audit start or allowlist validation fails.
+- [x] Test additional provider patterns, explicit approval and revocation, file-hash invalidation, mismatch rejection, malformed/symlinked state, exclusion behavior, and audit redaction.
+
+**Acceptance:** Only a user-reviewed detector exception for one exact file hash can suppress that detector in that file. An edited file, expired exception, malformed allowlist, or missing approval must leave the detection active.
