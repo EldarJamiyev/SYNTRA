@@ -117,12 +117,6 @@ function Ensure-Service([int]$Port, [string]$HealthUrl, [string]$NpmScript, [str
 try {
     Write-Host "SYNTRA - one-click local startup" -ForegroundColor Green
     Write-Host "Project: $Root"
-    $ModelProvider = ([string]$env:SYNTRA_MODEL_PROVIDER).Trim().ToLowerInvariant()
-    if (-not $ModelProvider) { $ModelProvider = "native" }
-    if ($ModelProvider -notin @("native", "openai-compatible")) {
-        throw "SYNTRA_MODEL_PROVIDER must be 'native' or the explicitly opt-in 'openai-compatible'."
-    }
-
     Write-Step "Checking prerequisites"
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
         throw "Node.js is missing. Install Node.js 22.12.0 or newer from https://nodejs.org/ and double-click Start-SYNTRA.bat again."
@@ -139,8 +133,7 @@ try {
     }
     Write-Host "Node.js: $nodeVersionText" -ForegroundColor Green
 
-    if ($ModelProvider -eq "native") {
-        if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
             throw "Python is missing. Install Python 3.12 or newer from https://www.python.org/downloads/ and enable Add Python to PATH."
         }
         $pythonVersionText = (& python --version 2>&1 | Out-String).Trim()
@@ -154,9 +147,6 @@ try {
             throw "SYNTRA needs Python 3.12 or newer. Installed version: $pythonVersionText"
         }
         Write-Host "$pythonVersionText" -ForegroundColor Green
-    } else {
-        Write-Host "Hybrid mode selected. Python/PyTorch setup and local checkpoint training are skipped." -ForegroundColor Yellow
-    }
 
     Write-Step "Preparing the web application"
     $ProjectLock = Join-Path $Root "package-lock.json"
@@ -193,8 +183,7 @@ try {
         Write-Host "JavaScript dependencies match the committed npm lockfile." -ForegroundColor Green
     }
 
-    if ($ModelProvider -eq "native") {
-        Write-Step "Preparing the isolated native AI environment"
+    Write-Step "Preparing the isolated native AI environment"
         $VenvPython = Join-Path $Root ".venv\Scripts\python.exe"
         Write-Host "Checking the installed Python environment against requirements.lock.txt..."
         & python (Join-Path $Root "scripts\setup_syntra_env.py")
@@ -280,21 +269,8 @@ try {
         }
 
 
-
-    } else {
-        Write-Step "Verifying the explicitly configured hybrid model"
-        $hybridCheck = & node --input-type=module -e "import { getHybridModelStatus } from './local/model-provider.mjs'; const status = await getHybridModelStatus(); console.log('Verified hybrid model: ' + status.model_name + ' · context ' + status.context_tokens + ' tokens');" 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            $hybridCheck | ForEach-Object { Write-Host $_ }
-            throw "The explicitly configured hybrid model could not be verified. Check SYNTRA_HYBRID_BASE_URL, SYNTRA_HYBRID_MODEL, API credentials, and model availability."
-        }
-        $hybridCheck | ForEach-Object { Write-Host $_ -ForegroundColor Green }
-    }
-
     Write-Step "Starting the local services"
-    if ($ModelProvider -eq "native") {
-        Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
-    }
+    Ensure-Service 3002 "http://127.0.0.1:3002/health" "ai:server"
     Ensure-Service 3001 "http://127.0.0.1:3001/local-api/health" "server"
     Ensure-Service 3000 "http://127.0.0.1:3000/" "dev" "SYNTRA Chat"
 

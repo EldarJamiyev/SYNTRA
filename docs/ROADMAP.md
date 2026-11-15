@@ -243,6 +243,20 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 
 **Limitation:** Skill retrieval supplies procedural guidance only; it does not provide pretrained weights or prove model-quality gains. Model capability must continue to be measured using real checkpoint benchmark runs.
 
+### Phase 29 — Native-only inference boundary
+
+**Objective:** Enforce the project's self-owned PyTorch model architecture consistently across runtime code, startup, benchmarks, tests, and documentation.
+
+- [x] Remove the optional external inference bridge and endpoint configuration.
+- [x] Remove provider-specific branches from the workspace server, coding agent, and benchmark runner.
+- [x] Require an actual trained native checkpoint for repository coding tasks and benchmark execution; report missing checkpoints explicitly.
+- [x] Always prepare and validate the local Python/PyTorch environment and checkpoint during the Windows one-click startup.
+- [x] Restore native semantic retrieval to model-selected read-only context planning without alternate-provider exclusions.
+- [x] Replace alternate-provider startup tests and CI assertions with native-only regression checks.
+- [x] Align the README, model-capability guide, release checklist, benchmark guide, changelog, and architecture diagram with the implemented runtime boundary.
+
+**Acceptance:** All model operations use the local SYNTRA checkpoint. The runtime, launcher, and benchmark paths do not contact third-party inference endpoints, external embedding services, or model registries. A missing or invalid checkpoint produces an explicit failure rather than an alternate-model fallback.
+
 ## Definition of done for every phase
 
 A phase is not complete merely because the interface looks finished. It must include:

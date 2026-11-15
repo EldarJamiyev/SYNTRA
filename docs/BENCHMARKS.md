@@ -1,12 +1,12 @@
 # SYNTRA coding benchmarks
 
-SYNTRA maintains separate benchmark tracks. They answer different questions and their scores must not be combined. Each report records the actual engine and model identity. Native and hybrid reports are not interchangeable. No public performance score is claimed in this repository until a complete, real run report is committed or attached as a release artifact.
+SYNTRA maintains separate benchmark tracks for direct native-model evaluation and full repository-agent execution. They answer different questions and their scores must not be combined. Each report records the actual native engine, checkpoint identity, and model identity. No public performance score is claimed until a complete, real run report is committed or attached as a release artifact.
 
 ## 1. Full coding-agent benchmark
 
 The existing Node.js suite measures SYNTRA's repository-aware coding workflow: workspace discovery, read-only source retrieval, planning, structured patch generation, second-pass review, candidate verification, and proposal staging.
 
-Run after starting SYNTRA and verifying the selected native checkpoint or explicitly configured hybrid endpoint:
+Run after starting SYNTRA and verifying the trained native checkpoint:
 
 ```bash
 npm run benchmark -- --list

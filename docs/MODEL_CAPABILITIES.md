@@ -2,52 +2,48 @@
 
 ## Local inference
 
-The default one-click startup and application backend use SYNTRA's native Python/PyTorch Transformer. Native mode requires Python 3.12 or newer and a trained local checkpoint; it does not download pretrained weights or call a hosted AI API.
+SYNTRA uses one inference implementation: its own local Python/PyTorch Transformer and the checkpoint trained and stored by the project. The desktop startup path prepares the hash-locked Python environment, validates an existing checkpoint or trains a local checkpoint, and starts the loopback AI service. No pretrained model weights, hosted inference API, third-party model provider, or model registry is downloaded or selected.
 
-An optional, explicit openai-compatible bridge is available for chat and repository coding-agent generation. It is disabled by default, requires a verified model identifier from the configured endpoint, and never silently falls back to the native checkpoint. Its purpose is to provide real pretrained coding inference today without pretending the from-scratch research model has equivalent capability.
+The native model starts from random initialization. It is a research model for experimenting with tokenization, local training, inference, checkpoint integrity, and repository-agent workflows. It is not a pretrained coding model and must not be described as equivalent to Claude or another frontier coding agent.
 
-The native model is a small, randomly initialized decoder-only research model trained from local source text. It is useful for experimentation with tokenization, training, inference, and checkpoint mechanics. It is not a pretrained coding model and should not be represented as comparable to a modern pretrained coding model or frontier coding agent.
+The checkpoint architecture and positional-embedding configuration define the context window. Runtime context accounting uses the checkpoint's saved tokenizer and refuses requests that exceed the available context; it must not silently enlarge the model's context or discard required task instructions.
 
-The default ModelConfig context is 4,096 tokens, but an installed checkpoint remains authoritative and the Windows first-run path currently targets 1,024 tokens, with a smaller 256-token fallback when the selected corpus is insufficient. Larger contexts require a checkpoint whose architecture and positional embedding configuration were trained for that context; context is never enlarged at inference time.
+## Training and data boundaries
 
-Before fine-tuning, run `python -m syntra_ai.cli audit-instructions --dataset <file.jsonl>`. This read-only preflight checks JSONL structure, duplicate prompts, prompt diversity, and whether a deterministic prompt-group train/validation split is possible. It does not judge semantic correctness, create a curated dataset, or prove that examples teach useful programming behavior. The audit uses a checkpoint tokenizer only when one is provided; otherwise it reports that the byte-level fallback was used for inspection.
+Source pretraining and instruction fine-tuning use local files and the project's native training pipeline. Review the corpus and instruction dataset before training. Do not include credentials, private keys, customer information, or data that is not authorized for use.
 
-SYNTRA's native model is a small, randomly initialized research model trained from the approved local corpus; it is not a pretrained coding model and its training does not guarantee strong instruction following. Semantic source retrieval and project-memory embeddings use this same native checkpoint. Project memory falls back to BM25 keyword ranking when native embeddings are unavailable or invalid. Source and memory embedding quality depends on the locally trained checkpoint and corpus; it is not pretrained semantic knowledge. Memory retrieval never embeds chat history.
+Training loss measures next-token prediction on the supplied data. It is not a coding-accuracy score and does not prove that generated patches are correct, that unfamiliar tasks can be solved, or that fine-tuning improved generalization. Checkpoint promotion remains gated by paired, hash-bound benchmark evidence and explicit operator acknowledgement.
 
-Native prompt token counts use SYNTRA's local tokenizer. Any byte-ratio estimate exposed by compatibility or diagnostic paths must remain clearly marked as an estimate and must not be presented as exact model tokenization.
+## Retrieval and embeddings
 
-## Hybrid inference
+Semantic source retrieval and project-memory embeddings use the same SYNTRA checkpoint through the local AI service. There is no separate embedding model or external embedding endpoint.
 
-Set SYNTRA_MODEL_PROVIDER=openai-compatible and configure SYNTRA_HYBRID_BASE_URL, SYNTRA_HYBRID_MODEL, and SYNTRA_HYBRID_CONTEXT_TOKENS. The base URL must expose GET /models and POST /chat/completions. SYNTRA validates that the configured model ID is actually listed before using it. An optional SYNTRA_HYBRID_API_KEY is sent as a bearer credential only to that endpoint.
+Semantic search validates source hashes before returning excerpts and invalidates cached vectors when source identity or checkpoint identity changes. If native embedding inference is unavailable or returns invalid vectors, project-memory search may use its documented BM25 keyword fallback and must report that fallback accurately. It must not claim that semantic inference succeeded.
 
-Loopback HTTP is permitted for local model servers. Remote endpoints require HTTPS and SYNTRA_HYBRID_ALLOW_REMOTE=true; remote HTTP, redirects, URL credentials, query strings, and fragments are rejected. The endpoint is an external trust boundary: request prompts and retrieved repository excerpts are sent to it. Review its data handling before enabling it for sensitive work.
+Chat history is not embedded as project memory. Only explicitly user-authored workspace notes are eligible for memory embeddings.
 
-The compatible API does not provide universal exact-tokenizer accounting. SYNTRA uses a clearly marked UTF-8 byte-budget estimate and requires the operator to declare the model's configured context size. This is a guardrail, not an exact tokenizer or a promise that the provider will accept every request. The runtime checks provider errors and reports them; it does not switch to another model.
+## Repository-agent behavior
 
-The bridge does not implement native pretraining, SFT, curriculum generation, checkpoint promotion, or SYNTRA-native embeddings. Those operations require the native Python/PyTorch runtime. Select SYNTRA_MODEL_PROVIDER=native to restore the complete native lifecycle.
+The repository-aware agent investigates the active workspace through bounded, read-only tools, uses task-aware local skill references as untrusted guidance, and stages structured candidate changes for review. Candidate checks, checkpoint hashes, source hashes, and verification outcomes are recorded as evidence.
+
+Generated patches are not silently applied. Applying proposals requires explicit user action. A model-generated answer or self-review is not proof that a change is correct; the relevant project checks must pass.
 
 ## Self-review
 
-Patch review runs before verification and uses the same native checkpoint as generation. It is a second reasoning pass, not an independent-model guarantee. If review is enabled and no accepted verdict is produced, the candidate is blocked rather than silently treated as reviewed.
+Patch review uses the same native checkpoint as generation. It is a second reasoning pass, not an independent-model guarantee. When review is enabled and no accepted verdict is produced, the candidate is blocked rather than silently treated as reviewed.
 
 ## Benchmark evidence
 
-The benchmark command evaluates a local agent against versioned fixtures and stores machine-readable reports. The eight-task suite includes simple JavaScript utilities, a TypeScript compiler-checked contract task, a multi-file API change, and a Python task; it remains a development baseline rather than a broad coding benchmark. A passing SYNTRA unit-test suite validates SYNTRA's implementation and test harness; it does not establish coding ability of a live model. Run `npm run benchmark` on the target hardware with the actual installed model and preserve the JSON report to compare model, prompt, and agent changes. Benchmark process memory measurements do not include all system-level runtime allocations or GPU VRAM.
+The benchmark command runs the actual repository agent against disposable, versioned fixture copies using a trained SYNTRA checkpoint. It requires the exact expected changed-file set and passing candidate verification for task completion. Reports record the native engine, checkpoint identity, task outcomes, latency, token counts, and the limitations of process-level memory measurements.
 
-The current benchmark fixtures are a development baseline, not a representative coding benchmark. Broader coverage is still required for multi-file changes, repository debugging, dependency/build failures, API work, mixed-language workspaces, security fixes, and regression prevention.
+The benchmark suite is a controlled development regression set, not an industry-wide coding benchmark. Passing SYNTRA's own implementation tests validates the software and test harness; it does not establish coding ability of a live checkpoint. Only a real benchmark run against the checkpoint on the target hardware creates model-performance evidence. Skipped language runtimes are not counted as successful tasks, and missing measurements must remain unavailable rather than being estimated or backfilled.
 
 ## Task-aware skill grounding
 
-The repository-aware coding agent discovers bounded `SKILL.md` references from SYNTRA's bundled `.agents/skills` library and the active workspace. It always selects the bundled project guardrails and verification guidance when present, then ranks task-relevant playbooks from their names and descriptions. Selection is deterministic and limited to three skills.
+The agent discovers bounded `SKILL.md` references from SYNTRA's bundled skills and the active workspace. It selects applicable project guardrails and ranks task-specific playbooks within the native checkpoint's measured context budget. Skill text is untrusted reference material: it cannot expand the tool allowlist, change permission boundaries, or authorize workspace mutations.
 
-Skill text is treated as untrusted reference context, not executable instructions or permission. Selected excerpt hashes and retrieval status are recorded with the agent run. The selected text is progressively compacted using the checkpoint's actual tokenizer budget and omitted when necessary to preserve the user's task and patch contract. This improves access to documented engineering procedures; it does not add model weights or prove the model followed a skill.
+Selected skill identities, excerpt hashes, and retrieval/compaction outcomes are recorded with agent-run evidence. Skill retrieval provides procedural context; it does not add pretrained weights or prove that the model followed the guidance.
 
-## Self-review
+## Inference boundary
 
-Patch review runs before verification and uses the same native checkpoint as generation. It is a second reasoning pass, not an independent-model guarantee. If review is enabled and no accepted verdict is produced, the candidate is blocked rather than silently treated as reviewed.
-
-## Benchmark evidence
-
-The benchmark command evaluates a local agent against versioned fixtures and stores machine-readable reports. The eight-task suite includes simple JavaScript utilities, a TypeScript compiler-checked contract task, a multi-file API change, and a Python task; it remains a development baseline rather than a broad coding benchmark. A passing SYNTRA unit-test suite validates SYNTRA's implementation and test harness; it does not establish coding ability of a live model. Run `npm run benchmark` on the target hardware with the actual installed model and preserve the JSON report to compare model, prompt, and agent changes. Benchmark process memory measurements do not include all system-level runtime allocations or GPU VRAM.
-
-The current benchmark fixtures are a development baseline, not a representative coding benchmark. Broader coverage is still required for multi-file changes, repository debugging, dependency/build failures, API work, mixed-language workspaces, security fixes, and regression prevention.
+All model requests are routed to SYNTRA's local PyTorch service. The application, launcher, repository agent, and benchmark runner do not integrate third-party inference endpoints, external embedding services, or model registries. A missing or invalid native checkpoint is reported as an error and must be resolved through SYNTRA's local training and checkpoint-validation workflow.
