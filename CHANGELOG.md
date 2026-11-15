@@ -9,6 +9,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
+- Make native source-pretraining and fresh corpus evaluation document-isolated: deduplicate exact source copies, learn BPE merges from training documents only, preserve complete files under the token budget, and record holdout provenance.
 - Enforce the Node.js version range required by the current Vite runtime in package metadata, startup validation, and CI.
 - Clarify that no model-performance score or pretrained starter checkpoint is published until genuine artifacts and reports exist.
 

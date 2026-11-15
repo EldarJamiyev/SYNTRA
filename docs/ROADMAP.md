@@ -276,3 +276,20 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for duplicate files across paths and duplicate-only corpora.
 
 **Acceptance:** Exact copies of a source file cannot cross the raw training/validation boundary. This is exact-content deduplication, not semantic near-duplicate detection.
+
+
+### Phase 30 — Document-isolated native source pretraining and evaluation
+
+**Objective:** Make source-pretraining validation evidence independent at the source-document level instead of cutting a concatenated token stream.
+
+- [x] Assign complete source documents to training or validation using deterministic, size-aware 80/20 partitioning.
+- [x] Group byte-identical source contents before partitioning and count unique documents against the source token budget only once.
+- [x] Learn tokenizer BPE merges exclusively from training documents; encode held-out documents with that frozen tokenizer.
+- [x] Preserve complete documents in corpus loading and never truncate a source file to fill the remaining token budget.
+- [x] Require at least two independent documents and enough tokens for both context windows; fail explicitly instead of reverting to token-offset validation.
+- [x] Bind the validation strategy to the checkpoint training-data fingerprint and expose split counts in checkpoint metadata and model status.
+- [x] Apply the same document-isolated split to fresh corpus evaluation and report the validation provenance.
+- [x] Add deterministic traversal, duplicate-content, holdout, resume-compatibility, and real training/checkpoint regression tests.
+- [ ] Run a fresh target-hardware raw-checkpoint baseline and compare actual coding-task outcomes before claiming a model-quality improvement.
+
+**Acceptance:** No exact source document or byte-identical copy crosses the training/validation boundary. The tokenizer is fitted only on training content. The split is reproducible, bounded by the configured source budget, independently tested, and explicitly reported. Historical token-offset checkpoints cannot silently resume under the new validation strategy.

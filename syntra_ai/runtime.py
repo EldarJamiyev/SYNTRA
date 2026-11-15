@@ -26,7 +26,13 @@ from .config import ModelConfig
 from .checkpoint_io import load_torch_checkpoint_snapshot
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
-    _batch, _encode_documents, _estimate_loss, choose_device, select_inference_checkpoint,
+    SOURCE_VALIDATION_STRATEGY,
+    _batch,
+    _encode_document_partition,
+    _estimate_loss,
+    _partition_source_documents,
+    choose_device,
+    select_inference_checkpoint,
 )
 from .data import MAX_CORPUS_TOKENS, load_corpus
 from .resources import validate_inference_memory_budget
@@ -304,6 +310,11 @@ def status() -> dict:
         "training_history_error": history_error,
         "corpus_files": metadata.get("corpus_files", len(metadata.get("dataset_files", [])) if isinstance(metadata.get("dataset_files"), list) else 0),
         "corpus_tokens": metadata.get("corpus_tokens", 0),
+        "training_documents": metadata.get("training_documents", 0),
+        "validation_documents": metadata.get("validation_documents", 0),
+        "duplicate_documents_excluded": metadata.get("duplicate_documents_excluded", 0),
+        "token_budget_documents_excluded": metadata.get("token_budget_documents_excluded", 0),
+        "validation_strategy": metadata.get("validation_strategy"),
         "tokenizer": metadata.get("tokenizer", "byte-BPE" if checkpoint_exists else None),
         "tokenizer_vocab_size": vocab_size,
         "context_tokens": context_tokens,
@@ -578,15 +589,19 @@ def evaluate(
         raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
     corpus_root = resolve_corpus_root(root)
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=checkpoint, device_name=device_name)
-    corpus = load_corpus([str(corpus_root)], max_tokens=max_tokens)
-    token_ids = _encode_documents(corpus.documents, tokenizer, max_tokens=max_tokens)
-    split = int(len(token_ids) * 0.8)
-    if split <= config.seq_len + 1 or len(token_ids) - split <= config.seq_len + 1:
-        raise ValueError(
-            f"The selected corpus produced {len(token_ids)} tokens. A fresh 80/20 evaluation "
-            f"with context={config.seq_len} needs more than {5 * (config.seq_len + 1)} tokens."
-        )
-    validation_data = torch.tensor(token_ids[split:], dtype=torch.long)
+    corpus = load_corpus(
+        [str(corpus_root)],
+        max_tokens=max_tokens,
+        include_tokens=False,
+    )
+    partition = _partition_source_documents(corpus.documents, max_tokens=max_tokens)
+    document_split = _encode_document_partition(
+        partition,
+        tokenizer,
+        max_tokens=max_tokens,
+        seq_len=config.seq_len,
+    )
+    validation_data = torch.tensor(document_split.validation_tokens, dtype=torch.long)
     fresh_loss = _estimate_loss(
         model, validation_data, batch_size=1, seq_len=config.seq_len, device=device, batches=batches
     )
@@ -598,7 +613,12 @@ def evaluate(
         "validation_loss": fresh_loss,
         "perplexity": math.exp(min(fresh_loss, 80.0)),
         "corpus_files": len(corpus.files),
-        "evaluation_tokens": len(token_ids) - split,
+        "evaluation_tokens": len(document_split.validation_tokens),
+        "training_documents": len(document_split.training_document_hashes),
+        "validation_documents": len(document_split.validation_document_hashes),
+        "duplicate_documents_excluded": document_split.duplicate_documents_excluded,
+        "token_budget_documents_excluded": document_split.token_budget_documents_excluded,
+        "validation_strategy": SOURCE_VALIDATION_STRATEGY,
         "batches": batches,
         "context_window_tokens": config.seq_len,
         "tokenizer": "byte-BPE",

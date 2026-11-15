@@ -1651,11 +1651,17 @@ class TransformerTests(unittest.TestCase):
                  "def clamp(value, low, high):\n    return min(max(value, low), high)\n") * 80,
                 encoding="utf-8",
             )
+            independent_source = root / "helper.py"
+            independent_source.write_text(
+                ("def normalize(value):\n    return value / 100\n\n"
+                 "def format_value(value):\n    return str(value)\n") * 40,
+                encoding="utf-8",
+            )
             checkpoint = root / "checkpoints" / "model.pt"
             config = ModelConfig(seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0)
             with patch.dict(os.environ, {"SYNTRA_ALLOWED_CORPUS_ROOTS": str(root)}):
                 result = train([str(root)], checkpoint, steps=1, batch_size=1, config=config,
-                               max_tokens=10000, device_name="cpu")
+                               max_tokens=20000, device_name="cpu")
             self.assertEqual(result["status"], "completed")
             self.assertTrue(checkpoint.is_file())
             self.assertTrue(checkpoint.with_suffix(".pt.json").is_file())
@@ -1693,7 +1699,7 @@ class TransformerTests(unittest.TestCase):
                         steps=1,
                         batch_size=1,
                         config=config,
-                        max_tokens=10000,
+                        max_tokens=20000,
                         device_name="cpu",
                         resume=True,
                     )
@@ -1706,7 +1712,7 @@ class TransformerTests(unittest.TestCase):
                         steps=1,
                         batch_size=2,
                         config=config,
-                        max_tokens=10000,
+                        max_tokens=20000,
                         device_name="cpu",
                         resume=True,
                     )
@@ -1762,7 +1768,7 @@ class TransformerTests(unittest.TestCase):
             previous_allowed_roots = os.environ.get("SYNTRA_ALLOWED_CORPUS_ROOTS")
             os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = str(root)
             try:
-                fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=10000, checkpoint=checkpoint)
+                fresh_evaluation = evaluate(str(root), batches=2, device_name="cpu", max_tokens=20000, checkpoint=checkpoint)
             finally:
                 if previous_allowed_roots is None:
                     os.environ.pop("SYNTRA_ALLOWED_CORPUS_ROOTS", None)
@@ -1770,6 +1776,9 @@ class TransformerTests(unittest.TestCase):
                     os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = previous_allowed_roots
             self.assertTrue(fresh_evaluation["evaluation_performed"])
             self.assertTrue(torch.isfinite(torch.tensor(fresh_evaluation["validation_loss"])).item())
+            self.assertEqual(fresh_evaluation["validation_strategy"], "sha256-grouped-document-holdout-v1")
+            self.assertGreater(fresh_evaluation["training_documents"], 0)
+            self.assertGreater(fresh_evaluation["validation_documents"], 0)
             model, saved, device = load_model(checkpoint, "cpu")
             self.assertFalse(model.training, "fresh evaluation must leave the resident inference model in eval mode")
             self.assertEqual(saved["training_mode"], "supervised-instruction-finetuning")
@@ -1783,7 +1792,7 @@ class TransformerTests(unittest.TestCase):
                         steps=1,
                         batch_size=1,
                         config=config,
-                        max_tokens=10000,
+                        max_tokens=20000,
                         device_name="cpu",
                         resume=True,
                     )
