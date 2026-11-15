@@ -121,6 +121,7 @@ class SftStatusCheckpointReconciliationTests(unittest.TestCase):
                 self.assertEqual(recovered["finetuning_remaining_steps"], 2)
                 self.assertTrue(recovered["checkpoint_metadata_reconciled"])
                 self.assertFalse(recovered["checkpoint_metadata_stale"])
+                self.assertTrue(recovered["checkpoint_metadata_identity_verified"])
                 self.assertIsNone(recovered["checkpoint_metadata_warning"])
 
                 repaired_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -154,6 +155,7 @@ class SftStatusCheckpointReconciliationTests(unittest.TestCase):
 
             self.assertTrue(result["checkpoint_metadata_stale"])
             self.assertFalse(result["checkpoint_metadata_reconciled"])
+            self.assertFalse(result["checkpoint_metadata_identity_verified"])
             self.assertIn("could not be reconciled", result["checkpoint_metadata_warning"])
             self.assertEqual(result["trained_steps"], 11)
 
