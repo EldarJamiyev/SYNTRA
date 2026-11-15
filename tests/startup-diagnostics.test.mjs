@@ -5,7 +5,6 @@ import { isSupportedNodeVersion, SUPPORTED_NODE_RANGE } from "../scripts/node-ve
 
 const launcherPath = new URL("../scripts/start-syntra.ps1", import.meta.url);
 
-
 test("Windows launcher enforces the same Node.js range declared by the package", async () => {
   const [launcher, packageText] = await Promise.all([
     fs.readFile(launcherPath, "utf8"),
@@ -37,24 +36,26 @@ test("Windows startup failures report HTTP response and the process listening on
   assert.match(launcher, /Check the Vite service window for its startup error/);
 });
 
-test("Windows startup preserves native-first setup and explicitly supports hybrid inference", async () => {
+test("Windows startup always prepares and validates the native PyTorch checkpoint", async () => {
   const launcher = await fs.readFile(launcherPath, "utf8");
-  assert.doesNotMatch(launcher, /SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|11434/i);
+  assert.doesNotMatch(launcher, /SYNTRA_MODEL_PROVIDER|SYNTRA_HYBRID_|openai-compatible|ollama/i);
   assert.doesNotMatch(launcher, /UsePretrainedModel|launcher-helpers/i);
-  assert.match(launcher, /SYNTRA_MODEL_PROVIDER/);
-  assert.match(launcher, /openai-compatible/);
   assert.match(launcher, /Preparing the isolated native AI environment/);
-  assert.match(launcher, /Verifying the explicitly configured hybrid model/);
-  assert.match(launcher, /npm install --package-lock-only --ignore-scripts --no-audit/);
-  assert.match(launcher, /npm ci/);
+  assert.match(launcher, /Checking the local model/);
+  assert.match(launcher, /First-run local training is required/);
+  assert.match(launcher, /CHECKPOINT_OK/);
   assert.match(launcher, /Ensure-Service 3002 "http:\/\/127\.0\.0\.1:3002\/health" "ai:server"/);
-  assert.match(launcher, /if \(\$ModelProvider -eq "native"\)/);
+  assert.match(launcher, /npm ci/);
   assert.ok(launcher.includes("Node.js 22.12.0 or newer"));
   assert.ok(launcher.includes("node-version.mjs"));
+
   const server = await fs.readFile(new URL("../local/server.mjs", import.meta.url), "utf8");
-  assert.match(server, /model-provider\.mjs/);
-  assert.match(server, /isHybridModelEnabled/);
-  await assert.doesNotReject(() => fs.access(new URL("../local/model-provider.mjs", import.meta.url)));
+  assert.doesNotMatch(server, /model-provider\.mjs|isHybridModelEnabled|SYNTRA_MODEL_PROVIDER|SYNTRA_HYBRID_|openai-compatible/i);
+  assert.match(server, /SYNTRA's own local PyTorch checkpoint/);
+  await assert.rejects(
+    fs.access(new URL("../local/model-provider.mjs", import.meta.url)),
+    error => error?.code === "ENOENT"
+  );
 });
 
 test("Vite startup keeps console output visible in its own service window", async () => {
@@ -63,14 +64,10 @@ test("Vite startup keeps console output visible in its own service window", asyn
   assert.match(launcher, /The Vite service window will show the frontend startup log/);
 });
 
-
-test("benchmark CLI preserves native inference and supports an explicit hybrid endpoint", async () => {
+test("benchmark CLI uses only the local SYNTRA AI service", async () => {
   const benchmark = await fs.readFile(new URL("../scripts/benchmark-agent.mjs", import.meta.url), "utf8");
   assert.match(benchmark, /127\.0\.0\.1/);
   assert.match(benchmark, /\/model\/status|createModelRequest/);
   assert.match(benchmark, /redirect: "error"/);
-  assert.match(benchmark, /model-provider\.mjs/);
-  assert.match(benchmark, /isHybridModelEnabled/);
-  assert.match(benchmark, /getHybridModelStatus/);
-  assert.doesNotMatch(benchmark, /detectLocalModel|handleLocalModelRequest|SYNTRA_REVIEW_MODEL|11434/i);
+  assert.doesNotMatch(benchmark, /model-provider|isHybridModelEnabled|openai-compatible|SYNTRA_HYBRID_|SYNTRA_MODEL_PROVIDER|ollama/i);
 });

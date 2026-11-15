@@ -1,6 +1,6 @@
 # Release checklist and upgrade notes
 
-This checklist validates SYNTRA's native Python/PyTorch model and the optional, explicitly configured OpenAI-compatible inference bridge. Provider identity, model ID, context assumptions, and data egress must be recorded separately.
+This checklist validates SYNTRA's single local Python/PyTorch model runtime, checkpoint integrity, workspace trust boundaries, and reproducible benchmark evidence.
 
 ## 1. Prepare the release candidate
 
@@ -28,8 +28,8 @@ On GitHub, require both the `SYNTRA checks` workflow and CodeQL to pass on the e
 
 ## 3. Verify the native runtime
 
-1. Confirm Node.js ^20.19.0 or >=22.12.0 and Git are installed. Python 3.12 or newer is required for native mode; it is not required for explicitly configured hybrid inference.
-2. In native mode, run `Start-SYNTRA.bat`. The launcher prepares the isolated Python environment, validates an existing checkpoint or trains SYNTRA's own checkpoint from approved local source data, and starts the native AI service. In hybrid mode, it verifies the exact configured model ID through /models, skips Python setup and checkpoint training, and starts the local workspace and frontend services.
+1. Confirm Node.js 22.12.0 or newer, Python 3.12 or newer, and Git are installed. Both runtimes are required for the native SYNTRA application.
+2. Run `Start-SYNTRA.bat`. The launcher prepares the isolated Python environment, validates an existing checkpoint or trains SYNTRA's own checkpoint from approved local source data, and starts the native AI service, workspace service, and frontend.
 3. Confirm `http://127.0.0.1:3002/health` reports the SYNTRA native Transformer service and `http://127.0.0.1:3001/local-api/health` reports the workspace service.
 4. Open `http://127.0.0.1:3000`, run `/status`, and verify the active checkpoint, training step count, and context size are actual values read from local metadata.
 5. Test normal chat, tokenization, streamed generation, and a small repository-aware coding task in a disposable workspace. Review the proposed diff, candidate-check results, and source hashes before applying anything.
@@ -76,7 +76,7 @@ Release only when all applicable gates are recorded:
 - [ ] GitHub `SYNTRA checks` and CodeQL pass on that exact commit.
 - [ ] Local lint, Node/Python regression tests, browser E2E tests, and production build pass.
 - [ ] The Windows launcher and native service smoke test pass on the target machine.
-- [ ] A valid locally trained SYNTRA checkpoint is confirmed and used by normal chat, generation, review, and embedding paths, OR the explicitly selected hybrid endpoint is verified and the exact provider/model/context and data-egress boundary are recorded.
+- [ ] A valid locally trained SYNTRA checkpoint is confirmed and used by normal chat, generation, review, semantic retrieval, and project-memory embedding paths.
 - [ ] A disposable-project coding task has a reviewable diff and truthful verification result.
 - [ ] Check isolation is explicitly configured and the chosen trust boundary is understood.
 - [ ] Native semantic-index and project-memory behavior is checked.

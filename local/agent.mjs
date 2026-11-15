@@ -996,7 +996,7 @@ function makeReadOnlyToolPlanPrompt(goal, ranked, {
 
 async function runModelSelectedReadOnlyTools({
   root, auditRoot = root, goal, ranked, modelRequest, contextBudget,
-  hybridProvider = false, signal, toolCalls, observations
+  signal, toolCalls, observations
 }) {
   const indexRefresh = await executeWorkspaceTool({
     root, auditRoot, name: "workspace.index.refresh", input: {}, signal
@@ -1079,12 +1079,7 @@ async function runModelSelectedReadOnlyTools({
     }, 120000, signal);
     const payload = extractJsonObject(generated.text);
     const validatedCalls = validateReadOnlyToolPlan(payload, ranked.slice(0, 40).map(item => item.path));
-    // Workspace semantic indexing is bound to SYNTRA's native checkpoint. In
-    // hybrid mode, keep retrieval lexical/symbol/memory based rather than
-    // attempting embeddings against a native service that is intentionally off.
-    const proposedCalls = hybridProvider
-      ? validatedCalls.filter(call => call.tool !== "workspace.semantic.search")
-      : validatedCalls;
+    const proposedCalls = validatedCalls;
     const calls = [];
     for (const call of proposedCalls) {
       const key = call.tool + ":" + JSON.stringify(call.input);
@@ -1548,14 +1543,10 @@ function createReviewDiff(relativePath, beforeContent, afterContent) {
 }
 
 export function deriveModelContextBudget(modelStatus = {}) {
-  // Native checkpoint dimensions are architecture-bound and capped separately.
-  // An explicitly selected compatible model has an operator-declared context
-  // limit, which must not inherit the native model's 16K ceiling.
-  const hybridProvider = modelStatus.backend === "openai-compatible";
+  // Native checkpoint architecture and positional embeddings are authoritative.
   const rawContext = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 4096);
-  const maximumContext = hybridProvider ? 1_000_000 : 16_384;
-  // The installed checkpoint (or explicitly configured provider limit) remains
-  // authoritative. Never enlarge a 256/512-token native checkpoint.
+  const maximumContext = 16_384;
+  // The installed checkpoint remains authoritative. Never enlarge a 256/512-token native checkpoint.
   const contextWindowTokens = Number.isFinite(rawContext) && rawContext > 0
     ? Math.max(16, Math.min(maximumContext, Math.floor(rawContext)))
     : 4096;
@@ -1640,7 +1631,7 @@ export async function runAgentTask({
   const skillSelection = await loadRelevantSkills(root, goal);
   maxIterations = Math.max(1, Math.min(MAX_ITERATIONS, Number(maxIterations) || 5));
   const modelStatus = await modelRequest("GET", "/model/status", undefined, 15000, { signal });
-  if (!modelStatus.checkpoint_exists && modelStatus.model_available !== true) throw new Error("No trained native SYNTRA checkpoint or verified opt-in hybrid model is available. Complete native training or verify the explicitly configured hybrid endpoint.");
+  if (modelStatus.checkpoint_exists !== true) throw new Error("A trained native SYNTRA checkpoint is required. Run SYNTRA's local training workflow before using repository coding tasks.");
   const contextPlan = deriveModelContextBudget(modelStatus);
   const contextWindow = contextPlan.contextWindowTokens;
   const contextBudget = contextPlan.contextBudgetTokens;
@@ -1648,8 +1639,6 @@ export async function runAgentTask({
   const modelMetadata = {
     engine: String(modelStatus.backend || "syntra-native"),
     name: String(modelStatus.model_name || "SYNTRA native Transformer"),
-    ...(modelStatus.provider ? { provider: String(modelStatus.provider) } : {}),
-    ...(modelStatus.backend === "openai-compatible" ? { modelId: String(modelStatus.model_name || "") } : {}),
     ...(modelStatus.checkpoint ? { checkpoint: String(modelStatus.checkpoint).slice(0, 512) } : {}),
     contextWindowTokens: contextWindow,
     contextBudgetTokens: contextBudget,
@@ -1786,7 +1775,7 @@ export async function runAgentTask({
         message: "Asking the local model to select bounded read-only context tools."
       });
       modelSelectedContext = await runModelSelectedReadOnlyTools({
-        root, auditRoot: root, goal, ranked, modelRequest, contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
+        root, auditRoot: root, goal, ranked, modelRequest, contextBudget, signal, toolCalls, observations
       });
     } catch (error) {
       if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -1883,7 +1872,7 @@ export async function runAgentTask({
         try {
           modelSelectedContext = await runModelSelectedReadOnlyTools({
             root: snapshot.root, auditRoot: root, goal: implementationSlices[firstSliceIndex].goal, ranked,
-            modelRequest, contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
+            modelRequest, contextBudget, signal, toolCalls, observations
           });
         } catch (error) {
           if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -2645,7 +2634,7 @@ export async function runAgentTask({
           try {
             modelSelectedContext = await runModelSelectedReadOnlyTools({
               root: snapshot.root, auditRoot: root, goal: sliceGoal, ranked, modelRequest,
-              contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
+              contextBudget, signal, toolCalls, observations
             });
           } catch (error) {
             if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -2710,7 +2699,7 @@ export async function runAgentTask({
           try {
             modelSelectedContext = await runModelSelectedReadOnlyTools({
               root: snapshot.root, auditRoot: root, goal: nextSlice.goal, ranked, modelRequest,
-              contextBudget, hybridProvider: modelStatus.backend === "openai-compatible", signal, toolCalls, observations
+              contextBudget, signal, toolCalls, observations
             });
           } catch (error) {
             if (signal?.aborted || error?.name === "AbortError") throw error;

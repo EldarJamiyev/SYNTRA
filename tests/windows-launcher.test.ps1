@@ -19,11 +19,8 @@ if ($LASTEXITCODE -ne 0) {
     throw "The installed Node.js runtime failed SYNTRA's compatibility check."
 }
 
-if ($launcher -match "(?i)SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|11434|UsePretrainedModel|launcher-helpers") {
-    throw "The Windows launcher must not contain legacy model selectors or alternate-provider launcher helpers."
-}
-if ($launcher -notmatch "SYNTRA_MODEL_PROVIDER" -or $launcher -notmatch "openai-compatible") {
-    throw "The Windows launcher must expose the explicit, opt-in hybrid provider mode."
+if ($launcher -match "(?i)SYNTRA_LOCAL_MODEL|SYNTRA_EMBED_MODEL|SYNTRA_REVIEW_MODEL|SYNTRA_MODEL_PROVIDER|SYNTRA_HYBRID_|openai-compatible|ollama|11434|UsePretrainedModel|launcher-helpers") {
+    throw "The Windows launcher must not contain alternate model selectors or provider integrations."
 }
 if ($launcher -notmatch 'scripts\\node-version\.mjs') {
     throw "The Windows launcher must invoke the shared supported-runtime validator."
@@ -33,8 +30,6 @@ if ($launcher -notmatch 'Node\.js 22\.12\.0 or newer') {
 }
 foreach ($required in @(
     "scripts\setup_syntra_env.py",
-    "local/model-provider.mjs",
-    "openai-compatible",
     "requirements.lock.txt",
     "syntra_ai.cli",
     "Preparing the isolated native AI environment",
@@ -55,4 +50,4 @@ if ($launcher -notmatch 'CHECKPOINT_OK') {
     throw "The launcher must validate the native checkpoint before starting chat."
 }
 
-Write-Host "Windows launcher native-first and hybrid startup checks passed." -ForegroundColor Green
+Write-Host "Windows launcher native-only startup checks passed." -ForegroundColor Green

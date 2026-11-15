@@ -2,13 +2,6 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import crypto from "node:crypto";
-import {
-  estimateHybridTokenCount,
-  generateHybridCompletion,
-  getHybridModelConfig,
-  getHybridModelStatus,
-  isHybridModelEnabled
-} from "./model-provider.mjs";
 import { getHostRejection, getOriginRejection } from "./origin-policy.mjs";
 import { runAgentTask } from "./agent.mjs";
 import { executeWorkspaceTool, listWorkspaceTools } from "./tool-runtime.mjs";
@@ -74,21 +67,6 @@ async function parseBody(request) {
 async function aiRequest(method, route, body, timeoutMs = undefined, options = {}) {
   const onToken = typeof options?.onToken === "function" ? options.onToken : undefined;
   const signal = options?.signal;
-  if (isHybridModelEnabled()) {
-    // Hybrid inference is an explicit opt-in. There is no silent native fallback.
-    getHybridModelConfig();
-    if (method === "GET" && route === "/model/status") return getHybridModelStatus({ signal });
-    if (method === "POST" && route === "/model/tokenize") {
-      return estimateHybridTokenCount(typeof body?.text === "string" ? body.text : "");
-    }
-    if (method === "POST" && route === "/model/generate") {
-      return generateHybridCompletion(body, { signal, timeoutMs: timeoutMs || 300000, onToken });
-    }
-    throw new Error(
-      "This operation requires SYNTRA's native PyTorch checkpoint and is unavailable while the openai-compatible hybrid provider is selected: "
-      + route
-    );
-  }
   const useNativeStream = Boolean(onToken && method === "POST" && route === "/model/generate");
   const requestBody = method === "GET" ? undefined : JSON.stringify(useNativeStream ? { ...(body || {}), stream: true } : (body || {}));
   const requestTimeout = timeoutMs || (method === "POST" && route === "/model/generate" ? 300000 : 30000);
@@ -568,7 +546,7 @@ async function runChatTurn(jobId, message, history, signal) {
         "- /status checks whether the local model backend is reachable.",
         "- /clear clears this conversation and its saved browser history.",
         "",
-        "Normal chat and code edits use SYNTRA's native checkpoint by default. An explicitly configured openai-compatible endpoint can be selected with SYNTRA_MODEL_PROVIDER=openai-compatible."
+        "Normal chat, coding, review, embeddings, and training use SYNTRA's own local PyTorch checkpoint. SYNTRA does not connect to third-party inference services or model registries."
       ].join("\n"));
       return;
     }
@@ -577,16 +555,13 @@ async function runChatTurn(jobId, message, history, signal) {
       updateChat(jobId, { phase: "status", message: "Checking the local model backend" });
       try {
         const modelStatus = await aiRequest("GET", "/model/status", undefined, 5000, { signal });
-        const backend = modelStatus.backend || "native";
-        const modelAvailable = modelStatus.checkpoint_exists === true || modelStatus.model_available === true;
+        const modelAvailable = modelStatus.checkpoint_exists === true;
         const lines = [
           "**SYNTRA status**",
           "",
           "Workspace service: running",
-          "Model backend: reachable (" + backend + ")",
-          backend === "openai-compatible"
-            ? (modelAvailable ? "Hybrid model: verified at the configured endpoint" : "Hybrid model: unavailable")
-            : (modelStatus.checkpoint_exists ? "Native checkpoint: available" : "Native checkpoint: not trained or not installed")
+          "Model backend: reachable (SYNTRA native PyTorch)",
+          modelAvailable ? "Native checkpoint: available" : "Native checkpoint: not trained or not installed"
         ];
         if (modelStatus.model_name) lines.push("Model: " + modelStatus.model_name);
         const context = Number(modelStatus.context_tokens || modelStatus.context_window_tokens || modelStatus.config?.seq_len || 0);
@@ -594,14 +569,9 @@ async function runChatTurn(jobId, message, history, signal) {
         if (Number.isFinite(Number(modelStatus.trained_steps)) && Number(modelStatus.trained_steps) > 0) {
           lines.push("Training steps: " + Number(modelStatus.trained_steps).toLocaleString());
         }
-        if (backend === "openai-compatible") {
-          lines.push("Inference: explicitly configured hybrid endpoint; no local checkpoint is implied");
-          if (modelStatus.context_count_is_estimate) lines.push("Context accounting: conservative UTF-8 byte budget, not exact provider tokenization");
-        } else if (modelStatus.checkpoint_exists) {
-          lines.push("Weights: local SYNTRA checkpoint");
-        }
+        if (modelAvailable) lines.push("Weights: local SYNTRA checkpoint");
         lines.push("", "Network diagnostics: available without a model.");
-        if (!modelAvailable) lines.push("Train the native SYNTRA model or verify the explicitly configured hybrid model to enable ordinary chat and code edits.");
+        if (!modelAvailable) lines.push("Train SYNTRA's native model locally to enable ordinary chat and code edits.");
         finishChat(jobId, lines.join("\n"), { modelStatus: "reachable" });
       } catch (error) {
         if (signal?.aborted || error?.name === "AbortError") throw error;
@@ -612,7 +582,7 @@ async function runChatTurn(jobId, message, history, signal) {
           "Model backend: unavailable",
           "Network diagnostics: available without a model.",
           "",
-          "Check the service windows opened by Start-SYNTRA.bat. Ordinary chat and code edits need a reachable local model backend.",
+          "Check the service windows opened by Start-SYNTRA.bat. Ordinary chat and code edits need a reachable local native PyTorch model service.",
           error instanceof Error ? error.message : String(error)
         ].join("\n"), { modelStatus: "unavailable" });
       }
