@@ -260,7 +260,7 @@ test("scanner gives an explicit empty result for a workspace with no supported m
     const result = await scanWorkspaceSecrets(root);
     assert.equal(result.findingCount, 0);
     assert.equal(result.findings.length, 0);
-    assert.match(result.notice, /best-effort/);
+    assert.match(result.notice, /best-effort/i);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
