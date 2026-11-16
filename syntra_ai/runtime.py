@@ -583,7 +583,7 @@ def embed_texts(
     overlap = min(EMBEDDING_WINDOW_OVERLAP_TOKENS, max(0, window_limit // 8))
     stride = max(1, window_limit - overlap)
     planned_window_counts = [
-        max(1, (token_count + stride - 1) // stride)
+        1 + max(0, (max(0, token_count - window_limit) + stride - 1) // stride)
         for token_count in input_token_counts
     ]
     planned_windows = sum(planned_window_counts)
