@@ -378,6 +378,9 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
       checkpointIdentity: queryResult.checkpointIdentity
     };
   }
+  if (queryResult.maxInputTokens !== index.maxInputTokens) {
+    throw new Error("Native embedding token limits differ from the saved semantic index. Refresh the semantic index.");
+  }
   const [queryVector] = queryResult.embeddings;
   if (queryVector.length !== index.dimensions) throw new Error("Query embedding dimensions do not match the saved native checkpoint. Refresh the semantic index.");
   const ranked = index.chunks.map(item => ({ ...item, score: cosineSimilarity(queryVector, item.vector) }))
