@@ -274,7 +274,7 @@ export async function refreshWorkspaceSemanticIndex(inputRoot, {
 } = {}) {
   const root = await resolveWorkspace(inputRoot);
   if (model !== DEFAULT_EMBEDDING_MODEL) throw new Error("SYNTRA semantic retrieval uses only its native checkpoint embeddings.");
-  const identityProbe = await embed(["SYNTRA native semantic index checkpoint identity probe"], model, fetchImpl, signal);
+  const identityProbe = await embed(["SYNTRA index"], model, fetchImpl, signal);
   const checkpointIdentity = identityProbe.checkpointIdentity;
   const previous = await readIndex(root), oldByPath = new Map();
   if (previous?.embeddingModel === model && previous.checkpointIdentity === checkpointIdentity) {
