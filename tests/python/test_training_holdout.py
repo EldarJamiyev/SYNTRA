@@ -356,6 +356,28 @@ class NativeTrainingHoldoutIntegrationTests(unittest.TestCase):
 
 
 
+
+class SourceTrainingArgumentValidationTests(unittest.TestCase):
+    def test_invalid_training_arguments_are_rejected_before_workspace_or_device_access(self):
+        from syntra_ai.training import train
+
+        invalid_arguments = [
+            ({"steps": True}, "steps must be an integer"),
+            ({"batch_size": False}, "batch_size must be an integer"),
+            ({"learning_rate": float("nan")}, "learning_rate must be a finite"),
+            ({"learning_rate": 10**1000}, "learning_rate must be a finite"),
+            ({"max_tokens": True}, "max_tokens must be an integer"),
+            ({"seed": 1.5}, "seed must be a signed/unsigned"),
+            ({"resume": "true"}, "resume must be a boolean"),
+            ({"device_name": 7}, "device_name must be a non-empty"),
+        ]
+        with tempfile.TemporaryDirectory(prefix="syntra-invalid-training-args-") as temp:
+            for arguments, expected in invalid_arguments:
+                with self.subTest(arguments=arguments):
+                    with self.assertRaisesRegex(ValueError, expected):
+                        train(roots=[], checkpoint=Path(temp) / "not-used.pt", **arguments)
+
+
 class SourceTrainingResumeContractTests(unittest.TestCase):
     def test_resume_requires_an_existing_checkpoint_instead_of_starting_fresh(self):
         from syntra_ai.training import train
