@@ -36,4 +36,4 @@ Instruction JSONL records are now parsed using strict JSON semantics rather than
 
 The record and file-size limits, required string `prompt`/`completion` fields, optional `split_group`/`source_path` metadata, exact-byte SHA-256 provenance, safe-open checks, and checkpoint-tokenizer context checks remain unchanged. This is input validation only; it does not rewrite datasets, discard records, alter split membership, or change the training objective.
 
-Regression tests cover duplicate required keys, duplicate keys inside nested metadata, non-standard constants, floating-point overflow, deeply nested input, accepted valid metadata, and the read-only audit's invalid-input result.
+Regression tests cover duplicate required keys, duplicate keys inside nested metadata, non-standard constants, floating-point overflow, input nested beyond 128 levels, accepted valid metadata, and the read-only audit's invalid-input result.
