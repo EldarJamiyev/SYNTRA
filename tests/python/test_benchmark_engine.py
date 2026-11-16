@@ -634,6 +634,130 @@ class RawModelReportComparisonTests(unittest.TestCase):
         self.assertIn("different evaluation protocols", result.stderr)
 
 
+class RawBenchmarkComparisonCliTests(unittest.TestCase):
+    @staticmethod
+    def _invoke(baseline: Path, candidate: Path):
+        return subprocess.run(
+            [
+                sys.executable,
+                str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+                "--baseline", str(baseline),
+                "--candidate", str(candidate),
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+    def test_comparison_cli_compares_real_report_files_on_matching_hardware(self):
+        hardware = RawModelReportComparisonTests._hardware()
+        baseline = RawModelReportComparisonTests._report(
+            run_id="cli-baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=False,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = RawModelReportComparisonTests._report(
+            run_id="cli-candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=copy.deepcopy(hardware),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = self._invoke(baseline_path, candidate_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Quality outcome: improved", result.stdout)
+        self.assertIn("Hardware-controlled performance: yes", result.stdout)
+        self.assertIn("generation_tokens_per_second", result.stdout)
+
+    def test_comparison_cli_marks_different_hardware_performance_incomparable(self):
+        baseline = RawModelReportComparisonTests._report(
+            run_id="cli-baseline-host-a",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=RawModelReportComparisonTests._hardware(),
+        )
+        candidate = RawModelReportComparisonTests._report(
+            run_id="cli-candidate-host-b",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=RawModelReportComparisonTests._hardware(cpu_model="Different Measured CPU"),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-different-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = self._invoke(baseline_path, candidate_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Quality outcome: improved", result.stdout)
+        self.assertIn("Hardware-controlled performance: no", result.stdout)
+        self.assertIn("incomparable", result.stdout)
+
+    def test_comparison_cli_rejects_invalid_json_and_symbolic_link_reports(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-invalid-") as temp:
+            invalid_path = Path(temp) / "invalid.json"
+            valid_path = Path(temp) / "valid.json"
+            invalid_path.write_text('{"schema_version": 1,}', encoding="utf-8")
+            valid_path.write_text("{}", encoding="utf-8")
+            invalid = self._invoke(invalid_path, valid_path)
+            self.assertEqual(invalid.returncode, 1)
+            self.assertIn("invalid JSON", invalid.stderr)
+
+            if os.name != "nt":
+                link_path = Path(temp) / "linked.json"
+                link_path.symlink_to(valid_path)
+                linked = self._invoke(link_path, valid_path)
+                self.assertEqual(linked.returncode, 1)
+                self.assertIn("non-symlink", linked.stderr)
+
+    def test_comparison_cli_help_does_not_require_report_paths(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+                "--help",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("raw SYNTRA PyTorch benchmark reports", result.stdout)
+        self.assertIn("--baseline", result.stdout)
+        self.assertIn("--candidate", result.stdout)
+
+
 class RawModelBenchmarkTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
