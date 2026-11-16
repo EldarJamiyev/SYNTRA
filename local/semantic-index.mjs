@@ -11,6 +11,7 @@ const MAX_INDEX_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 500, MAX_CHUNKS = 600, MAX_CHUNK_CHARS = 2400;
 const CHUNK_LINES = 36, CHUNK_OVERLAP = 6;
 const DEFAULT_EMBEDDING_MODEL = "syntra-native";
+const EMBEDDING_POOLING_STRATEGY = "full-text-overlapping-window-pool-v1";
 
 function cosineSimilarity(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return -1;
@@ -54,7 +55,8 @@ async function readIndex(root) {
   if (stat.size > MAX_INDEX_BYTES) return null;
   try {
     const data = JSON.parse(await fs.readFile(target, "utf8"));
-    if (data?.schemaVersion !== 1 || data.root !== root || data.embeddingModel !== DEFAULT_EMBEDDING_MODEL
+    if (data?.schemaVersion !== 2 || data.root !== root || data.embeddingModel !== DEFAULT_EMBEDDING_MODEL
+      || data.embeddingStrategy !== EMBEDDING_POOLING_STRATEGY
       || !/^[a-f0-9]{64}$/i.test(data.checkpointIdentity || "")
       || !Number.isInteger(data.dimensions) || data.dimensions < 8 || data.dimensions > 4096
       || !Array.isArray(data.chunks) || data.chunks.length > MAX_CHUNKS) return null;
@@ -62,6 +64,9 @@ async function readIndex(root) {
       && Number.isInteger(item.startLine) && item.startLine > 0
       && Number.isInteger(item.endLine) && item.endLine >= item.startLine
       && typeof item.sha256 === "string" && /^[a-f0-9]{64}$/i.test(item.sha256)
+      && Number.isSafeInteger(item.tokenCount) && item.tokenCount >= 0
+      && Number.isSafeInteger(item.windowCount) && item.windowCount >= 1
+      && Number.isSafeInteger(item.effectiveWindowTokens) && item.effectiveWindowTokens >= 8
       && Array.isArray(item.vector) && item.vector.length === data.dimensions
       && item.vector.every(value => Number.isFinite(value) && Math.abs(value) <= 100));
     return valid.length === data.chunks.length ? { ...data, chunks: valid } : null;
@@ -97,13 +102,32 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
     throw new Error("Native runtime returned an invalid embedding batch.");
   }
   const dims = payload.embeddings[0]?.length;
+  const tokenCounts = payload.input_token_counts;
+  const windowCounts = payload.window_counts;
+  const effectiveWindowTokens = payload.effective_window_tokens;
+  const overlapTokens = payload.window_overlap_tokens;
   if (!Number.isInteger(dims) || dims < 8 || dims > 4096
-    || payload.embeddings.some(v => !Array.isArray(v) || v.length !== dims || v.some(n => !Number.isFinite(n)))) {
-    throw new Error("Native runtime returned inconsistent or invalid embedding dimensions.");
+    || payload.embeddings.some(v => !Array.isArray(v) || v.length !== dims || v.some(n => !Number.isFinite(n)))
+    || payload.truncated !== false
+    || payload.pooling_strategy !== EMBEDDING_POOLING_STRATEGY
+    || !Array.isArray(tokenCounts) || tokenCounts.length !== texts.length
+    || tokenCounts.some(count => !Number.isSafeInteger(count) || count < 0)
+    || !Array.isArray(windowCounts) || windowCounts.length !== texts.length
+    || windowCounts.some(count => !Number.isSafeInteger(count) || count < 1)
+    || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
+    || !Number.isSafeInteger(overlapTokens) || overlapTokens < 0 || overlapTokens >= effectiveWindowTokens
+    || payload.total_input_tokens !== tokenCounts.reduce((sum, count) => sum + count, 0)
+    || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)) {
+    throw new Error("Native runtime returned invalid, incomplete, or truncated full-text embedding evidence.");
   }
   return {
     checkpointIdentity: payload.checkpoint_identity,
-    embeddings: payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5))))
+    embeddings: payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5)))),
+    tokenCounts,
+    windowCounts,
+    effectiveWindowTokens,
+    overlapTokens,
+    poolingStrategy: payload.pooling_strategy
   };
 }
 
@@ -118,7 +142,7 @@ async function embed(texts, model, fetchImpl, signal) {
 export async function getSemanticIndexStatus(inputRoot) {
   const root = await resolveWorkspace(inputRoot), index = await readIndex(root);
   return index
-    ? { available: true, root, embeddingModel: index.embeddingModel, checkpointIdentity: index.checkpointIdentity, indexedAt: index.indexedAt, chunkCount: index.chunks.length, dimensions: index.dimensions }
+    ? { available: true, root, embeddingModel: index.embeddingModel, embeddingStrategy: index.embeddingStrategy, checkpointIdentity: index.checkpointIdentity, indexedAt: index.indexedAt, chunkCount: index.chunks.length, dimensions: index.dimensions }
     : { available: false, root, embeddingModel: DEFAULT_EMBEDDING_MODEL, checkpointIdentity: null, chunkCount: 0, reason: "not_built_or_invalid" };
 }
 export async function refreshWorkspaceSemanticIndex(inputRoot, {
@@ -160,16 +184,33 @@ export async function refreshWorkspaceSemanticIndex(inputRoot, {
     }
     for (let i = 0; i < batch.length; i += 1) {
       const { text: _sourceTextNotPersisted, ...metadata } = batch[i];
-      chunks.push({ ...metadata, vector: generated.embeddings[i] });
+      chunks.push({
+        ...metadata,
+        tokenCount: generated.tokenCounts[i],
+        windowCount: generated.windowCounts[i],
+        effectiveWindowTokens: generated.effectiveWindowTokens,
+        vector: generated.embeddings[i]
+      });
     }
   }
   const dimensions = chunks[0]?.vector?.length || identityProbe.embeddings[0]?.length || 0;
   if (chunks.some(item => item.vector.length !== dimensions)) throw new Error("Semantic index contains inconsistent vector dimensions.");
-  const index = { schemaVersion: 1, root, embeddingModel: model, checkpointIdentity, dimensions, indexedAt: new Date().toISOString(),
+  const index = {
+    schemaVersion: 2,
+    root,
+    embeddingModel: model,
+    embeddingStrategy: EMBEDDING_POOLING_STRATEGY,
+    checkpointIdentity,
+    dimensions,
+    indexedAt: new Date().toISOString(),
     scannedFiles, scannedBytes, truncated: candidates.truncated || candidates.files.length > MAX_FILES || chunks.length >= MAX_CHUNKS, chunks };
   await writeIndex(root, index);
   return { available: true, root, embeddingModel: model, checkpointIdentity, indexedAt: index.indexedAt, chunkCount: chunks.length,
-    dimensions, scannedFiles, scannedBytes, reusedChunks, skippedFiles, truncated: index.truncated };
+    dimensions, scannedFiles, scannedBytes, reusedChunks, skippedFiles, truncated: index.truncated,
+    embeddingStrategy: EMBEDDING_POOLING_STRATEGY,
+    totalEmbeddedTokens: chunks.reduce((sum, item) => sum + item.tokenCount, 0),
+    totalEmbeddingWindows: chunks.reduce((sum, item) => sum + item.windowCount, 0)
+  };
 }
 export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
   fetchImpl = globalThis.fetch, model = DEFAULT_EMBEDDING_MODEL, signal
@@ -208,6 +249,17 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
     const excerpt = source.content.split(/\r?\n/).slice(item.startLine - 1, item.endLine).join("\n").slice(0, MAX_CHUNK_CHARS);
     results.push({ path: item.path, startLine: item.startLine, endLine: item.endLine, score: Number(item.score.toFixed(5)), sha256: item.sha256, excerpt });
   }
-  return { available: true, root, query: query.trim(), embeddingModel: model,
-    checkpointIdentity: index.checkpointIdentity, results, staleResults: ranked.length - results.length };
+  return {
+    available: true,
+    root,
+    query: query.trim(),
+    embeddingModel: model,
+    embeddingStrategy: EMBEDDING_POOLING_STRATEGY,
+    checkpointIdentity: index.checkpointIdentity,
+    queryTokenCount: queryResult.tokenCounts[0],
+    queryWindowCount: queryResult.windowCounts[0],
+    effectiveWindowTokens: queryResult.effectiveWindowTokens,
+    results,
+    staleResults: ranked.length - results.length
+  };
 }
