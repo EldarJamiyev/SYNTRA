@@ -24,6 +24,9 @@
 - After pretraining (or when reusing an existing checkpoint), the pipeline uses that checkpoint's actual BPE tokenizer to drop only multi-file records whose complete prompt exceeds `seq_len - 1`. It does not silently keep the tail of an oversized paired prompt. Completion targets are not truncated: the full `<thought>` trace, patch JSON, and EOS pass through the existing overlapping context-window loader. Audit failure, insufficient prompt diversity, or unavailable validation split stops SFT before optimizer updates.
 - Run `npm run brain:preflight` before a long baseline. It verifies Python 3.12+, real local PyTorch CPU/CUDA/MPS tensor execution, and the four required Docker tags with SHA-256 image IDs and repository digests. Docker inspection is read-only; it never pulls, builds, or runs images.
 - The HTTP API binds only to `127.0.0.1`; checkpoint loading uses PyTorch's `weights_only=True` path.
+- Native semantic embedding requests use the selected checkpoint's exact byte-BPE tokenizer and expose batch token counts plus the effective input-token limit. Over-context inputs are rejected; neither the runtime nor low-level model embedding silently slices a prefix.
+- Semantic index v2 preflights every source chunk through the native tokenizer, splits over-limit multi-line and long-line chunks with exact 1-based source columns, and verifies token counts again during embedding. The index stores the actual token count and exact source range for every vector; search reconstructs only that range after rechecking the current file SHA-256.
+- Legacy semantic-index v1 files are not reused because their vectors may describe silently truncated prefixes. Refresh the workspace semantic index after this update. If an individual fragment cannot fit the selected checkpoint context or lossless splitting would exceed the bounded chunk limit, refresh fails and leaves the prior index untouched.
 
 Useful commands:
 
