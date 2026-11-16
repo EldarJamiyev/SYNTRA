@@ -1684,6 +1684,15 @@ def compare_raw_benchmark_reports(baseline_input: Any, candidate_input: Any) -> 
     candidate_tasks = {task["id"]: task for task in candidate["tasks"]}
     if set(baseline_tasks) != set(candidate_tasks):
         raise BenchmarkError("Cannot compare different raw-model task selections.")
+    language_mismatches = [
+        task_id for task_id in sorted(baseline_tasks)
+        if baseline_tasks[task_id]["language"] != candidate_tasks[task_id]["language"]
+    ]
+    if language_mismatches:
+        raise BenchmarkError(
+            "Cannot compare reports that assign different languages to the same task ID: "
+            + ", ".join(language_mismatches)
+        )
     baseline_valid = {task_id for task_id, task in baseline_tasks.items() if task["baseline_validated"]}
     candidate_valid = {task_id for task_id, task in candidate_tasks.items() if task["baseline_validated"]}
     if baseline_valid != candidate_valid:
