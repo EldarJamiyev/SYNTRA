@@ -334,7 +334,7 @@ class RawModelReportComparisonTests(unittest.TestCase):
         baseline_validated=True,
     ):
         output_rate = (
-            generated_tokens / (generation_ms / 1000)
+            round(generated_tokens / (generation_ms / 1000), 2)
             if generation_ms is not None and generation_ms > 0
             else None
         )
@@ -414,6 +414,7 @@ class RawModelReportComparisonTests(unittest.TestCase):
 
         altered_hardware = copy.deepcopy(valid)
         altered_hardware["hardware"]["host"]["cpu_model"] = "Different CPU"
+        altered_hardware["hardware"]["device"]["name"] = "Different CPU"
         with self.assertRaisesRegex(runner.BenchmarkError, "fingerprint"):
             runner.validate_raw_benchmark_report(altered_hardware)
 
