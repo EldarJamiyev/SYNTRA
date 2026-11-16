@@ -1168,16 +1168,17 @@ class RawModelBenchmarkTests(unittest.TestCase):
     def setUpClass(cls):
         cls.suite = runner.load_suite()
 
-    def test_suite_has_fourteen_unique_held_out_tasks_across_five_languages(self):
-        self.assertEqual(self.suite["version"], "1.4.0")
-        self.assertEqual(len(self.suite["tasks"]), 14)
-        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 14)
+    def test_suite_has_twenty_one_unique_held_out_tasks_with_three_per_polyglot_language(self):
+        self.assertEqual(self.suite["version"], "1.5.0")
+        self.assertEqual(len(self.suite["tasks"]), 21)
+        self.assertEqual(len({task["id"] for task in self.suite["tasks"]}), 21)
         self.assertEqual({task["language"] for task in self.suite["tasks"]}, {"python", "javascript", "typescript", "go", "rust"})
         self.assertEqual(
             {language: sum(task["language"] == language for task in self.suite["tasks"]) for language in {"python", "javascript", "typescript", "go", "rust"}},
-            {"python": 9, "javascript": 2, "typescript": 1, "go": 1, "rust": 1},
+            {"python": 9, "javascript": 3, "typescript": 3, "go": 3, "rust": 3},
         )
         self.assertTrue(all(task["hidden_evaluation"].startswith("hidden/") for task in self.suite["tasks"]))
+        self.assertTrue(all(len(task["expected_changed_paths"]) <= 6 for task in self.suite["tasks"]))
 
     def test_environment_matrix_uses_pinned_offline_images_and_language_test_extensions(self):
         expected = {

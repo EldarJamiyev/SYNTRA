@@ -49,11 +49,11 @@ npm run benchmark:model -- --task python-clamp
 # Evaluate the TypeScript task
 npm run benchmark:model -- --task typescript-object-mapper
 
-# Run the complete 14-task matrix
+# Run the complete 21-task matrix
 npm run benchmark:model
 ```
 
-The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.4.0, and contains 14 held-out fixtures: nine Python, two JavaScript, one TypeScript, one Go, and one Rust task.
+The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.5.0, and contains 21 held-out fixtures: nine Python and three each for JavaScript, TypeScript, Go, and Rust.
 
 | Task | Language | Capability |
 | --- | --- | --- |
@@ -67,6 +67,13 @@ The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.4.0, and 
 | `python-retry-backoff` | Python | Overflow-safe bounded exponential backoff |
 | `javascript-event-normalizer` | JavaScript | Multi-file ESM event normalization, timestamp validation, and deep payload isolation |
 | `javascript-bounded-map` | JavaScript | Bounded async worker scheduling, stable result ordering, and failure-safe queue shutdown |
+| `javascript-safe-group-by` | JavaScript | Prototype-safe grouping with special property names and deterministic selector calls |
+| `typescript-result-map` | TypeScript | Generic discriminated-result mapping with exact error preservation |
+| `typescript-pick-own` | TypeScript | Generic own-property selection that excludes inherited keys |
+| `go-bounded-backoff` | Go | Saturating exponential retry delay without duration overflow |
+| `go-header-lookup` | Go | Case-insensitive deterministic header lookup across map key variants |
+| `rust-bounded-window` | Rust | Borrowed bounded slices with overflow-safe end calculation |
+| `rust-ascii-u64` | Rust | Strict ASCII-only unsigned integer parsing with overflow rejection |
 | `typescript-object-mapper` | TypeScript | Multi-file generic key/value constraints and object mapping |
 | `go-channel-sync` | Go | Worker-pool synchronization, cancellation, and race-safe collection |
 | `rust-safe-slice` | Rust | Lifetime-bound UTF-8 byte slicing without panics or allocation |
@@ -87,7 +94,7 @@ Before generation, the target test must fail with a recognized assertion/diagnos
 | Language | Default local image | Validation |
 | --- | --- | --- |
 | Python | `python:3.12-slim` | AST parsing and hidden Python tests |
-| JavaScript | `node:20-slim` | `node --check` and hidden `.mjs` tests for the v1.4.0 event-normalizer and bounded-concurrency tasks |
+| JavaScript | `node:20-slim` | `node --check` and hidden `.mjs` tests for the event-normalizer, bounded-concurrency, and prototype-safe group-by tasks |
 | TypeScript | `node:20-slim` | Local TypeScript compiler, then emitted JavaScript tests |
 | Go | `golang:1.22-alpine` | `go test ./...` and hidden Go test programs |
 | Rust | `rust:1.78-slim` | `cargo check --offline --locked` and Cargo integration tests |
@@ -199,7 +206,7 @@ CPU RSS uses the operating system's process high-water metric. CUDA memory uses 
 npm run brain:smoke
 ```
 
-The profile is intentionally small and CPU-selected for predictable portability. It runs one actual task per supported language (Python, JavaScript, TypeScript, Go, Rust) while preflighting every local language image. It remains an integration smoke test, not evidence of model quality or a timing guarantee; Docker image availability and task execution still determine total duration. Its partial five-task report is rejected by the promotion utility, which requires the full current 14-task suite.
+The profile is intentionally small and CPU-selected for predictable portability. It runs one actual task per supported language (Python, JavaScript, TypeScript, Go, Rust) while preflighting every local language image. It remains an integration smoke test, not evidence of model quality or a timing guarantee; Docker image availability and task execution still determine total duration. Its partial five-task report is rejected by the promotion utility, which requires the full current 21-task suite.
 
 `configs/training/local_cpu_fast.json` targets low-memory CPU machines with a 4-layer/width-64 model, 256-token context, physical batch 1, and gradient accumulation. `configs/training/local_gpu_scale.json` uses 8 layers, 8 heads, width 256 and 1024-token context for suitable dedicated GPU or high-memory unified-memory systems. Both keep micro-batches distinct from optimizer steps. Accumulation normalizes gradients by actual supervised-token counts and clips once per optimizer update. Select the backend explicitly to avoid silently using CPU on a machine where GPU acceleration was intended.
 
@@ -211,7 +218,7 @@ npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --dev
 
 ### Verified checkpoint promotion and rollback
 
-A benchmark report is selected explicitly. The promotion tool authenticates the report's exact staged checkpoint by SHA-256, checks the adjacent read-only snapshot manifest, requires the entire current 14-task suite with valid hidden baselines, and loads the candidate through SYNTRA's actual runtime before it can replace the active checkpoint.
+A benchmark report is selected explicitly. The promotion tool authenticates the report's exact staged checkpoint by SHA-256, checks the adjacent read-only snapshot manifest, requires the entire current 21-task suite with valid hidden baselines, and loads the candidate through SYNTRA's actual runtime before it can replace the active checkpoint.
 
 ```powershell
 npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
@@ -223,7 +230,7 @@ The active checkpoint target is resolved using the same `SYNTRA_CHECKPOINT` over
 
 ## Comparability and limitations
 
-Do not combine raw-model results with full-agent results. The direct raw-model suite now has 14 small held-out fixtures across five languages, but it is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. JavaScript now has two focused tasks covering cross-module event validation and bounded asynchronous concurrency; Go concurrency, Rust memory safety, TypeScript type-system coverage, and multi-file Python behavior remain narrow task samples, not evidence of broad language competence.
+Do not combine raw-model results with full-agent results. The direct raw-model suite now has 21 held-out fixtures across five languages: nine Python and three each for JavaScript, TypeScript, Go, and Rust. This is a controlled engineering regression matrix—not a representative sample of unfamiliar repositories or an industrial coding benchmark. Each non-Python language has three focused tasks, which remains a small sample and is not evidence of broad language competence.
 
 GitHub CI installs the required Go/Rust toolchains to validate the fixture baselines and the runner implementation. Actual benchmark execution remains offline: it uses pre-provisioned local Docker images and does not pull images or packages. The benchmark does not fabricate a score when a checkpoint, local image, language runtime, or valid fixture baseline is unavailable.
 

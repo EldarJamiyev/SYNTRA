@@ -206,7 +206,7 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Add a CPU smoke profile (50 pretraining optimizer updates and 20 masked SFT updates) that exercises the real checkpoint snapshot and complete offline Docker evaluation handoff.
 - [x] Add low-memory CPU and scaled 8-layer/8-head, width-256, 1024-token GPU training profiles with true gradient accumulation at optimizer-step boundaries.
 - [x] Capture measured supervised tokens/second, optimizer-step latency, process peak RSS, and available CUDA/MPS allocator high-water telemetry in checkpoint-comparison Markdown/CSV and per-run JSON.
-- [x] Add benchmark-report-bound checkpoint promotion: require the complete current 14-task suite, valid hidden baselines, exact staged snapshot SHA-256, and successful native-runtime checkpoint loading.
+- [x] Add benchmark-report-bound checkpoint promotion: require the complete current 21-task suite, valid hidden baselines, exact staged snapshot SHA-256, and successful native-runtime checkpoint loading.
 - [x] Archive the previous active checkpoint, metadata and inference companion under a timestamped ID; provide hash-verified rollback and rebuild the derived inference companion against the restored checkpoint timestamp.
 - [x] Keep promotion explicit, local and offline; training never auto-promotes or modifies loopback service/network policy.
 
@@ -397,4 +397,19 @@ A phase is not complete merely because the interface looks finished. It must inc
 **Acceptance:** Every language row can be traced to exact task IDs and task-level outcomes. Invalid baselines never enter rates, unmeasured metrics remain unavailable/incomparable, and the output explicitly states that fixture-level results do not prove general language competence.
 
 **Outstanding evidence:** The separate empirical capability-matrix item remains open until actual live-checkpoint reports have been produced on the intended hardware.
+
+### Phase 38 — Expand held-out polyglot benchmark fixture coverage
+
+**Objective:** Improve the balance of the raw-model evaluation matrix so each non-Python language has multiple independent task categories while preserving real failing baselines and independent regression tests.
+
+- [x] Add TypeScript generic result mapping with typed error preservation and own-property picking with inherited-property exclusion.
+- [x] Add Go saturating retry backoff and deterministic case-insensitive HTTP header lookup.
+- [x] Add Rust overflow-safe borrowed windows and strict ASCII unsigned parsing.
+- [x] Add JavaScript prototype-safe grouping for special property names.
+- [x] Require each new fixture to have a failing target test and a passing independent regression test.
+- [x] Keep hidden evaluation files outside the model-visible workspace and bind all new fixtures/tests into the content-addressed evaluation protocol.
+- [x] Upgrade the raw-model suite to 1.5.0 with 21 tasks: nine Python and three each for JavaScript, TypeScript, Go, and Rust.
+- [x] Update suite-count, capability, baseline, and documentation coverage without generating any model score.
+
+**Acceptance:** All 21 fixtures have a recognized expected target failure and a passing regression baseline in the actual language runtime. The expanded suite remains offline, dependency-free, and content-addressed. The empirical capability matrix remains unpopulated until a genuine local checkpoint completes a full run on target hardware.
 
