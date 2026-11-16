@@ -206,7 +206,7 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
                 },
             ),
         ):
-            self.assertIsNone(runner._discover_accelerator_driver_version("cuda", 0))
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda"))
 
     def test_rocm_driver_probe_reads_the_reported_installed_driver_version(self):
         with (
