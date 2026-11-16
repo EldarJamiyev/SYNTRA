@@ -295,10 +295,18 @@ class SyntraTransformer(nn.Module):
     @_preserve_module_modes
     @torch.no_grad()
     def embed_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
-        """Compute L2-normalized semantic embeddings from pooled final hidden states."""
+        """Compute L2-normalized semantic embeddings without discarding input tokens."""
+        if not isinstance(tokens, torch.Tensor) or tokens.dtype != torch.long or tokens.ndim != 2:
+            raise ValueError("tokens must be a two-dimensional torch.long tensor.")
+        if tokens.shape[0] < 1 or tokens.shape[1] < 1:
+            raise ValueError("tokens must contain a non-empty batch and sequence.")
+        if tokens.shape[1] > self.config.seq_len:
+            raise ValueError(
+                f"Embedding input has {tokens.shape[1]} tokens, exceeding the model context "
+                f"of {self.config.seq_len}; input was not truncated."
+            )
         self.eval()
-        clipped = tokens[:, -self.config.seq_len:]
-        hidden = self._forward_hidden(clipped, use_cache=False)
+        hidden = self._forward_hidden(tokens, use_cache=False)
         mean_pooled = hidden.mean(dim=1)
         last_token = hidden[:, -1, :]
         combined = 0.7 * mean_pooled + 0.3 * last_token
