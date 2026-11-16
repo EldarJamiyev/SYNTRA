@@ -233,7 +233,7 @@ def collect_hardware_identity(requested_device: str, resolved_device: Any, torch
             if type(major) is int and type(minor) is int and major >= 0 and minor >= 0:
                 compute_capability = str(major) + "." + str(minor)
             driver_lookup_type = "cuda-rocm" if hip_runtime else "cuda"
-            driver_version = _discover_accelerator_driver_version(driver_lookup_type, device_index)
+            driver_version = _discover_accelerator_driver_version(driver_lookup_type)
             if driver_version is None:
                 limitations.append("The installed accelerator driver version could not be measured through local driver utilities.")
             limitations.append("CUDA device properties are reported by the selected PyTorch runtime; MIG partitioning may affect available memory.")
@@ -868,16 +868,16 @@ def run_command(command: list[str], *, cwd: Path, env: dict[str, str], timeout_s
     return {"returncode": process.returncode, "timed_out": timed_out, "output_limited": limited.is_set(), "stdout": stdout, "stderr": stderr, "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)}
 
 
-def _discover_accelerator_driver_version(device_type: str, device_index: int | None) -> str | None:
-    """Read the selected accelerator's installed driver version from local OS tools."""
+def _discover_accelerator_driver_version(device_type: str) -> str | None:
+    """Read a host-wide accelerator driver version from local OS tools."""
     if device_type == "cuda":
         executable = shutil.which("nvidia-smi")
-        if not executable or type(device_index) is not int or device_index < 0:
+        if not executable:
             return None
         result = run_command(
             [
                 executable,
-                "--query-gpu=index,driver_version",
+                "--query-gpu=driver_version",
                 "--format=csv,noheader,nounits",
             ],
             cwd=REPOSITORY_ROOT,
@@ -887,14 +887,15 @@ def _discover_accelerator_driver_version(device_type: str, device_index: int | N
         )
         if result["returncode"] != 0 or result["timed_out"] or result["output_limited"]:
             return None
-        for line in result["stdout"].splitlines():
-            index_text, separator, version = line.partition(",")
-            if not separator or index_text.strip() != str(device_index):
-                continue
-            normalized = version.strip()
-            if re.fullmatch(r"[0-9]+(?:\.[0-9A-Za-z_-]+){0,3}", normalized):
-                return normalized
-        return None
+        versions = {
+            line.strip()
+            for line in result["stdout"].splitlines()
+            if re.fullmatch(r"[0-9]+(?:\.[0-9A-Za-z_-]+){0,3}", line.strip())
+        }
+        # NVIDIA's installed kernel driver is host-wide. If all visible GPUs
+        # report the same value, it is independent of CUDA_VISIBLE_DEVICES
+        # logical-to-physical ordinal remapping. Conflicting output is ambiguous.
+        return next(iter(versions)) if len(versions) == 1 else None
 
     if device_type == "cuda-rocm":
         executable = shutil.which("rocm-smi")
