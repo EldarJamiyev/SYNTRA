@@ -76,13 +76,49 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
       const body = JSON.parse(options.body);
       assert.equal(body.max_length, 256);
       assert.equal(body.device, "auto");
+      const tokenCounts = body.texts.map(input => Buffer.byteLength(input, "utf8"));
+      const windowTokenCounts = [];
+      const windowNewTokenCounts = [];
+      const windowCounts = [];
+      for (const tokenCount of tokenCounts) {
+        const tokenLengths = [], newlyCovered = [];
+        if (tokenCount === 0) {
+          tokenLengths.push(0);
+          newlyCovered.push(0);
+        } else {
+          let start = 0;
+          while (start < tokenCount) {
+            const end = Math.min(start + 256, tokenCount);
+            tokenLengths.push(end - start);
+            newlyCovered.push(start === 0 ? end - start : end - start - 32);
+            if (end >= tokenCount) break;
+            start += 224;
+          }
+        }
+        windowTokenCounts.push(tokenLengths);
+        windowNewTokenCounts.push(newlyCovered);
+        windowCounts.push(tokenLengths.length);
+      }
       const embeddings = body.texts.map(input => {
         const text = input.toLowerCase();
         return /dns|network access|service name|name resolution|lookup timeout/.test(text)
           ? [1, 0, 0, 0, 0, 0, 0, 0]
           : [0, 1, 0, 0, 0, 0, 0, 0];
       });
-      return new Response(JSON.stringify({ embeddings, checkpoint_identity: activeCheckpointIdentity }), {
+      return new Response(JSON.stringify({
+        embeddings,
+        checkpoint_identity: activeCheckpointIdentity,
+        input_token_counts: tokenCounts,
+        window_counts: windowCounts,
+        window_token_counts: windowTokenCounts,
+        window_new_token_counts: windowNewTokenCounts,
+        total_input_tokens: tokenCounts.reduce((sum, count) => sum + count, 0),
+        total_windows: windowCounts.reduce((sum, count) => sum + count, 0),
+        effective_window_tokens: 256,
+        window_overlap_tokens: 32,
+        pooling_strategy: "full-text-overlapping-window-pool-v1",
+        truncated: false
+      }), {
         status: 200, headers: { "Content-Type": "application/json" }
       });
     };
@@ -91,6 +127,11 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     });
     assert.equal(first.retrievalMode, "hybrid_semantic");
     assert.equal(first.embeddingModel, "syntra-native");
+    assert.equal(first.embeddingStrategy, "full-text-overlapping-window-pool-v1");
+    assert.ok(first.queryTokenCount > 0);
+    assert.equal(first.queryWindowCount, 1);
+    assert.ok(first.embeddedNoteTokens > 0);
+    assert.ok(first.embeddedNoteWindows >= 2);
     assert.equal(first.results[0].id, network.note.id);
     assert.equal(first.semanticCoverage, 2);
     assert.equal(requests, 2, "the initial search embeds the query and the selected notes against the same checkpoint");
@@ -105,8 +146,15 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     const cache = JSON.parse(await fs.readFile(
       path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"
     ));
-    assert.equal(cache.schemaVersion, 1);
-    assert.equal(cache.model, "syntra-native:" + "b".repeat(64));
+    assert.equal(cache.schemaVersion, 2);
+    assert.equal(cache.model, "syntra-native:" + "b".repeat(64) + ":full-text-overlapping-window-pool-v1");
+    assert.equal(cache.entries.length, 2);
+    assert.ok(cache.entries.every(entry =>
+      Number.isSafeInteger(entry.tokenCount)
+      && Number.isSafeInteger(entry.windowCount)
+      && entry.windowCount >= 1
+      && entry.effectiveWindowTokens === 256
+    ));
     assert.equal(first.checkpointIdentity, "b".repeat(64));
 
     activeCheckpointIdentity = "c".repeat(64);
@@ -118,7 +166,9 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
     const refreshedCache = JSON.parse(await fs.readFile(
       path.join(root, ".syntra", "project-memory-embeddings-v1.json"), "utf8"
     ));
-    assert.equal(refreshedCache.model, "syntra-native:" + activeCheckpointIdentity);
+    assert.equal(refreshedCache.schemaVersion, 2);
+    assert.equal(refreshedCache.model, "syntra-native:" + activeCheckpointIdentity + ":full-text-overlapping-window-pool-v1");
+    assert.ok(refreshedCache.entries.every(entry => Number.isSafeInteger(entry.tokenCount)));
     assert.equal(cache.root, await fs.realpath(root));
     assert.equal(cache.entries.length, 2);
     assert.ok(cache.entries.every(entry => !("content" in entry)));
