@@ -266,7 +266,7 @@ async function embed(texts, model, fetchImpl, signal) {
 export async function getSemanticIndexStatus(inputRoot) {
   const root = await resolveWorkspace(inputRoot), index = await readIndex(root);
   return index
-    ? { available: true, root, embeddingModel: index.embeddingModel, checkpointIdentity: index.checkpointIdentity, indexedAt: index.indexedAt, chunkCount: index.chunks.length, dimensions: index.dimensions }
+    ? { available: true, root, embeddingModel: index.embeddingModel, checkpointIdentity: index.checkpointIdentity, indexedAt: index.indexedAt, chunkCount: index.chunks.length, dimensions: index.dimensions, maxInputTokens: index.maxInputTokens, schemaVersion: index.schemaVersion }
     : { available: false, root, embeddingModel: DEFAULT_EMBEDDING_MODEL, checkpointIdentity: null, chunkCount: 0, reason: "not_built_or_invalid" };
 }
 export async function refreshWorkspaceSemanticIndex(inputRoot, {
@@ -300,11 +300,22 @@ export async function refreshWorkspaceSemanticIndex(inputRoot, {
     }
     if (chunks.length + pending.length >= MAX_CHUNKS) break;
   }
-  for (let offset = 0; offset < pending.length; offset += 24) {
-    const batch = pending.slice(offset, offset + 24);
+  const fitted = await fitChunksToNativeContext(pending, checkpointIdentity, fetchImpl, signal);
+  if (chunks.length + fitted.chunks.length > MAX_CHUNKS) {
+    throw new Error(
+      "Lossless semantic-index refresh would exceed the " + MAX_CHUNKS +
+      " chunk storage limit; no partial index was written."
+    );
+  }
+  for (let offset = 0; offset < fitted.chunks.length; offset += 24) {
+    const batch = fitted.chunks.slice(offset, offset + 24);
     const generated = await embed(batch.map(item => item.text), model, fetchImpl, signal);
     if (generated.checkpointIdentity !== checkpointIdentity) {
       throw new Error("The native checkpoint changed during semantic-index refresh; retry the operation.");
+    }
+    if (generated.maxInputTokens !== fitted.maxInputTokens
+      || generated.inputTokenCounts.some((count, index) => count !== batch[index].tokenCount)) {
+      throw new Error("Native tokenizer counts changed between semantic preflight and embedding; no index was written.");
     }
     for (let i = 0; i < batch.length; i += 1) {
       const { text: _sourceTextNotPersisted, ...metadata } = batch[i];
@@ -313,11 +324,36 @@ export async function refreshWorkspaceSemanticIndex(inputRoot, {
   }
   const dimensions = chunks[0]?.vector?.length || identityProbe.embeddings[0]?.length || 0;
   if (chunks.some(item => item.vector.length !== dimensions)) throw new Error("Semantic index contains inconsistent vector dimensions.");
-  const index = { schemaVersion: 1, root, embeddingModel: model, checkpointIdentity, dimensions, indexedAt: new Date().toISOString(),
-    scannedFiles, scannedBytes, truncated: candidates.truncated || candidates.files.length > MAX_FILES || chunks.length >= MAX_CHUNKS, chunks };
+  const index = {
+    schemaVersion: 2,
+    root,
+    embeddingModel: model,
+    checkpointIdentity,
+    dimensions,
+    maxInputTokens: fitted.maxInputTokens,
+    indexedAt: new Date().toISOString(),
+    scannedFiles,
+    scannedBytes,
+    truncated: candidates.truncated || candidates.files.length > MAX_FILES || chunks.length >= MAX_CHUNKS,
+    chunks
+  };
   await writeIndex(root, index);
-  return { available: true, root, embeddingModel: model, checkpointIdentity, indexedAt: index.indexedAt, chunkCount: chunks.length,
-    dimensions, scannedFiles, scannedBytes, reusedChunks, skippedFiles, truncated: index.truncated };
+  return {
+    available: true,
+    root,
+    embeddingModel: model,
+    checkpointIdentity,
+    indexedAt: index.indexedAt,
+    chunkCount: chunks.length,
+    dimensions,
+    maxInputTokens: index.maxInputTokens,
+    scannedFiles,
+    scannedBytes,
+    reusedChunks,
+    splitForContextChunks: Math.max(0, fitted.chunks.length - pending.length),
+    skippedFiles,
+    truncated: index.truncated
+  };
 }
 export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
   fetchImpl = globalThis.fetch, model = DEFAULT_EMBEDDING_MODEL, signal
@@ -353,8 +389,33 @@ export async function searchWorkspaceSemantic(inputRoot, query, limit = 8, {
     }
     const source = checked.get(item.path);
     if (!source) continue;
-    const excerpt = source.content.split(/\r?\n/).slice(item.startLine - 1, item.endLine).join("\n").slice(0, MAX_CHUNK_CHARS);
-    results.push({ path: item.path, startLine: item.startLine, endLine: item.endLine, score: Number(item.score.toFixed(5)), sha256: item.sha256, excerpt });
+    const excerptLines = source.content.split(/\r?\n/).slice(item.startLine - 1, item.endLine);
+    if (excerptLines.length === 1 && (item.startColumn !== undefined || item.endColumn !== undefined)) {
+      const points = Array.from(excerptLines[0]);
+      const from = Math.max(0, (item.startColumn || 1) - 1);
+      const to = item.endColumn === undefined ? points.length : Math.max(from, item.endColumn - 1);
+      excerptLines[0] = points.slice(from, to).join("");
+    } else {
+      if (item.startColumn !== undefined && excerptLines.length) {
+        excerptLines[0] = Array.from(excerptLines[0]).slice(item.startColumn - 1).join("");
+      }
+      if (item.endColumn !== undefined && excerptLines.length) {
+        const last = excerptLines.length - 1;
+        excerptLines[last] = Array.from(excerptLines[last]).slice(0, item.endColumn - 1).join("");
+      }
+    }
+    const excerpt = excerptLines.join("\n");
+    results.push({
+      path: item.path,
+      startLine: item.startLine,
+      endLine: item.endLine,
+      startColumn: item.startColumn,
+      endColumn: item.endColumn,
+      tokenCount: item.tokenCount,
+      score: Number(item.score.toFixed(5)),
+      sha256: item.sha256,
+      excerpt
+    });
   }
   return { available: true, root, query: query.trim(), embeddingModel: model,
     checkpointIdentity: index.checkpointIdentity, results, staleResults: ranked.length - results.length };
