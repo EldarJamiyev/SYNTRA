@@ -306,6 +306,7 @@ async function requestLocalEmbeddings(fetchImpl, input) {
   const windowTokenCounts = payload.window_token_counts;
   const windowNewTokenCounts = payload.window_new_token_counts;
   const effectiveWindowTokens = payload.effective_window_tokens;
+  const maxWindowsPerRequest = payload.max_windows_per_request;
   if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
     || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))
     || payload.truncated !== false
@@ -325,7 +326,9 @@ async function requestLocalEmbeddings(fetchImpl, input) {
       || counts.reduce((sum, count) => sum + count, 0) !== tokenCounts[index])
     || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
     || payload.total_input_tokens !== tokenCounts.reduce((sum, count) => sum + count, 0)
-    || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)) {
+    || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)
+    || !Number.isSafeInteger(maxWindowsPerRequest) || maxWindowsPerRequest < 1
+    || payload.total_windows > maxWindowsPerRequest) {
     throw new Error("SYNTRA native runtime returned invalid, incomplete, or truncated full-text embedding evidence.");
   }
   return {
