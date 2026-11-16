@@ -36,13 +36,46 @@ function fakeEmbeddings(url, options) {
   assert.equal(body.device, "auto");
   assert.equal(body.max_length, 256);
   const input = body.texts;
+  const tokenCounts = input.map(text => Buffer.byteLength(String(text), "utf8"));
+  const windowTokenCounts = [];
+  const windowNewTokenCounts = [];
+  const windowCounts = [];
+  for (const tokenCount of tokenCounts) {
+    const windows = [], newlyCovered = [];
+    if (tokenCount === 0) {
+      windows.push(0);
+      newlyCovered.push(0);
+    } else {
+      let start = 0;
+      while (start < tokenCount) {
+        const end = Math.min(start + 256, tokenCount);
+        windows.push(end - start);
+        newlyCovered.push(start === 0 ? end - start : end - start - 32);
+        if (end >= tokenCount) break;
+        start += 224;
+      }
+    }
+    windowTokenCounts.push(windows);
+    windowNewTokenCounts.push(newlyCovered);
+    windowCounts.push(windows.length);
+  }
   return Promise.resolve(new Response(JSON.stringify({
     checkpoint_identity: fakeEmbeddings.checkpointIdentity || "d".repeat(64),
     embeddings: input.map(text => {
       const value = String(text).toLowerCase();
       return [value.includes("gateway") || value.includes("network") ? 1 : 0,
         value.includes("database") ? 1 : 0, 0.25, 0.5, 0.75, 0.1, 0.2, 0.3];
-    })
+    }),
+    input_token_counts: tokenCounts,
+    window_counts: windowCounts,
+    window_token_counts: windowTokenCounts,
+    window_new_token_counts: windowNewTokenCounts,
+    total_input_tokens: tokenCounts.reduce((sum, count) => sum + count, 0),
+    total_windows: windowCounts.reduce((sum, count) => sum + count, 0),
+    effective_window_tokens: 256,
+    window_overlap_tokens: 32,
+    pooling_strategy: "full-text-overlapping-window-pool-v1",
+    truncated: false
   }), { status: 200 }));
 }
 test("semantic index invalidates vectors when the native checkpoint changes", async () => {
@@ -54,9 +87,24 @@ test("semantic index invalidates vectors when the native checkpoint changes", as
     assert.equal(built.available, true);
     assert.equal(built.checkpointIdentity, fakeEmbeddings.checkpointIdentity);
     assert.ok(built.chunkCount > 0);
+    assert.equal(built.embeddingStrategy, "full-text-overlapping-window-pool-v1");
+    assert.ok(built.totalEmbeddedTokens > 0);
+    assert.ok(built.totalEmbeddingWindows >= built.chunkCount);
+    const persisted = JSON.parse(await fs.readFile(path.join(root, ".syntra", "semantic-index-v1.json"), "utf8"));
+    assert.equal(persisted.schemaVersion, 2);
+    assert.equal(persisted.embeddingStrategy, "full-text-overlapping-window-pool-v1");
+    assert.ok(persisted.chunks.every(chunk =>
+      Number.isSafeInteger(chunk.tokenCount)
+      && Number.isSafeInteger(chunk.windowCount)
+      && chunk.windowCount >= 1
+      && chunk.tokenCount >= 0
+    ));
     assert.equal((await getSemanticIndexStatus(root)).checkpointIdentity, fakeEmbeddings.checkpointIdentity);
     const result = await searchWorkspaceSemantic(root, "find gateway configuration", 5, options);
     assert.equal(result.available, true);
+    assert.ok(result.queryTokenCount > 0);
+    assert.ok(result.queryWindowCount >= 1);
+    assert.equal(result.embeddingStrategy, "full-text-overlapping-window-pool-v1");
     assert.equal(result.results[0].path, "src/network.mjs");
     assert.match(result.results[0].excerpt, /resolveGateway/);
 
@@ -90,5 +138,53 @@ test("splitIntoChunks aligns chunks to declaration boundaries when source exceed
   assert.ok(chunks.length >= 2);
   assert.equal(chunks[0].endLine, 18);
   assert.match(chunks[1].text, /export function computeChecksum/);
+});
+
+test("semantic index rejects old clipped-vector schema and rebuilds it", async () => {
+  const root = await makeWorkspace();
+  try {
+    fakeEmbeddings.checkpointIdentity = "f".repeat(64);
+    const options = { fetchImpl: fakeEmbeddings, model: "syntra-native" };
+    const first = await refreshWorkspaceSemanticIndex(root, options);
+    assert.ok(first.chunkCount > 0);
+    const file = path.join(root, ".syntra", "semantic-index-v1.json");
+    const legacy = JSON.parse(await fs.readFile(file, "utf8"));
+    legacy.schemaVersion = 1;
+    delete legacy.embeddingStrategy;
+    for (const chunk of legacy.chunks) {
+      delete chunk.tokenCount;
+      delete chunk.windowCount;
+      delete chunk.effectiveWindowTokens;
+    }
+    await fs.writeFile(file, JSON.stringify(legacy), "utf8");
+    assert.equal((await getSemanticIndexStatus(root)).available, false);
+
+    const rebuilt = await refreshWorkspaceSemanticIndex(root, options);
+    assert.equal(rebuilt.available, true);
+    assert.equal(rebuilt.reusedChunks, 0);
+    const current = JSON.parse(await fs.readFile(file, "utf8"));
+    assert.equal(current.schemaVersion, 2);
+    assert.ok(current.chunks.every(chunk => Number.isSafeInteger(chunk.tokenCount)));
+  } finally {
+    delete fakeEmbeddings.checkpointIdentity;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic index refuses embedding responses that do not prove full input coverage", async () => {
+  const root = await makeWorkspace();
+  try {
+    const fetchImpl = async () => new Response(JSON.stringify({
+      checkpoint_identity: "a".repeat(64),
+      embeddings: [[1, 0, 0, 0, 0, 0, 0, 0]]
+    }), { status: 200 });
+    await assert.rejects(
+      refreshWorkspaceSemanticIndex(root, { fetchImpl, model: "syntra-native" }),
+      /invalid, incomplete, or truncated full-text embedding evidence/
+    );
+    await assert.rejects(fs.stat(path.join(root, ".syntra", "semantic-index-v1.json")), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
