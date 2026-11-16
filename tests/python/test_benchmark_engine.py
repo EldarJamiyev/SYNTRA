@@ -392,6 +392,212 @@ class RawModelReportComparisonTests(unittest.TestCase):
         }
         return report
 
+    @classmethod
+    def _with_tasks(cls, report, records):
+        report = copy.deepcopy(report)
+        tasks = []
+        for record in records:
+            task = copy.deepcopy(report["tasks"][0])
+            task.update({
+                "id": record["id"],
+                "language": record["language"],
+                "baseline_validated": record["baseline_validated"],
+                "task_completion": record["task_completion"],
+                "patch_correctness": record["patch_correctness"],
+                "regression_prevention": record["regression_prevention"],
+                "status": "completed" if record["task_completion"] else "target-failed",
+            })
+            generation_ms = record["generation_ms"]
+            generated_tokens = record["generated_tokens"]
+            task["execution_speed"].update({
+                "total_ms": record["total_ms"],
+                "generation_ms": generation_ms,
+                "generated_tokens": generated_tokens,
+                "output_tokens_per_second": (
+                    round(generated_tokens / (generation_ms / 1000), 2)
+                    if generation_ms is not None and generation_ms > 0
+                    else None
+                ),
+            })
+            tasks.append(task)
+        valid = [task for task in tasks if task["baseline_validated"]]
+        regression = [task for task in valid if task["regression_prevention"] is not None]
+        completed_count = sum(task["task_completion"] for task in valid)
+        patch_count = sum(task["patch_correctness"] for task in valid)
+        regression_count = sum(task["regression_prevention"] is True for task in regression)
+        denominator = len(valid)
+        report["tasks"] = tasks
+        report["summary"].update({
+            "task_count": len(tasks),
+            "baseline_valid_task_count": denominator,
+            "invalid_fixture_count": len(tasks) - denominator,
+            "completed_task_count": completed_count,
+            "task_completion_rate": round(completed_count / denominator, 4) if denominator else None,
+            "patch_correct_count": patch_count,
+            "patch_correctness_rate": round(patch_count / denominator, 4) if denominator else None,
+            "regression_measured_count": len(regression),
+            "regression_prevented_count": regression_count,
+            "regression_prevention_rate": round(regression_count / len(regression), 4) if regression else None,
+        })
+        return report
+
+    def test_language_matrix_uses_per_language_valid_denominators_and_marks_small_samples(self):
+        hardware = self._hardware()
+        base = self._report(
+            run_id="language-baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        baseline = self._with_tasks(base, [
+            {
+                "id": "python-clamp",
+                "language": "python",
+                "baseline_validated": True,
+                "task_completion": True,
+                "patch_correctness": True,
+                "regression_prevention": True,
+                "total_ms": 100,
+                "generation_ms": 50,
+                "generated_tokens": 10,
+            },
+            {
+                "id": "javascript-event-normalizer",
+                "language": "javascript",
+                "baseline_validated": True,
+                "task_completion": False,
+                "patch_correctness": False,
+                "regression_prevention": None,
+                "total_ms": 200,
+                "generation_ms": 100,
+                "generated_tokens": 20,
+            },
+            {
+                "id": "typescript-object-mapper",
+                "language": "typescript",
+                "baseline_validated": False,
+                "task_completion": False,
+                "patch_correctness": False,
+                "regression_prevention": None,
+                "total_ms": 10,
+                "generation_ms": None,
+                "generated_tokens": 0,
+            },
+        ])
+        candidate = self._with_tasks({
+            **base,
+            "run_id": "language-candidate",
+            "model": {**base["model"], "name": "language-candidate", "checkpoint_sha256": "b" * 64},
+        }, [
+            {
+                "id": "python-clamp",
+                "language": "python",
+                "baseline_validated": True,
+                "task_completion": True,
+                "patch_correctness": True,
+                "regression_prevention": True,
+                "total_ms": 80,
+                "generation_ms": 40,
+                "generated_tokens": 10,
+            },
+            {
+                "id": "javascript-event-normalizer",
+                "language": "javascript",
+                "baseline_validated": True,
+                "task_completion": True,
+                "patch_correctness": True,
+                "regression_prevention": False,
+                "total_ms": 150,
+                "generation_ms": 80,
+                "generated_tokens": 40,
+            },
+            {
+                "id": "typescript-object-mapper",
+                "language": "typescript",
+                "baseline_validated": False,
+                "task_completion": False,
+                "patch_correctness": False,
+                "regression_prevention": None,
+                "total_ms": 10,
+                "generation_ms": None,
+                "generated_tokens": 0,
+            },
+        ])
+
+        comparison = runner.compare_raw_benchmark_reports(baseline, candidate)
+        matrix = comparison["language_breakdown"]
+        self.assertEqual(set(matrix), {"python", "javascript", "typescript"})
+
+        python = matrix["python"]
+        self.assertEqual(python["task_count"], 1)
+        self.assertEqual(python["baseline_valid_task_count"], 1)
+        self.assertEqual(python["baseline"]["task_completion_rate"], 1.0)
+        self.assertEqual(python["candidate"]["task_completion_rate"], 1.0)
+        self.assertEqual(python["quality_status"], "unchanged")
+        self.assertTrue(python["sample_size_warning"])
+
+        javascript = matrix["javascript"]
+        self.assertEqual(javascript["baseline_valid_task_ids"], ["javascript-event-normalizer"])
+        self.assertEqual(javascript["baseline"]["task_completion_rate"], 0.0)
+        self.assertEqual(javascript["candidate"]["task_completion_rate"], 1.0)
+        self.assertEqual(javascript["quality_status"], "improved")
+        self.assertFalse(javascript["environment"]["regression_task_denominators_match"])
+        regression_metric = next(
+            metric for metric in javascript["metrics"]
+            if metric["key"] == "regression_prevention_rate"
+        )
+        self.assertEqual(regression_metric["direction"], "incomparable")
+        self.assertTrue(javascript["environment"]["hardware_comparable"])
+
+        typescript = matrix["typescript"]
+        self.assertEqual(typescript["task_count"], 1)
+        self.assertEqual(typescript["baseline_valid_task_count"], 0)
+        self.assertEqual(typescript["invalid_fixture_count"], 1)
+        self.assertEqual(typescript["quality_status"], "unavailable")
+        self.assertTrue(typescript["sample_size_warning"])
+        self.assertIsNone(typescript["baseline"]["task_completion_rate"])
+        self.assertIn("not evidence of general language capability", typescript["sample_size_note"])
+
+        self.assertEqual(comparison["languages_with_small_samples"], ["javascript", "python", "typescript"])
+        self.assertIn("invalid hidden baselines are excluded", comparison["language_matrix_note"])
+
+    def test_language_matrix_blocks_performance_when_hardware_is_incomplete(self):
+        baseline = self._report(
+            run_id="language-incomplete-baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=self._hardware(complete=False),
+        )
+        candidate = copy.deepcopy(baseline)
+        candidate["run_id"] = "language-incomplete-candidate"
+        candidate["model"] = {
+            **candidate["model"],
+            "name": "language-incomplete-candidate",
+            "checkpoint_sha256": "b" * 64,
+        }
+        comparison = runner.compare_raw_benchmark_reports(baseline, candidate)
+        language = comparison["language_breakdown"]["python"]
+        self.assertEqual(language["quality_status"], "unchanged")
+        self.assertFalse(language["environment"]["hardware_comparable"])
+        self.assertEqual(
+            next(metric for metric in language["metrics"] if metric["key"] == "mean_total_task_ms")["direction"],
+            "incomparable",
+        )
+        self.assertEqual(
+            next(metric for metric in language["metrics"] if metric["key"] == "generation_tokens_per_second")["direction"],
+            "incomparable",
+        )
+
     def test_report_validation_recomputes_denominators_and_hardware_fingerprint(self):
         hardware = self._hardware()
         valid = self._report(
