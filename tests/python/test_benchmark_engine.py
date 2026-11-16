@@ -399,6 +399,71 @@ class RawModelReportComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.BenchmarkError, "fingerprint"):
             runner.validate_raw_benchmark_report(altered_hardware)
 
+    def test_report_validator_rejects_complete_hardware_with_missing_release_or_driver(self):
+        hardware = self._hardware()
+        hardware["host"]["release"] = None
+        report = self._report(
+            run_id="missing-release",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        payload = {
+            "schema_version": 1,
+            "host": hardware["host"],
+            "python": hardware["python"],
+            "pytorch": hardware["pytorch"],
+            "device": {key: value for key, value in hardware["device"].items() if key != "requested"},
+        }
+        hardware["fingerprint_sha256"] = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        with self.assertRaisesRegex(runner.BenchmarkError, "marked complete"):
+            runner.validate_raw_benchmark_report(report)
+
+        cuda_hardware = copy.deepcopy(self._hardware())
+        cuda_hardware["device"].update({
+            "resolved": "cuda:0",
+            "type": "cuda",
+            "index": 0,
+            "vendor": "nvidia_cuda",
+            "name": "Measured GPU",
+            "total_memory_bytes": 8 * 1024 ** 3,
+            "compute_capability": "8.6",
+            "available_device_count": 1,
+            "cuda_runtime_version": "12.4",
+            "driver_version": "550.90",
+        })
+        cuda_hardware["pytorch"]["cuda_runtime_version"] = "12.4"
+        cuda_payload = {
+            "schema_version": 1,
+            "host": cuda_hardware["host"],
+            "python": cuda_hardware["python"],
+            "pytorch": cuda_hardware["pytorch"],
+            "device": {key: value for key, value in cuda_hardware["device"].items() if key != "requested"},
+        }
+        cuda_hardware["fingerprint_sha256"] = hashlib.sha256(
+            json.dumps(cuda_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        cuda_report = self._report(
+            run_id="cuda-zero",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=cuda_hardware,
+        )
+        cuda_report["model"]["device_resolved"] = "cuda:0"
+        self.assertIs(runner.validate_raw_benchmark_report(cuda_report), cuda_report)
+
     def test_same_protocol_and_complete_same_hardware_reports_compare_task_quality_and_performance(self):
         hardware = self._hardware()
         baseline = self._report(
