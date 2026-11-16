@@ -275,7 +275,7 @@ def start_finetuning(body: dict) -> dict:
             "train_loss": None, "validation_loss": None,
             "message": (
                 "Resuming the saved supervised fine-tuning stage."
-                if resume else "Supervised instruction-tuning worker is starting."
+                if worker_body["resume"] else "Supervised instruction-tuning worker is starting."
             )
         })
         _worker = Thread(
