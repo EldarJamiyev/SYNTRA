@@ -102,7 +102,7 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
         torch_module = self._mock_torch(cuda_runtime="12.4")
         torch_module.cuda = mock.Mock()
         torch_module.cuda.device_count.return_value = 2
-        torch_module.cuda.current_device.return_value = 1
+        torch_module.cuda.current_device.return_value = 0
         torch_module.cuda.get_device_name.return_value = "Measured Test Accelerator"
         torch_module.cuda.get_device_properties.return_value = type(
             "CudaProperties",
@@ -117,8 +117,8 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
         ):
             identity = runner.collect_hardware_identity("auto", device, torch_module)
 
-        self.assertEqual(identity["device"]["resolved"], "cuda:1")
-        self.assertEqual(identity["device"]["index"], 1)
+        self.assertEqual(identity["device"]["resolved"], "cuda:0")
+        self.assertEqual(identity["device"]["index"], 0)
         self.assertEqual(identity["device"]["vendor"], "nvidia_cuda")
         self.assertEqual(identity["device"]["name"], "Measured Test Accelerator")
         self.assertEqual(identity["device"]["total_memory_bytes"], 24 * 1024 ** 3)
