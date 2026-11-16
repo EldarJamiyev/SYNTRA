@@ -805,6 +805,11 @@ class RawModelReportComparisonTests(unittest.TestCase):
                 "tasks": [{**candidate["tasks"][0], "id": "different-task"}],
                 "summary": {**candidate["summary"]},
             })
+        with self.assertRaisesRegex(runner.BenchmarkError, "different languages to the same task ID"):
+            relabeled = copy.deepcopy(candidate)
+            relabeled["tasks"][0]["language"] = "typescript"
+            runner.compare_raw_benchmark_reports(baseline, relabeled)
+
         with self.assertRaisesRegex(runner.BenchmarkError, "baseline-valid task sets differ"):
             runner.compare_raw_benchmark_reports(baseline, {
                 **candidate,
