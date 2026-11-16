@@ -1466,8 +1466,20 @@ def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
         generated_tokens = speed.get("generated_tokens")
         if type(generated_tokens) is not int or generated_tokens < 0:
             raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generated-token count.")
-        if speed.get("output_tokens_per_second") is not None and not _report_number(speed["output_tokens_per_second"]):
+        throughput = speed.get("output_tokens_per_second")
+        if throughput is not None and not _report_number(throughput):
             raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generation-throughput measurement.")
+        generation_ms = speed.get("generation_ms")
+        if generation_ms is None:
+            if generated_tokens != 0 or throughput is not None:
+                raise BenchmarkError("Raw benchmark task " + task_id + " reports generated tokens or throughput without a generation-time measurement.")
+        elif generation_ms == 0:
+            if throughput is not None:
+                raise BenchmarkError("Raw benchmark task " + task_id + " reports throughput for a zero-duration generation.")
+        else:
+            expected_throughput = round(generated_tokens / (float(generation_ms) / 1000), 2)
+            if not _report_number(throughput) or float(throughput) != expected_throughput:
+                raise BenchmarkError("Raw benchmark task " + task_id + " has generation throughput inconsistent with its measured tokens/time.")
 
     valid = [task for task in tasks if task["baseline_validated"] is True]
     valid_count = len(valid)
