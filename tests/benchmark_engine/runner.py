@@ -109,6 +109,31 @@ def _cpu_model() -> str | None:
     identifier = os.environ.get("PROCESSOR_IDENTIFIER", "").strip()
     if identifier:
         candidates.append(identifier)
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            ) as processor_key:
+                registered_name, _ = winreg.QueryValueEx(processor_key, "ProcessorNameString")
+            if isinstance(registered_name, str) and registered_name.strip():
+                candidates.insert(0, registered_name.strip())
+        except (ImportError, OSError, TypeError, ValueError):
+            pass
+    elif sys.platform == "darwin":
+        executable = shutil.which("sysctl")
+        if executable:
+            result = run_command(
+                [executable, "-n", "machdep.cpu.brand_string"],
+                cwd=REPOSITORY_ROOT,
+                env=dict(os.environ),
+                timeout_seconds=3,
+                output_limit=1024,
+            )
+            value = result["stdout"].strip()
+            if result["returncode"] == 0 and not result["timed_out"] and not result["output_limited"] and value:
+                candidates.insert(0, value)
     if sys.platform.startswith("linux"):
         try:
             cpuinfo = Path("/proc/cpuinfo")
