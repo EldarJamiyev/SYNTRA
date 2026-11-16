@@ -286,27 +286,29 @@ class FineTuningApiResumeContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="syntra-finetune-api-") as temp:
             resolved_dataset = Path(temp) / "canonical-instructions.jsonl"
-            resolved_dataset.write_text('{"prompt":"p","completion":"c"}\n', encoding="utf-8")
+            resolved_dataset.write_text('{"prompt":"p","completion":"c"}\\n', encoding="utf-8")
             checkpoint = Path(temp) / "native-checkpoint.pt"
             checkpoint.write_bytes(b"checkpoint")
 
             with patch.object(server, "_default_checkpoint", return_value=str(checkpoint)):
                 with patch.object(server, "resolve_instruction_dataset", return_value=resolved_dataset):
-                    with patch.object(server, "_worker", None):
-                        with self.assertRaisesRegex(ValueError, "resume must be a boolean"):
-                            server.start_finetuning({
-                                "dataset": str(resolved_dataset),
-                                "resume": "true",
-                            })
+                    with patch.object(server, "_job", {"status": "idle"}):
+                        with patch.object(server, "_worker", None):
+                            with self.assertRaisesRegex(ValueError, "resume must be a boolean"):
+                                server.start_finetuning({
+                                    "dataset": str(resolved_dataset),
+                                    "resume": "true",
+                                })
 
-                    with patch.object(server, "_worker", None):
-                        with patch.object(server, "Thread") as worker:
-                            started = server.start_finetuning({
-                                "dataset": "untrusted-input-path.jsonl",
-                                "resume": True,
-                                "gradient_accumulation_steps": 2,
-                            })
-                            worker_body = worker.call_args.kwargs["args"][0]
+                        with patch.object(server, "_worker", None):
+                            with patch.object(server, "Thread") as worker:
+                                started = server.start_finetuning({
+                                    "dataset": "untrusted-input-path.jsonl",
+                                    "resume": True,
+                                    "gradient_accumulation_steps": 2,
+                                    "device": "cpu",
+                                })
+                                worker_body = worker.call_args.kwargs["args"][0]
 
             self.assertEqual(started["status"], "starting")
             self.assertEqual(worker_body["dataset"], str(resolved_dataset))
