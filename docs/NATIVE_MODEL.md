@@ -60,3 +60,6 @@ This gate is intentionally strict but narrow: it measures the checked-in 14-task
 ### Phase 10 — lossless instruction conditioning
 
 Instruction fine-tuning must preserve the complete conditioning prompt. The JSONL loader now checks the prompt's token count using the selected checkpoint's exact tokenizer and rejects any prompt that cannot fit in the available context after reserving the BOS token. It does not silently retain only the tail of an overlong prompt, because that can remove system constraints, task requirements, or output-format instructions. Operators must shorten the source prompt deliberately or use a checkpoint with a larger context window. Completion text remains fully supervised across the existing overlapping causal windows, including the terminal EOS target.
+
+- Training and supervised fine-tuning HTTP requests are validated before a worker is queued: integer settings reject booleans/floats/strings, learning rates must be finite and within the trainer's supported range, unknown request/configuration fields are rejected, and the selected CPU/CUDA/MPS device is checked on the local runtime.
+- Source-pretraining resume is fail-closed. A missing checkpoint is an error; it never silently turns an explicit resume request into a fresh random-weight training run.

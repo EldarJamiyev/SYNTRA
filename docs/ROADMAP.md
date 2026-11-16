@@ -426,3 +426,15 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for duplicate required/nested keys, non-finite values, float overflow, deeply nested JSON, valid metadata, and read-only audit failure reporting.
 
 **Acceptance:** Ambiguous or non-standard instruction records fail before tokenization/training with their source line; valid existing JSONL records retain the same parsing, tokenization, split, and training behavior.
+
+
+### Phase 40 — Native training API request contracts and resume safety
+
+**Objective:** Ensure invalid training requests fail synchronously at the local API boundary and explicit source-pretraining resume requests can never silently become fresh training runs.
+
+- [x] Validate source-training and SFT request keys, integer ranges/types, finite learning rates, seeds, model configuration fields, and supported/available local devices before creating a worker.
+- [x] Resolve approved corpus/dataset paths before device checks and preserve the existing filesystem boundary.
+- [x] Require an existing checkpoint for source-pretraining resume in both the API and core trainer; keep fresh training available only when resume is false.
+- [x] Add HTTP-level and direct API regressions proving invalid requests return an error without creating a training job, plus core trainer regressions for invalid inputs and missing checkpoints.
+
+**Acceptance:** Invalid settings are rejected before asynchronous job creation; valid requests retain their existing defaults and are passed to the worker without coercive parsing; resume without a checkpoint fails explicitly and creates no checkpoint or training state.
