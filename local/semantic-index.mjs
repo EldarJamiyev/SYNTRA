@@ -128,16 +128,27 @@ async function readIndex(root) {
       || !Number.isInteger(data.dimensions) || data.dimensions < 8 || data.dimensions > 4096
       || !Number.isInteger(data.maxInputTokens) || data.maxInputTokens < 1 || data.maxInputTokens > MAX_EMBEDDING_TOKENS
       || !Array.isArray(data.chunks) || data.chunks.length > MAX_CHUNKS) return null;
-    const valid = data.chunks.filter(item => item && typeof item.path === "string"
-      && Number.isInteger(item.startLine) && item.startLine > 0
-      && Number.isInteger(item.endLine) && item.endLine >= item.startLine
-      && (item.startColumn === undefined || (Number.isInteger(item.startColumn) && item.startColumn > 0))
-      && (item.endColumn === undefined || (Number.isInteger(item.endColumn) && item.endColumn > 1))
-      && (item.startColumn === undefined || item.endLine === item.startLine)
-      && Number.isInteger(item.tokenCount) && item.tokenCount >= 1 && item.tokenCount <= data.maxInputTokens
-      && typeof item.sha256 === "string" && /^[a-f0-9]{64}$/i.test(item.sha256)
-      && Array.isArray(item.vector) && item.vector.length === data.dimensions
-      && item.vector.every(value => Number.isFinite(value) && Math.abs(value) <= 100));
+    const valid = data.chunks.filter(item => {
+      if (!item || typeof item.path !== "string"
+        || !Number.isInteger(item.startLine) || item.startLine < 1
+        || !Number.isInteger(item.endLine) || item.endLine < item.startLine
+        || !Number.isInteger(item.tokenCount) || item.tokenCount < 1
+        || item.tokenCount > data.maxInputTokens
+        || typeof item.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(item.sha256)
+        || !Array.isArray(item.vector) || item.vector.length !== data.dimensions
+        || item.vector.some(value => !Number.isFinite(value) || Math.abs(value) > 100)) return false;
+      const hasStartColumn = item.startColumn !== undefined;
+      const hasEndColumn = item.endColumn !== undefined;
+      if (hasStartColumn !== hasEndColumn) return false;
+      if (hasStartColumn && (
+        item.endLine !== item.startLine
+        || !Number.isInteger(item.startColumn)
+        || !Number.isInteger(item.endColumn)
+        || item.startColumn < 1
+        || item.endColumn <= item.startColumn
+      )) return false;
+      return true;
+    });
     return valid.length === data.chunks.length ? { ...data, chunks: valid } : null;
   } catch { return null; }
 }
