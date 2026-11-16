@@ -55,6 +55,7 @@ MAX_INSTRUCTION_TOKENS = 3_000_000
 MAX_INSTRUCTION_FILE_BYTES = 100 * 1024 * 1024
 MAX_INSTRUCTION_RECORD_BYTES = 1024 * 1024
 MAX_INSTRUCTION_FIELD_BYTES = 512 * 1024
+MAX_INSTRUCTION_JSON_DEPTH = 128
 INSTRUCTION_VALIDATION_FRACTION = 0.1
 INSTRUCTION_SPLIT_SEED = "syntra-instruction-split-v1"
 SFT_STAGE_COSINE_SCHEDULER = "stage-cosine-warmup-v2"
@@ -88,8 +89,37 @@ def _reject_instruction_json_constant(value: str) -> None:
     raise ValueError("non-standard JSON constant " + repr(value))
 
 
+def _validate_instruction_json_depth(line: str) -> None:
+    """Bound structural JSON nesting without counting brackets inside string values."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in line:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            depth += 1
+            if depth > MAX_INSTRUCTION_JSON_DEPTH:
+                raise ValueError(
+                    "JSON nesting exceeds the "
+                    + str(MAX_INSTRUCTION_JSON_DEPTH)
+                    + "-level instruction record limit"
+                )
+        elif character in "}]":
+            depth = max(0, depth - 1)
+
+
 def _load_instruction_json_record(line: str) -> Any:
-    """Parse one strict JSON value, rejecting duplicate keys and non-finite numbers."""
+    """Parse one strict JSON value, rejecting ambiguous or excessively nested records."""
+    _validate_instruction_json_depth(line)
     return json.loads(
         line,
         object_pairs_hook=_instruction_json_object,
