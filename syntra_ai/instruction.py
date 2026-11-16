@@ -65,6 +65,39 @@ SFT_ADAMW_BETAS = (0.9, 0.999)
 SFT_ADAMW_EPS = 1e-8
 
 
+def _instruction_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build a JSON object while rejecting ambiguous duplicate member names."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key " + repr(key))
+        result[key] = value
+    return result
+
+
+def _instruction_json_float(value: str) -> float:
+    """Reject JSON numbers that overflow Python's finite floating-point range."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("non-finite JSON number")
+    return parsed
+
+
+def _reject_instruction_json_constant(value: str) -> None:
+    """Reject JavaScript-style NaN/Infinity constants, which are not JSON values."""
+    raise ValueError("non-standard JSON constant " + repr(value))
+
+
+def _load_instruction_json_record(line: str) -> Any:
+    """Parse one strict JSON value, rejecting duplicate keys and non-finite numbers."""
+    return json.loads(
+        line,
+        object_pairs_hook=_instruction_json_object,
+        parse_float=_instruction_json_float,
+        parse_constant=_reject_instruction_json_constant,
+    )
+
+
 def _finetuning_scheduler_settings(
     steps: int,
     learning_rate: float,
@@ -292,9 +325,10 @@ def load_instruction_examples(
         if len(line.encode("utf-8")) > MAX_INSTRUCTION_RECORD_BYTES:
             raise ValueError(f"Instruction record on line {line_number} exceeds the 1 MiB record limit.")
         try:
-            item = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON on line {line_number}: {exc.msg}") from exc
+            item = _load_instruction_json_record(line)
+        except (json.JSONDecodeError, ValueError, RecursionError, OverflowError) as exc:
+            detail = exc.msg if isinstance(exc, json.JSONDecodeError) else str(exc)
+            raise ValueError(f"Invalid JSON on line {line_number}: {detail}") from None
         if (
             not isinstance(item, dict)
             or not isinstance(item.get("prompt"), str)
