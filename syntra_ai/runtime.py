@@ -41,6 +41,12 @@ from .safe_paths import resolve_corpus_root
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "data" / "checkpoints" / "syntra.pt"
+MAX_EMBEDDING_TEXT_BYTES = 100_000
+MAX_EMBEDDING_INPUT_TOKENS = 131_072
+DEFAULT_EMBEDDING_WINDOW_TOKENS = 256
+MAX_EMBEDDING_WINDOW_TOKENS = 4096
+EMBEDDING_WINDOW_OVERLAP_TOKENS = 32
+EMBEDDING_POOLING_STRATEGY = "full-text-overlapping-window-pool-v1"
 FALLBACK_BRAIN_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "syntra-brain.pt"
 
 _CACHE_LOCK = RLock()
@@ -539,23 +545,83 @@ def embed_texts(
     texts: list[str],
     path: str | Path | None = None,
     device_name: str = "auto",
+    max_length: int = DEFAULT_EMBEDDING_WINDOW_TOKENS,
 ) -> dict:
-    """Compute dense semantic embeddings using the native SYNTRA Transformer."""
+    """Embed every input token through bounded overlapping native-model windows.
+
+    max_length bounds each text window, not the amount of source text retained.
+    Long inputs are represented by a token-weighted pool of all windows; no tail
+    tokens are silently sliced away.
+    """
     if not isinstance(texts, list) or not texts or len(texts) > 64:
         raise ValueError("input must be a non-empty list of at most 64 strings.")
+    if type(max_length) is not int or not 8 <= max_length <= MAX_EMBEDDING_WINDOW_TOKENS:
+        raise ValueError("max_length must be an integer between 8 and 4,096 tokens.")
     for item in texts:
-        if not isinstance(item, str) or len(item.encode("utf-8")) > 100_000:
+        if not isinstance(item, str) or len(item.encode("utf-8")) > MAX_EMBEDDING_TEXT_BYTES:
             raise ValueError("Each text item must be a string of at most 100 KB.")
+
     identity_before = _checkpoint_identity(path)
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
+    window_limit = min(max_length, config.seq_len - 1)
+    if window_limit < 8:
+        raise ValueError("The selected checkpoint context is too small for an embedding window of at least 8 tokens.")
+
+    encoded_texts = [tokenizer.encode(item) for item in texts]
+    input_token_counts = [len(tokens) for tokens in encoded_texts]
+    total_input_tokens = sum(input_token_counts)
+    if total_input_tokens > MAX_EMBEDDING_INPUT_TOKENS:
+        raise ValueError(
+            "Embedding request contains "
+            + str(total_input_tokens)
+            + " input tokens; the bounded request limit is "
+            + str(MAX_EMBEDDING_INPUT_TOKENS)
+            + ". Split the request into smaller batches."
+        )
+
+    overlap = min(EMBEDDING_WINDOW_OVERLAP_TOKENS, max(0, window_limit // 8))
+    stride = max(1, window_limit - overlap)
     vectors: list[list[float]] = []
-    limit = config.seq_len - 1
-    for item in texts:
-        encoded = tokenizer.encode(item)[:limit]
-        token_ids = [BOS_ID, *encoded]
-        tensor = torch.tensor([token_ids], dtype=torch.long, device=device)
-        vec = model.embed_tokens(tensor)[0].detach().cpu().tolist()
-        vectors.append([round(float(v), 5) for v in vec])
+    window_counts: list[int] = []
+    total_windows = 0
+
+    for encoded in encoded_texts:
+        if not encoded:
+            windows = [(0, [], 1)]
+        else:
+            windows = []
+            start = 0
+            while start < len(encoded):
+                end = min(start + window_limit, len(encoded))
+                content = encoded[start:end]
+                newly_covered = len(content) if start == 0 else max(1, len(content) - overlap)
+                windows.append((start, content, newly_covered))
+                if end >= len(encoded):
+                    break
+                start += stride
+
+        pooled = None
+        pooled_weight = 0
+        for _, content, weight in windows:
+            token_ids = [BOS_ID, *content]
+            if len(token_ids) > config.seq_len:
+                raise RuntimeError("Embedding window exceeded the selected checkpoint context.")
+            tensor = torch.tensor([token_ids], dtype=torch.long, device=device)
+            vector = model.embed_tokens(tensor)[0].detach().float()
+            if vector.ndim != 1 or vector.numel() != config.n_embd or not torch.isfinite(vector).all():
+                raise RuntimeError("The native model returned an invalid semantic embedding window.")
+            pooled = vector * weight if pooled is None else pooled + vector * weight
+            pooled_weight += weight
+
+        if pooled is None or pooled_weight < 1:
+            raise RuntimeError("The native embedding window pool did not cover the input.")
+        pooled = F.normalize((pooled / pooled_weight).unsqueeze(0), p=2, dim=-1)[0]
+        if not torch.isfinite(pooled).all() or torch.linalg.vector_norm(pooled).item() <= 0:
+            raise RuntimeError("The native model produced an invalid pooled semantic embedding.")
+        vectors.append([round(float(value), 5) for value in pooled.cpu().tolist()])
+        window_counts.append(len(windows))
+        total_windows += len(windows)
+
     identity_after = _checkpoint_identity(path)
     if identity_before is None or identity_after != identity_before:
         raise RuntimeError("The native checkpoint changed during embedding generation; retry the request.")
@@ -566,6 +632,14 @@ def embed_texts(
         "checkpoint": str(target),
         "checkpoint_identity": identity_before,
         "trained_steps": int(saved.get("step", 0)),
+        "input_token_counts": input_token_counts,
+        "window_counts": window_counts,
+        "total_input_tokens": total_input_tokens,
+        "total_windows": total_windows,
+        "effective_window_tokens": window_limit,
+        "window_overlap_tokens": overlap,
+        "pooling_strategy": EMBEDDING_POOLING_STRATEGY,
+        "truncated": False,
         "local_only": True,
     }
 
