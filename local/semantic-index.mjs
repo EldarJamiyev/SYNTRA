@@ -6,10 +6,11 @@ import {
   listWorkspaceIndexCandidates, readWorkspaceFile, resolveWorkspace
 } from "./workspace.mjs";
 
-const INDEX_NAME = "semantic-index-v1.json";
+const INDEX_NAME = "semantic-index-v2.json";
 const MAX_INDEX_BYTES = 8 * 1024 * 1024;
 const MAX_FILES = 500, MAX_CHUNKS = 600, MAX_CHUNK_CHARS = 2400;
 const CHUNK_LINES = 36, CHUNK_OVERLAP = 6;
+const MAX_EMBEDDING_TOKENS = 256;
 const DEFAULT_EMBEDDING_MODEL = "syntra-native";
 
 function cosineSimilarity(a, b) {
@@ -24,11 +25,10 @@ const DECLARATION_BOUNDARY = /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:func
 
 export function splitIntoChunks(relativePath, content) {
   const lines = String(content || "").split(/\r?\n/), chunks = [];
-  const defaultStep = Math.max(1, CHUNK_LINES - CHUNK_OVERLAP);
   let start = 0;
   while (start < lines.length && chunks.length < MAX_CHUNKS) {
     let end = Math.min(lines.length, start + CHUNK_LINES);
-    let nextStart = start + defaultStep;
+    let nextStart = Math.max(start + 1, end - CHUNK_OVERLAP);
     if (end < lines.length) {
       for (let probe = start + 14; probe < end; probe += 1) {
         if (DECLARATION_BOUNDARY.test(lines[probe].trim())) {
@@ -38,12 +38,82 @@ export function splitIntoChunks(relativePath, content) {
         }
       }
     }
-    const text = lines.slice(start, end).join("\n").slice(0, MAX_CHUNK_CHARS);
-    if (text.trim().length >= 40) chunks.push({ path: relativePath, startLine: start + 1, endLine: end, text });
+
+    let text = lines.slice(start, end).join("\n");
+    while (text.length > MAX_CHUNK_CHARS && end > start + 1) {
+      end -= 1;
+      nextStart = Math.max(start + 1, end - CHUNK_OVERLAP);
+      text = lines.slice(start, end).join("\n");
+    }
+
+    if (end === start + 1 && Array.from(lines[start]).length > MAX_CHUNK_CHARS) {
+      const points = Array.from(lines[start]);
+      for (let offset = 0; offset < points.length && chunks.length < MAX_CHUNKS; offset += MAX_CHUNK_CHARS) {
+        const finish = Math.min(points.length, offset + MAX_CHUNK_CHARS);
+        const part = points.slice(offset, finish).join("");
+        if (part.trim().length >= 40) {
+          chunks.push({
+            path: relativePath,
+            startLine: start + 1,
+            endLine: start + 1,
+            startColumn: offset + 1,
+            endColumn: finish + 1,
+            text: part
+          });
+        }
+      }
+      start += 1;
+      continue;
+    }
+
+    if (text.trim().length >= 40) {
+      chunks.push({ path: relativePath, startLine: start + 1, endLine: end, text });
+    }
     if (end >= lines.length || chunks.length >= MAX_CHUNKS) break;
-    start = Math.max(start + 1, nextStart);
+    start = Math.max(start + 1, Math.min(nextStart, end));
   }
   return chunks;
+}
+
+function splitOversizedChunk(chunk) {
+  const lines = String(chunk.text).split(/\r?\n/);
+  if (lines.length > 1) {
+    const midpoint = Math.floor(lines.length / 2);
+    if (midpoint < 1 || midpoint >= lines.length) return null;
+    const first = {
+      ...chunk,
+      endLine: chunk.startLine + midpoint - 1,
+      text: lines.slice(0, midpoint).join("\n")
+    };
+    delete first.endColumn;
+    const second = {
+      ...chunk,
+      startLine: chunk.startLine + midpoint,
+      startColumn: 1,
+      text: lines.slice(midpoint).join("\n")
+    };
+    return [first, second].filter(item => item.text.trim().length >= 1);
+  }
+
+  const points = Array.from(lines[0]);
+  if (points.length < 2) return null;
+  const midpoint = Math.floor(points.length / 2);
+  const baseColumn = Number.isInteger(chunk.startColumn) ? chunk.startColumn : 1;
+  const finalColumn = Number.isInteger(chunk.endColumn) ? chunk.endColumn : baseColumn + points.length;
+  return [
+    {
+      ...chunk,
+      startColumn: baseColumn,
+      endColumn: baseColumn + midpoint,
+      text: points.slice(0, midpoint).join("")
+    },
+    {
+      ...chunk,
+      startColumn: baseColumn + midpoint,
+      endColumn: finalColumn,
+      text: points.slice(midpoint).join("")
+    }
+  ].filter(item => item.text.trim().length >= 1);
 }
 async function readIndex(root) {
   const target = path.join(await getWorkspaceStateDirectory(root), INDEX_NAME);
@@ -54,13 +124,18 @@ async function readIndex(root) {
   if (stat.size > MAX_INDEX_BYTES) return null;
   try {
     const data = JSON.parse(await fs.readFile(target, "utf8"));
-    if (data?.schemaVersion !== 1 || data.root !== root || data.embeddingModel !== DEFAULT_EMBEDDING_MODEL
+    if (data?.schemaVersion !== 2 || data.root !== root || data.embeddingModel !== DEFAULT_EMBEDDING_MODEL
       || !/^[a-f0-9]{64}$/i.test(data.checkpointIdentity || "")
       || !Number.isInteger(data.dimensions) || data.dimensions < 8 || data.dimensions > 4096
+      || !Number.isInteger(data.maxInputTokens) || data.maxInputTokens < 1 || data.maxInputTokens > MAX_EMBEDDING_TOKENS
       || !Array.isArray(data.chunks) || data.chunks.length > MAX_CHUNKS) return null;
     const valid = data.chunks.filter(item => item && typeof item.path === "string"
       && Number.isInteger(item.startLine) && item.startLine > 0
       && Number.isInteger(item.endLine) && item.endLine >= item.startLine
+      && (item.startColumn === undefined || (Number.isInteger(item.startColumn) && item.startColumn > 0))
+      && (item.endColumn === undefined || (Number.isInteger(item.endColumn) && item.endColumn > 1))
+      && (item.startColumn === undefined || item.endLine === item.startLine)
+      && Number.isInteger(item.tokenCount) && item.tokenCount >= 1 && item.tokenCount <= data.maxInputTokens
       && typeof item.sha256 === "string" && /^[a-f0-9]{64}$/i.test(item.sha256)
       && Array.isArray(item.vector) && item.vector.length === data.dimensions
       && item.vector.every(value => Number.isFinite(value) && Math.abs(value) <= 100));
@@ -76,25 +151,58 @@ async function writeIndex(root, index) {
   try { await fs.rename(temporary, target); }
   catch (error) { await fs.rm(temporary, { force: true }); throw error; }
 }
-async function embedViaNativeRuntime(texts, fetchImpl, signal) {
+async function nativeRuntimeRequest(route, body, fetchImpl, signal) {
   const aiPort = Number(process.env.SYNTRA_AI_PORT || 3002);
   if (!Number.isInteger(aiPort) || aiPort < 1024 || aiPort > 65535) {
     throw new Error("SYNTRA_AI_PORT must be an integer between 1024 and 65535.");
   }
   const timeout = AbortSignal.timeout(120000);
-  const response = await fetchImpl(`http://127.0.0.1:${aiPort}/model/embed`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+  const response = await fetchImpl(`http://127.0.0.1:${aiPort}${route}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     redirect: "error",
-    body: JSON.stringify({ texts, max_length: 256, device: "auto" }),
+    body: JSON.stringify(body),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(String(payload.error || "Native embeddings request failed with HTTP " + response.status));
+  if (!response.ok) throw new Error(String(payload.error || "Native runtime request failed with HTTP " + response.status));
   if (!/^[a-f0-9]{64}$/i.test(payload.checkpoint_identity || "")) {
-    throw new Error("Native runtime did not identify the checkpoint that generated these embeddings.");
+    throw new Error("Native runtime did not identify the checkpoint used for this request.");
   }
-  if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length) {
-    throw new Error("Native runtime returned an invalid embedding batch.");
+  return payload;
+}
+
+async function countViaNativeRuntime(texts, fetchImpl, signal) {
+  const payload = await nativeRuntimeRequest("/model/tokenize", {
+    texts,
+    max_length: MAX_EMBEDDING_TOKENS
+  }, fetchImpl, signal);
+  if (!Array.isArray(payload.token_counts) || payload.token_counts.length !== texts.length
+    || payload.token_counts.some(value => !Number.isInteger(value) || value < 0)
+    || !Number.isInteger(payload.max_input_tokens) || payload.max_input_tokens < 1
+    || payload.max_input_tokens > MAX_EMBEDDING_TOKENS) {
+    throw new Error("Native runtime returned invalid token-count evidence for semantic chunks.");
+  }
+  return {
+    checkpointIdentity: payload.checkpoint_identity,
+    tokenCounts: payload.token_counts,
+    maxInputTokens: payload.max_input_tokens
+  };
+}
+
+async function embedViaNativeRuntime(texts, fetchImpl, signal) {
+  const payload = await nativeRuntimeRequest("/model/embed", {
+    texts,
+    max_length: MAX_EMBEDDING_TOKENS,
+    device: "auto"
+  }, fetchImpl, signal);
+  if (!Array.isArray(payload.embeddings) || payload.embeddings.length !== texts.length
+    || !Array.isArray(payload.input_token_counts) || payload.input_token_counts.length !== texts.length
+    || payload.input_token_counts.some(value => !Number.isInteger(value) || value < 0)
+    || !Number.isInteger(payload.max_input_tokens) || payload.max_input_tokens < 1
+    || payload.max_input_tokens > MAX_EMBEDDING_TOKENS
+    || payload.input_token_counts.some(value => value > payload.max_input_tokens)) {
+    throw new Error("Native runtime returned incomplete or truncated embedding-input evidence.");
   }
   const dims = payload.embeddings[0]?.length;
   if (!Number.isInteger(dims) || dims < 8 || dims > 4096
@@ -103,8 +211,48 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
   }
   return {
     checkpointIdentity: payload.checkpoint_identity,
+    inputTokenCounts: payload.input_token_counts,
+    maxInputTokens: payload.max_input_tokens,
     embeddings: payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5))))
   };
+}
+
+async function fitChunksToNativeContext(chunks, expectedCheckpointIdentity, fetchImpl, signal) {
+  const queue = [...chunks];
+  const fitted = [];
+  let maxInputTokens = MAX_EMBEDDING_TOKENS;
+  while (queue.length) {
+    const batch = queue.splice(0, 64);
+    const measured = await countViaNativeRuntime(batch.map(item => item.text), fetchImpl, signal);
+    if (measured.checkpointIdentity !== expectedCheckpointIdentity) {
+      throw new Error("The native checkpoint changed during semantic chunk tokenization; retry the operation.");
+    }
+    maxInputTokens = Math.min(maxInputTokens, measured.maxInputTokens);
+    for (let index = 0; index < batch.length; index += 1) {
+      const item = batch[index];
+      const tokenCount = measured.tokenCounts[index];
+      if (tokenCount <= measured.maxInputTokens) {
+        fitted.push({ ...item, tokenCount });
+        continue;
+      }
+      const parts = splitOversizedChunk(item);
+      if (!parts || parts.length < 2) {
+        throw new Error(
+          "Cannot index " + item.path + ":" + item.startLine +
+          " because this source fragment requires " + tokenCount +
+          " native tokenizer tokens and cannot be split further without losing source identity."
+        );
+      }
+      if (fitted.length + queue.length + parts.length > MAX_CHUNKS) {
+        throw new Error(
+          "Lossless token-aware chunking would exceed the semantic index limit of " +
+          MAX_CHUNKS + " chunks; no partial index was written."
+        );
+      }
+      queue.unshift(...parts);
+    }
+  }
+  return { chunks: fitted, maxInputTokens };
 }
 
 async function embed(texts, model, fetchImpl, signal) {
