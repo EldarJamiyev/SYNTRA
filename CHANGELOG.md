@@ -13,6 +13,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
+- Validate explicit CUDA device indices in the shared local device selector before training/model allocation; preserve default `cuda` selection and fail clearly for unavailable indices.
 - Validate native source-training and supervised fine-tuning request types/ranges, model configuration keys, and local device availability before queueing background work; reject missing-checkpoint source resumes instead of silently starting from random weights.
 - Parse supervised-instruction JSONL strictly: reject duplicate object keys at any depth, non-standard/non-finite numeric values, float overflow, and nesting beyond the 128-level record limit with source-line validation errors.
 - Extend checkpoint-backed status recovery to source pretraining, validate its optimizer/RNG/corpus provenance, and safely upgrade legacy progress metadata only after verifying the full checkpoint.

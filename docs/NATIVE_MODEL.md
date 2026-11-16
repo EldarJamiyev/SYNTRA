@@ -63,3 +63,5 @@ Instruction fine-tuning must preserve the complete conditioning prompt. The JSON
 
 - Training and supervised fine-tuning HTTP requests are validated before a worker is queued: integer settings reject booleans/floats/strings, learning rates must be finite and within the trainer's supported range, unknown request/configuration fields are rejected, and the selected CPU/CUDA/MPS device is checked on the local runtime.
 - Source-pretraining resume is fail-closed. A missing checkpoint is an error; it never silently turns an explicit resume request into a fresh random-weight training run.
+
+- Shared device selection validates an explicitly requested CUDA index against the local PyTorch device count before training or inference model allocation; the unindexed `cuda` selector retains the runtime's default-device behavior.

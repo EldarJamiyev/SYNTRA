@@ -245,8 +245,15 @@ def choose_device(requested: str = "auto") -> torch.device:
             return torch.device("mps")
         return torch.device("cpu")
     device = torch.device(requested)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise ValueError("CUDA was requested but PyTorch cannot find a CUDA device.")
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA was requested but PyTorch cannot find a CUDA device.")
+        if device.index is not None:
+            count = torch.cuda.device_count()
+            if device.index >= count:
+                raise ValueError(
+                    f"CUDA device index {device.index} is outside the {count} available device(s)."
+                )
     if device.type == "mps" and not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()):
         raise ValueError("MPS was requested but is not available on this machine.")
     return device
