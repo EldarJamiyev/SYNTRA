@@ -149,6 +149,42 @@ test("semantic indexing splits long source lines to exact tokenizer offsets befo
   }
 });
 
+test("semantic indexing splits oversized multi-line chunks without invalid column metadata", async () => {
+  const root = await makeWorkspace();
+  const sourceLines = [
+    "const first = '" + "a".repeat(45) + "';",
+    "const second = '" + "b".repeat(45) + "';",
+    "export function resolveNetworkRoute() { return '" + "network".repeat(6) + "'; }",
+    "const fourth = '" + "d".repeat(45) + "';"
+  ];
+  const source = sourceLines.join("\n");
+  try {
+    await fs.writeFile(path.join(root, "src", "multi-line.mjs"), source + "\n", "utf8");
+    fakeEmbeddings.checkpointIdentity = "9".repeat(64);
+    fakeEmbeddings.maxInputTokens = 128;
+    const options = { fetchImpl: fakeEmbeddings, model: "syntra-native" };
+    const built = await refreshWorkspaceSemanticIndex(root, options);
+    assert.equal(built.available, true);
+    assert.ok(built.splitForContextChunks > 0);
+
+    const status = await getSemanticIndexStatus(root);
+    assert.equal(status.available, true);
+    const result = await searchWorkspaceSemantic(root, "network routing", 8, options);
+    const match = result.results.find(item => item.path === "src/multi-line.mjs");
+    assert.ok(match);
+    assert.equal(match.startLine, 3);
+    assert.equal(match.endLine, 4);
+    assert.equal(match.startColumn, undefined);
+    assert.equal(match.endColumn, undefined);
+    assert.ok(match.tokenCount <= 128);
+    assert.equal(match.excerpt, sourceLines.slice(2, 4).join("\n"));
+  } finally {
+    delete fakeEmbeddings.checkpointIdentity;
+    delete fakeEmbeddings.maxInputTokens;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("semantic query text is rejected instead of being silently clipped to model context", async () => {
   const root = await makeWorkspace();
   try {
