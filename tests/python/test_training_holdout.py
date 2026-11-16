@@ -355,5 +355,22 @@ class NativeTrainingHoldoutIntegrationTests(unittest.TestCase):
                     )
 
 
+
+class SourceTrainingResumeContractTests(unittest.TestCase):
+    def test_resume_requires_an_existing_checkpoint_instead_of_starting_fresh(self):
+        from syntra_ai.training import train
+
+        with tempfile.TemporaryDirectory(prefix="syntra-missing-source-resume-") as temp:
+            checkpoint = Path(temp) / "missing-checkpoint.pt"
+            with self.assertRaisesRegex(FileNotFoundError, "checkpoint file does not exist"):
+                train(
+                    roots=[temp],
+                    checkpoint=checkpoint,
+                    steps=1,
+                    resume=True,
+                )
+            self.assertFalse(checkpoint.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
