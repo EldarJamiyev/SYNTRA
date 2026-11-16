@@ -303,6 +303,8 @@ async function requestLocalEmbeddings(fetchImpl, input) {
   const dimension = payload.embeddings[0]?.length;
   const tokenCounts = payload.input_token_counts;
   const windowCounts = payload.window_counts;
+  const windowTokenCounts = payload.window_token_counts;
+  const windowNewTokenCounts = payload.window_new_token_counts;
   const effectiveWindowTokens = payload.effective_window_tokens;
   if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
     || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))
@@ -312,6 +314,15 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     || tokenCounts.some(count => !Number.isSafeInteger(count) || count < 0)
     || !Array.isArray(windowCounts) || windowCounts.length !== input.length
     || windowCounts.some(count => !Number.isSafeInteger(count) || count < 1)
+    || !Array.isArray(windowTokenCounts) || windowTokenCounts.length !== input.length
+    || !Array.isArray(windowNewTokenCounts) || windowNewTokenCounts.length !== input.length
+    || windowTokenCounts.some((counts, index) => !Array.isArray(counts)
+      || counts.length !== windowCounts[index]
+      || counts.some(count => !Number.isSafeInteger(count) || count < 0 || count > effectiveWindowTokens))
+    || windowNewTokenCounts.some((counts, index) => !Array.isArray(counts)
+      || counts.length !== windowCounts[index]
+      || counts.some(count => !Number.isSafeInteger(count) || count < 0)
+      || counts.reduce((sum, count) => sum + count, 0) !== tokenCounts[index])
     || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
     || payload.total_input_tokens !== tokenCounts.reduce((sum, count) => sum + count, 0)
     || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)) {
@@ -323,6 +334,8 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     checkpointIdentity: payload.checkpoint_identity,
     tokenCounts,
     windowCounts,
+    windowTokenCounts,
+    windowNewTokenCounts,
     effectiveWindowTokens,
     poolingStrategy: payload.pooling_strategy
   };
