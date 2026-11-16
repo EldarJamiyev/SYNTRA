@@ -13,6 +13,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
+- Preserve complete input text in native semantic embeddings through bounded overlapping checkpoint-context windows, token-weighted pooling, explicit token/window coverage evidence, and schema-versioned retrieval-cache rebuilds.
 - Parse supervised-instruction JSONL strictly: reject duplicate object keys at any depth, non-standard/non-finite numeric values, float overflow, and nesting beyond the 128-level record limit with source-line validation errors.
 - Extend checkpoint-backed status recovery to source pretraining, validate its optimizer/RNG/corpus provenance, and safely upgrade legacy progress metadata only after verifying the full checkpoint.
 - Reconcile stale SFT JSON progress from the authoritative full checkpoint after interrupted writes, with checkpoint-identity verification and explicit stale-status reporting.
