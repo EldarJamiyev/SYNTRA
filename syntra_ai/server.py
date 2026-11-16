@@ -72,14 +72,15 @@ def _request_integer(
 
 def _request_learning_rate(body: dict, default: float) -> float:
     value = body.get("learning_rate", default)
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or not 1e-6 <= value <= 1e-2
-    ):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.")
-    return float(value)
+    try:
+        normalized = float(value)
+    except (OverflowError, TypeError, ValueError):
+        raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.") from None
+    if not math.isfinite(normalized) or not 1e-6 <= normalized <= 1e-2:
+        raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.")
+    return normalized
 
 
 def _request_device(value: Any) -> tuple[str, Any]:
