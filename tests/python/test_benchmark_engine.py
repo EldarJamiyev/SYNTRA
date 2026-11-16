@@ -160,19 +160,19 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
                     "returncode": 0,
                     "timed_out": False,
                     "output_limited": False,
-                    "stdout": "0, 535.183.01\n1, 550.90\n",
+                    "stdout": "550.90\n550.90\n",
                     "stderr": "",
                     "elapsed_ms": 1,
                 },
             ) as run_command,
         ):
-            self.assertEqual(runner._discover_accelerator_driver_version("cuda", 1), "550.90")
+            self.assertEqual(runner._discover_accelerator_driver_version("cuda"), "550.90")
         command = run_command.call_args.args[0]
-        self.assertIn("--query-gpu=index,driver_version", command)
+        self.assertIn("--query-gpu=driver_version", command)
 
     def test_driver_probe_fails_closed_on_missing_or_ambiguous_tool_output(self):
         with mock.patch.object(runner.shutil, "which", return_value=None):
-            self.assertIsNone(runner._discover_accelerator_driver_version("cuda", 0))
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda"))
         with (
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
             mock.patch.object(
