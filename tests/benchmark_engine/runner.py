@@ -327,6 +327,7 @@ def collect_hardware_identity(requested_device: str, resolved_device: Any, torch
         "identity_complete": identity_complete,
         "fingerprint_sha256": fingerprint,
         **fingerprint_payload,
+        "device": device_record,
         "limitations": limitations,
     }
 
