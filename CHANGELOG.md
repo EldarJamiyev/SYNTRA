@@ -8,6 +8,7 @@ All notable user-facing changes will be documented here.
 - Expand workspace secret scanning patterns and add approved, time-limited, file-SHA-256-bound detector exceptions with explicit revoke commands and audit redaction.
 - A real browser-based React UI screenshot capture in CI and a visual architecture overview.
 - Record measured host/native-device identity in raw-model benchmark reports and add protocol-/denominator-validated report comparison that blocks performance claims across incomplete or different hardware.
+- Add a per-language raw-model comparison matrix with exact valid-fixture denominators, separately measured quality/performance outcomes, and explicit small-sample limitations.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed

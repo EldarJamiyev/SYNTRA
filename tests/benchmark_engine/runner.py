@@ -1684,6 +1684,15 @@ def compare_raw_benchmark_reports(baseline_input: Any, candidate_input: Any) -> 
     candidate_tasks = {task["id"]: task for task in candidate["tasks"]}
     if set(baseline_tasks) != set(candidate_tasks):
         raise BenchmarkError("Cannot compare different raw-model task selections.")
+    language_mismatches = [
+        task_id for task_id in sorted(baseline_tasks)
+        if baseline_tasks[task_id]["language"] != candidate_tasks[task_id]["language"]
+    ]
+    if language_mismatches:
+        raise BenchmarkError(
+            "Cannot compare reports that assign different languages to the same task ID: "
+            + ", ".join(language_mismatches)
+        )
     baseline_valid = {task_id for task_id, task in baseline_tasks.items() if task["baseline_validated"]}
     candidate_valid = {task_id for task_id, task in candidate_tasks.items() if task["baseline_validated"]}
     if baseline_valid != candidate_valid:
@@ -1864,6 +1873,165 @@ def compare_raw_benchmark_reports(baseline_input: Any, candidate_input: Any) -> 
             "status": task_status,
         })
 
+    language_breakdown: dict[str, Any] = {}
+    languages = sorted({task["language"] for task in baseline["tasks"]})
+    small_language_samples: list[str] = []
+    for language in languages:
+        language_ids = sorted(
+            task_id for task_id, task in baseline_tasks.items()
+            if task["language"] == language
+        )
+        valid_language_ids = [task_id for task_id in language_ids if task_id in baseline_valid]
+        language_valid_count = len(valid_language_ids)
+
+        def language_side(task_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
+            completion_count = sum(task_map[task_id]["task_completion"] is True for task_id in valid_language_ids)
+            patch_count = sum(task_map[task_id]["patch_correctness"] is True for task_id in valid_language_ids)
+            regression_ids = [
+                task_id for task_id in valid_language_ids
+                if task_map[task_id]["regression_prevention"] is not None
+            ]
+            regression_count = sum(
+                task_map[task_id]["regression_prevention"] is True
+                for task_id in regression_ids
+            )
+            generation_ids = [
+                task_id for task_id in valid_language_ids
+                if task_map[task_id]["execution_speed"]["generation_ms"] is not None
+            ]
+            generation_ms = sum(
+                float(task_map[task_id]["execution_speed"]["generation_ms"])
+                for task_id in generation_ids
+            )
+            generated_tokens = sum(
+                task_map[task_id]["execution_speed"]["generated_tokens"]
+                for task_id in generation_ids
+            )
+            total_ms = (
+                sum(float(task_map[task_id]["execution_speed"]["total_ms"]) for task_id in valid_language_ids)
+                / language_valid_count
+                if language_valid_count else None
+            )
+            throughput = (
+                generated_tokens / (generation_ms / 1000)
+                if generation_ms > 0 else None
+            )
+            return {
+                "task_completion_count": completion_count,
+                "task_completion_rate": completion_count / language_valid_count if language_valid_count else None,
+                "patch_correct_count": patch_count,
+                "patch_correctness_rate": patch_count / language_valid_count if language_valid_count else None,
+                "regression_prevention_measured_count": len(regression_ids),
+                "regression_prevented_count": regression_count,
+                "regression_prevention_rate": regression_count / len(regression_ids) if regression_ids else None,
+                "generation_measured_task_count": len(generation_ids),
+                "generated_tokens": generated_tokens,
+                "generation_ms": generation_ms if generation_ids else None,
+                "generation_tokens_per_second": throughput,
+                "mean_total_task_ms": total_ms,
+            }
+
+        before = language_side(baseline_tasks)
+        after = language_side(candidate_tasks)
+        before_regression_ids = {
+            task_id for task_id in valid_language_ids
+            if baseline_tasks[task_id]["regression_prevention"] is not None
+        }
+        after_regression_ids = {
+            task_id for task_id in valid_language_ids
+            if candidate_tasks[task_id]["regression_prevention"] is not None
+        }
+        language_regression_comparable = before_regression_ids == after_regression_ids
+        before_generation_ids = {
+            task_id for task_id in valid_language_ids
+            if baseline_tasks[task_id]["execution_speed"]["generation_ms"] is not None
+        }
+        after_generation_ids = {
+            task_id for task_id in valid_language_ids
+            if candidate_tasks[task_id]["execution_speed"]["generation_ms"] is not None
+        }
+        language_generation_comparable = before_generation_ids == after_generation_ids
+
+        language_metrics = [
+            _comparison_metric(
+                "task_completion_rate",
+                before["task_completion_rate"],
+                after["task_completion_rate"],
+                higher_is_better=True,
+            ),
+            _comparison_metric(
+                "patch_correctness_rate",
+                before["patch_correctness_rate"],
+                after["patch_correctness_rate"],
+                higher_is_better=True,
+            ),
+            _comparison_metric(
+                "regression_prevention_rate",
+                before["regression_prevention_rate"],
+                after["regression_prevention_rate"],
+                higher_is_better=True,
+                comparable=language_regression_comparable,
+            ),
+            _comparison_metric(
+                "mean_total_task_ms",
+                before["mean_total_task_ms"],
+                after["mean_total_task_ms"],
+                higher_is_better=False,
+                comparable=hardware_comparable,
+            ),
+            _comparison_metric(
+                "generation_tokens_per_second",
+                before["generation_tokens_per_second"],
+                after["generation_tokens_per_second"],
+                higher_is_better=True,
+                comparable=hardware_comparable and language_generation_comparable,
+            ),
+        ]
+        language_quality_directions = [
+            metric["direction"] for metric in language_metrics[:3]
+            if metric["direction"] not in {"unavailable", "incomparable"}
+        ]
+        language_improved = sum(value == "improved" for value in language_quality_directions)
+        language_regressed = sum(value == "regressed" for value in language_quality_directions)
+        language_quality_status = (
+            "unavailable" if not language_quality_directions
+            else "mixed" if language_improved and language_regressed
+            else "improved" if language_improved
+            else "regressed" if language_regressed
+            else "unchanged"
+        )
+        sample_warning = language_valid_count < 3
+        if sample_warning:
+            small_language_samples.append(language)
+        language_breakdown[language] = {
+            "task_count": len(language_ids),
+            "task_ids": language_ids,
+            "baseline_valid_task_count": language_valid_count,
+            "baseline_valid_task_ids": valid_language_ids,
+            "invalid_fixture_count": len(language_ids) - language_valid_count,
+            "sample_size_warning": sample_warning,
+            "sample_size_note": (
+                "Only " + str(language_valid_count)
+                + " baseline-valid task(s) are available; treat this as a fixture-level observation, not evidence of general language capability."
+                if sample_warning
+                else "This is a controlled fixture sample, not a statistically representative estimate of general language capability."
+            ),
+            "baseline": before,
+            "candidate": after,
+            "environment": {
+                "hardware_comparable": hardware_comparable,
+                "regression_task_denominators_match": language_regression_comparable,
+                "generation_task_denominators_match": language_generation_comparable,
+            },
+            "quality_status": language_quality_status,
+            "metrics": language_metrics,
+        }
+
+    matrix_note = (
+        "Language rows are per-fixture observations from this exact held-out task selection. "
+        "Small task counts do not establish general language capability; invalid hidden baselines are excluded from rates."
+    )
+
     return {
         "schema_version": 1,
         "comparison_track": "raw-native-model",
@@ -1891,6 +2059,9 @@ def compare_raw_benchmark_reports(baseline_input: Any, candidate_input: Any) -> 
         },
         "quality_status": quality_status,
         "metrics": metrics,
+        "language_breakdown": language_breakdown,
+        "language_matrix_note": matrix_note,
+        "languages_with_small_samples": small_language_samples,
         "tasks": tasks,
         "warnings": warnings,
     }
