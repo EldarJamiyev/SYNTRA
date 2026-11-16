@@ -221,6 +221,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = embed_texts(
                     texts=texts,
                     device_name=str(body.get("device", "auto")),
+                    max_length=body.get("max_length", 256),
                 )
                 self._send(200, result)
             elif self.path == "/model/curriculum":
