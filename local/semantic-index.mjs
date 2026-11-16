@@ -93,8 +93,11 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
     body: JSON.stringify({ texts, max_length: 256, device: "auto" }),
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(String(payload.error || "Native embeddings request failed with HTTP " + response.status));
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(String(payload?.error || "Native embeddings request failed with HTTP " + response.status));
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Native runtime returned an invalid embedding response object.");
+  }
   if (!/^[a-f0-9]{64}$/i.test(payload.checkpoint_identity || "")) {
     throw new Error("Native runtime did not identify the checkpoint that generated these embeddings.");
   }
@@ -124,7 +127,8 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
       || counts.some(count => !Number.isSafeInteger(count) || count < 0 || count > effectiveWindowTokens))
     || windowNewTokenCounts.some((counts, index) => !Array.isArray(counts)
       || counts.length !== windowCounts[index]
-      || counts.some(count => !Number.isSafeInteger(count) || count < 0)
+      || counts.some((count, windowIndex) => !Number.isSafeInteger(count)
+        || count < 0 || count > windowTokenCounts[index][windowIndex])
       || counts.reduce((sum, count) => sum + count, 0) !== tokenCounts[index])
     || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
     || !Number.isSafeInteger(overlapTokens) || overlapTokens < 0 || overlapTokens >= effectiveWindowTokens
