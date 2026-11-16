@@ -28,3 +28,12 @@ Fine-tuning progress reports, full checkpoints, inference companions, and sideca
 - Execute a real one-step CPU fine-tuning test and verify that the full checkpoint, inference companion, and returned training report retain the same digest and byte count.
 
 No synthetic dataset, external model, hosted service, or checkpoint promotion is introduced.
+
+
+## Strict JSONL record parsing
+
+Instruction JSONL records are now parsed using strict JSON semantics rather than Python's permissive default decoder. Duplicate object member names are rejected at every nesting depth, including optional metadata; the loader no longer silently accepts a last-value-wins interpretation. Non-standard `NaN`/`Infinity` constants and numeric values that overflow to a non-finite float are rejected. Excessive JSON nesting is converted into a line-scoped dataset validation error instead of escaping as an unhandled parser recursion failure.
+
+The record and file-size limits, required string `prompt`/`completion` fields, optional `split_group`/`source_path` metadata, exact-byte SHA-256 provenance, safe-open checks, and checkpoint-tokenizer context checks remain unchanged. This is input validation only; it does not rewrite datasets, discard records, alter split membership, or change the training objective.
+
+Regression tests cover duplicate required keys, duplicate keys inside nested metadata, non-standard constants, floating-point overflow, deeply nested input, accepted valid metadata, and the read-only audit's invalid-input result.
