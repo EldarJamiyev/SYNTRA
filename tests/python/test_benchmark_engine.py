@@ -1102,6 +1102,9 @@ class RawBenchmarkComparisonCliTests(unittest.TestCase):
             self.assertTrue(original.endswith(b"\n"))
             parsed = json.loads(original)
             self.assertEqual(parsed["comparison_track"], "raw-native-model")
+            self.assertIn("Per-language fixture matrix", first.stdout)
+            self.assertIn("python", first.stdout)
+            self.assertIn("Sample limitation", first.stdout)
 
             second = self._invoke(baseline_path, candidate_path, output_path)
             self.assertEqual(second.returncode, 1)
