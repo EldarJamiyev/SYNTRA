@@ -32,7 +32,7 @@ No synthetic dataset, external model, hosted service, or checkpoint promotion is
 
 ## Strict JSONL record parsing
 
-Instruction JSONL records are now parsed using strict JSON semantics rather than Python's permissive default decoder. Duplicate object member names are rejected at every nesting depth, including optional metadata; the loader no longer silently accepts a last-value-wins interpretation. Non-standard `NaN`/`Infinity` constants and numeric values that overflow to a non-finite float are rejected. Excessive JSON nesting is converted into a line-scoped dataset validation error instead of escaping as an unhandled parser recursion failure.
+Instruction JSONL records are now parsed using strict JSON semantics rather than Python's permissive default decoder. Duplicate object member names are rejected at every nesting depth, including optional metadata; the loader no longer silently accepts a last-value-wins interpretation. Non-standard `NaN`/`Infinity` constants and numeric values that overflow to a non-finite float are rejected. Nesting beyond 128 structural levels is rejected by a quote/escape-aware pre-scan and converted into a line-scoped dataset validation error, rather than relying on the runtime's recursion limit.
 
 The record and file-size limits, required string `prompt`/`completion` fields, optional `split_group`/`source_path` metadata, exact-byte SHA-256 provenance, safe-open checks, and checkpoint-tokenizer context checks remain unchanged. This is input validation only; it does not rewrite datasets, discard records, alter split membership, or change the training objective.
 
