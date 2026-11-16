@@ -9,7 +9,14 @@ import time
 
 from .config import ModelConfig
 from .runtime import (
-    ContextWindowExceededError, embed_texts, evaluate, generate, status, stream_generate, tokenize_text,
+    ContextWindowExceededError,
+    embed_texts,
+    evaluate,
+    generate,
+    status,
+    stream_generate,
+    tokenize_text,
+    tokenize_texts,
 )
 from .training import train
 from .instruction import finetune, synthesize_repository_curriculum
@@ -212,7 +219,17 @@ class Handler(BaseHTTPRequestHandler):
                 result = start_finetuning(body)
                 self._send(202, result)
             elif self.path == "/model/tokenize":
-                result = tokenize_text(body.get("text", ""))
+                max_length = body.get("max_length")
+                if "texts" in body:
+                    result = tokenize_texts(
+                        body.get("texts"),
+                        max_tokens=max_length,
+                    )
+                else:
+                    result = tokenize_text(
+                        body.get("text", ""),
+                        max_tokens=max_length,
+                    )
                 self._send(200, result)
             elif self.path == "/model/embed":
                 texts = body.get("input") if "input" in body else body.get("texts", [])
@@ -220,7 +237,8 @@ class Handler(BaseHTTPRequestHandler):
                     texts = [texts]
                 result = embed_texts(
                     texts=texts,
-                    device_name=str(body.get("device", "auto")),
+                    device_name=body.get("device", "auto"),
+                    max_tokens=body.get("max_length"),
                 )
                 self._send(200, result)
             elif self.path == "/model/curriculum":
