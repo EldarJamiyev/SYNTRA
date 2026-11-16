@@ -12,6 +12,7 @@ import {
   deriveModelContextBudget,
   parsePatchOutput,
   runAgentTask,
+  semanticSearchEvidence,
   validateImplementationSlicePlan,
   validatePatchReview,
   validateReadOnlyToolPlan,
@@ -591,6 +592,35 @@ test("model-selected context plans allow only bounded read-only retrieval includ
   assert.throws(() => validateReadOnlyToolPlan({
     calls: Array.from({ length: 5 }, () => ({ tool: "workspace.search", input: { query: "handler" } }))
   }, ["src/server.js"]), /at most four calls/);
+});
+
+test("semantic retrieval evidence preserves exact columns and marks context excerpts truncated", () => {
+  const evidence = semanticSearchEvidence({
+    available: true,
+    embeddingModel: "syntra-native",
+    staleResults: 2,
+    results: [{
+      path: "src/long-line.ts",
+      startLine: 18,
+      endLine: 18,
+      startColumn: 241,
+      endColumn: 481,
+      tokenCount: 128,
+      score: 0.81234,
+      sha256: "a".repeat(64),
+      excerpt: "x".repeat(1900)
+    }]
+  }, "find the network route");
+  assert.equal(evidence.tool, "workspace.semantic.search");
+  assert.equal(evidence.available, true);
+  assert.equal(evidence.results[0].startLine, 18);
+  assert.equal(evidence.results[0].endLine, 18);
+  assert.equal(evidence.results[0].startColumn, 241);
+  assert.equal(evidence.results[0].endColumn, 481);
+  assert.equal(evidence.results[0].tokenCount, 128);
+  assert.equal(evidence.results[0].sha256, "a".repeat(64));
+  assert.equal(evidence.results[0].excerpt.length, 1800);
+  assert.equal(evidence.results[0].excerptTruncated, true);
 });
 
 test("agent executes only model-selected read-only retrieval calls and feeds results into patch context", async () => {
