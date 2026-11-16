@@ -190,6 +190,25 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
         ):
             self.assertIsNone(runner._discover_accelerator_driver_version("cuda", 0))
 
+    def test_rocm_driver_probe_reads_the_reported_installed_driver_version(self):
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/opt/rocm/bin/rocm-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "ROCm System Management Interface\nDriver version: 6.2.4\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ) as run_command,
+        ):
+            self.assertEqual(runner._discover_accelerator_driver_version("cuda-rocm", None), "6.2.4")
+        self.assertEqual(run_command.call_args.args[0][-1], "--showdriverversion")
+
     def test_mps_identity_does_not_invent_gpu_model_or_total_memory(self):
         device = type("Device", (), {"type": "mps", "index": None})()
         torch_module = self._mock_torch()
