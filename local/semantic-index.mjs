@@ -300,7 +300,13 @@ export async function refreshWorkspaceSemanticIndex(inputRoot, {
     }
     if (chunks.length + pending.length >= MAX_CHUNKS) break;
   }
-  const fitted = await fitChunksToNativeContext(pending, checkpointIdentity, fetchImpl, signal);
+  const fitted = await fitChunksToNativeContext(
+    pending,
+    checkpointIdentity,
+    fetchImpl,
+    signal,
+    identityProbe.maxInputTokens
+  );
   if (chunks.length + fitted.chunks.length > MAX_CHUNKS) {
     throw new Error(
       "Lossless semantic-index refresh would exceed the " + MAX_CHUNKS +
