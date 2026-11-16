@@ -777,7 +777,7 @@ class RawBenchmarkComparisonCliTests(unittest.TestCase):
             first = self._invoke(baseline_path, candidate_path, output_path)
             self.assertEqual(first.returncode, 0, first.stderr)
             original = output_path.read_bytes()
-            self.assertTrue(original.endswith(b"\\n"))
+            self.assertTrue(original.endswith(b"\n"))
             parsed = json.loads(original)
             self.assertEqual(parsed["comparison_track"], "raw-native-model")
 
