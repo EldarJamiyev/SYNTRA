@@ -576,10 +576,15 @@ def tokenize_text(
     result = tokenize_texts([text], path=path, max_tokens=max_tokens)
     count = result["token_counts"][0]
     return {
-        **result,
         "token_count": count,
+        "max_input_tokens": result["max_input_tokens"],
+        "context_window_tokens": result["context_window_tokens"],
+        "vocabulary_size": result["vocabulary_size"],
+        "tokenizer": result["tokenizer"],
         "tokens_over_context": max(0, count - result["max_input_tokens"]),
-        "token_counts": None,
+        "checkpoint": result["checkpoint"],
+        "checkpoint_identity": result["checkpoint_identity"],
+        "trained_steps": result["trained_steps"],
     }
 
 
