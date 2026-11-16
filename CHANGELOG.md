@@ -13,7 +13,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
-- Parse supervised-instruction JSONL strictly: reject duplicate object keys at any depth, non-standard/non-finite numeric values, float overflow, and excessive nesting with source-line validation errors.
+- Parse supervised-instruction JSONL strictly: reject duplicate object keys at any depth, non-standard/non-finite numeric values, float overflow, and nesting beyond the 128-level record limit with source-line validation errors.
 - Extend checkpoint-backed status recovery to source pretraining, validate its optimizer/RNG/corpus provenance, and safely upgrade legacy progress metadata only after verifying the full checkpoint.
 - Reconcile stale SFT JSON progress from the authoritative full checkpoint after interrupted writes, with checkpoint-identity verification and explicit stale-status reporting.
 - Add dataset-bound supervised fine-tuning resume: restore AdamW, stage scheduler, and CPU/CUDA RNG state from an atomic per-update checkpoint, with strict dataset/settings/device validation and explicit CLI/API resume controls.
