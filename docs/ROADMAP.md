@@ -421,7 +421,7 @@ A phase is not complete merely because the interface looks finished. It must inc
 
 - [x] Reject duplicate JSON object member names at every depth, including optional metadata, rather than silently applying last-value-wins parsing.
 - [x] Reject non-standard NaN/Infinity constants and decimal values that overflow to non-finite Python floats.
-- [x] Convert excessive JSON nesting/parser recursion into a bounded, line-scoped dataset validation error.
+- [x] Enforce a quote/escape-aware 128-level JSON nesting limit and convert parser recursion into a bounded, line-scoped dataset validation error.
 - [x] Preserve the existing approved-root/no-follow dataset read, exact-byte SHA-256 provenance, file/record/field/token limits, prompt-context checks, and optional split/source-path metadata.
 - [x] Add regressions for duplicate required/nested keys, non-finite values, float overflow, deeply nested JSON, valid metadata, and read-only audit failure reporting.
 
