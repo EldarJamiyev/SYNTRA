@@ -186,7 +186,8 @@ Remaining measurement limitations: peak RSS covers only the benchmark Node.js pr
 - [x] Harden Docker check containers with init, private IPC, bounded swap and an open-file limit; retain no-network, read-only root, dropped capabilities, no-new-privileges and candidate-only write mount.
 - [x] Persist a bounded, hash-validated in-flight candidate snapshot before project checks. On restart, restore it only after validating workspace identity and original-file hashes, re-run discovered checks and candidate-integrity verification, then continue or repair from the restored candidate.
 - [x] Add checkpoint-aware context sizing with output caps and safety reserves; derive exact prompt counts from SYNTRA's saved tokenizer.
-- [ ] Build a cross-language empirical model capability matrix from repeatable live-checkpoint runs across the available TypeScript, Python, Go and Rust fixtures. Implementation and fixture baselines are not a substitute for measured model outcomes.
+- [x] Implement report-derived per-language comparison rows with exact hidden-baseline-valid denominators, completion/patch/regression rates, hardware-gated performance, and explicit small-sample/zero-valid warnings.
+- [ ] Populate and assess the cross-language capability matrix using repeatable live-checkpoint runs across TypeScript, Python, Go and Rust fixtures; implementation and fixture baselines are not a substitute for measured model outcomes.
 - [x] Expand the raw native-model suite from its initial Python-only baseline to version 1.4.0 with 14 independently validated held-out fixtures: nine Python tasks, two JavaScript tasks, and one each for TypeScript, Go and Rust.
 - [x] Add coordinated multi-file tasks in Python and JavaScript; present connected modules together and require one exact, non-duplicated changed-path set.
 - [x] Add language-specific offline runtime selection, compiler/test validation, local-image-only Docker preflight, and per-language score breakdowns without combining the direct-model track with the full-agent suite.
@@ -381,3 +382,19 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add CPU/CUDA/MPS metadata tests, missing-measurement tests, report-integrity tests, denominator/protocol mismatch tests, and CLI regression coverage.
 
 **Acceptance:** Every new raw benchmark report identifies the actual selected backend and records only measured system/device properties. A comparison cannot claim a controlled latency/throughput delta unless both complete execution identities match. This phase implements provenance and comparison tooling only; it does not satisfy the separate target-hardware baseline or empirical language-capability roadmap items.
+
+### Phase 37 — Per-language raw benchmark outcome matrix
+
+**Objective:** Make cross-language raw-model comparisons interpretable without changing the task set, hiding invalid fixture baselines, or presenting small samples as general capability evidence.
+
+- [x] Derive language rows directly from task-level baseline/candidate records using each language's own hidden-baseline-valid task denominator.
+- [x] Report selected fixtures, valid fixtures, excluded invalid baselines, completion/patch outcomes, and separately denominated regression-prevention measurements.
+- [x] Mark per-language latency and generation throughput incomparable when hardware identity or the corresponding measured-task denominator differs.
+- [x] Preserve null/unavailable rates for languages with no valid fixtures and attach a visible warning to languages with fewer than three valid fixtures.
+- [x] Expose the matrix in comparison JSON and the comparison CLI without running inference or fabricating scores.
+- [x] Test multi-language reports, invalid-baseline exclusion, language-specific regression-denominator mismatch, hardware gating, small sample warnings, and CLI output.
+
+**Acceptance:** Every language row can be traced to exact task IDs and task-level outcomes. Invalid baselines never enter rates, unmeasured metrics remain unavailable/incomparable, and the output explicitly states that fixture-level results do not prove general language competence.
+
+**Outstanding evidence:** The separate empirical capability-matrix item remains open until actual live-checkpoint reports have been produced on the intended hardware.
+
