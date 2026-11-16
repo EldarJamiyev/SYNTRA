@@ -426,3 +426,19 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for duplicate required/nested keys, non-finite values, float overflow, deeply nested JSON, valid metadata, and read-only audit failure reporting.
 
 **Acceptance:** Ambiguous or non-standard instruction records fail before tokenization/training with their source line; valid existing JSONL records retain the same parsing, tokenization, split, and training behavior.
+
+
+### Phase 40 — Preserve complete text in native semantic embeddings
+
+**Objective:** Remove silent prefix truncation from native semantic embeddings while keeping work bounded to the selected checkpoint context and the existing local PyTorch model.
+
+- [x] Tokenize each input completely and cover the full token sequence with overlapping windows no longer than `max_length` or `seq_len - 1`.
+- [x] Combine same-checkpoint window vectors through newly-covered-token-weighted pooling and normalize the final vector.
+- [x] Return explicit token counts, per-window lengths and coverage, aggregate window counts, effective context size, pooling strategy, and `truncated: false`.
+- [x] Bound requests to 131,072 aggregate tokens and 2,048 total windows; reject over-budget requests before the first model embedding forward pass.
+- [x] Require semantic-index and project-memory clients to validate complete-coverage evidence rather than accepting vectors alone.
+- [x] Version semantic-index and project-memory caches so vectors created under prior prefix truncation are rebuilt.
+- [x] Add real CPU-checkpoint integration tests for long-text coverage, checkpoint identity, invalid window lengths, and pre-inference window-budget rejection.
+- [x] Add Node regressions for incomplete/over-budget embedding evidence, semantic-index v1 rebuild, and project-memory cache v1 rebuild.
+
+**Acceptance:** A successful embedding response proves that all tokenizer IDs of every supplied text were represented by bounded overlapping windows from one unchanged native checkpoint. Invalid or incomplete evidence cannot enter either persisted semantic cache.
