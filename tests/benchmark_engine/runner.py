@@ -1581,13 +1581,25 @@ def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
                     raise BenchmarkError("Complete CPU identity must match the measured host CPU model.")
             elif device["type"] == "cuda":
                 runtime_version = pytorch.get("rocm_runtime_version") if device.get("vendor") == "rocm" else pytorch.get("cuda_runtime_version")
+                device_count = device.get("available_device_count")
+                device_index = device.get("index")
                 if not all((
-                    type(device.get("index")) is int and device.get("index") >= 0,
+                    type(device_index) is int and device_index >= 0,
+                    positive_integer(device_count) and device_index < device_count,
                     positive_integer(device.get("total_memory_bytes")),
                     nonempty_text(device.get("driver_version")),
                     nonempty_text(runtime_version),
+                    device.get("cuda_runtime_version") == pytorch.get("cuda_runtime_version"),
+                    device.get("rocm_runtime_version") == pytorch.get("rocm_runtime_version"),
+                    device.get("resolved") == "cuda:" + str(device_index),
+                    (
+                        device.get("vendor") != "nvidia_cuda"
+                        or nonempty_text(device.get("compute_capability"))
+                    ),
                 )):
-                    raise BenchmarkError("CUDA/ROCm identity is marked complete without selected accelerator memory, runtime, or driver evidence.")
+                    raise BenchmarkError("CUDA/ROCm identity is marked complete without consistent selected-device, memory, runtime, or driver evidence.")
+            elif device["type"] == "mps":
+                raise BenchmarkError("MPS identity cannot be marked complete without a measured Apple GPU identity and memory specification.")
         fingerprint_device = {key: value for key, value in device.items() if key != "requested"}
         fingerprint_payload = {
             "schema_version": 1,
@@ -1632,7 +1644,7 @@ def _comparison_metric(
     delta = candidate - baseline if baseline is not None and candidate is not None else None
     relative = (
         round((delta / baseline) * 100, 2)
-        if delta is not None and baseline not in (None, 0)
+        if comparable and delta is not None and baseline not in (None, 0)
         else None
     )
     return {
