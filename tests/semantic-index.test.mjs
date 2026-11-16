@@ -97,6 +97,19 @@ test("semantic index invalidates vectors when the native checkpoint changes", as
   }
 });
 
+test("splitIntoChunks preserves complete very long source lines without character truncation", () => {
+  const sourceLine = "x".repeat(6000);
+  const chunks = splitIntoChunks("src/generated.mjs", sourceLine);
+  assert.equal(chunks.map(chunk => chunk.text).join(""), sourceLine);
+  assert.equal(chunks.length, 3);
+  assert.equal(chunks[0].startColumn, 1);
+  assert.equal(chunks[0].endColumn, 2401);
+  assert.equal(chunks[1].startColumn, 2401);
+  assert.equal(chunks[1].endColumn, 4801);
+  assert.equal(chunks[2].startColumn, 4801);
+  assert.equal(chunks[2].endColumn, 6001);
+});
+
 test("semantic indexing splits long source lines to exact tokenizer offsets before embedding", async () => {
   const root = await makeWorkspace();
   const originalLine = "const source = '" + "x".repeat(420) + " gateway configuration lives here " + "y".repeat(420) + "';";
