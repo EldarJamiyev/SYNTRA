@@ -97,7 +97,7 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
         self.assertEqual(identity["device"]["requested"], "auto")
         self.assertEqual(repeated["device"]["requested"], "cpu")
 
-    def test_cuda_identity_records_selected_gpu_but_marks_missing_driver_evidence_incomplete(self):
+    def test_cuda_identity_records_selected_gpu_and_measured_driver_evidence(self):
         device = type("Device", (), {"type": "cuda", "index": None})()
         torch_module = self._mock_torch(cuda_runtime="12.4")
         torch_module.cuda = mock.Mock()
@@ -113,6 +113,7 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
             mock.patch.object(runner, "_cpu_model", return_value="Measured Host CPU"),
             mock.patch.object(runner, "_physical_memory_bytes", return_value=64 * 1024 ** 3),
             mock.patch.object(runner.os, "cpu_count", return_value=32),
+            mock.patch.object(runner, "_discover_accelerator_driver_version", return_value="550.90"),
         ):
             identity = runner.collect_hardware_identity("auto", device, torch_module)
 
@@ -123,9 +124,71 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
         self.assertEqual(identity["device"]["total_memory_bytes"], 24 * 1024 ** 3)
         self.assertEqual(identity["device"]["compute_capability"], "9.0")
         self.assertEqual(identity["device"]["cuda_runtime_version"], "12.4")
+        self.assertEqual(identity["device"]["driver_version"], "550.90")
+        self.assertTrue(identity["identity_complete"])
+
+    def test_cuda_identity_is_incomplete_when_selected_driver_cannot_be_measured(self):
+        device = type("Device", (), {"type": "cuda", "index": 0})()
+        torch_module = self._mock_torch(cuda_runtime="12.4")
+        torch_module.cuda = mock.Mock()
+        torch_module.cuda.device_count.return_value = 1
+        torch_module.cuda.get_device_name.return_value = "Measured Test Accelerator"
+        torch_module.cuda.get_device_properties.return_value = type(
+            "CudaProperties",
+            (),
+            {"total_memory": 24 * 1024 ** 3, "major": 9, "minor": 0},
+        )()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Host CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=64 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=32),
+            mock.patch.object(runner, "_discover_accelerator_driver_version", return_value=None),
+        ):
+            identity = runner.collect_hardware_identity("cuda", device, torch_module)
+
         self.assertIsNone(identity["device"]["driver_version"])
         self.assertFalse(identity["identity_complete"])
         self.assertTrue(any("driver version" in item.lower() for item in identity["limitations"]))
+
+    def test_nvidia_driver_probe_uses_selected_physical_device_index(self):
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "0, 535.183.01\\n1, 550.90\\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ) as run_command,
+        ):
+            self.assertEqual(runner._discover_accelerator_driver_version("cuda", 1), "550.90")
+        command = run_command.call_args.args[0]
+        self.assertIn("--query-gpu=index,driver_version", command)
+
+    def test_driver_probe_fails_closed_on_missing_or_ambiguous_tool_output(self):
+        with mock.patch.object(runner.shutil, "which", return_value=None):
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda", 0))
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "driver version unknown\\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ),
+        ):
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda", 0))
 
     def test_mps_identity_does_not_invent_gpu_model_or_total_memory(self):
         device = type("Device", (), {"type": "mps", "index": None})()
