@@ -583,26 +583,28 @@ def embed_texts(
     stride = max(1, window_limit - overlap)
     vectors: list[list[float]] = []
     window_counts: list[int] = []
+    window_token_counts: list[list[int]] = []
+    window_new_token_counts: list[list[int]] = []
     total_windows = 0
 
     for encoded in encoded_texts:
         if not encoded:
-            windows = [(0, [], 1)]
+            windows = [(0, [], 0, 1)]
         else:
             windows = []
             start = 0
             while start < len(encoded):
                 end = min(start + window_limit, len(encoded))
                 content = encoded[start:end]
-                newly_covered = len(content) if start == 0 else max(1, len(content) - overlap)
-                windows.append((start, content, newly_covered))
+                newly_covered = len(content) if start == 0 else len(content) - overlap
+                windows.append((start, content, newly_covered, newly_covered))
                 if end >= len(encoded):
                     break
                 start += stride
 
         pooled = None
         pooled_weight = 0
-        for _, content, weight in windows:
+        for _, content, _, weight in windows:
             token_ids = [BOS_ID, *content]
             if len(token_ids) > config.seq_len:
                 raise RuntimeError("Embedding window exceeded the selected checkpoint context.")
@@ -620,6 +622,10 @@ def embed_texts(
             raise RuntimeError("The native model produced an invalid pooled semantic embedding.")
         vectors.append([round(float(value), 5) for value in pooled.cpu().tolist()])
         window_counts.append(len(windows))
+        window_token_counts.append([len(content) for _, content, _, _ in windows])
+        window_new_token_counts.append([new_tokens for _, _, new_tokens, _ in windows])
+        if sum(window_new_token_counts[-1]) != len(encoded):
+            raise RuntimeError("The native embedding window plan did not cover every input token exactly once.")
         total_windows += len(windows)
 
     identity_after = _checkpoint_identity(path)
@@ -634,6 +640,8 @@ def embed_texts(
         "trained_steps": int(saved.get("step", 0)),
         "input_token_counts": input_token_counts,
         "window_counts": window_counts,
+        "window_token_counts": window_token_counts,
+        "window_new_token_counts": window_new_token_counts,
         "total_input_tokens": total_input_tokens,
         "total_windows": total_windows,
         "effective_window_tokens": window_limit,
