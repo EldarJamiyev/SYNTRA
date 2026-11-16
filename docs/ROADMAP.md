@@ -366,3 +366,18 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Test additional provider patterns, explicit approval and revocation, file-hash invalidation, mismatch rejection, malformed/symlinked state, exclusion behavior, and audit redaction.
 
 **Acceptance:** Only a user-reviewed detector exception for one exact file hash can suppress that detector in that file. An edited file, expired exception, malformed allowlist, or missing approval must leave the detection active.
+
+
+### Phase 36 — Raw benchmark hardware provenance and controlled report comparison
+
+**Objective:** Make raw native-model timing evidence traceable to the actual host/backend, and prevent incomplete or mismatched execution environments from producing controlled-performance claims.
+
+- [x] Resolve the actual inference device once before a raw benchmark and use the same explicit resolved backend/device index for all tasks.
+- [x] Record measured host OS/release/architecture, exposed CPU model, logical cores, installed physical memory, Python identity, PyTorch build, selected device and accelerator properties where the active runtime exposes them.
+- [x] Preserve unknown CPU/GPU/driver/memory properties as null with explicit limitations; measure NVIDIA/AMD driver identity from local OS tools when available and keep CUDA/MPS identities incomplete when the selected backend cannot be fully identified.
+- [x] Add strict raw-report validation for checkpoint and evaluation-protocol identities, task outcomes, summary denominators, and hardware fingerprint integrity.
+- [x] Add a raw-report comparison CLI that requires matching suite/protocol/task sets and hidden-baseline-valid denominators.
+- [x] Separate task quality from hardware-dependent performance, marking latency/throughput incomparable when identity is incomplete/different and marking regression/throughput rates incomparable when measured task subsets differ.
+- [x] Add CPU/CUDA/MPS metadata tests, missing-measurement tests, report-integrity tests, denominator/protocol mismatch tests, and CLI regression coverage.
+
+**Acceptance:** Every new raw benchmark report identifies the actual selected backend and records only measured system/device properties. A comparison cannot claim a controlled latency/throughput delta unless both complete execution identities match. This phase implements provenance and comparison tooling only; it does not satisfy the separate target-hardware baseline or empirical language-capability roadmap items.

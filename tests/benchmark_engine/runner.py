@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path, PurePosixPath
+import platform as host_platform
 import re
 import shutil
 import subprocess
@@ -69,6 +70,266 @@ class ContextWindowExceeded(BenchmarkError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _cpu_model() -> str | None:
+    """Read a local CPU model identifier when the current OS exposes one."""
+    candidates: list[str] = []
+    try:
+        processor = host_platform.processor().strip()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        processor = ""
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            ) as key:
+                processor_name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            if isinstance(processor_name, str) and processor_name.strip():
+                candidates.insert(0, processor_name.strip())
+        except (ImportError, OSError, TypeError, ValueError):
+            pass
+    elif sys.platform == "darwin":
+        try:
+            output = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+            if output.returncode == 0 and output.stdout.strip():
+                candidates.insert(0, output.stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+    if processor:
+        candidates.append(processor)
+    identifier = os.environ.get("PROCESSOR_IDENTIFIER", "").strip()
+    if identifier:
+        candidates.append(identifier)
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            ) as processor_key:
+                registered_name, _ = winreg.QueryValueEx(processor_key, "ProcessorNameString")
+            if isinstance(registered_name, str) and registered_name.strip():
+                candidates.insert(0, registered_name.strip())
+        except (ImportError, OSError, TypeError, ValueError):
+            pass
+    elif sys.platform == "darwin":
+        executable = shutil.which("sysctl")
+        if executable:
+            result = run_command(
+                [executable, "-n", "machdep.cpu.brand_string"],
+                cwd=REPOSITORY_ROOT,
+                env=dict(os.environ),
+                timeout_seconds=3,
+                output_limit=1024,
+            )
+            value = result["stdout"].strip()
+            if result["returncode"] == 0 and not result["timed_out"] and not result["output_limited"] and value:
+                candidates.insert(0, value)
+    if sys.platform.startswith("linux"):
+        try:
+            cpuinfo = Path("/proc/cpuinfo")
+            if cpuinfo.is_file() and cpuinfo.stat().st_size <= 1024 * 1024:
+                for line in cpuinfo.read_text(encoding="utf-8", errors="replace").splitlines():
+                    key, separator, value = line.partition(":")
+                    if separator and key.strip().casefold() in {"model name", "hardware"} and value.strip():
+                        candidates.insert(0, value.strip())
+                        break
+        except OSError:
+            pass
+    for value in candidates:
+        cleaned = " ".join(value.split())
+        if cleaned and len(cleaned) <= 256:
+            return cleaned
+    return None
+
+
+def _physical_memory_bytes() -> int | None:
+    """Return installed physical memory only when the OS provides an exact value."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", wintypes.DWORD),
+                    ("dwMemoryLoad", wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = MEMORYSTATUSEX()
+            status.dwLength = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                result = int(status.ullTotalPhys)
+                return result if result > 0 else None
+        except (AttributeError, OSError, TypeError, ValueError):
+            return None
+        return None
+
+    try:
+        pages = int(os.sysconf("SC_PHYS_PAGES"))
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        total = pages * page_size
+        return total if pages > 0 and page_size > 0 and total > 0 else None
+    except (AttributeError, OSError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def collect_hardware_identity(requested_device: str, resolved_device: Any, torch_module: Any) -> dict[str, Any]:
+    """Capture actual host, PyTorch, and selected-device identity without estimates."""
+    device_type = getattr(resolved_device, "type", None)
+    device_index = getattr(resolved_device, "index", None)
+    if device_type not in {"cpu", "cuda", "mps"}:
+        raise BenchmarkError("The native runtime resolved an unsupported benchmark device.")
+
+    cpu_model = _cpu_model()
+    logical_cores = os.cpu_count()
+    if type(logical_cores) is not int or logical_cores < 1:
+        logical_cores = None
+    total_memory = _physical_memory_bytes()
+    try:
+        torch_version = str(torch_module.__version__)
+    except (AttributeError, TypeError):
+        torch_version = None
+
+    cuda_runtime = getattr(getattr(torch_module, "version", None), "cuda", None)
+    hip_runtime = getattr(getattr(torch_module, "version", None), "hip", None)
+    accelerator_vendor = "cpu" if device_type == "cpu" else "apple_mps"
+    accelerator_name = cpu_model if device_type == "cpu" else None
+    accelerator_memory = None
+    compute_capability = None
+    cuda_device_count = None
+    driver_version = None
+    limitations: list[str] = []
+
+    if device_type == "cuda":
+        accelerator_vendor = "rocm" if hip_runtime else "nvidia_cuda"
+        try:
+            cuda_device_count = int(torch_module.cuda.device_count())
+            if device_index is None:
+                device_index = int(torch_module.cuda.current_device())
+            if type(device_index) is not int or not 0 <= device_index < cuda_device_count:
+                raise ValueError("Resolved CUDA device index is outside the available device list.")
+            properties = torch_module.cuda.get_device_properties(device_index)
+            accelerator_name = str(torch_module.cuda.get_device_name(device_index)).strip() or None
+            memory_value = getattr(properties, "total_memory", None)
+            accelerator_memory = int(memory_value) if isinstance(memory_value, (int, float)) and not isinstance(memory_value, bool) and memory_value > 0 else None
+            major, minor = getattr(properties, "major", None), getattr(properties, "minor", None)
+            if type(major) is int and type(minor) is int and major >= 0 and minor >= 0:
+                compute_capability = str(major) + "." + str(minor)
+            driver_lookup_type = "cuda-rocm" if hip_runtime else "cuda"
+            driver_version = _discover_accelerator_driver_version(driver_lookup_type)
+            if driver_version is None:
+                limitations.append("The installed accelerator driver version could not be measured through local driver utilities.")
+            limitations.append("CUDA device properties are reported by the selected PyTorch runtime; MIG partitioning may affect available memory.")
+        except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
+            limitations.append("CUDA hardware details could not be read: " + str(exc)[:240])
+    elif device_type == "mps":
+        accelerator_vendor = "apple_mps"
+        limitations.append("PyTorch does not expose a stable Apple GPU model/total-memory identity through this benchmark collector.")
+    elif not cpu_model:
+        limitations.append("The operating system did not expose a CPU model identifier.")
+
+    if total_memory is None:
+        limitations.append("Installed physical memory could not be measured through the current operating-system API.")
+    if logical_cores is None:
+        limitations.append("Logical CPU count is unavailable.")
+
+    resolved_name = (
+        "cuda:" + str(device_index) if device_type == "cuda" and type(device_index) is int
+        else device_type
+    )
+    device_record = {
+        "requested": requested_device,
+        "resolved": resolved_name,
+        "type": device_type,
+        "index": device_index if type(device_index) is int else None,
+        "vendor": accelerator_vendor,
+        "name": accelerator_name,
+        "total_memory_bytes": accelerator_memory,
+        "compute_capability": compute_capability,
+        "available_device_count": cuda_device_count,
+        "cuda_runtime_version": cuda_runtime,
+        "rocm_runtime_version": hip_runtime,
+        "driver_version": driver_version,
+    }
+    host_record = {
+        "system": host_platform.system() or None,
+        "release": host_platform.release() or None,
+        "machine": host_platform.machine() or None,
+        "cpu_model": cpu_model,
+        "logical_cores": logical_cores,
+        "physical_memory_bytes": total_memory,
+    }
+    python_record = {
+        "implementation": host_platform.python_implementation(),
+        "version": sys.version.split()[0],
+    }
+    identity_complete = bool(
+        host_record["system"]
+        and host_record["release"]
+        and host_record["machine"]
+        and host_record["cpu_model"]
+        and logical_cores
+        and total_memory
+        and torch_version
+        and device_record["name"]
+        and (
+            device_type == "cpu"
+            or (
+                device_type == "cuda"
+                and accelerator_memory
+                and (cuda_runtime or hip_runtime)
+                and driver_version
+            )
+        )
+    )
+    fingerprint_device_record = {
+        key: value for key, value in device_record.items() if key != "requested"
+    }
+    fingerprint_payload = {
+        "schema_version": 1,
+        "host": host_record,
+        "python": python_record,
+        "pytorch": {
+            "version": torch_version,
+            "cuda_runtime_version": cuda_runtime,
+            "rocm_runtime_version": hip_runtime,
+        },
+        "device": fingerprint_device_record,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema_version": 1,
+        "identity_complete": identity_complete,
+        "fingerprint_sha256": fingerprint,
+        **fingerprint_payload,
+        "device": device_record,
+        "limitations": limitations,
+    }
 
 
 def _is_within(parent: Path, target: Path) -> bool:
@@ -608,6 +869,65 @@ def run_command(command: list[str], *, cwd: Path, env: dict[str, str], timeout_s
     return {"returncode": process.returncode, "timed_out": timed_out, "output_limited": limited.is_set(), "stdout": stdout, "stderr": stderr, "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)}
 
 
+def _discover_accelerator_driver_version(device_type: str) -> str | None:
+    """Read a host-wide accelerator driver version from local OS tools."""
+    if device_type == "cuda":
+        executable = shutil.which("nvidia-smi")
+        if not executable:
+            return None
+        result = run_command(
+            [
+                executable,
+                "--query-gpu=driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            cwd=REPOSITORY_ROOT,
+            env=dict(os.environ),
+            timeout_seconds=5,
+            output_limit=16 * 1024,
+        )
+        if result["returncode"] != 0 or result["timed_out"] or result["output_limited"]:
+            return None
+        versions = {
+            line.strip()
+            for line in result["stdout"].splitlines()
+            if re.fullmatch(r"[0-9]+(?:\.[0-9A-Za-z_-]+){0,3}", line.strip())
+        }
+        # NVIDIA's installed kernel driver is host-wide. If all visible GPUs
+        # report the same value, it is independent of CUDA_VISIBLE_DEVICES
+        # logical-to-physical ordinal remapping. Conflicting output is ambiguous.
+        return next(iter(versions)) if len(versions) == 1 else None
+
+    if device_type == "cuda-rocm":
+        executable = shutil.which("rocm-smi")
+        if executable:
+            result = run_command(
+                [executable, "--showdriverversion"],
+                cwd=REPOSITORY_ROOT,
+                env=dict(os.environ),
+                timeout_seconds=5,
+                output_limit=16 * 1024,
+            )
+            if result["returncode"] == 0 and not result["timed_out"] and not result["output_limited"]:
+                match = re.search(
+                    r"(?im)^\s*(?:GPU\s+)?Driver version\s*:\s*([0-9][A-Za-z0-9._+-]{0,63})\s*$",
+                    result["stdout"],
+                )
+                if match:
+                    return match.group(1)
+        sysfs_version = Path("/sys/module/amdgpu/version")
+        try:
+            if not sysfs_version.is_symlink():
+                info = sysfs_version.lstat()
+                if stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 256:
+                    value = sysfs_version.read_text(encoding="utf-8").strip()
+                    if re.fullmatch(r"[0-9][A-Za-z0-9._+-]{0,63}", value):
+                        return value
+        except OSError:
+            pass
+    return None
+
+
 def prepare_isolation(mode: str, image: str) -> dict[str, Any]:
     if mode == "host":
         return {"mode": "host-opt-in", "image": None, "image_id": None, "warning": "Generated code executes with the host OS user's permissions; this is not sandboxed."}
@@ -1069,6 +1389,513 @@ def assess_loss_intelligence_divergence(summary: dict[str, Any], checkpoint: dic
     }
 
 
+def _report_number(value: Any) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        normalized = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return math.isfinite(normalized) and normalized >= 0
+
+
+def _report_rate(value: Any, numerator: int, denominator: int) -> bool:
+    expected = round(numerator / denominator, 4) if denominator else None
+    if expected is None:
+        return value is None
+    if not _report_number(value):
+        return False
+    return float(value) == expected
+
+
+def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
+    """Validate report provenance and recompute its task-denominator invariants."""
+    if not isinstance(report, dict) or report.get("schema_version") != 1:
+        raise BenchmarkError("Raw benchmark report must use schema_version 1.")
+    if report.get("benchmark_track") != "raw-native-model":
+        raise BenchmarkError("The selected report is not from the raw-native-model benchmark track.")
+    suite_version = report.get("suite_version")
+    if not isinstance(suite_version, str) or re.fullmatch(r"\d+\.\d+\.\d+", suite_version) is None:
+        raise BenchmarkError("Raw benchmark report contains an invalid suite version.")
+    if not isinstance(report.get("run_id"), str) or not report["run_id"].strip():
+        raise BenchmarkError("Raw benchmark report is missing its run ID.")
+    protocol = report.get("evaluation_protocol")
+    if (
+        not isinstance(protocol, dict)
+        or protocol.get("schema_version") != 1
+        or not isinstance(protocol.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", protocol["sha256"]) is None
+        or type(protocol.get("file_count")) is not int
+        or protocol["file_count"] < 1
+        or type(protocol.get("total_bytes")) is not int
+        or protocol["total_bytes"] < 1
+    ):
+        raise BenchmarkError("Raw benchmark report is missing complete evaluation-protocol identity.")
+
+    model = report.get("model")
+    if (
+        not isinstance(model, dict)
+        or model.get("engine") != "syntra-native-pytorch"
+        or not isinstance(model.get("checkpoint_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", model["checkpoint_sha256"]) is None
+    ):
+        raise BenchmarkError("Raw benchmark report is missing native checkpoint identity.")
+
+    tasks = report.get("tasks")
+    if not isinstance(tasks, list) or not 1 <= len(tasks) <= 100:
+        raise BenchmarkError("Raw benchmark report must contain between 1 and 100 task results.")
+    seen: set[str] = set()
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise BenchmarkError("Raw benchmark task result must be an object.")
+        task_id = task.get("id")
+        if not isinstance(task_id, str) or re.fullmatch(r"[a-z0-9][a-z0-9-]{1,63}", task_id) is None or task_id in seen:
+            raise BenchmarkError("Raw benchmark report contains an invalid or duplicate task ID.")
+        seen.add(task_id)
+        if not isinstance(task.get("language"), str) or not task["language"]:
+            raise BenchmarkError("Raw benchmark task " + task_id + " is missing its language.")
+        for key in ("baseline_validated", "patch_correctness", "task_completion"):
+            if type(task.get(key)) is not bool:
+                raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid " + key + " value.")
+        if task.get("regression_prevention") is not None and type(task["regression_prevention"]) is not bool:
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid regression-prevention measurement.")
+        speed = task.get("execution_speed")
+        if not isinstance(speed, dict) or not _report_number(speed.get("total_ms")):
+            raise BenchmarkError("Raw benchmark task " + task_id + " is missing valid total execution time.")
+        if speed.get("generation_ms") is not None and not _report_number(speed["generation_ms"]):
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generation-time measurement.")
+        generated_tokens = speed.get("generated_tokens")
+        if type(generated_tokens) is not int or generated_tokens < 0:
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generated-token count.")
+        throughput = speed.get("output_tokens_per_second")
+        if throughput is not None and not _report_number(throughput):
+            raise BenchmarkError("Raw benchmark task " + task_id + " has an invalid generation-throughput measurement.")
+        generation_ms = speed.get("generation_ms")
+        if generation_ms is None:
+            if generated_tokens != 0 or throughput is not None:
+                raise BenchmarkError("Raw benchmark task " + task_id + " reports generated tokens or throughput without a generation-time measurement.")
+        elif generation_ms == 0:
+            if throughput is not None:
+                raise BenchmarkError("Raw benchmark task " + task_id + " reports throughput for a zero-duration generation.")
+        else:
+            expected_throughput = round(generated_tokens / (float(generation_ms) / 1000), 2)
+            if not _report_number(throughput) or float(throughput) != expected_throughput:
+                raise BenchmarkError("Raw benchmark task " + task_id + " has generation throughput inconsistent with its measured tokens/time.")
+
+    valid = [task for task in tasks if task["baseline_validated"] is True]
+    valid_count = len(valid)
+    completed_count = sum(task["task_completion"] is True for task in valid)
+    patch_count = sum(task["patch_correctness"] is True for task in valid)
+    regression_measured = [task for task in valid if task["regression_prevention"] is not None]
+    regression_count = sum(task["regression_prevention"] is True for task in regression_measured)
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        raise BenchmarkError("Raw benchmark report is missing its measured summary.")
+    expected_counts = {
+        "task_count": len(tasks),
+        "baseline_valid_task_count": valid_count,
+        "invalid_fixture_count": len(tasks) - valid_count,
+        "completed_task_count": completed_count,
+        "patch_correct_count": patch_count,
+        "regression_measured_count": len(regression_measured),
+        "regression_prevented_count": regression_count,
+    }
+    for key, expected in expected_counts.items():
+        if type(summary.get(key)) is not int or summary[key] != expected:
+            raise BenchmarkError("Raw benchmark summary has inconsistent " + key + " evidence.")
+    expected_rates = {
+        "task_completion_rate": (completed_count, valid_count),
+        "patch_correctness_rate": (patch_count, valid_count),
+        "regression_prevention_rate": (regression_count, len(regression_measured)),
+    }
+    for key, (numerator, denominator) in expected_rates.items():
+        if not _report_rate(summary.get(key), numerator, denominator):
+            raise BenchmarkError("Raw benchmark summary has an inconsistent " + key + " denominator or rate.")
+
+    hardware = report.get("hardware")
+    if hardware is not None:
+        if (
+            not isinstance(hardware, dict)
+            or hardware.get("schema_version") != 1
+            or type(hardware.get("identity_complete")) is not bool
+            or not isinstance(hardware.get("fingerprint_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", hardware["fingerprint_sha256"]) is None
+        ):
+            raise BenchmarkError("Raw benchmark report contains malformed hardware identity.")
+        host = hardware.get("host")
+        python_info = hardware.get("python")
+        pytorch = hardware.get("pytorch")
+        device = hardware.get("device")
+        if not all(isinstance(value, dict) for value in (host, python_info, pytorch, device)):
+            raise BenchmarkError("Raw benchmark hardware identity is missing host, Python, PyTorch, or device fields.")
+        def nonempty_text(value: Any) -> bool:
+            return isinstance(value, str) and bool(value.strip()) and len(value) <= 512
+
+        def positive_integer(value: Any) -> bool:
+            return type(value) is int and value > 0
+
+        if device.get("type") not in {"cpu", "cuda", "mps"} or not nonempty_text(device.get("resolved")):
+            raise BenchmarkError("Raw benchmark hardware identity contains an invalid resolved device.")
+        if model.get("device_resolved") != device.get("resolved"):
+            raise BenchmarkError("Raw benchmark model and hardware records disagree about the resolved device.")
+        if (
+            not isinstance(hardware.get("limitations"), list)
+            or any(not isinstance(item, str) for item in hardware["limitations"])
+        ):
+            raise BenchmarkError("Raw benchmark hardware limitations must be a list of strings.")
+        optional_text_fields = (
+            (host, "system"), (host, "release"), (host, "machine"), (host, "cpu_model"),
+            (python_info, "implementation"), (python_info, "version"),
+            (pytorch, "version"), (pytorch, "cuda_runtime_version"), (pytorch, "rocm_runtime_version"),
+            (device, "requested"), (device, "resolved"), (device, "vendor"), (device, "name"),
+            (device, "compute_capability"), (device, "driver_version"),
+        )
+        for source, field in optional_text_fields:
+            value = source.get(field)
+            if value is not None and not nonempty_text(value):
+                raise BenchmarkError("Raw benchmark hardware field " + field + " must be non-empty text or null.")
+        for source, field in ((host, "logical_cores"), (host, "physical_memory_bytes"),
+                              (device, "index"), (device, "total_memory_bytes"),
+                              (device, "available_device_count")):
+            value = source.get(field)
+            if value is not None and (
+                type(value) is not int or value < (0 if field == "index" else 1)
+            ):
+                raise BenchmarkError("Raw benchmark hardware field " + field + " has an invalid numeric value.")
+        if device.get("type") == "cpu" and (
+            device.get("resolved") != "cpu" or device.get("vendor") != "cpu"
+        ):
+            raise BenchmarkError("CPU hardware identity must resolve to the CPU backend.")
+        if device.get("type") == "mps" and (
+            device.get("resolved") != "mps" or device.get("vendor") != "apple_mps"
+        ):
+            raise BenchmarkError("MPS hardware identity must resolve to the Apple MPS backend.")
+        if device.get("type") == "cuda" and (
+            re.fullmatch(r"cuda:[0-9]+", device["resolved"]) is None
+            or device.get("vendor") not in {"nvidia_cuda", "rocm"}
+        ):
+            raise BenchmarkError("CUDA/ROCm hardware identity must include its selected device index and backend.")
+        if hardware["identity_complete"]:
+            common_complete = all((
+                nonempty_text(host.get("system")),
+                nonempty_text(host.get("release")),
+                nonempty_text(host.get("machine")),
+                nonempty_text(host.get("cpu_model")),
+                positive_integer(host.get("logical_cores")),
+                positive_integer(host.get("physical_memory_bytes")),
+                nonempty_text(python_info.get("implementation")),
+                nonempty_text(python_info.get("version")),
+                nonempty_text(pytorch.get("version")),
+                nonempty_text(device.get("name")),
+            ))
+            if not common_complete:
+                raise BenchmarkError("Hardware identity is marked complete but required host/runtime/device measurements are missing.")
+            if device["type"] == "cpu":
+                if device.get("name") != host.get("cpu_model"):
+                    raise BenchmarkError("Complete CPU identity must match the measured host CPU model.")
+            elif device["type"] == "cuda":
+                runtime_version = pytorch.get("rocm_runtime_version") if device.get("vendor") == "rocm" else pytorch.get("cuda_runtime_version")
+                device_count = device.get("available_device_count")
+                device_index = device.get("index")
+                if not all((
+                    type(device_index) is int and device_index >= 0,
+                    positive_integer(device_count) and device_index < device_count,
+                    positive_integer(device.get("total_memory_bytes")),
+                    nonempty_text(device.get("driver_version")),
+                    nonempty_text(runtime_version),
+                    device.get("cuda_runtime_version") == pytorch.get("cuda_runtime_version"),
+                    device.get("rocm_runtime_version") == pytorch.get("rocm_runtime_version"),
+                    device.get("resolved") == "cuda:" + str(device_index),
+                    (
+                        device.get("vendor") != "nvidia_cuda"
+                        or nonempty_text(device.get("compute_capability"))
+                    ),
+                )):
+                    raise BenchmarkError("CUDA/ROCm identity is marked complete without consistent selected-device, memory, runtime, or driver evidence.")
+            elif device["type"] == "mps":
+                raise BenchmarkError("MPS identity cannot be marked complete without a measured Apple GPU identity and memory specification.")
+        fingerprint_device = {key: value for key, value in device.items() if key != "requested"}
+        fingerprint_payload = {
+            "schema_version": 1,
+            "host": host,
+            "python": python_info,
+            "pytorch": pytorch,
+            "device": fingerprint_device,
+        }
+        expected_fingerprint = hashlib.sha256(
+            json.dumps(
+                fingerprint_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if expected_fingerprint != hardware["fingerprint_sha256"]:
+            raise BenchmarkError("Raw benchmark hardware fingerprint does not match its recorded fields.")
+    return report
+
+
+def _comparison_metric(
+    key: str,
+    baseline: float | None,
+    candidate: float | None,
+    *,
+    higher_is_better: bool,
+    comparable: bool = True,
+) -> dict[str, Any]:
+    if not comparable:
+        direction = "incomparable"
+    elif baseline is None or candidate is None:
+        direction = "unavailable"
+    else:
+        delta = candidate - baseline
+        direction = (
+            "unchanged" if delta == 0
+            else "improved" if ((delta > 0) == higher_is_better)
+            else "regressed"
+        )
+    delta = candidate - baseline if baseline is not None and candidate is not None else None
+    relative = (
+        round((delta / baseline) * 100, 2)
+        if comparable and delta is not None and baseline not in (None, 0)
+        else None
+    )
+    return {
+        "key": key,
+        "baseline": baseline,
+        "candidate": candidate,
+        "delta": delta,
+        "relative_change_percent": relative,
+        "direction": direction,
+    }
+
+
+def compare_raw_benchmark_reports(baseline_input: Any, candidate_input: Any) -> dict[str, Any]:
+    """Compare same-protocol raw-model reports without hiding denominator or hardware changes."""
+    baseline = validate_raw_benchmark_report(baseline_input)
+    candidate = validate_raw_benchmark_report(candidate_input)
+    if baseline["suite_version"] != candidate["suite_version"]:
+        raise BenchmarkError("Cannot compare raw-model reports from different suite versions.")
+    if baseline["evaluation_protocol"]["sha256"] != candidate["evaluation_protocol"]["sha256"]:
+        raise BenchmarkError("Cannot compare raw-model reports from different evaluation protocols; rerun both against the same protocol identity.")
+
+    baseline_tasks = {task["id"]: task for task in baseline["tasks"]}
+    candidate_tasks = {task["id"]: task for task in candidate["tasks"]}
+    if set(baseline_tasks) != set(candidate_tasks):
+        raise BenchmarkError("Cannot compare different raw-model task selections.")
+    baseline_valid = {task_id for task_id, task in baseline_tasks.items() if task["baseline_validated"]}
+    candidate_valid = {task_id for task_id, task in candidate_tasks.items() if task["baseline_validated"]}
+    if baseline_valid != candidate_valid:
+        raise BenchmarkError("Cannot compare reports whose hidden-baseline-valid task sets differ.")
+
+    baseline_hardware = baseline.get("hardware") or {}
+    candidate_hardware = candidate.get("hardware") or {}
+    hardware_comparable = bool(
+        baseline_hardware.get("identity_complete") is True
+        and candidate_hardware.get("identity_complete") is True
+        and baseline_hardware.get("fingerprint_sha256") == candidate_hardware.get("fingerprint_sha256")
+    )
+    baseline_device = baseline_hardware.get("device", {})
+    candidate_device = candidate_hardware.get("device", {})
+    if baseline_device.get("resolved") != candidate_device.get("resolved"):
+        hardware_comparable = False
+
+    ordered_valid = sorted(baseline_valid)
+    count = len(ordered_valid)
+    baseline_completion = sum(baseline_tasks[task_id]["task_completion"] for task_id in ordered_valid)
+    candidate_completion = sum(candidate_tasks[task_id]["task_completion"] for task_id in ordered_valid)
+    baseline_patch = sum(baseline_tasks[task_id]["patch_correctness"] for task_id in ordered_valid)
+    candidate_patch = sum(candidate_tasks[task_id]["patch_correctness"] for task_id in ordered_valid)
+
+    baseline_regression_ids = {
+        task_id for task_id in ordered_valid
+        if baseline_tasks[task_id]["regression_prevention"] is not None
+    }
+    candidate_regression_ids = {
+        task_id for task_id in ordered_valid
+        if candidate_tasks[task_id]["regression_prevention"] is not None
+    }
+    regression_comparable = baseline_regression_ids == candidate_regression_ids
+    baseline_regression_count = sum(
+        baseline_tasks[task_id]["regression_prevention"] is True
+        for task_id in sorted(baseline_regression_ids)
+    )
+    candidate_regression_count = sum(
+        candidate_tasks[task_id]["regression_prevention"] is True
+        for task_id in sorted(candidate_regression_ids)
+    )
+
+    baseline_generation_ids = {
+        task_id for task_id in ordered_valid
+        if baseline_tasks[task_id]["execution_speed"]["generation_ms"] is not None
+    }
+    candidate_generation_ids = {
+        task_id for task_id in ordered_valid
+        if candidate_tasks[task_id]["execution_speed"]["generation_ms"] is not None
+    }
+    generation_denominators_match = baseline_generation_ids == candidate_generation_ids
+    baseline_generation_ms = sum(
+        float(baseline_tasks[task_id]["execution_speed"]["generation_ms"])
+        for task_id in sorted(baseline_generation_ids)
+    )
+    candidate_generation_ms = sum(
+        float(candidate_tasks[task_id]["execution_speed"]["generation_ms"])
+        for task_id in sorted(candidate_generation_ids)
+    )
+    baseline_generated_tokens = sum(
+        baseline_tasks[task_id]["execution_speed"]["generated_tokens"]
+        for task_id in sorted(baseline_generation_ids)
+    )
+    candidate_generated_tokens = sum(
+        candidate_tasks[task_id]["execution_speed"]["generated_tokens"]
+        for task_id in sorted(candidate_generation_ids)
+    )
+    baseline_throughput = (
+        baseline_generated_tokens / (baseline_generation_ms / 1000)
+        if baseline_generation_ms > 0 else None
+    )
+    candidate_throughput = (
+        candidate_generated_tokens / (candidate_generation_ms / 1000)
+        if candidate_generation_ms > 0 else None
+    )
+
+    baseline_total_ms = sum(
+        float(baseline_tasks[task_id]["execution_speed"]["total_ms"])
+        for task_id in ordered_valid
+    ) / count if count else None
+    candidate_total_ms = sum(
+        float(candidate_tasks[task_id]["execution_speed"]["total_ms"])
+        for task_id in ordered_valid
+    ) / count if count else None
+
+    metrics = [
+        _comparison_metric(
+            "task_completion_rate",
+            baseline_completion / count if count else None,
+            candidate_completion / count if count else None,
+            higher_is_better=True,
+        ),
+        _comparison_metric(
+            "patch_correctness_rate",
+            baseline_patch / count if count else None,
+            candidate_patch / count if count else None,
+            higher_is_better=True,
+        ),
+        _comparison_metric(
+            "regression_prevention_rate",
+            baseline_regression_count / len(baseline_regression_ids) if baseline_regression_ids else None,
+            candidate_regression_count / len(candidate_regression_ids) if candidate_regression_ids else None,
+            higher_is_better=True,
+            comparable=regression_comparable,
+        ),
+        _comparison_metric(
+            "mean_total_task_ms",
+            baseline_total_ms,
+            candidate_total_ms,
+            higher_is_better=False,
+            comparable=hardware_comparable,
+        ),
+        _comparison_metric(
+            "generation_tokens_per_second",
+            baseline_throughput,
+            candidate_throughput,
+            higher_is_better=True,
+            comparable=hardware_comparable and generation_denominators_match,
+        ),
+    ]
+    quality_directions = [
+        metric["direction"] for metric in metrics[:3]
+        if metric["direction"] not in {"unavailable", "incomparable"}
+    ]
+    improved = sum(value == "improved" for value in quality_directions)
+    regressed = sum(value == "regressed" for value in quality_directions)
+    quality_status = (
+        "unavailable" if not quality_directions
+        else "mixed" if improved and regressed
+        else "improved" if improved
+        else "regressed" if regressed
+        else "unchanged"
+    )
+
+    warnings = []
+    if count == 0:
+        warnings.append("No task has a valid hidden baseline in both reports; task-quality comparison is unavailable.")
+    if not hardware_comparable:
+        warnings.append("Hardware/device identity is missing, incomplete, or different. Latency and throughput are reported but marked incomparable.")
+    if not regression_comparable:
+        warnings.append("Regression-prevention measurements cover different task subsets; regression rates are incomparable.")
+    if not generation_denominators_match:
+        warnings.append("Generated-token throughput covers different task subsets; throughput is incomparable.")
+    if baseline["model"]["checkpoint_sha256"] == candidate["model"]["checkpoint_sha256"]:
+        warnings.append("Both reports use the same checkpoint SHA-256; this is a repeatability comparison, not a checkpoint-change comparison.")
+    if quality_status in {"improved", "regressed"} and not hardware_comparable:
+        warnings.append("Task-outcome differences are measured observations, not a controlled causal quality claim, because execution environments differ or are incomplete.")
+
+    tasks = []
+    for task_id in sorted(baseline_tasks):
+        before = baseline_tasks[task_id]
+        after = candidate_tasks[task_id]
+        if task_id not in baseline_valid:
+            task_status = "excluded-invalid-baseline"
+        else:
+            changes = []
+            for field in ("task_completion", "patch_correctness"):
+                if before[field] != after[field]:
+                    changes.append("improved" if after[field] else "regressed")
+            if before["regression_prevention"] is not None and after["regression_prevention"] is not None:
+                if before["regression_prevention"] != after["regression_prevention"]:
+                    changes.append("improved" if after["regression_prevention"] else "regressed")
+            task_status = (
+                "mixed" if "improved" in changes and "regressed" in changes
+                else changes[0] if changes
+                else "unchanged"
+            )
+        tasks.append({
+            "id": task_id,
+            "language": before["language"],
+            "baseline_validated": task_id in baseline_valid,
+            "baseline_task_completion": before["task_completion"],
+            "candidate_task_completion": after["task_completion"],
+            "baseline_patch_correctness": before["patch_correctness"],
+            "candidate_patch_correctness": after["patch_correctness"],
+            "baseline_regression_prevention": before["regression_prevention"],
+            "candidate_regression_prevention": after["regression_prevention"],
+            "status": task_status,
+        })
+
+    return {
+        "schema_version": 1,
+        "comparison_track": "raw-native-model",
+        "suite_version": baseline["suite_version"],
+        "evaluation_protocol_sha256": baseline["evaluation_protocol"]["sha256"],
+        "compared_at": _now(),
+        "baseline": {
+            "run_id": baseline["run_id"],
+            "checkpoint_sha256": baseline["model"]["checkpoint_sha256"],
+            "device_resolved": baseline.get("model", {}).get("device_resolved"),
+            "hardware_fingerprint_sha256": baseline_hardware.get("fingerprint_sha256"),
+            "baseline_valid_task_count": count,
+        },
+        "candidate": {
+            "run_id": candidate["run_id"],
+            "checkpoint_sha256": candidate["model"]["checkpoint_sha256"],
+            "device_resolved": candidate.get("model", {}).get("device_resolved"),
+            "hardware_fingerprint_sha256": candidate_hardware.get("fingerprint_sha256"),
+            "baseline_valid_task_count": count,
+        },
+        "environment": {
+            "hardware_comparable": hardware_comparable,
+            "generation_task_denominators_match": generation_denominators_match,
+            "regression_task_denominators_match": regression_comparable,
+        },
+        "quality_status": quality_status,
+        "metrics": metrics,
+        "tasks": tasks,
+        "warnings": warnings,
+    }
+
+
 def write_report(path: Path, report: dict[str, Any]) -> Path:
     requested = path.expanduser()
     if not requested.is_absolute():
@@ -1119,6 +1946,11 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     from syntra_ai import runtime
     checkpoint = (Path(args.checkpoint).expanduser() if args.checkpoint else runtime.checkpoint_path()).resolve(strict=True)
     checkpoint_evidence = load_checkpoint_evidence(checkpoint)
+    try:
+        resolved_device = runtime.choose_device(args.device)
+        hardware_identity = collect_hardware_identity(args.device, resolved_device, runtime.torch)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise BenchmarkError("Cannot establish the actual native inference device/hardware identity: " + str(exc)) from None
     image_overrides = {
         "python": args.python_image,
         "javascript": args.node_image,
@@ -1142,7 +1974,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     for task in selected:
         print("[" + task["id"] + "] Evaluating the actual local SYNTRA checkpoint...")
         try:
-            result = run_task(task, runtime=runtime, checkpoint=checkpoint, device=args.device, max_new_tokens=args.max_new_tokens, isolation=isolations[task["language"]], run_id=run_id)
+            result = run_task(task, runtime=runtime, checkpoint=checkpoint, device=hardware_identity["device"]["resolved"], max_new_tokens=args.max_new_tokens, isolation=isolations[task["language"]], run_id=run_id)
         except (BenchmarkError, OSError, RuntimeError, ValueError) as exc:
             result = {
                 "id": task["id"], "language": task["language"], "category": task.get("category", "general"), "title": task.get("title", task["id"]),
@@ -1169,11 +2001,13 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         "model": {
             "engine": "syntra-native-pytorch", "checkpoint": checkpoint_evidence["path"],
             "checkpoint_sha256": checkpoint_evidence["sha256"], "checkpoint_identity": initial_identity,
-            "device_requested": args.device, "trained_steps": checkpoint_evidence["step"],
+            "device_requested": args.device, "device_resolved": hardware_identity["device"]["resolved"],
+            "trained_steps": checkpoint_evidence["step"],
             "training_mode": checkpoint_evidence["training_mode"],
             "instruction_dataset_sha256": checkpoint_evidence["instruction_dataset_sha256"],
             "instruction_dataset_bytes": checkpoint_evidence["instruction_dataset_bytes"],
         },
+        "hardware": hardware_identity,
         "training_loss": {
             "train_loss": checkpoint_evidence["train_loss"], "validation_loss": checkpoint_evidence["validation_loss"],
             "best_validation_loss": checkpoint_evidence["best_validation_loss"],
@@ -1203,6 +2037,8 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             "Prompt token count and context-window utilization are recorded per task; over-context prompts are rejected before generation with their measured overflow retained.",
             "Context-rejected tasks remain in end-to-end completion scoring but are excluded from the loss/intelligence divergence heuristic, which uses within-context generation attempts only.",
             "Per-language and aggregate reports separate context-window rejections from completed model-generation attempts.",
+            "Host CPU model, logical-core count, installed physical memory, operating-system identity, PyTorch build, resolved inference device and exposed accelerator properties are recorded as measured; unavailable properties remain null and are listed as limitations.",
+            "Hardware identity is incomplete when an essential host/device property or (for CUDA/ROCm) the driver version is unavailable; do not make controlled performance comparisons from incomplete identities.",
             "Generation throughput and timings are local measurements affected by hardware and system load.",
             "Docker mode uses an already-present image, disables networking, and mounts workspace and tests read-only; images are never pulled.",
             "Host execution is not sandboxed and requires explicit command-line acknowledgement.",

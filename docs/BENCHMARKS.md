@@ -228,3 +228,21 @@ Do not combine raw-model results with full-agent results. The direct raw-model s
 GitHub CI installs the required Go/Rust toolchains to validate the fixture baselines and the runner implementation. Actual benchmark execution remains offline: it uses pre-provisioned local Docker images and does not pull images or packages. The benchmark does not fabricate a score when a checkpoint, local image, language runtime, or valid fixture baseline is unavailable.
 
 For meaningful comparisons, retain the same suite version and task IDs, run the same checkpoint on the same hardware and device, and keep system load as similar as practical. Compare exact checkpoint identities and measured outputs. Do not infer skill improvement from training loss alone. Record a real baseline run before and after a training or agent change.
+
+
+### Measured hardware identity and raw-report comparison
+
+Every new raw-model report records the actual resolved inference device rather than relying only on the requested `--device` value. The hardware record includes the host operating-system/release/architecture, CPU model when exposed, logical-core count, installed physical memory, Python implementation/version, PyTorch build, the selected device type/index, and accelerator name/memory/compute capability when the active backend exposes those properties. The selected device is resolved once before evaluation and the same explicit device is used for every task in that run.
+
+Missing hardware properties remain JSON `null` and are listed in `hardware.limitations`; no CPU/GPU model, memory value, driver version, or accelerator identifier is inferred. NVIDIA CUDA driver identity is read from the host-wide driver values reported by the locally installed `nvidia-smi`; it is accepted only when every visible GPU reports the same version, avoiding assumptions about `CUDA_VISIBLE_DEVICES` ordinal remapping. AMD ROCm driver identity is read from the local `rocm-smi` utility or the kernel's AMDGPU driver-version file when available. If a local driver utility cannot report the selected device's driver, the field remains null and the hardware identity is incomplete. The current stable PyTorch interface does not expose a stable Apple GPU model/total-memory identity for MPS, so MPS reports remain incomplete rather than inventing a GPU specification. Consequently, latency and throughput comparisons from incomplete identities are marked incomparable. CPU comparisons are hardware-comparable only when the relevant host, memory, CPU, Python and PyTorch identity is actually measured and matches.
+
+Compare two real reports from the same suite and exact evaluation protocol:
+
+```powershell
+npm run benchmark:model:compare -- --baseline "data/benchmarks/baseline.json" --candidate "data/benchmarks/candidate.json"
+npm run benchmark:model:compare -- --baseline "data/benchmarks/baseline.json" --candidate "data/benchmarks/candidate.json" --output "data/benchmarks/comparisons/cpu-comparison.json"
+```
+
+The comparator validates both reports and recomputes task denominators from the individual task records. It requires the same suite version, evaluation-protocol SHA-256, exact task IDs, and identical hidden-baseline-valid task subsets. A mismatch is rejected rather than silently changing the score denominator. Task completion, patch correctness and measured regression prevention are reported separately from performance. Latency and generation throughput are marked incomparable when the complete execution-environment fingerprint differs or is unavailable; regression and throughput metrics are also marked incomparable when their measured task subsets differ. The comparison does not convert training loss into model-quality evidence.
+
+The comparison utility does not execute inference and does not generate or modify the source benchmark reports. It reads two existing reports. Optional comparison JSON output is written atomically inside the repository and refuses to overwrite an existing file; it cannot replace a raw benchmark report by accident. The target-hardware baseline and actual cross-language capability matrix remain open until a real local checkpoint is run on the intended hardware.

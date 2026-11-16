@@ -1,6 +1,8 @@
 import copy
+import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -57,6 +59,894 @@ class TrainingHistoryTests(unittest.TestCase):
                 train_loss=0.1,
                 validation_loss=0.2,
             )
+
+
+class BenchmarkHardwareIdentityTests(unittest.TestCase):
+    def _mock_torch(self, *, cuda_runtime=None, hip_runtime=None):
+        version = type("TorchVersion", (), {
+            "cuda": cuda_runtime,
+            "hip": hip_runtime,
+        })()
+        return type("TorchModule", (), {
+            "__version__": "2.7.1+test",
+            "version": version,
+        })()
+
+    def test_cpu_identity_records_measured_host_and_selected_runtime(self):
+        device = type("Device", (), {"type": "cpu", "index": None})()
+        torch_module = self._mock_torch()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Test CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=16 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=12),
+            mock.patch.object(runner.host_platform, "system", return_value="TestOS"),
+            mock.patch.object(runner.host_platform, "release", return_value="1.2"),
+            mock.patch.object(runner.host_platform, "machine", return_value="x86_64"),
+        ):
+            identity = runner.collect_hardware_identity("auto", device, torch_module)
+            repeated = runner.collect_hardware_identity("cpu", device, torch_module)
+
+        self.assertTrue(identity["identity_complete"])
+        self.assertEqual(identity["host"]["cpu_model"], "Measured Test CPU")
+        self.assertEqual(identity["host"]["logical_cores"], 12)
+        self.assertEqual(identity["host"]["physical_memory_bytes"], 16 * 1024 ** 3)
+        self.assertEqual(identity["device"]["resolved"], "cpu")
+        self.assertEqual(identity["device"]["name"], "Measured Test CPU")
+        self.assertEqual(identity["pytorch"]["version"], "2.7.1+test")
+        self.assertEqual(identity["fingerprint_sha256"], repeated["fingerprint_sha256"])
+        self.assertEqual(identity["device"]["requested"], "auto")
+        self.assertEqual(repeated["device"]["requested"], "cpu")
+
+    def test_cuda_identity_records_selected_gpu_and_measured_driver_evidence(self):
+        device = type("Device", (), {"type": "cuda", "index": None})()
+        torch_module = self._mock_torch(cuda_runtime="12.4")
+        torch_module.cuda = mock.Mock()
+        torch_module.cuda.device_count.return_value = 2
+        torch_module.cuda.current_device.return_value = 0
+        torch_module.cuda.get_device_name.return_value = "Measured Test Accelerator"
+        torch_module.cuda.get_device_properties.return_value = type(
+            "CudaProperties",
+            (),
+            {"total_memory": 24 * 1024 ** 3, "major": 9, "minor": 0},
+        )()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Host CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=64 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=32),
+            mock.patch.object(runner, "_discover_accelerator_driver_version", return_value="550.90"),
+        ):
+            identity = runner.collect_hardware_identity("auto", device, torch_module)
+
+        self.assertEqual(identity["device"]["resolved"], "cuda:0")
+        self.assertEqual(identity["device"]["index"], 0)
+        self.assertEqual(identity["device"]["vendor"], "nvidia_cuda")
+        self.assertEqual(identity["device"]["name"], "Measured Test Accelerator")
+        self.assertEqual(identity["device"]["total_memory_bytes"], 24 * 1024 ** 3)
+        self.assertEqual(identity["device"]["compute_capability"], "9.0")
+        self.assertEqual(identity["device"]["cuda_runtime_version"], "12.4")
+        self.assertEqual(identity["device"]["driver_version"], "550.90")
+        self.assertTrue(identity["identity_complete"])
+
+    def test_cuda_identity_is_incomplete_when_selected_driver_cannot_be_measured(self):
+        device = type("Device", (), {"type": "cuda", "index": 0})()
+        torch_module = self._mock_torch(cuda_runtime="12.4")
+        torch_module.cuda = mock.Mock()
+        torch_module.cuda.device_count.return_value = 1
+        torch_module.cuda.get_device_name.return_value = "Measured Test Accelerator"
+        torch_module.cuda.get_device_properties.return_value = type(
+            "CudaProperties",
+            (),
+            {"total_memory": 24 * 1024 ** 3, "major": 9, "minor": 0},
+        )()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Host CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=64 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=32),
+            mock.patch.object(runner, "_discover_accelerator_driver_version", return_value=None),
+        ):
+            identity = runner.collect_hardware_identity("cuda", device, torch_module)
+
+        self.assertIsNone(identity["device"]["driver_version"])
+        self.assertFalse(identity["identity_complete"])
+        self.assertTrue(any("driver version" in item.lower() for item in identity["limitations"]))
+
+    def test_nvidia_driver_probe_requires_a_consistent_host_driver_identity(self):
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "550.90\n550.90\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ) as run_command,
+        ):
+            self.assertEqual(runner._discover_accelerator_driver_version("cuda"), "550.90")
+        command = run_command.call_args.args[0]
+        self.assertIn("--query-gpu=driver_version", command)
+
+    def test_nvidia_driver_probe_rejects_conflicting_device_driver_values(self):
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "550.90\n555.10\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ),
+        ):
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda"))
+
+    def test_driver_probe_fails_closed_on_missing_or_ambiguous_tool_output(self):
+        with mock.patch.object(runner.shutil, "which", return_value=None):
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda"))
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "driver version unknown\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ),
+        ):
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda"))
+
+    def test_rocm_driver_probe_reads_the_reported_installed_driver_version(self):
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/opt/rocm/bin/rocm-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "ROCm System Management Interface\nDriver version: 6.2.4\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ) as run_command,
+        ):
+            self.assertEqual(runner._discover_accelerator_driver_version("cuda-rocm"), "6.2.4")
+        self.assertEqual(run_command.call_args.args[0][-1], "--showdriverversion")
+
+    def test_mps_identity_does_not_invent_gpu_model_or_total_memory(self):
+        device = type("Device", (), {"type": "mps", "index": None})()
+        torch_module = self._mock_torch()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value="Measured Apple Host CPU"),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=32 * 1024 ** 3),
+            mock.patch.object(runner.os, "cpu_count", return_value=10),
+        ):
+            identity = runner.collect_hardware_identity("mps", device, torch_module)
+
+        self.assertEqual(identity["device"]["resolved"], "mps")
+        self.assertEqual(identity["device"]["vendor"], "apple_mps")
+        self.assertIsNone(identity["device"]["name"])
+        self.assertIsNone(identity["device"]["total_memory_bytes"])
+        self.assertFalse(identity["identity_complete"])
+        self.assertTrue(any("apple gpu" in item.lower() for item in identity["limitations"]))
+
+    def test_missing_host_measurements_remain_null_and_identity_incomplete(self):
+        device = type("Device", (), {"type": "cpu", "index": None})()
+        torch_module = self._mock_torch()
+        with (
+            mock.patch.object(runner, "_cpu_model", return_value=None),
+            mock.patch.object(runner, "_physical_memory_bytes", return_value=None),
+            mock.patch.object(runner.os, "cpu_count", return_value=None),
+        ):
+            identity = runner.collect_hardware_identity("cpu", device, torch_module)
+
+        self.assertIsNone(identity["host"]["cpu_model"])
+        self.assertIsNone(identity["host"]["physical_memory_bytes"])
+        self.assertIsNone(identity["host"]["logical_cores"])
+        self.assertFalse(identity["identity_complete"])
+        self.assertTrue(identity["limitations"])
+
+
+class RawModelReportComparisonTests(unittest.TestCase):
+    @staticmethod
+    def _hardware(*, cpu_model="Test CPU", logical_cores=8, torch_version="2.7.1+cpu", complete=True):
+        host = {
+            "system": "TestOS",
+            "release": "1.0",
+            "machine": "x86_64",
+            "cpu_model": cpu_model,
+            "logical_cores": logical_cores,
+            "physical_memory_bytes": 16 * 1024 ** 3,
+        }
+        python_info = {"implementation": "CPython", "version": "3.12.8"}
+        pytorch = {
+            "version": torch_version,
+            "cuda_runtime_version": None,
+            "rocm_runtime_version": None,
+        }
+        device = {
+            "requested": "auto",
+            "resolved": "cpu",
+            "type": "cpu",
+            "index": None,
+            "vendor": "cpu",
+            "name": cpu_model,
+            "total_memory_bytes": None,
+            "compute_capability": None,
+            "available_device_count": None,
+            "cuda_runtime_version": None,
+            "rocm_runtime_version": None,
+            "driver_version": None,
+        }
+        fingerprint_payload = {
+            "schema_version": 1,
+            "host": host,
+            "python": python_info,
+            "pytorch": pytorch,
+            "device": {key: value for key, value in device.items() if key != "requested"},
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                fingerprint_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        return {
+            "schema_version": 1,
+            "identity_complete": complete,
+            "fingerprint_sha256": fingerprint,
+            **fingerprint_payload,
+            "limitations": [] if complete else ["Hardware identity is incomplete in this fixture."],
+            "device": device,
+        }
+
+    @classmethod
+    def _report(
+        cls,
+        *,
+        run_id,
+        checkpoint,
+        task_completion,
+        patch_correctness,
+        regression_prevention,
+        total_ms,
+        generation_ms,
+        generated_tokens,
+        hardware=None,
+        protocol="c" * 64,
+        baseline_validated=True,
+    ):
+        output_rate = (
+            round(generated_tokens / (generation_ms / 1000), 2)
+            if generation_ms is not None and generation_ms > 0
+            else None
+        )
+        task = {
+            "id": "python-clamp",
+            "language": "python",
+            "status": "completed" if task_completion else "target-failed",
+            "baseline_validated": baseline_validated,
+            "patch_correctness": patch_correctness,
+            "task_completion": task_completion,
+            "regression_prevention": regression_prevention,
+            "execution_speed": {
+                "total_ms": total_ms,
+                "generation_ms": generation_ms,
+                "generated_tokens": generated_tokens,
+                "output_tokens_per_second": output_rate,
+            },
+        }
+        valid = int(baseline_validated)
+        completed = int(baseline_validated and task_completion)
+        patch_count = int(baseline_validated and patch_correctness)
+        regression_measured = int(baseline_validated and regression_prevention is not None)
+        regression_count = int(baseline_validated and regression_prevention is True)
+        report = {
+            "schema_version": 1,
+            "benchmark_track": "raw-native-model",
+            "suite_version": "1.4.0",
+            "evaluation_protocol": {
+                "schema_version": 1,
+                "sha256": protocol,
+                "file_count": 100,
+                "total_bytes": 1_000_000,
+            },
+            "run_id": run_id,
+            "model": {
+                "engine": "syntra-native-pytorch",
+                "name": run_id,
+                "checkpoint_sha256": checkpoint,
+                "device_resolved": "cpu" if hardware else None,
+            },
+            "hardware": hardware,
+            "summary": {
+                "task_count": 1,
+                "baseline_valid_task_count": valid,
+                "invalid_fixture_count": 1 - valid,
+                "completed_task_count": completed,
+                "task_completion_rate": round(completed / valid, 4) if valid else None,
+                "patch_correct_count": patch_count,
+                "patch_correctness_rate": round(patch_count / valid, 4) if valid else None,
+                "regression_measured_count": regression_measured,
+                "regression_prevented_count": regression_count,
+                "regression_prevention_rate": round(regression_count / regression_measured, 4) if regression_measured else None,
+            },
+            "tasks": [task],
+        }
+        return report
+
+    def test_report_validation_recomputes_denominators_and_hardware_fingerprint(self):
+        hardware = self._hardware()
+        valid = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        self.assertIs(runner.validate_raw_benchmark_report(valid), valid)
+
+        inconsistent = copy.deepcopy(valid)
+        inconsistent["summary"]["completed_task_count"] = 0
+        with self.assertRaisesRegex(runner.BenchmarkError, "completed_task_count"):
+            runner.validate_raw_benchmark_report(inconsistent)
+
+        altered_hardware = copy.deepcopy(valid)
+        altered_hardware["hardware"]["host"]["cpu_model"] = "Different CPU"
+        altered_hardware["hardware"]["device"]["name"] = "Different CPU"
+        with self.assertRaisesRegex(runner.BenchmarkError, "fingerprint"):
+            runner.validate_raw_benchmark_report(altered_hardware)
+
+        altered_throughput = copy.deepcopy(valid)
+        altered_throughput["tasks"][0]["execution_speed"]["output_tokens_per_second"] = 999
+        with self.assertRaisesRegex(runner.BenchmarkError, "inconsistent with its measured tokens/time"):
+            runner.validate_raw_benchmark_report(altered_throughput)
+
+    def test_report_validator_rejects_complete_hardware_with_missing_release_or_driver(self):
+        hardware = self._hardware()
+        hardware["host"]["release"] = None
+        report = self._report(
+            run_id="missing-release",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        payload = {
+            "schema_version": 1,
+            "host": hardware["host"],
+            "python": hardware["python"],
+            "pytorch": hardware["pytorch"],
+            "device": {key: value for key, value in hardware["device"].items() if key != "requested"},
+        }
+        hardware["fingerprint_sha256"] = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        with self.assertRaisesRegex(runner.BenchmarkError, "marked complete"):
+            runner.validate_raw_benchmark_report(report)
+
+        cuda_hardware = copy.deepcopy(self._hardware())
+        cuda_hardware["device"].update({
+            "resolved": "cuda:0",
+            "type": "cuda",
+            "index": 0,
+            "vendor": "nvidia_cuda",
+            "name": "Measured GPU",
+            "total_memory_bytes": 8 * 1024 ** 3,
+            "compute_capability": "8.6",
+            "available_device_count": 1,
+            "cuda_runtime_version": "12.4",
+            "driver_version": "550.90",
+        })
+        cuda_hardware["pytorch"]["cuda_runtime_version"] = "12.4"
+        cuda_payload = {
+            "schema_version": 1,
+            "host": cuda_hardware["host"],
+            "python": cuda_hardware["python"],
+            "pytorch": cuda_hardware["pytorch"],
+            "device": {key: value for key, value in cuda_hardware["device"].items() if key != "requested"},
+        }
+        cuda_hardware["fingerprint_sha256"] = hashlib.sha256(
+            json.dumps(cuda_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        cuda_report = self._report(
+            run_id="cuda-zero",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=cuda_hardware,
+        )
+        cuda_report["model"]["device_resolved"] = "cuda:0"
+        self.assertIs(runner.validate_raw_benchmark_report(cuda_report), cuda_report)
+
+    def test_same_protocol_and_complete_same_hardware_reports_compare_task_quality_and_performance(self):
+        hardware = self._hardware()
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=False,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=copy.deepcopy(hardware),
+        )
+        result = runner.compare_raw_benchmark_reports(baseline, candidate)
+        self.assertEqual(result["quality_status"], "improved")
+        self.assertTrue(result["environment"]["hardware_comparable"])
+        self.assertEqual(
+            result["metrics"][0]["direction"],
+            "improved",
+        )
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "mean_total_task_ms")["direction"],
+            "improved",
+        )
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "generation_tokens_per_second")["direction"],
+            "improved",
+        )
+        self.assertEqual(result["tasks"][0]["status"], "improved")
+
+    def test_different_or_incomplete_hardware_keeps_quality_but_blocks_performance_claims(self):
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=200,
+            generation_ms=100,
+            generated_tokens=10,
+            hardware=self._hardware(),
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=20,
+            hardware=self._hardware(cpu_model="Different CPU"),
+        )
+        result = runner.compare_raw_benchmark_reports(baseline, candidate)
+        self.assertEqual(result["quality_status"], "improved")
+        self.assertFalse(result["environment"]["hardware_comparable"])
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "mean_total_task_ms")["direction"],
+            "incomparable",
+        )
+        self.assertEqual(
+            next(metric for metric in result["metrics"] if metric["key"] == "generation_tokens_per_second")["direction"],
+            "incomparable",
+        )
+        self.assertTrue(any("incomparable" in warning.lower() for warning in result["warnings"]))
+
+    def test_comparison_rejects_protocol_task_selection_and_baseline_denominator_changes(self):
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=self._hardware(),
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=self._hardware(),
+        )
+        with self.assertRaisesRegex(runner.BenchmarkError, "different evaluation protocols"):
+            runner.compare_raw_benchmark_reports(baseline, {
+                **candidate,
+                "evaluation_protocol": {**candidate["evaluation_protocol"], "sha256": "d" * 64},
+            })
+        with self.assertRaisesRegex(runner.BenchmarkError, "different raw-model task selections"):
+            runner.compare_raw_benchmark_reports(baseline, {
+                **candidate,
+                "tasks": [{**candidate["tasks"][0], "id": "different-task"}],
+                "summary": {**candidate["summary"]},
+            })
+        with self.assertRaisesRegex(runner.BenchmarkError, "baseline-valid task sets differ"):
+            runner.compare_raw_benchmark_reports(baseline, {
+                **candidate,
+                "tasks": [{**candidate["tasks"][0], "baseline_validated": False, "task_completion": False, "patch_correctness": False}],
+                "summary": {
+                    **candidate["summary"],
+                    "baseline_valid_task_count": 0,
+                    "invalid_fixture_count": 1,
+                    "completed_task_count": 0,
+                    "task_completion_rate": None,
+                    "patch_correct_count": 0,
+                    "patch_correctness_rate": None,
+                    "regression_measured_count": 0,
+                    "regression_prevented_count": 0,
+                    "regression_prevention_rate": None,
+                },
+            })
+
+    def test_unavailable_hardware_and_unequal_measurement_denominators_remain_incomparable(self):
+        baseline = self._report(
+            run_id="baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=None,
+        )
+        candidate = self._report(
+            run_id="candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=None,
+            generated_tokens=0,
+            hardware=None,
+        )
+        result = runner.compare_raw_benchmark_reports(baseline, candidate)
+        regression = next(metric for metric in result["metrics"] if metric["key"] == "regression_prevention_rate")
+        throughput = next(metric for metric in result["metrics"] if metric["key"] == "generation_tokens_per_second")
+        latency = next(metric for metric in result["metrics"] if metric["key"] == "mean_total_task_ms")
+        self.assertEqual(regression["direction"], "incomparable")
+        self.assertEqual(throughput["direction"], "incomparable")
+        self.assertEqual(latency["direction"], "incomparable")
+
+
+    def test_raw_benchmark_compare_cli_compares_content_addressed_reports(self):
+        hardware = self._hardware()
+        baseline = self._report(
+            run_id="baseline-cli",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=False,
+            total_ms=120,
+            generation_ms=60,
+            generated_tokens=12,
+            hardware=hardware,
+        )
+        candidate = self._report(
+            run_id="candidate-cli",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=15,
+            hardware=copy.deepcopy(hardware),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-benchmark-compare-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+                    "--baseline", str(baseline_path),
+                    "--candidate", str(candidate_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Quality outcome: improved", result.stdout)
+        self.assertIn("Hardware-controlled performance: yes", result.stdout)
+        self.assertIn("task_completion_rate", result.stdout)
+
+    def test_raw_benchmark_compare_cli_rejects_protocol_mismatch(self):
+        baseline = self._report(
+            run_id="baseline-protocol",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=self._hardware(),
+        )
+        candidate = self._report(
+            run_id="candidate-protocol",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=90,
+            generation_ms=45,
+            generated_tokens=12,
+            hardware=self._hardware(),
+        )
+        candidate["evaluation_protocol"]["sha256"] = "d" * 64
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-benchmark-invalid-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+                    "--baseline", str(baseline_path),
+                    "--candidate", str(candidate_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("different evaluation protocols", result.stderr)
+
+
+class RawBenchmarkComparisonCliTests(unittest.TestCase):
+    def test_npm_script_exposes_the_raw_benchmark_comparison_cli(self):
+        package = json.loads((REPOSITORY_ROOT / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            package.get("scripts", {}).get("benchmark:model:compare"),
+            "python scripts/compare_raw_benchmarks.py",
+        )
+        self.assertTrue((REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py").is_file())
+
+    @staticmethod
+    def _invoke(baseline: Path, candidate: Path, output: Path | None = None):
+        command = [
+            sys.executable,
+            str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+            "--baseline", str(baseline),
+            "--candidate", str(candidate),
+        ]
+        if output is not None:
+            command.extend(["--output", str(output)])
+        return subprocess.run(
+            command,
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+    def test_comparison_cli_compares_real_report_files_on_matching_hardware(self):
+        hardware = RawModelReportComparisonTests._hardware()
+        baseline = RawModelReportComparisonTests._report(
+            run_id="cli-baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=False,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = RawModelReportComparisonTests._report(
+            run_id="cli-candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=True,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=copy.deepcopy(hardware),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = self._invoke(baseline_path, candidate_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Quality outcome: improved", result.stdout)
+        self.assertIn("Hardware-controlled performance: yes", result.stdout)
+        self.assertIn("generation_tokens_per_second", result.stdout)
+
+    def test_comparison_cli_marks_different_hardware_performance_incomparable(self):
+        baseline = RawModelReportComparisonTests._report(
+            run_id="cli-baseline-host-a",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=RawModelReportComparisonTests._hardware(),
+        )
+        candidate = RawModelReportComparisonTests._report(
+            run_id="cli-candidate-host-b",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=RawModelReportComparisonTests._hardware(cpu_model="Different Measured CPU"),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-different-") as temp:
+            baseline_path = Path(temp) / "baseline.json"
+            candidate_path = Path(temp) / "candidate.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = self._invoke(baseline_path, candidate_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Quality outcome: improved", result.stdout)
+        self.assertIn("Hardware-controlled performance: no", result.stdout)
+        self.assertIn("incomparable", result.stdout)
+
+    def test_comparison_cli_rejects_invalid_json_and_symbolic_link_reports(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-invalid-") as temp:
+            invalid_path = Path(temp) / "invalid.json"
+            valid_path = Path(temp) / "valid.json"
+            invalid_path.write_text('{"schema_version": 1,}', encoding="utf-8")
+            valid_path.write_text("{}", encoding="utf-8")
+            invalid = self._invoke(invalid_path, valid_path)
+            self.assertEqual(invalid.returncode, 1)
+            self.assertIn("invalid JSON", invalid.stderr)
+
+            if os.name != "nt":
+                link_path = Path(temp) / "linked.json"
+                link_path.symlink_to(valid_path)
+                linked = self._invoke(link_path, valid_path)
+                self.assertEqual(linked.returncode, 1)
+                self.assertIn("non-symlink", linked.stderr)
+
+    def test_comparison_cli_output_is_atomic_and_never_overwrites_an_existing_file(self):
+        hardware = RawModelReportComparisonTests._hardware()
+        baseline = RawModelReportComparisonTests._report(
+            run_id="cli-output-baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = RawModelReportComparisonTests._report(
+            run_id="cli-output-candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=copy.deepcopy(hardware),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-output-", dir=REPOSITORY_ROOT) as temp:
+            root = Path(temp)
+            baseline_path = root / "baseline.json"
+            candidate_path = root / "candidate.json"
+            output_path = root / "comparisons" / "comparison.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+            first = self._invoke(baseline_path, candidate_path, output_path)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            original = output_path.read_bytes()
+            self.assertTrue(original.endswith(b"\n"))
+            parsed = json.loads(original)
+            self.assertEqual(parsed["comparison_track"], "raw-native-model")
+
+            second = self._invoke(baseline_path, candidate_path, output_path)
+            self.assertEqual(second.returncode, 1)
+            self.assertIn("already exists", second.stderr)
+            self.assertEqual(output_path.read_bytes(), original)
+
+    def test_comparison_cli_rejects_output_paths_outside_repository_before_creating_directories(self):
+        hardware = RawModelReportComparisonTests._hardware()
+        baseline = RawModelReportComparisonTests._report(
+            run_id="outside-output-baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = copy.deepcopy(baseline)
+        candidate["run_id"] = "outside-output-candidate"
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-outside-") as temp:
+            root = Path(temp)
+            baseline_path = root / "baseline.json"
+            candidate_path = root / "candidate.json"
+            forbidden_directory = root / "must-not-be-created"
+            output_path = forbidden_directory / "comparison.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = self._invoke(baseline_path, candidate_path, output_path)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("inside the SYNTRA repository", result.stderr)
+            self.assertFalse(forbidden_directory.exists())
+
+    def test_comparison_cli_help_does_not_require_report_paths(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+                "--help",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("raw SYNTRA PyTorch benchmark reports", result.stdout)
+        self.assertIn("--baseline", result.stdout)
+        self.assertIn("--candidate", result.stdout)
 
 
 class RawModelBenchmarkTests(unittest.TestCase):
