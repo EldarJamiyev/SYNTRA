@@ -108,6 +108,7 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
   const windowNewTokenCounts = payload.window_new_token_counts;
   const effectiveWindowTokens = payload.effective_window_tokens;
   const overlapTokens = payload.window_overlap_tokens;
+  const maxWindowsPerRequest = payload.max_windows_per_request;
   if (!Number.isInteger(dims) || dims < 8 || dims > 4096
     || payload.embeddings.some(v => !Array.isArray(v) || v.length !== dims || v.some(n => !Number.isFinite(n)))
     || payload.truncated !== false
@@ -128,7 +129,9 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
     || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
     || !Number.isSafeInteger(overlapTokens) || overlapTokens < 0 || overlapTokens >= effectiveWindowTokens
     || payload.total_input_tokens !== tokenCounts.reduce((sum, count) => sum + count, 0)
-    || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)) {
+    || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)
+    || !Number.isSafeInteger(maxWindowsPerRequest) || maxWindowsPerRequest < 1
+    || payload.total_windows > maxWindowsPerRequest) {
     throw new Error("Native runtime returned invalid, incomplete, or truncated full-text embedding evidence.");
   }
   return {
