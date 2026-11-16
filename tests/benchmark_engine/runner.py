@@ -207,7 +207,10 @@ def collect_hardware_identity(requested_device: str, resolved_device: Any, torch
             major, minor = getattr(properties, "major", None), getattr(properties, "minor", None)
             if type(major) is int and type(minor) is int and major >= 0 and minor >= 0:
                 compute_capability = str(major) + "." + str(minor)
-            limitations.append("The active accelerator driver version is not exposed by the stable PyTorch API used here.")
+            driver_lookup_type = "cuda-rocm" if hip_runtime else "cuda"
+            driver_version = _discover_accelerator_driver_version(driver_lookup_type, device_index)
+            if driver_version is None:
+                limitations.append("The installed accelerator driver version could not be measured through local driver utilities.")
             limitations.append("CUDA device properties are reported by the selected PyTorch runtime; MIG partitioning may affect available memory.")
         except (AttributeError, RuntimeError, TypeError, ValueError, OverflowError) as exc:
             limitations.append("CUDA hardware details could not be read: " + str(exc)[:240])
@@ -837,6 +840,64 @@ def run_command(command: list[str], *, cwd: Path, env: dict[str, str], timeout_s
     if limited.is_set():
         stderr += "\n[benchmark output limit reached; process terminated]"
     return {"returncode": process.returncode, "timed_out": timed_out, "output_limited": limited.is_set(), "stdout": stdout, "stderr": stderr, "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)}
+
+
+def _discover_accelerator_driver_version(device_type: str, device_index: int | None) -> str | None:
+    """Read the selected accelerator's installed driver version from local OS tools."""
+    if device_type == "cuda":
+        executable = shutil.which("nvidia-smi")
+        if not executable or type(device_index) is not int or device_index < 0:
+            return None
+        result = run_command(
+            [
+                executable,
+                "--query-gpu=index,driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            cwd=REPOSITORY_ROOT,
+            env=dict(os.environ),
+            timeout_seconds=5,
+            output_limit=16 * 1024,
+        )
+        if result["returncode"] != 0 or result["timed_out"] or result["output_limited"]:
+            return None
+        for line in result["stdout"].splitlines():
+            index_text, separator, version = line.partition(",")
+            if not separator or index_text.strip() != str(device_index):
+                continue
+            normalized = version.strip()
+            if re.fullmatch(r"[0-9]+(?:\.[0-9A-Za-z_-]+){0,3}", normalized):
+                return normalized
+        return None
+
+    if device_type == "cuda-rocm":
+        executable = shutil.which("rocm-smi")
+        if executable:
+            result = run_command(
+                [executable, "--showdriverversion"],
+                cwd=REPOSITORY_ROOT,
+                env=dict(os.environ),
+                timeout_seconds=5,
+                output_limit=16 * 1024,
+            )
+            if result["returncode"] == 0 and not result["timed_out"] and not result["output_limited"]:
+                match = re.search(
+                    r"(?im)^\s*(?:GPU\s+)?Driver version\s*:\s*([0-9][A-Za-z0-9._+-]{0,63})\s*$",
+                    result["stdout"],
+                )
+                if match:
+                    return match.group(1)
+        sysfs_version = Path("/sys/module/amdgpu/version")
+        try:
+            if not sysfs_version.is_symlink():
+                info = sysfs_version.lstat()
+                if stat.S_ISREG(info.st_mode) and 0 < info.st_size <= 256:
+                    value = sysfs_version.read_text(encoding="utf-8").strip()
+                    if re.fullmatch(r"[0-9][A-Za-z0-9._+-]{0,63}", value):
+                        return value
+        except OSError:
+            pass
+    return None
 
 
 def prepare_isolation(mode: str, image: str) -> dict[str, Any]:
