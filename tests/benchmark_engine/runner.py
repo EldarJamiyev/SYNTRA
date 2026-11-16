@@ -1513,10 +1513,80 @@ def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
         device = hardware.get("device")
         if not all(isinstance(value, dict) for value in (host, python_info, pytorch, device)):
             raise BenchmarkError("Raw benchmark hardware identity is missing host, Python, PyTorch, or device fields.")
-        if device.get("type") not in {"cpu", "cuda", "mps"} or not isinstance(device.get("resolved"), str):
+        def nonempty_text(value: Any) -> bool:
+            return isinstance(value, str) and bool(value.strip()) and len(value) <= 512
+
+        def positive_integer(value: Any) -> bool:
+            return type(value) is int and value > 0
+
+        if device.get("type") not in {"cpu", "cuda", "mps"} or not nonempty_text(device.get("resolved")):
             raise BenchmarkError("Raw benchmark hardware identity contains an invalid resolved device.")
         if model.get("device_resolved") != device.get("resolved"):
             raise BenchmarkError("Raw benchmark model and hardware records disagree about the resolved device.")
+        if (
+            not isinstance(hardware.get("limitations"), list)
+            or any(not isinstance(item, str) for item in hardware["limitations"])
+        ):
+            raise BenchmarkError("Raw benchmark hardware limitations must be a list of strings.")
+        optional_text_fields = (
+            (host, "system"), (host, "release"), (host, "machine"), (host, "cpu_model"),
+            (python_info, "implementation"), (python_info, "version"),
+            (pytorch, "version"), (pytorch, "cuda_runtime_version"), (pytorch, "rocm_runtime_version"),
+            (device, "requested"), (device, "resolved"), (device, "vendor"), (device, "name"),
+            (device, "compute_capability"), (device, "driver_version"),
+        )
+        for source, field in optional_text_fields:
+            value = source.get(field)
+            if value is not None and not nonempty_text(value):
+                raise BenchmarkError("Raw benchmark hardware field " + field + " must be non-empty text or null.")
+        for source, field in ((host, "logical_cores"), (host, "physical_memory_bytes"),
+                              (device, "index"), (device, "total_memory_bytes"),
+                              (device, "available_device_count")):
+            value = source.get(field)
+            if value is not None and (
+                type(value) is not int or value < (0 if field == "index" else 1)
+            ):
+                raise BenchmarkError("Raw benchmark hardware field " + field + " has an invalid numeric value.")
+        if device.get("type") == "cpu" and (
+            device.get("resolved") != "cpu" or device.get("vendor") != "cpu"
+        ):
+            raise BenchmarkError("CPU hardware identity must resolve to the CPU backend.")
+        if device.get("type") == "mps" and (
+            device.get("resolved") != "mps" or device.get("vendor") != "apple_mps"
+        ):
+            raise BenchmarkError("MPS hardware identity must resolve to the Apple MPS backend.")
+        if device.get("type") == "cuda" and (
+            re.fullmatch(r"cuda:[0-9]+", device["resolved"]) is None
+            or device.get("vendor") not in {"nvidia_cuda", "rocm"}
+        ):
+            raise BenchmarkError("CUDA/ROCm hardware identity must include its selected device index and backend.")
+        if hardware["identity_complete"]:
+            common_complete = all((
+                nonempty_text(host.get("system")),
+                nonempty_text(host.get("release")),
+                nonempty_text(host.get("machine")),
+                nonempty_text(host.get("cpu_model")),
+                positive_integer(host.get("logical_cores")),
+                positive_integer(host.get("physical_memory_bytes")),
+                nonempty_text(python_info.get("implementation")),
+                nonempty_text(python_info.get("version")),
+                nonempty_text(pytorch.get("version")),
+                nonempty_text(device.get("name")),
+            ))
+            if not common_complete:
+                raise BenchmarkError("Hardware identity is marked complete but required host/runtime/device measurements are missing.")
+            if device["type"] == "cpu":
+                if device.get("name") != host.get("cpu_model"):
+                    raise BenchmarkError("Complete CPU identity must match the measured host CPU model.")
+            elif device["type"] == "cuda":
+                runtime_version = pytorch.get("rocm_runtime_version") if device.get("vendor") == "rocm" else pytorch.get("cuda_runtime_version")
+                if not all((
+                    positive_integer(device.get("index")),
+                    positive_integer(device.get("total_memory_bytes")),
+                    nonempty_text(device.get("driver_version")),
+                    nonempty_text(runtime_version),
+                )):
+                    raise BenchmarkError("CUDA/ROCm identity is marked complete without selected accelerator memory, runtime, or driver evidence.")
         fingerprint_device = {key: value for key, value in device.items() if key != "requested"}
         fingerprint_payload = {
             "schema_version": 1,
@@ -1536,8 +1606,6 @@ def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
         ).hexdigest()
         if expected_fingerprint != hardware["fingerprint_sha256"]:
             raise BenchmarkError("Raw benchmark hardware fingerprint does not match its recorded fields.")
-        if not isinstance(hardware.get("limitations"), list) or any(not isinstance(item, str) for item in hardware["limitations"]):
-            raise BenchmarkError("Raw benchmark hardware limitations must be a list of strings.")
     return report
 
 
