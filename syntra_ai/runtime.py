@@ -516,21 +516,70 @@ def load_model(path: str | Path | None = None, device_name: str = "auto"):
     return model, saved, device
 
 
-def tokenize_text(text: str, path: str | Path | None = None) -> dict:
-    if not isinstance(text, str):
-        raise ValueError("Text must be a string.")
-    if len(text.encode("utf-8")) > 300_000:
-        raise ValueError("Text exceeds the 300 KB token-count API limit.")
+def _validated_text_batch(texts: list[str], *, maximum: int, byte_limit: int) -> list[str]:
+    if not isinstance(texts, list) or not texts or len(texts) > maximum:
+        raise ValueError(f"input must be a non-empty list of at most {maximum} strings.")
+    for index, item in enumerate(texts):
+        if not isinstance(item, str):
+            raise ValueError(f"Text at index {index} must be a string.")
+        try:
+            size = len(item.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise ValueError(f"Text at index {index} is not valid UTF-8 text.") from None
+        if size > byte_limit:
+            raise ValueError(f"Text at index {index} exceeds the {byte_limit // 1000} KB API limit.")
+    return texts
+
+
+def _embedding_token_limit(config: ModelConfig, max_tokens: int | None) -> int:
+    context_limit = config.seq_len - 1
+    if max_tokens is None:
+        return context_limit
+    if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
+        raise ValueError("max_length must be an integer between 1 and 4096.")
+    return min(context_limit, max_tokens)
+
+
+def tokenize_texts(
+    texts: list[str],
+    path: str | Path | None = None,
+    max_tokens: int | None = None,
+) -> dict:
+    """Count complete native tokenizer inputs using one checkpoint snapshot."""
+    _validated_text_batch(texts, maximum=64, byte_limit=300_000)
+    identity_before = _checkpoint_identity(path)
     target, _, saved, config, tokenizer, _ = _get_resident_bundle(path=path, device_name="cpu")
-    count = len(tokenizer.encode(text))
+    token_counts = [len(tokenizer.encode(item)) for item in texts]
+    identity_after = _checkpoint_identity(path)
+    if identity_before is None or identity_after != identity_before:
+        raise RuntimeError("The native checkpoint changed during token counting; retry the request.")
+    max_input_tokens = _embedding_token_limit(config, max_tokens)
     return {
-        "token_count": count,
+        "token_counts": token_counts,
+        "max_input_tokens": max_input_tokens,
         "context_window_tokens": config.seq_len,
         "vocabulary_size": tokenizer.vocab_size,
         "tokenizer": "byte-BPE",
-        "tokens_over_context": max(0, count - (config.seq_len - 1)),
         "checkpoint": str(target),
+        "checkpoint_identity": identity_before,
         "trained_steps": int(saved.get("step", 0)),
+    }
+
+
+def tokenize_text(
+    text: str,
+    path: str | Path | None = None,
+    max_tokens: int | None = None,
+) -> dict:
+    if not isinstance(text, str):
+        raise ValueError("Text must be a string.")
+    result = tokenize_texts([text], path=path, max_tokens=max_tokens)
+    count = result["token_counts"][0]
+    return {
+        **result,
+        "token_count": count,
+        "tokens_over_context": max(0, count - result["max_input_tokens"]),
+        "token_counts": None,
     }
 
 
@@ -539,19 +588,23 @@ def embed_texts(
     texts: list[str],
     path: str | Path | None = None,
     device_name: str = "auto",
+    max_tokens: int | None = None,
 ) -> dict:
-    """Compute dense semantic embeddings using the native SYNTRA Transformer."""
-    if not isinstance(texts, list) or not texts or len(texts) > 64:
-        raise ValueError("input must be a non-empty list of at most 64 strings.")
-    for item in texts:
-        if not isinstance(item, str) or len(item.encode("utf-8")) > 100_000:
-            raise ValueError("Each text item must be a string of at most 100 KB.")
+    """Compute dense semantic embeddings without silently truncating input text."""
+    _validated_text_batch(texts, maximum=64, byte_limit=100_000)
     identity_before = _checkpoint_identity(path)
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
+    limit = _embedding_token_limit(config, max_tokens)
+    encoded_items = [tokenizer.encode(item) for item in texts]
+    for index, encoded in enumerate(encoded_items):
+        if len(encoded) > limit:
+            raise ValueError(
+                f"Text at index {index} requires {len(encoded)} tokenizer tokens, "
+                f"exceeding the embedding limit of {limit}; input was not truncated."
+            )
+
     vectors: list[list[float]] = []
-    limit = config.seq_len - 1
-    for item in texts:
-        encoded = tokenizer.encode(item)[:limit]
+    for encoded in encoded_items:
         token_ids = [BOS_ID, *encoded]
         tensor = torch.tensor([token_ids], dtype=torch.long, device=device)
         vec = model.embed_tokens(tensor)[0].detach().cpu().tolist()
@@ -561,6 +614,8 @@ def embed_texts(
         raise RuntimeError("The native checkpoint changed during embedding generation; retry the request.")
     return {
         "embeddings": vectors,
+        "input_token_counts": [len(encoded) for encoded in encoded_items],
+        "max_input_tokens": limit,
         "dimensions": config.n_embd,
         "model": "syntra-native-transformer",
         "checkpoint": str(target),
