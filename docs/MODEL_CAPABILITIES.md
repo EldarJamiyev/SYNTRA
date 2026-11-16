@@ -27,6 +27,10 @@ Semantic source retrieval and project-memory embeddings use the same SYNTRA chec
 
 Semantic search validates source hashes before returning excerpts and invalidates cached vectors when source identity or checkpoint identity changes. If native embedding inference is unavailable or returns invalid vectors, project-memory search may use its documented BM25 keyword fallback and must report that fallback accurately. It must not claim that semantic inference succeeded.
 
+Native embedding requests preserve complete input text. The runtime tokenizes each item once and represents it using overlapping context windows no larger than the requested `max_length` or the selected checkpoint's usable context (`seq_len - 1`, reserving BOS). Window vectors from the same local checkpoint are combined by newly-covered-token weighting and normalized. The response includes per-input token counts, per-window token lengths and new-token coverage, total token/window counts, the effective window size, the pooling strategy, and an explicit `truncated: false` marker; callers validate that the evidence covers every input token. The runtime rejects more than 131,072 total input tokens or 2,048 context windows per request before model inference. It does not silently slice a long text to fit a single context window.
+
+The semantic index uses schema version 2 and records the embedding strategy and each chunk's token/window counts. Previous schema-v1 semantic indexes and project-memory embedding caches are rebuilt instead of reusing vectors created by the old prefix-truncation behavior. These changes improve input-integrity and context coverage, not model semantics; no embedding-quality or retrieval-quality improvement is claimed without an actual checkpoint and a representative retrieval evaluation.
+
 Chat history is not embedded as project memory. Only explicitly user-authored workspace notes are eligible for memory embeddings.
 
 ## Repository-agent behavior
