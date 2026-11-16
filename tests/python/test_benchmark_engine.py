@@ -870,6 +870,34 @@ class RawBenchmarkComparisonCliTests(unittest.TestCase):
             self.assertIn("already exists", second.stderr)
             self.assertEqual(output_path.read_bytes(), original)
 
+    def test_comparison_cli_rejects_output_paths_outside_repository_before_creating_directories(self):
+        hardware = RawModelReportComparisonTests._hardware()
+        baseline = RawModelReportComparisonTests._report(
+            run_id="outside-output-baseline",
+            checkpoint="a" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = copy.deepcopy(baseline)
+        candidate["run_id"] = "outside-output-candidate"
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-outside-") as temp:
+            root = Path(temp)
+            baseline_path = root / "baseline.json"
+            candidate_path = root / "candidate.json"
+            forbidden_directory = root / "must-not-be-created"
+            output_path = forbidden_directory / "comparison.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            result = self._invoke(baseline_path, candidate_path, output_path)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("inside the SYNTRA repository", result.stderr)
+            self.assertFalse(forbidden_directory.exists())
+
     def test_comparison_cli_help_does_not_require_report_paths(self):
         result = subprocess.run(
             [
