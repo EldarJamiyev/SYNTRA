@@ -78,7 +78,7 @@ class InstructionJsonlStrictnessTests(unittest.TestCase):
     def test_bracket_characters_inside_json_strings_do_not_consume_nesting_budget(self):
         with tempfile.TemporaryDirectory(prefix="syntra-jsonl-depth-string-") as temp:
             root = Path(temp)
-            metadata = "[" * (MAX_INSTRUCTION_JSON_DEPTH + 20) + "]" * (MAX_INSTRUCTION_JSON_DEPTH + 20)
+            metadata = 'escaped " quote ' + "[" * (MAX_INSTRUCTION_JSON_DEPTH + 20) + "]" * (MAX_INSTRUCTION_JSON_DEPTH + 20)
             line = json.dumps({
                 "prompt": "task",
                 "completion": "answer",
