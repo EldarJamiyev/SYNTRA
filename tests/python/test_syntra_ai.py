@@ -382,6 +382,85 @@ class TransformerTests(unittest.TestCase):
             self.assertEqual(len(result["embeddings"][0]), config.n_embd)
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_embed_texts_covers_every_input_token_with_overlapping_context_windows(self):
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import (
+            EMBEDDING_POOLING_STRATEGY,
+            MAX_EMBEDDING_INPUT_TOKENS,
+            _checkpoint_identity,
+            embed_texts,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="syntra-full-text-embedding-windows-") as temp:
+            checkpoint = Path(temp) / "windowed-model.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            tokenizer = ByteBPETokenizer.empty()
+            model = SyntraTransformer(config)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
+                "model_state": model.state_dict(),
+                "step": 19,
+                "training_mode": "causal-source-pretraining",
+            }, checkpoint)
+
+            long_text = "network gateway routing context " * 80
+            short_text = "gateway"
+            result = embed_texts(
+                [long_text, short_text],
+                path=checkpoint,
+                device_name="cpu",
+                max_length=256,
+            )
+
+            expected_counts = [
+                len(tokenizer.encode(long_text)),
+                len(tokenizer.encode(short_text)),
+            ]
+            self.assertEqual(result["input_token_counts"], expected_counts)
+            self.assertEqual(result["total_input_tokens"], sum(expected_counts))
+            self.assertGreater(result["window_counts"][0], 1)
+            self.assertEqual(result["window_counts"][1], 1)
+            self.assertEqual(result["total_windows"], sum(result["window_counts"]))
+            self.assertEqual(result["effective_window_tokens"], config.seq_len - 1)
+            self.assertLessEqual(result["effective_window_tokens"], 256)
+            self.assertEqual(result["pooling_strategy"], EMBEDDING_POOLING_STRATEGY)
+            self.assertFalse(result["truncated"])
+            for index, token_count in enumerate(expected_counts):
+                self.assertEqual(
+                    sum(result["window_new_token_counts"][index]),
+                    token_count,
+                    "new-token coverage must account for every source token exactly once",
+                )
+                self.assertEqual(
+                    len(result["window_token_counts"][index]),
+                    result["window_counts"][index],
+                )
+                self.assertTrue(all(
+                    0 <= window_tokens <= result["effective_window_tokens"]
+                    for window_tokens in result["window_token_counts"][index]
+                ))
+            self.assertTrue(all(
+                len(vector) == config.n_embd and all(math.isfinite(value) for value in vector)
+                for vector in result["embeddings"]
+            ))
+            self.assertEqual(result["checkpoint_identity"], _checkpoint_identity(checkpoint))
+
+            with self.assertRaisesRegex(ValueError, "max_length must be an integer"):
+                embed_texts(["short"], path=checkpoint, device_name="cpu", max_length=True)
+
+            over_budget = ["a" * 70_000, "b" * 70_000]
+            self.assertGreater(
+                sum(len(item.encode("utf-8")) for item in over_budget),
+                MAX_EMBEDDING_INPUT_TOKENS,
+            )
+            with self.assertRaisesRegex(ValueError, "bounded request limit"):
+                embed_texts(over_budget, path=checkpoint, device_name="cpu")
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_status_does_not_report_a_stale_resident_checkpoint(self):
         from syntra_ai.model import SyntraTransformer
         from syntra_ai.runtime import _get_resident_bundle, clear_resident_cache, status
