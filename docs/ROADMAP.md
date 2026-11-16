@@ -398,3 +398,18 @@ A phase is not complete merely because the interface looks finished. It must inc
 
 **Outstanding evidence:** The separate empirical capability-matrix item remains open until actual live-checkpoint reports have been produced on the intended hardware.
 
+### Phase 38 — Expand held-out polyglot benchmark fixture coverage
+
+**Objective:** Improve the balance of the raw-model evaluation matrix so each non-Python language has multiple independent task categories while preserving real failing baselines and independent regression tests.
+
+- [x] Add TypeScript generic result mapping with typed error preservation and own-property picking with inherited-property exclusion.
+- [x] Add Go saturating retry backoff and deterministic case-insensitive HTTP header lookup.
+- [x] Add Rust overflow-safe borrowed windows and strict ASCII unsigned parsing.
+- [x] Add JavaScript prototype-safe grouping for special property names.
+- [x] Require each new fixture to have a failing target test and a passing independent regression test.
+- [x] Keep hidden evaluation files outside the model-visible workspace and bind all new fixtures/tests into the content-addressed evaluation protocol.
+- [x] Upgrade the raw-model suite to 1.5.0 with 21 tasks: nine Python and three each for JavaScript, TypeScript, Go, and Rust.
+- [x] Update suite-count, capability, baseline, and documentation coverage without generating any model score.
+
+**Acceptance:** All 21 fixtures have a recognized expected target failure and a passing regression baseline in the actual language runtime. The expanded suite remains offline, dependency-free, and content-addressed. The empirical capability matrix remains unpopulated until a genuine local checkpoint completes a full run on target hardware.
+

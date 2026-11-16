@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "1.4.0",
-  "description": "Held-out raw-native-model coding benchmark across JavaScript, TypeScript, Python, Go, and Rust. Evaluation scripts remain outside the model-visible workspace.",
-  "task_count": 14,
+  "version": "1.5.0",
+  "description": "Held-out raw-native-model coding benchmark across Python, JavaScript, TypeScript, Go, and Rust with three fixtures per non-Python language. Evaluation scripts remain outside the model-visible workspace.",
+  "task_count": 21,
   "tasks": [
     {
       "id": "python-slugify",
@@ -202,6 +202,104 @@
         "src/map-concurrent.mjs"
       ],
       "goal": "Implement async mapConcurrent(items, mapper, options) in src/map-concurrent.mjs. Require an array and callable mapper; options must be a non-array object; default concurrency to 4 and require an integer from 1 through 64. Snapshot the input at call time, invoke mapper(value, index), run no more than concurrency mappers at once, and resolve to a result array in original input order even when individual operations finish out of order. Treat synchronous throws and rejected mapper promises identically: after the first rejection, start no queued items, wait for every mapper already in flight to settle, then reject with the first failure reason. Empty arrays resolve to an empty array. Do not mutate the caller's input or add dependencies."
+    },
+    {
+      "id": "typescript-result-map",
+      "language": "typescript",
+      "category": "generic-types",
+      "title": "Map success results while preserving typed errors",
+      "workspace": "fixtures/typescript-result-map/workspace",
+      "hidden_evaluation": "hidden/typescript-result-map",
+      "target_test": "test_target.ts",
+      "regression_test": "test_regression.ts",
+      "expected_changed_paths": [
+        "src/map-result.ts"
+      ],
+      "goal": "Implement mapResult in src/map-result.ts using the discriminated Result<TValue,TError> type from src/result.ts. Map only successful values and return Result<TNext,TError>. For a failure, return an error variant carrying the exact original error value unchanged and never call the mapper. Preserve generic inference for both branches; do not stringify errors, cast away the error contract, or add dependencies."
+    },
+    {
+      "id": "typescript-pick-own",
+      "language": "typescript",
+      "category": "object-ownership",
+      "title": "Pick only own properties from a typed object",
+      "workspace": "fixtures/typescript-pick-own/workspace",
+      "hidden_evaluation": "hidden/typescript-pick-own",
+      "target_test": "test_target.ts",
+      "regression_test": "test_regression.ts",
+      "expected_changed_paths": [
+        "src/pick-own.ts"
+      ],
+      "goal": "Implement pickOwn<T, K extends keyof T> in src/pick-own.ts and return Partial<Pick<T,K>>. Copy only requested keys that are own properties of source, skip inherited properties, preserve an own property even when its value is undefined, and leave source untouched. Keep the selected-key generic constraint so nonexistent keys are rejected by the TypeScript compiler."
+    },
+    {
+      "id": "go-bounded-backoff",
+      "language": "go",
+      "category": "retry-control",
+      "title": "Calculate saturating exponential retry delay",
+      "workspace": "fixtures/go-bounded-backoff/workspace",
+      "hidden_evaluation": "hidden/go-bounded-backoff",
+      "target_test": "test_target.go",
+      "regression_test": "test_regression.go",
+      "expected_changed_paths": [
+        "retry/backoff.go"
+      ],
+      "goal": "Implement Backoff(attempt int, base, maximum time.Duration) in retry/backoff.go. Attempts are 1-based; return zero for attempts below one or non-positive duration bounds. For valid positive durations return base doubled once for each additional attempt, capped at maximum. Detect the cap before multiplication so extremely large attempts cannot overflow time.Duration or require an unbounded number of iterations. Do not add dependencies."
+    },
+    {
+      "id": "go-header-lookup",
+      "language": "go",
+      "category": "http-headers",
+      "title": "Resolve headers case-insensitively and deterministically",
+      "workspace": "fixtures/go-header-lookup/workspace",
+      "hidden_evaluation": "hidden/go-header-lookup",
+      "target_test": "test_target.go",
+      "regression_test": "test_regression.go",
+      "expected_changed_paths": [
+        "headers/lookup.go"
+      ],
+      "goal": "Implement Lookup(headers map[string]string, name, fallback string) in headers/lookup.go. Match names using strings.EqualFold, return the original stored value unchanged, and return fallback for a nil map, blank lookup name, or no match. Because a Go map may contain multiple case variants, sort matching original keys lexicographically and return the value for the first key so the result is deterministic. Do not mutate the map or add dependencies."
+    },
+    {
+      "id": "rust-bounded-window",
+      "language": "rust",
+      "category": "safe-slicing",
+      "title": "Return a bounded borrowed slice without overflow",
+      "workspace": "fixtures/rust-bounded-window/workspace",
+      "hidden_evaluation": "hidden/rust-bounded-window",
+      "target_test": "test_target.rs",
+      "regression_test": "test_regression.rs",
+      "expected_changed_paths": [
+        "src/lib.rs"
+      ],
+      "goal": "Implement bounded_window<T>(items: &[T], start: usize, limit: usize) -> &[T] in src/lib.rs. Return at most limit items beginning at start, return an empty borrowed slice when start is at or beyond the input length or limit is zero, and clamp the end to the input length using overflow-safe arithmetic. Do not allocate, copy, or panic for usize::MAX inputs; returned references must remain tied to the input slice lifetime."
+    },
+    {
+      "id": "rust-ascii-u64",
+      "language": "rust",
+      "category": "input-validation",
+      "title": "Parse only unsigned ASCII decimal integers",
+      "workspace": "fixtures/rust-ascii-u64/workspace",
+      "hidden_evaluation": "hidden/rust-ascii-u64",
+      "target_test": "test_target.rs",
+      "regression_test": "test_regression.rs",
+      "expected_changed_paths": [
+        "src/lib.rs"
+      ],
+      "goal": "Implement parse_ascii_u64(value: &str) -> Option<u64> in src/lib.rs. Accept one or more ASCII digits only and return the parsed u64. Reject signs, whitespace, separators, Unicode digit characters, empty input, and values that overflow u64. Do not trim or normalize input and do not add dependencies."
+    },
+    {
+      "id": "javascript-safe-group-by",
+      "language": "javascript",
+      "category": "object-safety",
+      "title": "Group records without prototype-key hazards",
+      "workspace": "fixtures/javascript-safe-group-by/workspace",
+      "hidden_evaluation": "hidden/javascript-safe-group-by",
+      "target_test": "test_target.mjs",
+      "regression_test": "test_regression.mjs",
+      "expected_changed_paths": [
+        "src/group-by.mjs"
+      ],
+      "goal": "Implement groupBy(items, keySelector) in src/group-by.mjs. Require an array and callable selector; call the selector once per item with its original index and require a string key. Return a plain record with a null prototype, preserving item order in each group and supporting keys such as __proto__, constructor, and toString without prototype access or mutation. Do not mutate the input or add dependencies."
     }
   ]
 }
