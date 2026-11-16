@@ -104,6 +104,8 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
   const dims = payload.embeddings[0]?.length;
   const tokenCounts = payload.input_token_counts;
   const windowCounts = payload.window_counts;
+  const windowTokenCounts = payload.window_token_counts;
+  const windowNewTokenCounts = payload.window_new_token_counts;
   const effectiveWindowTokens = payload.effective_window_tokens;
   const overlapTokens = payload.window_overlap_tokens;
   if (!Number.isInteger(dims) || dims < 8 || dims > 4096
@@ -114,6 +116,15 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
     || tokenCounts.some(count => !Number.isSafeInteger(count) || count < 0)
     || !Array.isArray(windowCounts) || windowCounts.length !== texts.length
     || windowCounts.some(count => !Number.isSafeInteger(count) || count < 1)
+    || !Array.isArray(windowTokenCounts) || windowTokenCounts.length !== texts.length
+    || !Array.isArray(windowNewTokenCounts) || windowNewTokenCounts.length !== texts.length
+    || windowTokenCounts.some((counts, index) => !Array.isArray(counts)
+      || counts.length !== windowCounts[index]
+      || counts.some(count => !Number.isSafeInteger(count) || count < 0 || count > effectiveWindowTokens))
+    || windowNewTokenCounts.some((counts, index) => !Array.isArray(counts)
+      || counts.length !== windowCounts[index]
+      || counts.some(count => !Number.isSafeInteger(count) || count < 0)
+      || counts.reduce((sum, count) => sum + count, 0) !== tokenCounts[index])
     || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
     || !Number.isSafeInteger(overlapTokens) || overlapTokens < 0 || overlapTokens >= effectiveWindowTokens
     || payload.total_input_tokens !== tokenCounts.reduce((sum, count) => sum + count, 0)
@@ -125,6 +136,8 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
     embeddings: payload.embeddings.map(v => v.map(n => Number(Number(n).toFixed(5)))),
     tokenCounts,
     windowCounts,
+    windowTokenCounts,
+    windowNewTokenCounts,
     effectiveWindowTokens,
     overlapTokens,
     poolingStrategy: payload.pooling_strategy
