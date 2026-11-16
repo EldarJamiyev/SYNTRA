@@ -51,14 +51,20 @@ def process_peak_rss_bytes() -> int | None:
         return None
 
 
-def reset_device_peak_stats(device: Any, torch_module: Any) -> None:
-    """Reset CUDA allocator peaks; other backends are sampled as observed high-water."""
+def reset_device_peak_stats(device: Any, torch_module: Any) -> bool:
+    """Reset CUDA allocator peaks; return whether the requested measurement setup succeeded."""
     try:
         selected = torch_module.device(device)
-        if selected.type == "cuda" and torch_module.cuda.is_available():
+        if selected.type == "cuda":
+            if not torch_module.cuda.is_available():
+                return False
             torch_module.cuda.reset_peak_memory_stats(selected)
+            return True
+        if selected.type in {"cpu", "mps"}:
+            return True
     except (AttributeError, RuntimeError, TypeError, ValueError):
-        pass
+        return False
+    return False
 
 
 def device_memory_sample(device: Any, torch_module: Any) -> tuple[int | None, str]:
@@ -71,10 +77,10 @@ def device_memory_sample(device: Any, torch_module: Any) -> tuple[int | None, st
             mps = getattr(torch_module, "mps", None)
             sample = getattr(mps, "driver_allocated_memory", None)
             if callable(sample):
-                return int(sample()), "mps_observed_driver_high_water"
+                return int(sample()), "mps_driver_allocated_current"
             sample = getattr(mps, "current_allocated_memory", None)
             if callable(sample):
-                return int(sample()), "mps_observed_allocator_high_water"
+                return int(sample()), "mps_allocator_current"
             return None, "mps_unavailable"
         if selected.type == "cpu":
             return None, "cpu_not_applicable"
