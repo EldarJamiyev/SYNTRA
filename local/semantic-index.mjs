@@ -89,7 +89,6 @@ function splitOversizedChunk(chunk) {
     const second = {
       ...chunk,
       startLine: chunk.startLine + midpoint,
-      startColumn: 1,
       text: lines.slice(midpoint).join("\n")
     };
     return [first, second].filter(item => item.text.trim().length >= 1);
