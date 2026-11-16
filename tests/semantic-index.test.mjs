@@ -30,14 +30,27 @@ test("semantic retrieval accepts only the native SYNTRA checkpoint as its embedd
 });
 
 function fakeEmbeddings(url, options) {
-  assert.equal(url, "http://127.0.0.1:3002/model/embed");
-  assert.equal(options.redirect, "error", "native embedding requests must not follow redirects");
+  assert.equal(options.redirect, "error", "native tokenizer/embedding requests must not follow redirects");
   const body = JSON.parse(options.body);
-  assert.equal(body.device, "auto");
   assert.equal(body.max_length, 256);
+  if (url === "http://127.0.0.1:3002/model/tokenize") {
+    assert.ok(Array.isArray(body.texts));
+    return Promise.resolve(new Response(JSON.stringify({
+      checkpoint_identity: fakeEmbeddings.checkpointIdentity || "d".repeat(64),
+      token_counts: body.texts.map(text => Array.from(String(text)).length),
+      max_input_tokens: fakeEmbeddings.maxInputTokens || 256
+    }), { status: 200 }));
+  }
+  assert.equal(url, "http://127.0.0.1:3002/model/embed");
+  assert.equal(body.device, "auto");
   const input = body.texts;
+  const tokenCounts = input.map(text => Array.from(String(text)).length);
+  assert.ok(tokenCounts.every(count => count <= (fakeEmbeddings.maxInputTokens || 256)),
+    "the semantic index must only embed complete token-budgeted text");
   return Promise.resolve(new Response(JSON.stringify({
     checkpoint_identity: fakeEmbeddings.checkpointIdentity || "d".repeat(64),
+    input_token_counts: tokenCounts,
+    max_input_tokens: fakeEmbeddings.maxInputTokens || 256,
     embeddings: input.map(text => {
       const value = String(text).toLowerCase();
       return [value.includes("gateway") || value.includes("network") ? 1 : 0,
@@ -74,6 +87,57 @@ test("semantic index invalidates vectors when the native checkpoint changes", as
     assert.ok(stale.staleResults > 0);
   } finally {
     delete fakeEmbeddings.checkpointIdentity;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic indexing splits long source lines to exact tokenizer offsets before embedding", async () => {
+  const root = await makeWorkspace();
+  const originalLine = "const source = '" + "x".repeat(420) + " gateway configuration lives here " + "y".repeat(420) + "';";
+  try {
+    await fs.writeFile(path.join(root, "src", "long-line.mjs"), originalLine + "\n", "utf8");
+    fakeEmbeddings.checkpointIdentity = "f".repeat(64);
+    fakeEmbeddings.maxInputTokens = 128;
+    const options = { fetchImpl: fakeEmbeddings, model: "syntra-native" };
+    const built = await refreshWorkspaceSemanticIndex(root, options);
+    assert.equal(built.available, true);
+    assert.equal(built.maxInputTokens, 128);
+    assert.ok(built.splitForContextChunks > 0);
+
+    const result = await searchWorkspaceSemantic(root, "gateway configuration", 8, options);
+    const match = result.results.find(item => item.path === "src/long-line.mjs");
+    assert.ok(match, "the late part of the long source line must have its own embedding");
+    assert.ok(match.tokenCount <= 128);
+    assert.ok(Number.isInteger(match.startColumn));
+    assert.ok(Number.isInteger(match.endColumn));
+    assert.match(match.excerpt, /gateway configuration/);
+    const expected = Array.from(originalLine).slice(match.startColumn - 1, match.endColumn - 1).join("");
+    assert.equal(match.excerpt, expected, "retrieved source columns must match the exact embedded fragment");
+
+    const status = await getSemanticIndexStatus(root);
+    assert.equal(status.schemaVersion, 2);
+    assert.equal(status.maxInputTokens, 128);
+  } finally {
+    delete fakeEmbeddings.checkpointIdentity;
+    delete fakeEmbeddings.maxInputTokens;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("semantic query text is rejected instead of being silently clipped to model context", async () => {
+  const root = await makeWorkspace();
+  try {
+    fakeEmbeddings.checkpointIdentity = "a".repeat(64);
+    fakeEmbeddings.maxInputTokens = 32;
+    const options = { fetchImpl: fakeEmbeddings, model: "syntra-native" };
+    await refreshWorkspaceSemanticIndex(root, options);
+    await assert.rejects(
+      () => searchWorkspaceSemantic(root, "q".repeat(33), 5, options),
+      /requires 33 tokenizer tokens.*input was not truncated/
+    );
+  } finally {
+    delete fakeEmbeddings.checkpointIdentity;
+    delete fakeEmbeddings.maxInputTokens;
     await fs.rm(root, { recursive: true, force: true });
   }
 });
