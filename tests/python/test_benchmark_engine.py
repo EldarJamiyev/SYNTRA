@@ -636,14 +636,17 @@ class RawModelReportComparisonTests(unittest.TestCase):
 
 class RawBenchmarkComparisonCliTests(unittest.TestCase):
     @staticmethod
-    def _invoke(baseline: Path, candidate: Path):
+    def _invoke(baseline: Path, candidate: Path, output: Path | None = None):
+        command = [
+            sys.executable,
+            str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
+            "--baseline", str(baseline),
+            "--candidate", str(candidate),
+        ]
+        if output is not None:
+            command.extend(["--output", str(output)])
         return subprocess.run(
-            [
-                sys.executable,
-                str(REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py"),
-                "--baseline", str(baseline),
-                "--candidate", str(candidate),
-            ],
+            command,
             cwd=REPOSITORY_ROOT,
             capture_output=True,
             text=True,
@@ -738,6 +741,50 @@ class RawBenchmarkComparisonCliTests(unittest.TestCase):
                 linked = self._invoke(link_path, valid_path)
                 self.assertEqual(linked.returncode, 1)
                 self.assertIn("non-symlink", linked.stderr)
+
+    def test_comparison_cli_output_is_atomic_and_never_overwrites_an_existing_file(self):
+        hardware = RawModelReportComparisonTests._hardware()
+        baseline = RawModelReportComparisonTests._report(
+            run_id="cli-output-baseline",
+            checkpoint="a" * 64,
+            task_completion=False,
+            patch_correctness=False,
+            regression_prevention=None,
+            total_ms=100,
+            generation_ms=50,
+            generated_tokens=10,
+            hardware=hardware,
+        )
+        candidate = RawModelReportComparisonTests._report(
+            run_id="cli-output-candidate",
+            checkpoint="b" * 64,
+            task_completion=True,
+            patch_correctness=True,
+            regression_prevention=None,
+            total_ms=80,
+            generation_ms=40,
+            generated_tokens=20,
+            hardware=copy.deepcopy(hardware),
+        )
+        with tempfile.TemporaryDirectory(prefix="syntra-raw-cli-output-", dir=REPOSITORY_ROOT) as temp:
+            root = Path(temp)
+            baseline_path = root / "baseline.json"
+            candidate_path = root / "candidate.json"
+            output_path = root / "comparison.json"
+            baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+
+            first = self._invoke(baseline_path, candidate_path, output_path)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            original = output_path.read_bytes()
+            self.assertTrue(original.endswith(b"\\n"))
+            parsed = json.loads(original)
+            self.assertEqual(parsed["comparison_track"], "raw-native-model")
+
+            second = self._invoke(baseline_path, candidate_path, output_path)
+            self.assertEqual(second.returncode, 1)
+            self.assertIn("already exists", second.stderr)
+            self.assertEqual(output_path.read_bytes(), original)
 
     def test_comparison_cli_help_does_not_require_report_paths(self):
         result = subprocess.run(
