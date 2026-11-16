@@ -231,6 +231,13 @@ def _legacy_scheduled_learning_rate(base_learning_rate: float, global_step: int)
 
 
 def choose_device(requested: str = "auto") -> torch.device:
+    if not isinstance(requested, str) or not requested.strip():
+        raise ValueError("device must be auto, cpu, cuda, cuda:N, or mps.")
+    requested = requested.strip().lower()
+    if requested not in {"auto", "cpu", "cuda", "mps"} and not (
+        requested.startswith("cuda:") and requested[5:].isdecimal()
+    ):
+        raise ValueError("device must be auto, cpu, cuda, cuda:N, or mps.")
     if requested == "auto":
         if torch.cuda.is_available():
             return torch.device("cuda")
@@ -484,14 +491,26 @@ def train(
     resume: bool = False,
     callback: ProgressCallback | None = None,
 ) -> dict:
-    if steps < 1 or steps > 1_000_000:
-        raise ValueError("steps must be between 1 and 1,000,000.")
-    if batch_size < 1 or batch_size > 128:
-        raise ValueError("batch_size must be between 1 and 128.")
-    if not 1e-6 <= learning_rate <= 1e-2:
-        raise ValueError("learning_rate must be between 1e-6 and 1e-2.")
-    if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
-        raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
+    if type(steps) is not int or not 1 <= steps <= 1_000_000:
+        raise ValueError("steps must be an integer between 1 and 1,000,000.")
+    if type(batch_size) is not int or not 1 <= batch_size <= 128:
+        raise ValueError("batch_size must be an integer between 1 and 128.")
+    if isinstance(learning_rate, bool) or not isinstance(learning_rate, (int, float)):
+        raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.")
+    try:
+        learning_rate = float(learning_rate)
+    except (OverflowError, TypeError, ValueError):
+        raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.") from None
+    if not math.isfinite(learning_rate) or not 1e-6 <= learning_rate <= 1e-2:
+        raise ValueError("learning_rate must be a finite number between 1e-6 and 1e-2.")
+    if type(max_tokens) is not int or not 1024 <= max_tokens <= MAX_CORPUS_TOKENS:
+        raise ValueError(f"max_tokens must be an integer between 1,024 and {MAX_CORPUS_TOKENS:,}.")
+    if type(seed) is not int or not -(1 << 63) <= seed <= (1 << 64) - 1:
+        raise ValueError("seed must be a signed/unsigned 64-bit integer accepted by PyTorch.")
+    if type(resume) is not bool:
+        raise ValueError("resume must be a boolean.")
+    if not isinstance(device_name, str) or not device_name.strip():
+        raise ValueError("device_name must be a non-empty supported device name.")
     requested_config = config
     effective_scheduler = SOURCE_TRAINING_SCHEDULER
     effective_minimum_learning_rate = min(
