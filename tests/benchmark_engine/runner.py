@@ -282,6 +282,7 @@ def collect_hardware_identity(requested_device: str, resolved_device: Any, torch
     }
     identity_complete = bool(
         host_record["system"]
+        and host_record["release"]
         and host_record["machine"]
         and host_record["cpu_model"]
         and logical_cores
@@ -1581,7 +1582,7 @@ def validate_raw_benchmark_report(report: Any) -> dict[str, Any]:
             elif device["type"] == "cuda":
                 runtime_version = pytorch.get("rocm_runtime_version") if device.get("vendor") == "rocm" else pytorch.get("cuda_runtime_version")
                 if not all((
-                    positive_integer(device.get("index")),
+                    type(device.get("index")) is int and device.get("index") >= 0,
                     positive_integer(device.get("total_memory_bytes")),
                     nonempty_text(device.get("driver_version")),
                     nonempty_text(runtime_version),
