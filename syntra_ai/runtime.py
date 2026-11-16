@@ -43,6 +43,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "data" / "checkpoints" / "syntra.pt"
 MAX_EMBEDDING_TEXT_BYTES = 100_000
 MAX_EMBEDDING_INPUT_TOKENS = 131_072
+MAX_EMBEDDING_WINDOWS = 2048
 DEFAULT_EMBEDDING_WINDOW_TOKENS = 256
 MAX_EMBEDDING_WINDOW_TOKENS = 4096
 EMBEDDING_WINDOW_OVERLAP_TOKENS = 32
@@ -581,6 +582,19 @@ def embed_texts(
 
     overlap = min(EMBEDDING_WINDOW_OVERLAP_TOKENS, max(0, window_limit // 8))
     stride = max(1, window_limit - overlap)
+    planned_window_counts = [
+        max(1, (token_count + stride - 1) // stride)
+        for token_count in input_token_counts
+    ]
+    planned_windows = sum(planned_window_counts)
+    if planned_windows > MAX_EMBEDDING_WINDOWS:
+        raise ValueError(
+            "Embedding request requires "
+            + str(planned_windows)
+            + " context windows; the bounded request limit is "
+            + str(MAX_EMBEDDING_WINDOWS)
+            + ". Reduce the text size or use a checkpoint with a larger context window."
+        )
     vectors: list[list[float]] = []
     window_counts: list[int] = []
     window_token_counts: list[list[int]] = []
@@ -621,6 +635,8 @@ def embed_texts(
         if not torch.isfinite(pooled).all() or torch.linalg.vector_norm(pooled).item() <= 0:
             raise RuntimeError("The native model produced an invalid pooled semantic embedding.")
         vectors.append([round(float(value), 5) for value in pooled.cpu().tolist()])
+        if len(windows) != planned_window_counts[len(window_counts)]:
+            raise RuntimeError("The native embedding window plan changed after preflight.")
         window_counts.append(len(windows))
         window_token_counts.append([len(content) for _, content, _, _ in windows])
         window_new_token_counts.append([new_tokens for _, _, new_tokens, _ in windows])
@@ -644,6 +660,7 @@ def embed_texts(
         "window_new_token_counts": window_new_token_counts,
         "total_input_tokens": total_input_tokens,
         "total_windows": total_windows,
+        "max_windows_per_request": MAX_EMBEDDING_WINDOWS,
         "effective_window_tokens": window_limit,
         "window_overlap_tokens": overlap,
         "pooling_strategy": EMBEDDING_POOLING_STRATEGY,
