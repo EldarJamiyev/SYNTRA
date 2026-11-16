@@ -178,6 +178,92 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
   }
 });
 
+test("project-memory schema-v1 clipped vectors are recomputed under the full-text embedding strategy", async () => {
+  const root = await createWorkspace();
+  try {
+    await addWorkspaceMemory(root, {
+      title: "Gateway resolution",
+      content: "Resolve the gateway through the configured network route and preserve the complete interface context.",
+      category: "convention",
+      tags: ["network", "gateway"]
+    });
+    let requests = 0;
+    const checkpointIdentity = "d".repeat(64);
+    const fetchImpl = async (_url, options) => {
+      requests += 1;
+      const body = JSON.parse(options.body);
+      const tokenCounts = body.texts.map(input => Buffer.byteLength(input, "utf8"));
+      const windowCounts = tokenCounts.map(count => count === 0 ? 1 : Math.ceil(count / 224));
+      const windowTokenCounts = tokenCounts.map(count => {
+        const lengths = [];
+        if (count === 0) return [0];
+        for (let start = 0; start < count; start += 224) lengths.push(Math.min(256, count - start));
+        return lengths;
+      });
+      const windowNewTokenCounts = tokenCounts.map(count => {
+        const values = [];
+        if (count === 0) return [0];
+        for (let start = 0; start < count; start += 224) {
+          const end = Math.min(start + 256, count);
+          values.push(start === 0 ? end - start : end - start - 32);
+        }
+        return values;
+      });
+      return new Response(JSON.stringify({
+        checkpoint_identity: checkpointIdentity,
+        embeddings: body.texts.map(() => [1, 0, 0, 0, 0, 0, 0, 0]),
+        input_token_counts: tokenCounts,
+        window_counts: windowCounts,
+        window_token_counts: windowTokenCounts,
+        window_new_token_counts: windowNewTokenCounts,
+        total_input_tokens: tokenCounts.reduce((sum, count) => sum + count, 0),
+        total_windows: windowCounts.reduce((sum, count) => sum + count, 0),
+        effective_window_tokens: 256,
+        max_windows_per_request: 2048,
+        window_overlap_tokens: 32,
+        pooling_strategy: "full-text-overlapping-window-pool-v1",
+        truncated: false
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+
+    const initial = await searchWorkspaceMemory(root, "gateway route", 6, {
+      embedModel: "syntra-native",
+      fetchImpl
+    });
+    assert.equal(initial.retrievalMode, "hybrid_semantic");
+    assert.equal(requests, 2);
+
+    const cachePath = path.join(root, ".syntra", "project-memory-embeddings-v1.json");
+    const legacy = JSON.parse(await fs.readFile(cachePath, "utf8"));
+    legacy.schemaVersion = 1;
+    legacy.model = "syntra-native:" + checkpointIdentity;
+    for (const entry of legacy.entries) {
+      delete entry.tokenCount;
+      delete entry.windowCount;
+      delete entry.effectiveWindowTokens;
+    }
+    await fs.writeFile(cachePath, JSON.stringify(legacy), "utf8");
+
+    const rebuilt = await searchWorkspaceMemory(root, "gateway route", 6, {
+      embedModel: "syntra-native",
+      fetchImpl
+    });
+    assert.equal(rebuilt.retrievalMode, "hybrid_semantic");
+    assert.equal(requests, 4, "the query and stale note vector must both be re-embedded");
+    assert.equal(rebuilt.embeddingStrategy, "full-text-overlapping-window-pool-v1");
+    const current = JSON.parse(await fs.readFile(cachePath, "utf8"));
+    assert.equal(current.schemaVersion, 2);
+    assert.equal(current.model, "syntra-native:" + checkpointIdentity + ":full-text-overlapping-window-pool-v1");
+    assert.ok(current.entries.every(entry =>
+      Number.isSafeInteger(entry.tokenCount)
+      && Number.isSafeInteger(entry.windowCount)
+      && Number.isSafeInteger(entry.effectiveWindowTokens)
+    ));
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("semantic project-memory search falls back to BM25 when the local embedding model is unavailable", async () => {
   const root = await createWorkspace();
   try {
