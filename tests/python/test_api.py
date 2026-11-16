@@ -80,6 +80,56 @@ class LocalApiSmokeTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(tokenized["token_count"], len("function add(a, b) { return a + b; }".encode("utf-8")))
                 self.assertEqual(tokenized["context_window_tokens"], 32)
+                self.assertEqual(tokenized["max_input_tokens"], 31)
+                self.assertRegex(tokenized["checkpoint_identity"], r"^[a-f0-9]{64}$")
+
+                connection.request(
+                    "POST",
+                    "/model/tokenize",
+                    body=json.dumps({
+                        "texts": ["a" * 31, "b" * 32],
+                        "max_length": 31,
+                    }),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                token_batch = json.loads(response.read())
+                self.assertEqual(response.status, 200)
+                self.assertEqual(token_batch["token_counts"], [31, 32])
+                self.assertEqual(token_batch["max_input_tokens"], 31)
+
+                connection.request(
+                    "POST",
+                    "/model/embed",
+                    body=json.dumps({
+                        "texts": ["z" * 32],
+                        "max_length": 31,
+                        "device": "cpu",
+                    }),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                oversized_embedding = json.loads(response.read())
+                self.assertEqual(response.status, 400)
+                self.assertIn("requires 32 tokenizer tokens", oversized_embedding["error"])
+                self.assertIn("input was not truncated", oversized_embedding["error"])
+
+                connection.request(
+                    "POST",
+                    "/model/embed",
+                    body=json.dumps({
+                        "texts": ["z" * 31],
+                        "max_length": 31,
+                        "device": "cpu",
+                    }),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                embedding = json.loads(response.read())
+                self.assertEqual(response.status, 200)
+                self.assertEqual(embedding["input_token_counts"], [31])
+                self.assertEqual(embedding["max_input_tokens"], 31)
+                self.assertEqual(len(embedding["embeddings"]), 1)
 
                 connection.request(
                     "POST",
