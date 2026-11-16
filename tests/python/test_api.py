@@ -286,7 +286,7 @@ class FineTuningApiResumeContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="syntra-finetune-api-") as temp:
             resolved_dataset = Path(temp) / "canonical-instructions.jsonl"
-            resolved_dataset.write_text('{"prompt":"p","completion":"c"}\\n', encoding="utf-8")
+            resolved_dataset.write_text('{"prompt":"p","completion":"c"}\n', encoding="utf-8")
             checkpoint = Path(temp) / "native-checkpoint.pt"
             checkpoint.write_bytes(b"checkpoint")
 
@@ -330,7 +330,7 @@ class FineTuningApiValidationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="syntra-finetuning-request-") as temp:
             dataset = Path(temp) / "instructions.jsonl"
-            dataset.write_text('{"prompt":"p","completion":"c"}\\n', encoding="utf-8")
+            dataset.write_text('{"prompt":"p","completion":"c"}\n', encoding="utf-8")
             for overrides, expected in invalid_requests:
                 with self.subTest(overrides=overrides):
                     with patch.object(server, "resolve_instruction_dataset", return_value=dataset):
