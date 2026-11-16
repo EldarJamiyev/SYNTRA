@@ -218,7 +218,7 @@ npm run brain:milestone4 -- --config configs/training/local_gpu_scale.json --dev
 
 ### Verified checkpoint promotion and rollback
 
-A benchmark report is selected explicitly. The promotion tool authenticates the report's exact staged checkpoint by SHA-256, checks the adjacent read-only snapshot manifest, requires the entire current 14-task suite with valid hidden baselines, and loads the candidate through SYNTRA's actual runtime before it can replace the active checkpoint.
+A benchmark report is selected explicitly. The promotion tool authenticates the report's exact staged checkpoint by SHA-256, checks the adjacent read-only snapshot manifest, requires the entire current 21-task suite with valid hidden baselines, and loads the candidate through SYNTRA's actual runtime before it can replace the active checkpoint.
 
 ```powershell
 npm run brain:promote -- --report "data/benchmarks/<profile>/<run-id>/evaluations/<checkpoint-report>.json" --dry-run
