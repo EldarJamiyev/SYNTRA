@@ -292,8 +292,11 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     redirect: "error",
     signal: AbortSignal.timeout(120000)
   });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(String(payload.error || "SYNTRA native embedding service returned HTTP " + response.status + "."));
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(String(payload?.error || "SYNTRA native embedding service returned HTTP " + response.status + "."));
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("SYNTRA native embedding service returned an invalid response object.");
+  }
   if (!/^[a-f0-9]{64}$/i.test(payload.checkpoint_identity || "")) {
     throw new Error("SYNTRA native runtime did not identify the checkpoint that generated these embeddings.");
   }
@@ -306,6 +309,7 @@ async function requestLocalEmbeddings(fetchImpl, input) {
   const windowTokenCounts = payload.window_token_counts;
   const windowNewTokenCounts = payload.window_new_token_counts;
   const effectiveWindowTokens = payload.effective_window_tokens;
+  const overlapTokens = payload.window_overlap_tokens;
   const maxWindowsPerRequest = payload.max_windows_per_request;
   if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
     || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))
@@ -322,9 +326,11 @@ async function requestLocalEmbeddings(fetchImpl, input) {
       || counts.some(count => !Number.isSafeInteger(count) || count < 0 || count > effectiveWindowTokens))
     || windowNewTokenCounts.some((counts, index) => !Array.isArray(counts)
       || counts.length !== windowCounts[index]
-      || counts.some(count => !Number.isSafeInteger(count) || count < 0)
+      || counts.some((count, windowIndex) => !Number.isSafeInteger(count)
+        || count < 0 || count > windowTokenCounts[index][windowIndex])
       || counts.reduce((sum, count) => sum + count, 0) !== tokenCounts[index])
     || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
+    || !Number.isSafeInteger(overlapTokens) || overlapTokens < 0 || overlapTokens >= effectiveWindowTokens
     || payload.total_input_tokens !== tokenCounts.reduce((sum, count) => sum + count, 0)
     || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)
     || !Number.isSafeInteger(maxWindowsPerRequest) || maxWindowsPerRequest < 1
