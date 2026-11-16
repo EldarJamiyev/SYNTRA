@@ -9,6 +9,7 @@ from pathlib import Path
 import stat
 import sys
 from typing import Any
+import uuid
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 TESTS_ROOT = REPOSITORY_ROOT / "tests"
@@ -63,6 +64,46 @@ def read_report(path_value: str) -> dict[str, Any]:
             os.close(descriptor)
 
 
+def write_comparison(path_value: str, comparison: dict[str, Any]) -> Path:
+    requested = Path(path_value).expanduser()
+    if not requested.is_absolute():
+        requested = REPOSITORY_ROOT / requested
+    requested.parent.mkdir(parents=True, exist_ok=True)
+    parent = requested.parent.resolve(strict=True)
+    try:
+        parent.relative_to(REPOSITORY_ROOT.resolve(strict=True))
+    except ValueError:
+        raise runner.BenchmarkError("Comparison output must remain inside the SYNTRA repository.") from None
+    target = parent / requested.name
+    if not requested.name or requested.name in {".", ".."}:
+        raise runner.BenchmarkError("Comparison output must name a file.")
+    if target.is_symlink() or target.exists():
+        raise runner.BenchmarkError("Comparison output already exists or is a symbolic link; choose a new path.")
+    encoded = (json.dumps(comparison, ensure_ascii=False, indent=2, allow_nan=False) + "\\n").encode("utf-8")
+    if len(encoded) > MAX_INPUT_BYTES:
+        raise runner.BenchmarkError("Comparison output exceeds the 10 MiB limit.")
+    temporary = parent / ("." + target.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # A same-directory hard-link creates the final name atomically and fails
+        # when another process already owns it; unlike replace(), it cannot clobber.
+        os.link(temporary, target)
+        return target
+    except FileExistsError:
+        raise runner.BenchmarkError("Comparison output was created concurrently; choose a new path.") from None
+    except OSError as exc:
+        raise runner.BenchmarkError("Could not create comparison output safely: " + str(exc)) from None
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare two raw SYNTRA PyTorch benchmark reports without hiding protocol, denominator, or hardware differences."
@@ -103,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             for warning in comparison["warnings"]:
                 print("- " + warning)
         if args.output:
-            output = runner.write_report(Path(args.output), comparison)
+            output = write_comparison(args.output, comparison)
             print("")
             print("Comparison JSON: " + str(output))
         return 0
