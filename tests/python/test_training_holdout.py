@@ -357,6 +357,43 @@ class NativeTrainingHoldoutIntegrationTests(unittest.TestCase):
 
 
 
+
+class NativeDeviceSelectionTests(unittest.TestCase):
+    @unittest.skipIf(torch is None, "Install PyTorch to run native device selection tests.")
+    def test_explicit_cuda_index_is_checked_against_available_device_count(self):
+        from unittest.mock import patch
+        from syntra_ai.training import choose_device
+
+        with patch("syntra_ai.training.torch.cuda.is_available", return_value=True):
+            with patch("syntra_ai.training.torch.cuda.device_count", return_value=2):
+                selected = choose_device("cuda:1")
+                self.assertEqual(selected.type, "cuda")
+                self.assertEqual(selected.index, 1)
+                with self.assertRaisesRegex(ValueError, "outside the 2 available device"):
+                    choose_device("cuda:2")
+
+    @unittest.skipIf(torch is None, "Install PyTorch to run native device selection tests.")
+    def test_unindexed_cuda_uses_the_default_device_without_an_index_probe(self):
+        from unittest.mock import patch
+        from syntra_ai.training import choose_device
+
+        with patch("syntra_ai.training.torch.cuda.is_available", return_value=True):
+            with patch("syntra_ai.training.torch.cuda.device_count") as count:
+                selected = choose_device("cuda")
+        self.assertEqual(selected.type, "cuda")
+        self.assertIsNone(selected.index)
+        count.assert_not_called()
+
+    @unittest.skipIf(torch is None, "Install PyTorch to run native device selection tests.")
+    def test_cuda_index_is_rejected_when_cuda_is_unavailable(self):
+        from unittest.mock import patch
+        from syntra_ai.training import choose_device
+
+        with patch("syntra_ai.training.torch.cuda.is_available", return_value=False):
+            with self.assertRaisesRegex(ValueError, "cannot find a CUDA device"):
+                choose_device("cuda:0")
+
+
 class SourceTrainingArgumentValidationTests(unittest.TestCase):
     def test_invalid_training_arguments_are_rejected_before_workspace_or_device_access(self):
         from syntra_ai.training import train
