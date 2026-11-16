@@ -123,6 +123,12 @@ test("semantic indexing splits long source lines to exact tokenizer offsets befo
     assert.equal(built.maxInputTokens, 128);
     assert.ok(built.splitForContextChunks > 0);
 
+    const reused = await refreshWorkspaceSemanticIndex(root, options);
+    assert.equal(reused.reusedChunks, built.chunkCount);
+    assert.equal(reused.splitForContextChunks, 0);
+    assert.equal(reused.maxInputTokens, 128,
+      "a fully reused index must retain the selected checkpoint's actual context limit");
+
     const result = await searchWorkspaceSemantic(root, "gateway configuration", 8, options);
     const match = result.results.find(item => item.path === "src/long-line.mjs");
     assert.ok(match, "the late part of the long source line must have its own embedding");
