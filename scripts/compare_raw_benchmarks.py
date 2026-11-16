@@ -79,7 +79,7 @@ def write_comparison(path_value: str, comparison: dict[str, Any]) -> Path:
         raise runner.BenchmarkError("Comparison output must name a file.")
     if target.is_symlink() or target.exists():
         raise runner.BenchmarkError("Comparison output already exists or is a symbolic link; choose a new path.")
-    encoded = (json.dumps(comparison, ensure_ascii=False, indent=2, allow_nan=False) + "\\n").encode("utf-8")
+    encoded = (json.dumps(comparison, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
     if len(encoded) > MAX_INPUT_BYTES:
         raise runner.BenchmarkError("Comparison output exceeds the 10 MiB limit.")
     temporary = parent / ("." + target.name + "." + uuid.uuid4().hex + ".tmp")
