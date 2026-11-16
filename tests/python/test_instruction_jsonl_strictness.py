@@ -6,7 +6,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from syntra_ai.instruction import audit_instruction_dataset, load_instruction_examples
+from syntra_ai.instruction import (
+    MAX_INSTRUCTION_JSON_DEPTH,
+    audit_instruction_dataset,
+    load_instruction_examples,
+ )
 from syntra_ai.tokenizer import ByteBPETokenizer
 
 
@@ -62,6 +66,26 @@ class InstructionJsonlStrictnessTests(unittest.TestCase):
             line = '{"prompt":"task","completion":"answer","metadata":' + nested + "}"
             with self.assertRaisesRegex(ValueError, r"Invalid JSON on line 1:"):
                 self._load(root, line)
+
+    def test_json_depth_limit_accepts_a_record_at_the_exact_boundary(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-jsonl-depth-boundary-") as temp:
+            root = Path(temp)
+            nested = "[" * (MAX_INSTRUCTION_JSON_DEPTH - 1) + "0" + "]" * (MAX_INSTRUCTION_JSON_DEPTH - 1)
+            line = '{"prompt":"task","completion":"answer","metadata":' + nested + "}"
+            examples = self._load(root, line)
+            self.assertTrue(examples)
+
+    def test_bracket_characters_inside_json_strings_do_not_consume_nesting_budget(self):
+        with tempfile.TemporaryDirectory(prefix="syntra-jsonl-depth-string-") as temp:
+            root = Path(temp)
+            metadata = "[" * (MAX_INSTRUCTION_JSON_DEPTH + 20) + "]" * (MAX_INSTRUCTION_JSON_DEPTH + 20)
+            line = json.dumps({
+                "prompt": "task",
+                "completion": "answer",
+                "metadata": {"literal": metadata},
+            })
+            examples = self._load(root, line)
+            self.assertTrue(examples)
 
     def test_valid_nested_metadata_and_optional_training_groups_remain_supported(self):
         with tempfile.TemporaryDirectory(prefix="syntra-jsonl-valid-nested-") as temp:
