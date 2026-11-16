@@ -133,6 +133,23 @@ class LocalApiSmokeTests(unittest.TestCase):
                 connection.request(
                     "POST",
                     "/model/train",
+                    body=json.dumps({"root": temp, "steps": True}),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                invalid_training = json.loads(response.read())
+                self.assertEqual(response.status, 400)
+                self.assertIn("steps must be an integer", invalid_training["error"])
+
+                connection.request("GET", "/model/train/status")
+                response = connection.getresponse()
+                training_status = json.loads(response.read())
+                self.assertEqual(response.status, 200)
+                self.assertEqual(training_status["status"], "idle")
+
+                connection.request(
+                    "POST",
+                    "/model/train",
                     body=json.dumps({"root": temp}),
                     headers={
                         "Content-Type": "application/json",
@@ -174,6 +191,94 @@ class NativeApiPathBoundaryTests(unittest.TestCase):
                 os.environ["SYNTRA_ALLOWED_CORPUS_ROOTS"] = previous
 
 
+
+class TrainingApiRequestValidationTests(unittest.TestCase):
+    def test_invalid_source_training_parameters_never_create_a_worker(self):
+        from unittest.mock import patch
+        from syntra_ai import server
+
+        invalid_requests = [
+            ({"steps": True}, "steps must be an integer"),
+            ({"steps": "2"}, "steps must be an integer"),
+            ({"batch_size": 129}, "batch_size must be an integer"),
+            ({"learning_rate": float("nan")}, "learning_rate must be a finite"),
+            ({"learning_rate": 10**1000}, "learning_rate must be a finite"),
+            ({"max_tokens": 10}, "max_tokens must be an integer"),
+            ({"seed": 1.5}, "seed must be a signed/unsigned"),
+            ({"resume": "false"}, "resume must be a boolean"),
+            ({"device": "meta"}, "device must be auto"),
+            ({"steps": 1, "unexpected": True}, "unsupported field"),
+            ({"config": {"seq_len": 32, "seq_lne": 32}}, "unsupported field"),
+            ({"config": {"block_size": 32, "seq_len": 32}}, "either block_size or seq_len"),
+            ({"config": {"seq_len": 16385}}, "seq_len must be between"),
+        ]
+
+        with tempfile.TemporaryDirectory(prefix="syntra-training-request-") as temp:
+            for overrides, expected in invalid_requests:
+                with self.subTest(overrides=overrides):
+                    with patch.object(server, "resolve_corpus_root", return_value=Path(temp)):
+                        with patch.object(server, "_worker", None):
+                            with patch.object(server, "Thread") as worker:
+                                with self.assertRaisesRegex(ValueError, expected):
+                                    server.start_training({"root": temp, **overrides})
+                                worker.assert_not_called()
+
+    def test_source_training_request_is_normalized_before_worker_creation(self):
+        from unittest.mock import patch
+        from syntra_ai import server
+
+        with tempfile.TemporaryDirectory(prefix="syntra-training-request-valid-") as temp:
+            config = {
+                "vocab_size": 258,
+                "seq_len": 32,
+                "n_layer": 1,
+                "n_head": 2,
+                "n_embd": 32,
+                "dropout": 0.0,
+            }
+            with patch.object(server, "resolve_corpus_root", return_value=Path(temp)):
+                with patch.object(server, "_worker", None):
+                    with patch.object(server, "_job", {"status": "idle"}):
+                        with patch.object(server, "Thread") as worker:
+                            started = server.start_training({
+                                "root": temp,
+                                "steps": 2,
+                                "batch_size": 1,
+                                "config": config,
+                                "learning_rate": 1e-4,
+                                "max_tokens": 1024,
+                                "device": "cpu",
+                                "seed": 17,
+                                "resume": False,
+                            })
+                            worker_body = worker.call_args.kwargs["args"][0]
+
+            self.assertEqual(started["status"], "starting")
+            self.assertEqual(worker_body["root"], str(Path(temp)))
+            self.assertEqual(worker_body["steps"], 2)
+            self.assertEqual(worker_body["batch_size"], 1)
+            self.assertEqual(worker_body["config"]["seq_len"], 32)
+            self.assertEqual(worker_body["learning_rate"], 1e-4)
+            self.assertEqual(worker_body["max_tokens"], 1024)
+            self.assertEqual(worker_body["device"], "cpu")
+            self.assertEqual(worker_body["seed"], 17)
+            self.assertIs(worker_body["resume"], False)
+
+    def test_source_training_resume_requires_an_existing_checkpoint(self):
+        from unittest.mock import patch
+        from syntra_ai import server
+
+        with tempfile.TemporaryDirectory(prefix="syntra-training-resume-api-") as temp:
+            checkpoint = Path(temp) / "missing-checkpoint.pt"
+            with patch.object(server, "resolve_corpus_root", return_value=Path(temp)):
+                with patch.object(server, "_default_checkpoint", return_value=str(checkpoint)):
+                    with patch.object(server, "_worker", None):
+                        with patch.object(server, "Thread") as worker:
+                            with self.assertRaisesRegex(FileNotFoundError, "checkpoint file does not exist"):
+                                server.start_training({"root": temp, "resume": True})
+                            worker.assert_not_called()
+
+
 class FineTuningApiResumeContractTests(unittest.TestCase):
     def test_resume_is_boolean_and_worker_receives_resolved_dataset_path(self):
         from unittest.mock import patch
@@ -181,29 +286,59 @@ class FineTuningApiResumeContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="syntra-finetune-api-") as temp:
             resolved_dataset = Path(temp) / "canonical-instructions.jsonl"
-            resolved_dataset.write_text('{"prompt":"p","completion":"c"}\n', encoding="utf-8")
+            resolved_dataset.write_text('{"prompt":"p","completion":"c"}\\n', encoding="utf-8")
+            checkpoint = Path(temp) / "native-checkpoint.pt"
+            checkpoint.write_bytes(b"checkpoint")
 
-            with patch.object(server, "resolve_instruction_dataset", return_value=resolved_dataset):
-                with patch.object(server, "_worker", None):
-                    with self.assertRaisesRegex(ValueError, "resume must be a boolean"):
-                        server.start_finetuning({
-                            "dataset": str(resolved_dataset),
-                            "resume": "true",
-                        })
+            with patch.object(server, "_default_checkpoint", return_value=str(checkpoint)):
+                with patch.object(server, "resolve_instruction_dataset", return_value=resolved_dataset):
+                    with patch.object(server, "_worker", None):
+                        with self.assertRaisesRegex(ValueError, "resume must be a boolean"):
+                            server.start_finetuning({
+                                "dataset": str(resolved_dataset),
+                                "resume": "true",
+                            })
 
-                with patch.object(server, "_worker", None):
-                    with patch.object(server, "Thread") as worker:
-                        started = server.start_finetuning({
-                            "dataset": "untrusted-input-path.jsonl",
-                            "resume": True,
-                            "gradient_accumulation_steps": 2,
-                        })
-                        worker_body = worker.call_args.kwargs["args"][0]
+                    with patch.object(server, "_worker", None):
+                        with patch.object(server, "Thread") as worker:
+                            started = server.start_finetuning({
+                                "dataset": "untrusted-input-path.jsonl",
+                                "resume": True,
+                                "gradient_accumulation_steps": 2,
+                            })
+                            worker_body = worker.call_args.kwargs["args"][0]
 
             self.assertEqual(started["status"], "starting")
             self.assertEqual(worker_body["dataset"], str(resolved_dataset))
             self.assertTrue(worker_body["resume"])
             self.assertEqual(worker_body["gradient_accumulation_steps"], 2)
+
+class FineTuningApiValidationTests(unittest.TestCase):
+    def test_invalid_finetuning_parameters_never_create_a_worker(self):
+        from unittest.mock import patch
+        from syntra_ai import server
+
+        invalid_requests = [
+            ({"steps": True}, "steps must be an integer"),
+            ({"batch_size": 0}, "batch_size must be an integer"),
+            ({"gradient_accumulation_steps": 129}, "gradient_accumulation_steps must be an integer"),
+            ({"learning_rate": float("inf")}, "learning_rate must be a finite"),
+            ({"resume": "true"}, "resume must be a boolean"),
+            ({"device": "meta"}, "device must be auto"),
+            ({"unrecognized": 1}, "unsupported field"),
+        ]
+
+        with tempfile.TemporaryDirectory(prefix="syntra-finetuning-request-") as temp:
+            dataset = Path(temp) / "instructions.jsonl"
+            dataset.write_text('{"prompt":"p","completion":"c"}\\n', encoding="utf-8")
+            for overrides, expected in invalid_requests:
+                with self.subTest(overrides=overrides):
+                    with patch.object(server, "resolve_instruction_dataset", return_value=dataset):
+                        with patch.object(server, "_worker", None):
+                            with patch.object(server, "Thread") as worker:
+                                with self.assertRaisesRegex(ValueError, expected):
+                                    server.start_finetuning({"dataset": str(dataset), **overrides})
+                                worker.assert_not_called()
 
 
 class FineTuningCliResumeContractTests(unittest.TestCase):
