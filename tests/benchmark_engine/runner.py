@@ -1944,6 +1944,11 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     if args.isolation == "host" and not args.allow_host_execution:
         raise BenchmarkError("Host execution requires the explicit --allow-host-execution acknowledgement.")
     from syntra_ai import runtime
+    from syntra_ai.hardware_telemetry import (
+        device_memory_sample,
+        process_peak_rss_bytes,
+        reset_device_peak_stats,
+    )
     checkpoint = (Path(args.checkpoint).expanduser() if args.checkpoint else runtime.checkpoint_path()).resolve(strict=True)
     checkpoint_evidence = load_checkpoint_evidence(checkpoint)
     try:
@@ -1970,6 +1975,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
     initial_identity = runtime._checkpoint_identity(checkpoint)
     if initial_identity is None:
         raise BenchmarkError("Native runtime could not establish checkpoint identity.")
+    device_peak_reset_succeeded = reset_device_peak_stats(resolved_device, runtime.torch)
     run_id, started_at, results = "raw-model-" + uuid.uuid4().hex, _now(), []
     for task in selected:
         print("[" + task["id"] + "] Evaluating the actual local SYNTRA checkpoint...")
@@ -1994,6 +2000,31 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
         raise BenchmarkError("Raw-model evaluation inputs changed during the benchmark; the run is invalid.")
     summary = summarize(results)
     divergence = assess_loss_intelligence_divergence(summary, checkpoint_evidence, args.low_loss_threshold)
+    process_peak = process_peak_rss_bytes()
+    process_peak_method = (
+        "windows_peak_working_set_bytes" if os.name == "nt"
+        else "posix_getrusage_peak_rss_bytes"
+    ) if process_peak is not None else "unavailable"
+    if resolved_device.type == "cuda" and not device_peak_reset_succeeded:
+        device_memory_bytes, device_memory_method = None, "cuda_peak_reset_failed"
+    else:
+        device_memory_bytes, device_memory_method = device_memory_sample(resolved_device, runtime.torch)
+    if device_memory_method == "cuda_peak_allocated":
+        device_memory_scope = "suite_peak_since_reset_before_first_task"
+    elif device_memory_method in {"mps_driver_allocated_current", "mps_allocator_current"}:
+        device_memory_scope = "post_suite_current_sample_not_peak"
+    elif device_memory_method == "cpu_not_applicable":
+        device_memory_scope = "not_applicable"
+    else:
+        device_memory_scope = "unavailable"
+    memory_evidence = {
+        "process_peak_rss_bytes": process_peak,
+        "process_peak_rss_method": process_peak_method,
+        "process_peak_rss_scope": "process_lifetime_including_imports_and_benchmark_preflight",
+        "device_allocated_memory_bytes": device_memory_bytes,
+        "device_memory_method": device_memory_method,
+        "device_memory_scope": device_memory_scope,
+    }
     report = {
         "schema_version": 1, "benchmark_track": "raw-native-model", "suite_version": suite["version"],
         "evaluation_protocol": protocol_identity,
@@ -2008,6 +2039,7 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             "instruction_dataset_bytes": checkpoint_evidence["instruction_dataset_bytes"],
         },
         "hardware": hardware_identity,
+        "memory": memory_evidence,
         "training_loss": {
             "train_loss": checkpoint_evidence["train_loss"], "validation_loss": checkpoint_evidence["validation_loss"],
             "best_validation_loss": checkpoint_evidence["best_validation_loss"],
@@ -2039,6 +2071,9 @@ def run_suite(args: argparse.Namespace) -> dict[str, Any]:
             "Per-language and aggregate reports separate context-window rejections from completed model-generation attempts.",
             "Host CPU model, logical-core count, installed physical memory, operating-system identity, PyTorch build, resolved inference device and exposed accelerator properties are recorded as measured; unavailable properties remain null and are listed as limitations.",
             "Hardware identity is incomplete when an essential host/device property or (for CUDA/ROCm) the driver version is unavailable; do not make controlled performance comparisons from incomplete identities.",
+            "Process peak RSS is an OS high-water measurement for the complete benchmark process lifetime, including imports and preflight; it is not a per-task measurement.",
+            "CUDA memory is PyTorch allocator peak allocated bytes since reset immediately before the task loop. MPS memory, when exposed, is a post-suite current-allocation sample and is not reported as a peak.",
+            "CPU device-memory usage is not applicable; unavailable RSS/device measurements remain null with their method and scope recorded.",
             "Generation throughput and timings are local measurements affected by hardware and system load.",
             "Docker mode uses an already-present image, disables networking, and mounts workspace and tests read-only; images are never pulled.",
             "Host execution is not sandboxed and requires explicit command-line acknowledgement.",
