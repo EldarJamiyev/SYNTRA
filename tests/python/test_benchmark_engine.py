@@ -417,6 +417,11 @@ class RawModelReportComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.BenchmarkError, "fingerprint"):
             runner.validate_raw_benchmark_report(altered_hardware)
 
+        altered_throughput = copy.deepcopy(valid)
+        altered_throughput["tasks"][0]["execution_speed"]["output_tokens_per_second"] = 999
+        with self.assertRaisesRegex(runner.BenchmarkError, "inconsistent with its measured tokens/time"):
+            runner.validate_raw_benchmark_report(altered_throughput)
+
     def test_report_validator_rejects_complete_hardware_with_missing_release_or_driver(self):
         hardware = self._hardware()
         hardware["host"]["release"] = None
