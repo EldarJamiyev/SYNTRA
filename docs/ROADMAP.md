@@ -374,7 +374,7 @@ A phase is not complete merely because the interface looks finished. It must inc
 
 - [x] Resolve the actual inference device once before a raw benchmark and use the same explicit resolved backend/device index for all tasks.
 - [x] Record measured host OS/release/architecture, exposed CPU model, logical cores, installed physical memory, Python identity, PyTorch build, selected device and accelerator properties where the active runtime exposes them.
-- [x] Preserve unknown CPU/GPU/driver/memory properties as null with explicit limitations; mark CUDA/MPS identities incomplete when stable driver or accelerator identity is unavailable.
+- [x] Preserve unknown CPU/GPU/driver/memory properties as null with explicit limitations; measure NVIDIA/AMD driver identity from local OS tools when available and keep CUDA/MPS identities incomplete when the selected backend cannot be fully identified.
 - [x] Add strict raw-report validation for checkpoint and evaluation-protocol identities, task outcomes, summary denominators, and hardware fingerprint integrity.
 - [x] Add a raw-report comparison CLI that requires matching suite/protocol/task sets and hidden-baseline-valid denominators.
 - [x] Separate task quality from hardware-dependent performance, marking latency/throughput incomparable when identity is incomplete/different and marking regression/throughput rates incomparable when measured task subsets differ.
