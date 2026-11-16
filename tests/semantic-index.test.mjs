@@ -127,6 +127,37 @@ test("semantic index invalidates vectors when the native checkpoint changes", as
   }
 });
 
+test("semantic index rejects native embedding evidence above the forward-window budget", async () => {
+  const root = await makeWorkspace();
+  try {
+    const fetchImpl = async (_url, options) => {
+      const input = JSON.parse(options.body).texts;
+      return new Response(JSON.stringify({
+        checkpoint_identity: "a".repeat(64),
+        embeddings: input.map(() => [1, 0, 0, 0, 0, 0, 0, 0]),
+        input_token_counts: input.map(() => 4097),
+        window_counts: input.map(() => 2049),
+        window_token_counts: input.map(() => Array(2049).fill(256)),
+        window_new_token_counts: input.map(() => [...Array(2048).fill(2), 1]),
+        total_input_tokens: input.length * 4097,
+        total_windows: input.length * 2049,
+        effective_window_tokens: 256,
+        max_windows_per_request: 2048,
+        window_overlap_tokens: 32,
+        pooling_strategy: "full-text-overlapping-window-pool-v1",
+        truncated: false
+      }), { status: 200 });
+    };
+    await assert.rejects(
+      refreshWorkspaceSemanticIndex(root, { fetchImpl, model: "syntra-native" }),
+      /invalid, incomplete, or truncated full-text embedding evidence/
+    );
+    await assert.rejects(fs.stat(path.join(root, ".syntra", "semantic-index-v1.json")), { code: "ENOENT" });
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("splitIntoChunks aligns chunks to declaration boundaries when source exceeds one window", () => {
   const lines = [
     ...Array.from({ length: 18 }, (_, i) => `const line${i} = ${i}; // setup preamble line`),
