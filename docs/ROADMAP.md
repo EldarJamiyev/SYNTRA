@@ -438,3 +438,14 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add HTTP-level and direct API regressions proving invalid requests return an error without creating a training job, plus core trainer regressions for invalid inputs and missing checkpoints.
 
 **Acceptance:** Invalid settings are rejected before asynchronous job creation; valid requests retain their existing defaults and are passed to the worker without coercive parsing; resume without a checkpoint fails explicitly and creates no checkpoint or training state.
+
+
+### Phase 41 — Shared CUDA device-index preflight
+
+**Objective:** Make explicit CUDA device selection fail at the shared device boundary before model allocation, consistently across API, CLI, training, and inference callers.
+
+- [x] Validate `cuda:N` indices against the local PyTorch CUDA device count in `choose_device()`.
+- [x] Preserve unindexed `cuda` default-device behavior and existing CPU/MPS selection.
+- [x] Add regressions for valid indexed selection, out-of-range indices, and CUDA-unavailable behavior.
+
+**Acceptance:** A valid explicit CUDA index resolves to the requested device; an out-of-range index fails with a clear `ValueError` before model allocation; unindexed `cuda` remains unchanged.
