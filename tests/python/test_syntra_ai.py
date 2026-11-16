@@ -461,6 +461,47 @@ class TransformerTests(unittest.TestCase):
                 embed_texts(over_budget, path=checkpoint, device_name="cpu")
 
     @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_embedding_window_budget_rejects_excessive_forward_plans_before_model_inference(self):
+        from unittest.mock import patch
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import MAX_EMBEDDING_WINDOWS, embed_texts
+
+        with tempfile.TemporaryDirectory(prefix="syntra-embedding-window-budget-") as temp:
+            checkpoint = Path(temp) / "small-context-model.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=16, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            tokenizer = ByteBPETokenizer.empty()
+            model = SyntraTransformer(config)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": tokenizer.to_dict(),
+                "model_state": model.state_dict(),
+                "step": 3,
+                "training_mode": "causal-source-pretraining",
+            }, checkpoint)
+
+            oversized = "x" * 40_000
+            self.assertLessEqual(len(oversized.encode("utf-8")), 100_000)
+            self.assertLessEqual(len(tokenizer.encode(oversized)), 131_072)
+            effective_window = config.seq_len - 1
+            overlap = min(32, effective_window // 8)
+            stride = effective_window - overlap
+            expected_windows = (len(tokenizer.encode(oversized)) + stride - 1) // stride
+            self.assertGreater(expected_windows, MAX_EMBEDDING_WINDOWS)
+
+            with patch.object(SyntraTransformer, "embed_tokens", autospec=True) as embed:
+                with self.assertRaisesRegex(ValueError, "bounded request limit"):
+                    embed_texts(
+                        [oversized],
+                        path=checkpoint,
+                        device_name="cpu",
+                        max_length=256,
+                    )
+                embed.assert_not_called()
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
     def test_status_does_not_report_a_stale_resident_checkpoint(self):
         from syntra_ai.model import SyntraTransformer
         from syntra_ai.runtime import _get_resident_bundle, clear_resident_cache, status
