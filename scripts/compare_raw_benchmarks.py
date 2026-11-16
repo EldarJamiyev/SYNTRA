@@ -68,15 +68,21 @@ def write_comparison(path_value: str, comparison: dict[str, Any]) -> Path:
     requested = Path(path_value).expanduser()
     if not requested.is_absolute():
         requested = REPOSITORY_ROOT / requested
-    requested.parent.mkdir(parents=True, exist_ok=True)
+    if not requested.name or requested.name in {".", ".."}:
+        raise runner.BenchmarkError("Comparison output must name a file.")
+    repository_root = REPOSITORY_ROOT.resolve(strict=True)
+    try:
+        parent = requested.parent.resolve(strict=False)
+        parent.relative_to(repository_root)
+    except (OSError, RuntimeError, ValueError):
+        raise runner.BenchmarkError("Comparison output must remain inside the SYNTRA repository.") from None
+    parent.mkdir(parents=True, exist_ok=True)
     parent = requested.parent.resolve(strict=True)
     try:
-        parent.relative_to(REPOSITORY_ROOT.resolve(strict=True))
+        parent.relative_to(repository_root)
     except ValueError:
         raise runner.BenchmarkError("Comparison output must remain inside the SYNTRA repository.") from None
     target = parent / requested.name
-    if not requested.name or requested.name in {".", ".."}:
-        raise runner.BenchmarkError("Comparison output must name a file.")
     if target.is_symlink() or target.exists():
         raise runner.BenchmarkError("Comparison output already exists or is a symbolic link; choose a new path.")
     encoded = (json.dumps(comparison, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
