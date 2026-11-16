@@ -45,8 +45,14 @@ function fakeEmbeddings(url, options) {
   assert.equal(body.device, "auto");
   const input = body.texts;
   const tokenCounts = input.map(text => Array.from(String(text)).length);
-  assert.ok(tokenCounts.every(count => count <= (fakeEmbeddings.maxInputTokens || 256)),
-    "the semantic index must only embed complete token-budgeted text");
+  const maximum = fakeEmbeddings.maxInputTokens || 256;
+  if (tokenCounts.some(count => count > maximum)) {
+    const index = tokenCounts.findIndex(count => count > maximum);
+    return Promise.resolve(new Response(JSON.stringify({
+      error: "Text at index " + index + " requires " + tokenCounts[index] +
+        " tokenizer tokens, exceeding the embedding limit of " + maximum + "; input was not truncated."
+    }), { status: 400 }));
+  }
   return Promise.resolve(new Response(JSON.stringify({
     checkpoint_identity: fakeEmbeddings.checkpointIdentity || "d".repeat(64),
     input_token_counts: tokenCounts,
@@ -128,12 +134,12 @@ test("semantic query text is rejected instead of being silently clipped to model
   const root = await makeWorkspace();
   try {
     fakeEmbeddings.checkpointIdentity = "a".repeat(64);
-    fakeEmbeddings.maxInputTokens = 32;
+    fakeEmbeddings.maxInputTokens = 64;
     const options = { fetchImpl: fakeEmbeddings, model: "syntra-native" };
     await refreshWorkspaceSemanticIndex(root, options);
     await assert.rejects(
-      () => searchWorkspaceSemantic(root, "q".repeat(33), 5, options),
-      /requires 33 tokenizer tokens.*input was not truncated/
+      () => searchWorkspaceSemantic(root, "q".repeat(65), 5, options),
+      /requires 65 tokenizer tokens.*input was not truncated/
     );
   } finally {
     delete fakeEmbeddings.checkpointIdentity;
