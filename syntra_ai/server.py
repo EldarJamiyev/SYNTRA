@@ -237,7 +237,7 @@ class Handler(BaseHTTPRequestHandler):
                     texts = [texts]
                 result = embed_texts(
                     texts=texts,
-                    device_name=body.get("device", "auto"),
+                    device_name=str(body.get("device", "auto")),
                     max_tokens=body.get("max_length"),
                 )
                 self._send(200, result)
