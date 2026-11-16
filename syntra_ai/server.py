@@ -132,8 +132,8 @@ def _validated_training_request(body: dict) -> dict:
     seed = body.get("seed", 1337)
     if type(seed) is not int or not -(1 << 63) <= seed <= (1 << 64) - 1:
         raise ValueError("seed must be a signed/unsigned 64-bit integer accepted by PyTorch.")
-    device_name, _selected_device = _request_device(body.get("device", "auto"))
     normalized_root = resolve_corpus_root(raw_root)
+    device_name, _selected_device = _request_device(body.get("device", "auto"))
 
     checkpoint = Path(_default_checkpoint())
     if resume and not checkpoint.is_file():
@@ -166,10 +166,10 @@ def _validated_finetuning_request(body: dict) -> dict:
     batch_size = _request_integer(body, "batch_size", 4, 1, 128)
     accumulation = _request_integer(body, "gradient_accumulation_steps", 1, 1, 128)
     learning_rate = _request_learning_rate(body, 1e-4)
+    dataset_path = resolve_instruction_dataset(raw_dataset)
     device_name, selected_device = _request_device(body.get("device", "auto"))
     if resume and selected_device.type not in {"cpu", "cuda"}:
         raise ValueError("Exact SFT resume currently supports CPU and CUDA devices only.")
-    dataset_path = resolve_instruction_dataset(raw_dataset)
     if not Path(_default_checkpoint()).is_file():
         raise FileNotFoundError("Train a SYNTRA checkpoint from local source code before instruction fine-tuning.")
     return {
