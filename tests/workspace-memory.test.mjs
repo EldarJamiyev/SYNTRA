@@ -115,6 +115,7 @@ test("semantic project-memory retrieval uses local embeddings and caches only us
         total_input_tokens: tokenCounts.reduce((sum, count) => sum + count, 0),
         total_windows: windowCounts.reduce((sum, count) => sum + count, 0),
         effective_window_tokens: 256,
+        max_windows_per_request: 2048,
         window_overlap_tokens: 32,
         pooling_strategy: "full-text-overlapping-window-pool-v1",
         truncated: false
