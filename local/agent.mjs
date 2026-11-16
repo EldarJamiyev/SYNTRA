@@ -1165,10 +1165,21 @@ async function runModelSelectedReadOnlyTools({
           detail: "Retrieved " + results.length + " user-approved project note(s) for '" + call.input.query + "'."
         });
       } else if (call.tool === "workspace.semantic.search") {
-        const results = (toolRun.output.results || []).slice(0, 8).map(item => ({
-          path: item.path, startLine: item.startLine, endLine: item.endLine,
-          score: item.score, sha256: item.sha256, excerpt: String(item.excerpt || "").slice(0, 1800)
-        }));
+        const results = (toolRun.output.results || []).slice(0, 8).map(item => {
+          const excerpt = String(item.excerpt || "");
+          return {
+            path: item.path,
+            startLine: item.startLine,
+            endLine: item.endLine,
+            startColumn: item.startColumn,
+            endColumn: item.endColumn,
+            tokenCount: item.tokenCount,
+            score: item.score,
+            sha256: item.sha256,
+            excerpt: excerpt.slice(0, 1800),
+            excerptTruncated: excerpt.length > 1800
+          };
+        });
         fragment = JSON.stringify({
           tool: call.tool, query: call.input.query, available: toolRun.output.available,
           embeddingModel: toolRun.output.embeddingModel, staleResults: toolRun.output.staleResults, results
