@@ -67,7 +67,6 @@ The current suite is `tests/benchmark_engine/suite.v1.json`, version 1.5.0, and 
 | `python-retry-backoff` | Python | Overflow-safe bounded exponential backoff |
 | `javascript-event-normalizer` | JavaScript | Multi-file ESM event normalization, timestamp validation, and deep payload isolation |
 | `javascript-bounded-map` | JavaScript | Bounded async worker scheduling, stable result ordering, and failure-safe queue shutdown |
-
 | `javascript-safe-group-by` | JavaScript | Prototype-safe grouping with special property names and deterministic selector calls |
 | `typescript-result-map` | TypeScript | Generic discriminated-result mapping with exact error preservation |
 | `typescript-pick-own` | TypeScript | Generic own-property selection that excludes inherited keys |
