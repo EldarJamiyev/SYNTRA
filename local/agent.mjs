@@ -50,6 +50,32 @@ const MODEL_PROMPT = [
   "Use only file paths inside the selected project. Make no more than 6 file edits and keep each replacement under 12,000 characters."
 ].join("\n");
 
+export function semanticSearchEvidence(output, query) {
+  const results = (Array.isArray(output?.results) ? output.results : []).slice(0, 8).map(item => {
+    const excerpt = String(item.excerpt || "");
+    return {
+      path: item.path,
+      startLine: item.startLine,
+      endLine: item.endLine,
+      startColumn: item.startColumn,
+      endColumn: item.endColumn,
+      tokenCount: item.tokenCount,
+      score: item.score,
+      sha256: item.sha256,
+      excerpt: excerpt.slice(0, 1800),
+      excerptTruncated: excerpt.length > 1800
+    };
+  });
+  return {
+    tool: "workspace.semantic.search",
+    query,
+    available: output?.available === true,
+    embeddingModel: output?.embeddingModel,
+    staleResults: output?.staleResults,
+    results
+  };
+}
+
 function sha256(text) {
   return crypto.createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -1165,25 +1191,8 @@ async function runModelSelectedReadOnlyTools({
           detail: "Retrieved " + results.length + " user-approved project note(s) for '" + call.input.query + "'."
         });
       } else if (call.tool === "workspace.semantic.search") {
-        const results = (toolRun.output.results || []).slice(0, 8).map(item => {
-          const excerpt = String(item.excerpt || "");
-          return {
-            path: item.path,
-            startLine: item.startLine,
-            endLine: item.endLine,
-            startColumn: item.startColumn,
-            endColumn: item.endColumn,
-            tokenCount: item.tokenCount,
-            score: item.score,
-            sha256: item.sha256,
-            excerpt: excerpt.slice(0, 1800),
-            excerptTruncated: excerpt.length > 1800
-          };
-        });
-        fragment = JSON.stringify({
-          tool: call.tool, query: call.input.query, available: toolRun.output.available,
-          embeddingModel: toolRun.output.embeddingModel, staleResults: toolRun.output.staleResults, results
-        });
+        const evidence = semanticSearchEvidence(toolRun.output, call.input.query);
+        fragment = JSON.stringify(evidence);
         observations.push({
           kind: call.tool, stage: "model-selected-context",
           status: toolRun.output.available ? results.length ? "observed" : "empty" : "unavailable",
