@@ -502,6 +502,11 @@ def train(
     effective_decay_steps = SOURCE_SCHEDULER_DECAY_STEPS
     effective_gradient_clip_norm = SOURCE_GRADIENT_CLIP_NORM
     checkpoint_path = Path(checkpoint).expanduser().absolute()
+    if resume and not checkpoint_path.is_file():
+        raise FileNotFoundError(
+            "Cannot resume source pretraining because the checkpoint file does not exist. "
+            "Start a new run with resume=False."
+        )
     device = choose_device(device_name)
     random.seed(seed)
     torch.manual_seed(seed)
