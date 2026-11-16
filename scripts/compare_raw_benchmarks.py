@@ -129,6 +129,40 @@ def format_metric(metric: dict[str, Any]) -> str:
     return metric["key"] + ": " + values + " | " + change + " | " + metric["direction"]
 
 
+def format_rate(value: Any) -> str:
+    return "n/a" if value is None else str(round(float(value) * 100, 1)) + "%"
+
+
+def format_language_matrix(comparison: dict[str, Any]) -> list[str]:
+    lines = [
+        "",
+        "Per-language fixture matrix",
+        "Language | Valid fixtures | Completion | Patch correctness | Regression prevention | Quality outcome",
+        "--- | ---: | ---: | ---: | ---: | ---",
+    ]
+    for language, entry in comparison.get("language_breakdown", {}).items():
+        metrics = {metric["key"]: metric for metric in entry["metrics"]}
+        completion = metrics["task_completion_rate"]
+        patch = metrics["patch_correctness_rate"]
+        regression = metrics["regression_prevention_rate"]
+        lines.append(" | ".join([
+            language,
+            str(entry["baseline_valid_task_count"]) + "/" + str(entry["task_count"]),
+            format_rate(completion["baseline"]) + " → " + format_rate(completion["candidate"]),
+            format_rate(patch["baseline"]) + " → " + format_rate(patch["candidate"]),
+            format_rate(regression["baseline"]) + " → " + format_rate(regression["candidate"]) + " (" + regression["direction"] + ")",
+            entry["quality_status"],
+        ]))
+        if entry["sample_size_warning"]:
+            lines.append("  Sample limitation: " + entry["sample_size_note"])
+    lines.append("")
+    lines.append(comparison.get(
+        "language_matrix_note",
+        "Language rows are fixture-level observations and do not establish general language capability.",
+    ))
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
@@ -144,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         print("")
         for metric in comparison["metrics"]:
             print(format_metric(metric))
+        for line in format_language_matrix(comparison):
+            print(line)
         if comparison["warnings"]:
             print("")
             print("Warnings:")
