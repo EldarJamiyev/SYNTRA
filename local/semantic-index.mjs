@@ -217,10 +217,21 @@ async function embedViaNativeRuntime(texts, fetchImpl, signal) {
   };
 }
 
-async function fitChunksToNativeContext(chunks, expectedCheckpointIdentity, fetchImpl, signal) {
+async function fitChunksToNativeContext(
+  chunks,
+  expectedCheckpointIdentity,
+  fetchImpl,
+  signal,
+  fallbackMaxInputTokens
+) {
   const queue = [...chunks];
   const fitted = [];
-  let maxInputTokens = MAX_EMBEDDING_TOKENS;
+  if (!Number.isInteger(fallbackMaxInputTokens)
+    || fallbackMaxInputTokens < 1
+    || fallbackMaxInputTokens > MAX_EMBEDDING_TOKENS) {
+    throw new Error("The selected native checkpoint reported an invalid semantic input-token limit.");
+  }
+  let maxInputTokens = fallbackMaxInputTokens;
   while (queue.length) {
     const batch = queue.splice(0, 64);
     const measured = await countViaNativeRuntime(batch.map(item => item.text), fetchImpl, signal);
