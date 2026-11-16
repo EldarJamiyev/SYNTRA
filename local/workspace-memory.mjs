@@ -13,6 +13,8 @@ const MAX_EMBEDDING_CACHE_BYTES = 8 * 1024 * 1024;
 const MAX_SEMANTIC_INDEX_NOTES = 64;
 const EMBEDDING_BATCH_SIZE = 32;
 const MEMORY_SCHEMA_VERSION = 1;
+const MEMORY_EMBEDDING_SCHEMA_VERSION = 2;
+const EMBEDDING_POOLING_STRATEGY = "full-text-overlapping-window-pool-v1";
 const MAX_NOTES = 200;
 const MAX_MEMORY_BYTES = 1024 * 1024;
 const MAX_TITLE_LENGTH = 120;
@@ -216,12 +218,17 @@ async function readMemoryEmbeddingCache(root, model) {
     throw new Error("The local project-memory embedding cache contains invalid JSON and was not overwritten.");
   }
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || value.schemaVersion !== 1 || value.root !== root
+    || ![1, MEMORY_EMBEDDING_SCHEMA_VERSION].includes(value.schemaVersion)
+    || value.root !== root
     || typeof value.model !== "string" || !Array.isArray(value.entries)
     || value.entries.length > MAX_NOTES) {
     throw new Error("The local project-memory embedding cache is invalid or belongs to another workspace.");
   }
-  if (value.model !== model) return { dimension: null, entries: [] };
+  // Schema-v1 vectors may have been created from silently clipped input.
+  // Rebuild those entries rather than reusing them as full-text embeddings.
+  if (value.schemaVersion !== MEMORY_EMBEDDING_SCHEMA_VERSION || value.model !== model) {
+    return { dimension: null, entries: [] };
+  }
   const dimension = Number.isInteger(value.dimension) && value.dimension >= 8 && value.dimension <= 4096
     ? value.dimension : null;
   const ids = new Set();
@@ -229,11 +236,21 @@ async function readMemoryEmbeddingCache(root, model) {
   for (const item of value.entries) {
     if (!item || typeof item !== "object" || !NOTE_ID_PATTERN.test(item.noteId || "")
       || ids.has(item.noteId) || !/^[a-f0-9]{64}$/.test(item.textHash || "")
+      || !Number.isSafeInteger(item.tokenCount) || item.tokenCount < 0
+      || !Number.isSafeInteger(item.windowCount) || item.windowCount < 1
+      || !Number.isSafeInteger(item.effectiveWindowTokens) || item.effectiveWindowTokens < 8
       || !validEmbeddingVector(item.embedding, dimension)) {
       throw new Error("The local project-memory embedding cache contains an invalid vector entry.");
     }
     ids.add(item.noteId);
-    entries.push({ noteId: item.noteId, textHash: item.textHash, embedding: item.embedding });
+    entries.push({
+      noteId: item.noteId,
+      textHash: item.textHash,
+      embedding: item.embedding,
+      tokenCount: item.tokenCount,
+      windowCount: item.windowCount,
+      effectiveWindowTokens: item.effectiveWindowTokens
+    });
   }
   return { dimension, entries };
 }
@@ -246,7 +263,7 @@ async function writeMemoryEmbeddingCache(root, model, dimension, entries) {
     throw new Error("The project-memory embedding cache must be a regular file, not a symbolic link.");
   }
   const serialized = JSON.stringify({
-    schemaVersion: 1, root, model, dimension,
+    schemaVersion: MEMORY_EMBEDDING_SCHEMA_VERSION, root, model, dimension,
     updatedAt: new Date().toISOString(), entries
   });
   if (Buffer.byteLength(serialized, "utf8") > MAX_EMBEDDING_CACHE_BYTES) {
@@ -273,7 +290,7 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ texts: input, max_length: 256, device: "auto" }),
     redirect: "error",
-    signal: AbortSignal.timeout(30000)
+    signal: AbortSignal.timeout(120000)
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(String(payload.error || "SYNTRA native embedding service returned HTTP " + response.status + "."));
@@ -284,11 +301,31 @@ async function requestLocalEmbeddings(fetchImpl, input) {
     throw new Error("SYNTRA native runtime returned an invalid embedding response.");
   }
   const dimension = payload.embeddings[0]?.length;
+  const tokenCounts = payload.input_token_counts;
+  const windowCounts = payload.window_counts;
+  const effectiveWindowTokens = payload.effective_window_tokens;
   if (!Number.isInteger(dimension) || dimension < 8 || dimension > 4096
-    || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))) {
-    throw new Error("SYNTRA native runtime returned an invalid or inconsistent embedding dimension.");
+    || !payload.embeddings.every(vector => validEmbeddingVector(vector, dimension))
+    || payload.truncated !== false
+    || payload.pooling_strategy !== EMBEDDING_POOLING_STRATEGY
+    || !Array.isArray(tokenCounts) || tokenCounts.length !== input.length
+    || tokenCounts.some(count => !Number.isSafeInteger(count) || count < 0)
+    || !Array.isArray(windowCounts) || windowCounts.length !== input.length
+    || windowCounts.some(count => !Number.isSafeInteger(count) || count < 1)
+    || !Number.isSafeInteger(effectiveWindowTokens) || effectiveWindowTokens < 8 || effectiveWindowTokens > 4096
+    || payload.total_input_tokens !== tokenCounts.reduce((sum, count) => sum + count, 0)
+    || payload.total_windows !== windowCounts.reduce((sum, count) => sum + count, 0)) {
+    throw new Error("SYNTRA native runtime returned invalid, incomplete, or truncated full-text embedding evidence.");
   }
-  return { dimension, embeddings: payload.embeddings, checkpointIdentity: payload.checkpoint_identity };
+  return {
+    dimension,
+    embeddings: payload.embeddings,
+    checkpointIdentity: payload.checkpoint_identity,
+    tokenCounts,
+    windowCounts,
+    effectiveWindowTokens,
+    poolingStrategy: payload.pooling_strategy
+  };
 }
 
 function cosineSimilarity(left, right) {
@@ -310,7 +347,7 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
   if (typeof fetchImpl !== "function") throw new Error("SYNTRA native embeddings are unavailable in this runtime.");
   // Identify the active checkpoint before reusing any saved note vectors.
   const queryBatch = await requestLocalEmbeddings(fetchImpl, [query]);
-  const cacheModel = model + ":" + queryBatch.checkpointIdentity;
+  const cacheModel = model + ":" + queryBatch.checkpointIdentity + ":" + EMBEDDING_POOLING_STRATEGY;
   const cache = await readMemoryEmbeddingCache(root, cacheModel);
   if (cache.dimension !== null && cache.dimension !== queryBatch.dimension) {
     throw new Error("The native checkpoint embedding dimension changed without a matching checkpoint identity.");
@@ -321,6 +358,11 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
     return note && entry.textHash === memoryTextHash(memoryEmbeddingText(note));
   });
   const vectorById = new Map(validEntries.map(entry => [entry.noteId, entry.embedding]));
+  const evidenceById = new Map(validEntries.map(entry => [entry.noteId, {
+    tokenCount: entry.tokenCount,
+    windowCount: entry.windowCount,
+    effectiveWindowTokens: entry.effectiveWindowTokens
+  }]));
   const recent = store.notes.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, MAX_SEMANTIC_INDEX_NOTES);
   const lexicalCandidates = ranked.slice(0, 16).map(item => item.note);
@@ -340,12 +382,21 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
       throw new Error("The native embedding model returned a different vector size within one search.");
     }
     vectors.push(...batch.embeddings);
+    for (let index = 0; index < missing.slice(offset, offset + EMBEDDING_BATCH_SIZE).length; index += 1) {
+      const note = missing[offset + index];
+      evidenceById.set(note.id, {
+        tokenCount: batch.tokenCounts[index],
+        windowCount: batch.windowCounts[index],
+        effectiveWindowTokens: batch.effectiveWindowTokens
+      });
+    }
   }
   if (vectors.length !== missing.length) throw new Error("SYNTRA native embedding generation returned an incomplete vector set.");
   const newEntries = missing.map((note, index) => ({
     noteId: note.id,
     textHash: memoryTextHash(memoryEmbeddingText(note)),
-    embedding: vectors[index]
+    embedding: vectors[index],
+    ...evidenceById.get(note.id)
   }));
   for (const entry of newEntries) vectorById.set(entry.noteId, entry.embedding);
   const currentEntries = store.notes
@@ -353,7 +404,8 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
     .map(note => ({
       noteId: note.id,
       textHash: memoryTextHash(memoryEmbeddingText(note)),
-      embedding: vectorById.get(note.id)
+      embedding: vectorById.get(note.id),
+      ...evidenceById.get(note.id)
     }));
   await writeMemoryEmbeddingCache(root, cacheModel, dimension, currentEntries);
   const queryEmbedding = queryBatch.embeddings[0];
@@ -380,6 +432,11 @@ async function searchMemorySemantically(root, store, query, ranked, options = {}
     retrievalMode: "hybrid_semantic",
     embeddingModel: model,
     checkpointIdentity: queryBatch.checkpointIdentity,
+    embeddingStrategy: EMBEDDING_POOLING_STRATEGY,
+    queryTokenCount: queryBatch.tokenCounts[0],
+    queryWindowCount: queryBatch.windowCounts[0],
+    embeddedNoteTokens: currentEntries.reduce((sum, entry) => sum + entry.tokenCount, 0),
+    embeddedNoteWindows: currentEntries.reduce((sum, entry) => sum + entry.windowCount, 0),
     semanticCoverage: currentEntries.length,
     results: semanticRanked
   };
