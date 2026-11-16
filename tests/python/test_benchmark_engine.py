@@ -150,7 +150,7 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
         self.assertFalse(identity["identity_complete"])
         self.assertTrue(any("driver version" in item.lower() for item in identity["limitations"]))
 
-    def test_nvidia_driver_probe_uses_selected_physical_device_index(self):
+    def test_nvidia_driver_probe_requires_a_consistent_host_driver_identity(self):
         with (
             mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
             mock.patch.object(
@@ -169,6 +169,24 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
             self.assertEqual(runner._discover_accelerator_driver_version("cuda"), "550.90")
         command = run_command.call_args.args[0]
         self.assertIn("--query-gpu=driver_version", command)
+
+    def test_nvidia_driver_probe_rejects_conflicting_device_driver_values(self):
+        with (
+            mock.patch.object(runner.shutil, "which", return_value="/usr/bin/nvidia-smi"),
+            mock.patch.object(
+                runner,
+                "run_command",
+                return_value={
+                    "returncode": 0,
+                    "timed_out": False,
+                    "output_limited": False,
+                    "stdout": "550.90\n555.10\n",
+                    "stderr": "",
+                    "elapsed_ms": 1,
+                },
+            ),
+        ):
+            self.assertIsNone(runner._discover_accelerator_driver_version("cuda"))
 
     def test_driver_probe_fails_closed_on_missing_or_ambiguous_tool_output(self):
         with mock.patch.object(runner.shutil, "which", return_value=None):
@@ -206,7 +224,7 @@ class BenchmarkHardwareIdentityTests(unittest.TestCase):
                 },
             ) as run_command,
         ):
-            self.assertEqual(runner._discover_accelerator_driver_version("cuda-rocm", None), "6.2.4")
+            self.assertEqual(runner._discover_accelerator_driver_version("cuda-rocm"), "6.2.4")
         self.assertEqual(run_command.call_args.args[0][-1], "--showdriverversion")
 
     def test_mps_identity_does_not_invent_gpu_model_or_total_memory(self):
