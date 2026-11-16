@@ -737,6 +737,14 @@ class RawModelReportComparisonTests(unittest.TestCase):
 
 
 class RawBenchmarkComparisonCliTests(unittest.TestCase):
+    def test_npm_script_exposes_the_raw_benchmark_comparison_cli(self):
+        package = json.loads((REPOSITORY_ROOT / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            package.get("scripts", {}).get("benchmark:model:compare"),
+            "python scripts/compare_raw_benchmarks.py",
+        )
+        self.assertTrue((REPOSITORY_ROOT / "scripts" / "compare_raw_benchmarks.py").is_file())
+
     @staticmethod
     def _invoke(baseline: Path, candidate: Path, output: Path | None = None):
         command = [
@@ -872,7 +880,7 @@ class RawBenchmarkComparisonCliTests(unittest.TestCase):
             root = Path(temp)
             baseline_path = root / "baseline.json"
             candidate_path = root / "candidate.json"
-            output_path = root / "comparison.json"
+            output_path = root / "comparisons" / "comparison.json"
             baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
             candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
 
