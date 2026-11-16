@@ -426,3 +426,22 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for duplicate required/nested keys, non-finite values, float overflow, deeply nested JSON, valid metadata, and read-only audit failure reporting.
 
 **Acceptance:** Ambiguous or non-standard instruction records fail before tokenization/training with their source line; valid existing JSONL records retain the same parsing, tokenization, split, and training behavior.
+
+
+### Phase 40 — Lossless native semantic embedding and source offsets
+
+**Objective:** Prevent semantic retrieval vectors from representing a truncated prefix while their metadata claims to represent a larger source range.
+
+- [x] Add batched token counting to the native API using the selected checkpoint's actual byte-BPE tokenizer and return the effective input-token limit and checkpoint identity.
+- [x] Make native embedding and the low-level Transformer embedding reject over-context inputs instead of silently slicing them.
+- [x] Honor the semantic client's requested `max_length` in both token-count and embedding endpoints.
+- [x] Upgrade semantic indexes to schema v2; persist each chunk's actual tokenizer count and effective index token limit.
+- [x] Preflight chunks with the native tokenizer, subdivide oversized multi-line and long-line fragments without losing source coverage, and retain exact 1-based start/end columns for partial-line chunks.
+- [x] Verify tokenizer counts and checkpoint identity again during vector generation; abort rather than write an index if preflight and embedding disagree.
+- [x] Reconstruct retrieved excerpts from the exact recorded line/column ranges after checking the current file SHA-256.
+- [x] Reject over-context semantic queries, validate the query/index context contract, and leave the existing index untouched when a lossless refresh cannot fit within bounded limits.
+- [x] Add native PyTorch boundary tests, local HTTP API tests, token-budgeted index tests, and long-line source-offset regressions.
+
+**Acceptance:** Every stored vector represents the complete source fragment recorded by its path/line/column metadata. No native embedding silently truncates input, and a failed or over-budget refresh never replaces the previous semantic index with partial vectors.
+
+**Migration:** Existing `.syntra/semantic-index-v1.json` files are ignored. Operators must refresh the semantic index to create v2 vectors with token-count and source-column evidence.
