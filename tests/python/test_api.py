@@ -549,11 +549,47 @@ class InferenceAdmissionControlTests(unittest.TestCase):
                                     getattr(server, starter_name)({})
                                 worker.assert_not_called()
 
+    def test_training_http_request_returns_retryable_503_during_inference(self):
+        from unittest.mock import patch
+        from syntra_ai import server as native_server
+
+        with native_server._inference_slot() as admitted:
+            self.assertTrue(admitted)
+            with patch.object(
+                native_server,
+                "_validated_training_request",
+                return_value={"steps": 1, "resume": False},
+            ):
+                with patch.object(native_server, "Thread") as worker:
+                    http_server, thread = self._start_server()
+                    try:
+                        connection = HTTPConnection("127.0.0.1", http_server.server_port, timeout=3)
+                        connection.request(
+                            "POST",
+                            "/model/train",
+                            body=json.dumps({"root": "validated-by-test"}),
+                            headers={"Content-Type": "application/json"},
+                        )
+                        response = connection.getresponse()
+                        payload = json.loads(response.read())
+                        self.assertEqual(response.status, 503)
+                        self.assertEqual(response.getheader("Retry-After"), "1")
+                        self.assertIn("active inference", payload["error"])
+                        worker.assert_not_called()
+
+                        connection.request("GET", "/health")
+                        health_response = connection.getresponse()
+                        health = json.loads(health_response.read())
+                        self.assertEqual(health_response.status, 200)
+                        self.assertEqual(health["status"], "ok")
+                    finally:
+                        http_server.shutdown()
+                        http_server.server_close()
+                        thread.join(timeout=2)
+
     def test_inference_is_rejected_while_training_worker_is_alive(self):
         from threading import BoundedSemaphore
         from unittest.mock import patch
-        from syntra_ai.server import Handler
-
         class RunningWorker:
             @staticmethod
             def is_alive():
