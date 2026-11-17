@@ -126,10 +126,17 @@ def exclusive_training_compute() -> Iterator[None]:
             file_locks.append(file_lock)
         yield
     finally:
+        release_error: Exception | None = None
         for file_lock in reversed(file_locks):
-            file_lock.release()
+            try:
+                file_lock.release()
+            except Exception as exc:
+                if release_error is None:
+                    release_error = exc
         for local in reversed(local_acquired):
             local.release()
+        if release_error is not None:
+            raise release_error
 
 
 def inference_compute_guard(function: Callable[..., Any]) -> Callable[..., Any]:
