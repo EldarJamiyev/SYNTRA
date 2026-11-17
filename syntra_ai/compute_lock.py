@@ -156,6 +156,8 @@ class ComputeLease:
         self._context_token: Token[tuple[ComputeMode, int, int] | None] | None = None
 
     def __enter__(self) -> "ComputeLease":
+        if self.pid != os.getpid():
+            raise RuntimeError("A SYNTRA compute lease cannot be transferred across processes.")
         if self._released:
             raise RuntimeError("A released SYNTRA compute lease cannot be entered.")
         if self._context_token is not None:
@@ -272,7 +274,7 @@ def compute_operation(mode: ComputeMode):
             def guarded_generator(*args, **kwargs) -> Iterator:
                 active = _ACTIVE_LEASE.get()
                 if active is not None:
-                    if active[0] != mode:
+                    if active[2] != os.getpid() or active[0] != mode:
                         raise ComputeBusyError(
                             "The requested native compute operation conflicts with the active operation."
                         )
@@ -286,7 +288,7 @@ def compute_operation(mode: ComputeMode):
         def guarded_call(*args, **kwargs):
             active = _ACTIVE_LEASE.get()
             if active is not None:
-                if active[0] != mode:
+                if active[2] != os.getpid() or active[0] != mode:
                     raise ComputeBusyError(
                         "The requested native compute operation conflicts with the active operation."
                     )
