@@ -48,11 +48,11 @@ def _configure_inference_slots(value: str | None = None) -> int:
             "SYNTRA_MAX_CONCURRENT_INFERENCE must be an integer between 1 and 4."
         )
     capacity = int(raw)
-    configure_compute_inference_capacity(capacity)
     global _INFERENCE_SLOTS
     with _job_lock:
         if _ACTIVE_INFERENCE_REQUESTS or (_worker is not None and _worker.is_alive()):
             raise ValueError("Inference capacity can only be configured while the native service is idle.")
+        configure_compute_inference_capacity(capacity)
         _INFERENCE_SLOTS = BoundedSemaphore(capacity)
     return capacity
 
