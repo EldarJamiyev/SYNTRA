@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import unittest
 from threading import Thread
 
@@ -76,6 +75,93 @@ class NativeComputeLeaseTests(unittest.TestCase):
             blocked = probe_compute_from_child("training")
             self.assertEqual(blocked.returncode, 0, blocked.stderr)
             self.assertEqual(blocked.stdout.strip(), "BUSY")
+
+    def test_api_returns_retryable_503_before_starting_worker_when_other_process_owns_compute(self):
+        import json
+        from http.client import HTTPConnection
+        from http.server import ThreadingHTTPServer
+        from queue import Queue
+        from unittest.mock import patch
+
+        from syntra_ai import server as native_server
+
+        child_script = (
+            "from syntra_ai.compute_lock import acquire_compute_lease\n"
+            "import time\n"
+            "with acquire_compute_lease('training'):\n"
+            "    print('READY', flush=True)\n"
+            "    time.sleep(30)\n"
+        )
+        env = os.environ.copy()
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(PROJECT_ROOT) + (os.pathsep + existing if existing else "")
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        child = subprocess.Popen(
+            [sys.executable, "-c", child_script],
+            cwd=PROJECT_ROOT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        ready_line: Queue[str] = Queue()
+
+        def read_child_ready():
+            assert child.stdout is not None
+            ready_line.put(child.stdout.readline())
+
+        reader = Thread(target=read_child_ready, daemon=True)
+        api_server = None
+        api_thread = None
+        try:
+            reader.start()
+            self.assertEqual(ready_line.get(timeout=15).strip(), "READY")
+            from syntra_ai.server import Handler
+
+            api_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            api_thread = Thread(target=api_server.serve_forever, daemon=True)
+            api_thread.start()
+
+            with patch.object(
+                native_server,
+                "_validated_training_request",
+                return_value={"steps": 1, "resume": False},
+            ):
+                with patch.object(native_server, "_worker", None):
+                    with patch.object(native_server, "_job", {"status": "idle"}):
+                        with patch.object(native_server, "Thread") as worker:
+                            connection = HTTPConnection(
+                                "127.0.0.1", api_server.server_port, timeout=5
+                            )
+                            connection.request(
+                                "POST",
+                                "/model/train",
+                                body=json.dumps({"root": "validated-by-test"}),
+                                headers={"Content-Type": "application/json"},
+                            )
+                            response = connection.getresponse()
+                            payload = json.loads(response.read())
+                            connection.close()
+
+                            self.assertEqual(response.status, 503)
+                            self.assertEqual(response.getheader("Retry-After"), "1")
+                            self.assertIn("another SYNTRA process", payload["error"])
+                            worker.assert_not_called()
+        finally:
+            if api_server is not None:
+                api_server.shutdown()
+                api_server.server_close()
+            if api_thread is not None:
+                api_thread.join(timeout=3)
+            if child.poll() is None:
+                child.terminate()
+            child.wait(timeout=5)
+            if child.stdout is not None:
+                child.stdout.close()
+            if child.stderr is not None:
+                child.stderr.close()
 
     def test_lease_is_released_when_operation_raises(self):
         with self.assertRaisesRegex(RuntimeError, "intentional failure"):
