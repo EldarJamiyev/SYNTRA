@@ -19,6 +19,7 @@ except ImportError:
     SyntraTransformer = None  # type: ignore[assignment]
 
 from .checkpoint_io import load_torch_checkpoint_snapshot
+from .compute_lock import compute_operation
 from .config import ModelConfig
 from .data import load_corpus
 from .resources import validate_checkpoint_load_budget, validate_training_memory_budget
@@ -871,6 +872,7 @@ def _instruction_loss(
         raise ValueError("Validation did not process any supervised completion tokens.")
     return weighted_loss / supervised_tokens
 
+@compute_operation("training")
 def finetune(
     dataset_path: str | Path,
     steps: int = 1000,

@@ -19,6 +19,7 @@ except ImportError:
     SyntraTransformer = None  # type: ignore[assignment]
 
 from .config import ModelConfig
+from .compute_lock import compute_operation
 from .checkpoint_io import checkpoint_file_identity, load_torch_checkpoint_snapshot
 from .data import MAX_CORPUS_TOKENS, load_corpus
 from .resources import validate_training_memory_budget
@@ -485,6 +486,7 @@ def _same_architecture(requested: ModelConfig, stored: ModelConfig) -> bool:
     return requested.to_dict() == stored.to_dict()
 
 
+@compute_operation("training")
 def train(
     roots: list[str],
     checkpoint: str | Path,
