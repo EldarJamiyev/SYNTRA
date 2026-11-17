@@ -527,3 +527,20 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for both directions of exclusion and failed worker startup.
 
 **Acceptance:** Within one native API process, admitted inference and active training/fine-tuning never overlap; admission decisions and active-request release are serialized, rejected work starts no model operation, and every failure path leaves the service able to accept later work.
+
+
+
+### Phase 48 — Cross-process native compute exclusion
+
+**Objective:** Extend the existing in-process training/inference admission contract to independently launched SYNTRA CLI and API processes running under the same operating-system user.
+
+- [x] Add a kernel-managed, non-blocking per-user process lock with POSIX file locking and Windows byte-range locking; rely on the operating system to release ownership after process termination instead of trusting stale PID/marker files.
+- [x] Share one process reservation across simultaneous inference calls in the same process, preserving the configured in-process inference capacity while excluding training/fine-tuning.
+- [x] Guard direct native source training, supervised fine-tuning, embeddings, generation, streaming generation, and fresh evaluation entry points.
+- [x] Reserve training/fine-tuning ownership synchronously before starting an API worker; release the reservation on worker-start failure and on every worker exit.
+- [x] Keep streaming ownership active until the generator is exhausted or closed; keep health, status, tokenization, and repository curriculum routes outside the heavy model-compute reservation.
+- [x] Add subprocess regressions for cross-process inference/training exclusion and lock release, plus same-process concurrency, generator-close, worker-lease transfer, and private lock-file checks.
+
+**Acceptance:** Under one OS user and the same temporary-directory configuration, a SYNTRA process cannot begin native model compute while another process owns the compute reservation; same-process inference concurrency remains governed by SYNTRA_MAX_CONCURRENT_INFERENCE; API conflicts fail immediately with HTTP 503 and Retry-After: 1; process termination releases the OS lock without stale-lock cleanup.
+
+**Boundary:** The process reservation is per OS user and per host temporary-directory configuration. It does not coordinate different OS users, separate hosts, or processes intentionally configured with different temporary directories, and it does not claim to measure or guarantee a specific GPU/CPU memory ceiling.
