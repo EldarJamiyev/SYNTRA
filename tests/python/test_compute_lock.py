@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from threading import Thread
 from unittest.mock import patch
 
 from syntra_ai.compute_lock import (
@@ -75,6 +79,54 @@ class NativeComputeLockTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "between 1 and 4"):
                     configure_compute_inference_capacity(invalid)
         configure_compute_inference_capacity(1)
+
+    def test_api_training_endpoints_return_503_when_another_process_owns_compute(self):
+        from syntra_ai import server as native_server
+
+        process = self._run_child_holding("inference")
+        http_server = ThreadingHTTPServer(("127.0.0.1", 0), native_server.Handler)
+        server_thread = Thread(target=http_server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            with patch.object(
+                native_server,
+                "_validated_training_request",
+                return_value={"steps": 1, "resume": False},
+            ), patch.object(
+                native_server,
+                "_validated_finetuning_request",
+                return_value={"steps": 1, "resume": False},
+            ), patch.object(native_server, "_worker", None), patch.object(native_server, "Thread") as worker:
+                connection = HTTPConnection("127.0.0.1", http_server.server_port, timeout=3)
+                requests = (
+                    ("/model/train", {"root": "validated-by-test"}),
+                    ("/model/finetune", {"dataset": "validated-by-test"}),
+                )
+                for route, body in requests:
+                    connection.request(
+                        "POST",
+                        route,
+                        body=json.dumps(body),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read())
+                    self.assertEqual(response.status, 503)
+                    self.assertEqual(response.getheader("Retry-After"), "1")
+                    self.assertIn("another SYNTRA process", payload["error"])
+                worker.assert_not_called()
+                connection.request("GET", "/health")
+                health_response = connection.getresponse()
+                health = json.loads(health_response.read())
+                self.assertEqual(health_response.status, 200)
+                self.assertEqual(health["status"], "ok")
+                connection.close()
+        finally:
+            http_server.shutdown()
+            http_server.server_close()
+            server_thread.join(timeout=5)
+            process.terminate()
+            process.wait(timeout=5)
 
     def test_streaming_decorator_holds_lease_until_iteration_finishes(self):
         @inference_compute_guard
