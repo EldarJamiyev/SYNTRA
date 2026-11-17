@@ -546,6 +546,7 @@ def embed_texts(
     for item in texts:
         if not isinstance(item, str) or len(item.encode("utf-8")) > 100_000:
             raise ValueError("Each text item must be a string of at most 100 KB.")
+    device_name = _normalize_device_name(device_name)
     identity_before = _checkpoint_identity(path)
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
     vectors: list[list[float]] = []
@@ -592,6 +593,19 @@ def _token_bytes_table(tokenizer: ByteBPETokenizer) -> list[bytes]:
 
 @_no_grad
 
+
+def _normalize_device_name(device_name: Any) -> str:
+    """Validate local device selection before opening a checkpoint or allocating a model."""
+    if not isinstance(device_name, str) or not device_name.strip():
+        raise ValueError("device must be auto, cpu, cuda, cuda:N, or mps.")
+    normalized = device_name.strip().lower()
+    try:
+        choose_device(normalized)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("Requested device is unavailable: " + str(exc)) from None
+    return normalized
+
+
 def _normalize_generation_options(
     max_new_tokens: Any,
     temperature: Any,
@@ -627,13 +641,7 @@ def _normalize_generation_options(
     normalized_repetition_penalty = finite_number(
         "repetition_penalty", repetition_penalty, 1.0, 2.0
     )
-    if not isinstance(device_name, str) or not device_name.strip():
-        raise ValueError("device must be auto, cpu, cuda, cuda:N, or mps.")
-    normalized_device = device_name.strip().lower()
-    try:
-        choose_device(normalized_device)
-    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
-        raise ValueError("Requested device is unavailable: " + str(exc)) from None
+    normalized_device = _normalize_device_name(device_name)
     return (
         max_new_tokens,
         normalized_temperature,
@@ -828,10 +836,11 @@ def evaluate(
     This is a new measurement, but not an independent benchmark if that corpus was
     also included in training. Task-level code benchmarks remain separate.
     """
-    if batches < 1 or batches > 1000:
-        raise ValueError("batches must be between 1 and 1,000.")
-    if max_tokens < 1024 or max_tokens > MAX_CORPUS_TOKENS:
-        raise ValueError(f"max_tokens must be between 1,024 and {MAX_CORPUS_TOKENS:,}.")
+    if type(batches) is not int or not 1 <= batches <= 1000:
+        raise ValueError("batches must be an integer between 1 and 1,000.")
+    if type(max_tokens) is not int or not 1024 <= max_tokens <= MAX_CORPUS_TOKENS:
+        raise ValueError(f"max_tokens must be an integer between 1,024 and {MAX_CORPUS_TOKENS:,}.")
+    device_name = _normalize_device_name(device_name)
     corpus_root = resolve_corpus_root(root)
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=checkpoint, device_name=device_name)
     corpus = load_corpus(

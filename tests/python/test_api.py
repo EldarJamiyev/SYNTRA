@@ -92,6 +92,27 @@ class LocalApiSmokeTests(unittest.TestCase):
                         self.assertEqual(response.status, 400)
                         self.assertIn(expected_error, rejected["error"])
 
+                other_endpoint_invalid_cases = [
+                    ("/model/embed", {"input": "valid text", "device": 123}, "device must be auto"),
+                    ("/model/evaluate", {"root": temp, "batches": True}, "batches must be an integer"),
+                    ("/model/evaluate", {"root": temp, "max_tokens": 10.5}, "max_tokens must be an integer"),
+                    ("/model/evaluate", {"root": temp, "device": 123}, "device must be auto"),
+                    ("/model/curriculum", {"root": temp, "max_examples": 4.5}, "max_examples must be between"),
+                    ("/model/curriculum", {"root": temp, "max_examples": True}, "max_examples must be between"),
+                ]
+                for route, request_body, expected_error in other_endpoint_invalid_cases:
+                    with self.subTest(route=route, request_body=request_body):
+                        connection.request(
+                            "POST",
+                            route,
+                            body=json.dumps(request_body),
+                            headers={"Content-Type": "application/json"},
+                        )
+                        response = connection.getresponse()
+                        rejected = json.loads(response.read())
+                        self.assertEqual(response.status, 400)
+                        self.assertIn(expected_error, rejected["error"])
+
                 connection.request(
                     "POST",
                     "/model/generate",

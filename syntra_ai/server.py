@@ -434,22 +434,22 @@ class Handler(BaseHTTPRequestHandler):
                     texts = [texts]
                 result = embed_texts(
                     texts=texts,
-                    device_name=str(body.get("device", "auto")),
+                    device_name=body.get("device", "auto"),
                 )
                 self._send(200, result)
             elif self.path == "/model/curriculum":
                 result = synthesize_repository_curriculum(
                     root=body.get("root"),
                     output_path=body.get("output") or body.get("dataset"),
-                    max_examples=int(body.get("max_examples", 240)),
+                    max_examples=body.get("max_examples", 240),
                 )
                 self._send(200, result)
             elif self.path == "/model/evaluate":
                 result = evaluate(
                     root=body.get("root", ""),
-                    batches=int(body.get("batches", 16)),
-                    device_name=str(body.get("device", "auto")),
-                    max_tokens=int(body.get("max_tokens", 2_000_000)),
+                    batches=body.get("batches", 16),
+                    device_name=body.get("device", "auto"),
+                    max_tokens=body.get("max_tokens", 2_000_000),
                 )
                 self._send(200, result)
             elif self.path == "/model/generate":
