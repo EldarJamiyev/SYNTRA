@@ -486,3 +486,16 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Preserve the curriculum engine's existing `max_examples` integer bounds and add live HTTP/direct-runtime regressions.
 
 **Acceptance:** Invalid endpoint values fail with HTTP 400 before checkpoint access or curriculum scanning; valid defaults and string/list embedding input behavior remain unchanged.
+
+
+### Phase 45 — Single-flight resident checkpoint loading
+
+**Objective:** Prevent duplicate resident Transformer construction under concurrent first requests and ensure a checkpoint replacement during model construction cannot publish stale cached state.
+
+- [x] Add per-checkpoint load synchronization so concurrent requests share one checkpoint read and model construction.
+- [x] Re-check resident cache after waiting, preserving the existing four-entry cache limit and per-device cache signature.
+- [x] Recompute source/companion checkpoint identity after model construction and reject cache publication if any identity changed.
+- [x] Reference-count per-path locks so idle lock entries are removed without racing queued waiters.
+- [x] Add concurrent-load and atomic replacement-during-load regressions.
+
+**Acceptance:** Concurrent requests for the same checkpoint/device construct one model; different checkpoint paths can still load independently; a checkpoint replaced during load never enters the resident cache.
