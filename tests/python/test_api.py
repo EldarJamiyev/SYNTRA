@@ -263,6 +263,14 @@ class NativeApiPathBoundaryTests(unittest.TestCase):
 
 
 
+class MockComputeLease:
+    def __init__(self):
+        self.released = False
+
+    def release(self):
+        self.released = True
+
+
 class TrainingApiRequestValidationTests(unittest.TestCase):
     def test_invalid_source_training_parameters_never_create_a_worker(self):
         from unittest.mock import patch
@@ -307,23 +315,28 @@ class TrainingApiRequestValidationTests(unittest.TestCase):
                 "n_embd": 32,
                 "dropout": 0.0,
             }
+            lease = MockComputeLease()
             with patch.object(server, "resolve_corpus_root", return_value=Path(temp)):
                 with patch.object(server, "_worker", None):
                     with patch.object(server, "_job", {"status": "idle"}):
-                        with patch.object(server, "Thread") as worker:
-                            started = server.start_training({
-                                "root": temp,
-                                "steps": 2,
-                                "batch_size": 1,
-                                "config": config,
-                                "learning_rate": 1e-4,
-                                "max_tokens": 1024,
-                                "device": "cpu",
-                                "seed": 17,
-                                "resume": False,
-                            })
-                            worker_body = worker.call_args.kwargs["args"][0]
+                        with patch.object(server, "acquire_compute_lease", return_value=lease):
+                            with patch.object(server, "Thread") as worker:
+                                started = server.start_training({
+                                    "root": temp,
+                                    "steps": 2,
+                                    "batch_size": 1,
+                                    "config": config,
+                                    "learning_rate": 1e-4,
+                                    "max_tokens": 1024,
+                                    "device": "cpu",
+                                    "seed": 17,
+                                    "resume": False,
+                                })
+                                worker_args = worker.call_args.kwargs["args"]
+                                worker_body = worker_args[0]
+                                self.assertIs(worker_args[1], lease)
 
+            lease.release()
             self.assertEqual(started["status"], "starting")
             self.assertEqual(worker_body["root"], str(Path(temp)))
             self.assertEqual(worker_body["steps"], 2)
@@ -372,15 +385,20 @@ class FineTuningApiResumeContractTests(unittest.TestCase):
                                 })
 
                         with patch.object(server, "_worker", None):
-                            with patch.object(server, "Thread") as worker:
-                                started = server.start_finetuning({
-                                    "dataset": "untrusted-input-path.jsonl",
-                                    "resume": True,
-                                    "gradient_accumulation_steps": 2,
-                                    "device": "cpu",
-                                })
-                                worker_body = worker.call_args.kwargs["args"][0]
+                            lease = MockComputeLease()
+                            with patch.object(server, "acquire_compute_lease", return_value=lease):
+                                with patch.object(server, "Thread") as worker:
+                                    started = server.start_finetuning({
+                                        "dataset": "untrusted-input-path.jsonl",
+                                        "resume": True,
+                                        "gradient_accumulation_steps": 2,
+                                        "device": "cpu",
+                                    })
+                                    worker_args = worker.call_args.kwargs["args"]
+                                    worker_body = worker_args[0]
+                                    self.assertIs(worker_args[1], lease)
 
+            lease.release()
             self.assertEqual(started["status"], "starting")
             self.assertEqual(worker_body["dataset"], str(resolved_dataset))
             self.assertTrue(worker_body["resume"])
