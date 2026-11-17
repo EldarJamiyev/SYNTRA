@@ -45,6 +45,23 @@ class NativeComputeLockTests(unittest.TestCase):
         with inference_compute_slot():
             pass
 
+    def test_symlink_lock_directory_is_rejected_without_leaking_local_admission(self):
+        target = Path(self.temp.name) / "private-locks"
+        target.mkdir(mode=0o700)
+        link = Path(self.temp.name) / "linked-locks"
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("Directory symlinks are unavailable on this runner.")
+
+        with patch.dict(os.environ, {"SYNTRA_COMPUTE_LOCK_DIR": str(link)}):
+            with self.assertRaisesRegex(RuntimeError, "real directory"):
+                with inference_compute_slot():
+                    self.fail("a symlinked lock directory must fail closed")
+
+        with inference_compute_slot():
+            pass
+
     def test_configured_inference_slots_are_bounded(self):
         configure_compute_inference_capacity(2)
         with patch.dict(os.environ, {"SYNTRA_MAX_CONCURRENT_INFERENCE": "2"}):
@@ -102,7 +119,9 @@ class NativeComputeLockTests(unittest.TestCase):
         while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
             time.sleep(0.02)
         if not ready.exists():
-            stdout, stderr = process.communicate(timeout=2)
+            if process.poll() is None:
+                process.terminate()
+            stdout, stderr = process.communicate(timeout=5)
             self.fail(
                 f"child failed to acquire {lock_kind} lease; "
                 f"exit={process.returncode}, stdout={stdout!r}, stderr={stderr!r}"
