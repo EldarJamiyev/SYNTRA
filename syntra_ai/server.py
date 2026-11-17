@@ -34,6 +34,77 @@ _worker: Thread | None = None
 
 
 
+
+MAX_REQUEST_JSON_DEPTH = 64
+
+
+def _request_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate JSON member names instead of silently applying last-value-wins."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key " + repr(key))
+        result[key] = value
+    return result
+
+
+def _request_json_float(value: str) -> float:
+    """Reject decimal JSON values that overflow to a non-finite Python float."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("non-finite JSON number " + repr(value))
+    return parsed
+
+
+def _reject_request_json_constant(value: str) -> None:
+    """Reject JavaScript-style NaN and Infinity constants, which are not JSON values."""
+    raise ValueError("non-standard JSON constant " + repr(value))
+
+
+def _validate_request_json_depth(source: str) -> None:
+    """Bound JSON nesting without counting brackets inside quoted strings."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in source:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == chr(92):
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            depth += 1
+            if depth > MAX_REQUEST_JSON_DEPTH:
+                raise ValueError(
+                    "JSON nesting exceeds the "
+                    + str(MAX_REQUEST_JSON_DEPTH)
+                    + "-level request body limit"
+                )
+        elif character in "}]":
+            depth = max(0, depth - 1)
+
+
+def _load_request_json(source: str) -> Any:
+    """Parse one bounded strict JSON request before endpoint-specific validation."""
+    _validate_request_json_depth(source)
+    try:
+        return json.loads(
+            source,
+            object_pairs_hook=_request_json_object,
+            parse_float=_request_json_float,
+            parse_constant=_reject_request_json_constant,
+        )
+    except RecursionError:
+        raise ValueError(
+            "JSON nesting exceeds the " + str(MAX_REQUEST_JSON_DEPTH) + "-level request body limit"
+        ) from None
+
+
 TRAINING_REQUEST_FIELDS = {
     "root", "steps", "batch_size", "config", "learning_rate",
     "max_tokens", "device", "seed", "resume",
@@ -310,7 +381,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("Request body exceeds the local AI API size limit.")
         if length == 0:
             return {}
-        value = json.loads(self.rfile.read(length).decode("utf-8"))
+        value = _load_request_json(self.rfile.read(length).decode("utf-8"))
         if not isinstance(value, dict):
             raise ValueError("Request body must be a JSON object.")
         return value

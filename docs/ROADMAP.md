@@ -449,3 +449,15 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for valid indexed selection, out-of-range indices, and CUDA-unavailable behavior.
 
 **Acceptance:** A valid explicit CUDA index resolves to the requested device; an out-of-range index fails with a clear `ValueError` before model allocation; unindexed `cuda` remains unchanged.
+
+
+### Phase 42 — Strict native HTTP JSON request decoding
+
+**Objective:** Prevent ambiguous or non-standard JSON request bodies from reaching native API route handlers.
+
+- [x] Reject duplicate object member names recursively at every nesting level.
+- [x] Reject JavaScript-style NaN/Infinity constants and decimal values that overflow to non-finite floats.
+- [x] Enforce a quote/escape-aware 64-level structural nesting limit and normalize parser recursion into a bounded client validation error.
+- [x] Add live HTTP regressions proving invalid request bodies return HTTP 400 before endpoint dispatch.
+
+**Acceptance:** Each invalid request is rejected consistently with HTTP 400; valid JSON objects preserve existing endpoint behavior and accepted field semantics.

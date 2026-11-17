@@ -65,3 +65,5 @@ Instruction fine-tuning must preserve the complete conditioning prompt. The JSON
 - Source-pretraining resume is fail-closed. A missing checkpoint is an error; it never silently turns an explicit resume request into a fresh random-weight training run.
 
 - Shared device selection validates an explicitly requested CUDA index against the local PyTorch device count before training or inference model allocation; the unindexed `cuda` selector retains the runtime's default-device behavior.
+
+- Native HTTP request bodies use strict JSON decoding: duplicate object keys, non-standard NaN/Infinity constants, overflowing decimal numbers, and nesting deeper than 64 levels are rejected before route dispatch.

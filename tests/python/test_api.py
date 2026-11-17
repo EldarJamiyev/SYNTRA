@@ -42,6 +42,30 @@ class LocalApiSmokeTests(unittest.TestCase):
                 self.assertFalse(model_status["checkpoint_exists"])
                 self.assertFalse(model_status["external_ai_api"])
 
+                strict_json_cases = [
+                    ('{"text":"first","text":"second"}', "duplicate JSON object key"),
+                    ('{"text":"valid","metadata":{"mode":"safe","mode":"unsafe"}}', "duplicate JSON object key"),
+                    ('{"text":"valid","metadata":NaN}', "non-standard JSON constant"),
+                    ('{"text":"valid","metadata":Infinity}', "non-standard JSON constant"),
+                    ('{"text":"valid","metadata":1e9999}', "non-finite JSON number"),
+                    (
+                        '{"text":"valid","metadata":' + "[" * 64 + "0" + "]" * 64 + "}",
+                        "JSON nesting exceeds the 64-level request body limit",
+                    ),
+                ]
+                for raw_body, expected_error in strict_json_cases:
+                    with self.subTest(raw_body=raw_body[:100]):
+                        connection.request(
+                            "POST",
+                            "/model/tokenize",
+                            body=raw_body,
+                            headers={"Content-Type": "application/json"},
+                        )
+                        response = connection.getresponse()
+                        rejected = json.loads(response.read())
+                        self.assertEqual(response.status, 400)
+                        self.assertIn(expected_error, rejected["error"])
+
                 connection.request(
                     "POST",
                     "/model/generate",
