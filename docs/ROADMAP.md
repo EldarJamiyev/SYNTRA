@@ -461,3 +461,16 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add live HTTP regressions proving invalid request bodies return HTTP 400 before endpoint dispatch.
 
 **Acceptance:** Each invalid request is rejected consistently with HTTP 400; valid JSON objects preserve existing endpoint behavior and accepted field semantics.
+
+
+### Phase 43 — Strict native generation request contracts
+
+**Objective:** Make streaming and non-streaming native generation enforce the same parameter contract before loading a checkpoint or allocating an inference model.
+
+- [x] Validate strict integer types/ranges for output token count and top-k; reject booleans and fractional/string values.
+- [x] Validate finite temperature, top-p, and repetition-penalty ranges without accepting booleans or overflowing numbers.
+- [x] Validate local device selection before checkpoint loading and share the same validator between streaming and non-streaming generation.
+- [x] Remove HTTP `int()`/`float()`/`str()` coercion for generation parameters and require an actual boolean stream flag.
+- [x] Add direct runtime and live HTTP regressions proving invalid controls fail before a checkpoint is loaded.
+
+**Acceptance:** Both generation modes accept the same parameter types and ranges; invalid inputs return a client validation error before model loading, while existing valid defaults and output behavior remain unchanged.
