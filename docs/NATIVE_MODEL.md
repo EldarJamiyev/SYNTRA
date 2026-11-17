@@ -74,3 +74,5 @@ Instruction fine-tuning must preserve the complete conditioning prompt. The JSON
 - Repository curriculum HTTP requests preserve the caller's `max_examples` type so the curriculum engine's strict integer bounds reject fractional, string, and boolean values.
 
 - Resident inference loads are single-flight per checkpoint path: concurrent first requests share one deserialization/model construction, and a checkpoint whose file identity changes while the model is being built is rejected rather than cached.
+
+- The loopback HTTP service applies bounded admission control to generation (including the full streamed response), embeddings, and fresh evaluation. The default is one in-flight inference request; `SYNTRA_MAX_CONCURRENT_INFERENCE` can raise the capacity to 2–4 after local memory testing. Requests arriving at capacity receive HTTP 503 with `Retry-After: 1`; health/status and token counting remain available.

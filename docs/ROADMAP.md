@@ -499,3 +499,16 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add concurrent-load and atomic replacement-during-load regressions.
 
 **Acceptance:** Concurrent requests for the same checkpoint/device construct one model; different checkpoint paths can still load independently; a checkpoint replaced during load never enters the resident cache.
+
+
+### Phase 46 — Bounded native inference admission control
+
+**Objective:** Prevent unbounded concurrent HTTP inference requests from multiplying activation/KV memory use on a local CPU/GPU while preserving responsive health/status and lightweight tokenization endpoints.
+
+- [x] Add a bounded inference semaphore with a safe default of one in-flight model operation and a strict configurable range of 1–4.
+- [x] Apply admission to generation, embeddings, and fresh evaluation; retain the slot throughout streamed generation.
+- [x] Reject excess work immediately with HTTP 503 and `Retry-After: 1`, rather than queueing an unbounded set of request threads.
+- [x] Release slots on success, validation failure, and stream completion; keep health/status/tokenize endpoints outside the inference gate.
+- [x] Add live HTTP tests for busy responses, release-on-error, streaming lifetime, and invalid capacity settings.
+
+**Acceptance:** Active heavy inference operations never exceed the configured limit; rejected requests receive a retryable response; each acquired slot is released exactly once on every exit path.

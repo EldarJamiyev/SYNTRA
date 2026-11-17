@@ -1,7 +1,8 @@
 """Loopback-only HTTP API for SYNTRA's trained local model."""
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock, Thread
+from threading import BoundedSemaphore, Lock, Thread
 from typing import Any
 import json
 import math
@@ -31,6 +32,37 @@ _job: dict[str, Any] = {
     "validation_loss": None, "message": "No training job has run in this process."
 }
 _worker: Thread | None = None
+
+DEFAULT_MAX_CONCURRENT_INFERENCE = 1
+MAX_CONCURRENT_INFERENCE = 4
+_INFERENCE_SLOTS = BoundedSemaphore(DEFAULT_MAX_CONCURRENT_INFERENCE)
+
+
+def _configure_inference_slots(value: str | None = None) -> int:
+    """Configure bounded simultaneous inference requests before serving traffic."""
+    raw = os.environ.get("SYNTRA_MAX_CONCURRENT_INFERENCE", "1") if value is None else value
+    if not isinstance(raw, str) or not re.fullmatch(rf"[1-{MAX_CONCURRENT_INFERENCE}]", raw):
+        raise ValueError(
+            "SYNTRA_MAX_CONCURRENT_INFERENCE must be an integer between 1 and 4."
+        )
+    capacity = int(raw)
+    global _INFERENCE_SLOTS
+    _INFERENCE_SLOTS = BoundedSemaphore(capacity)
+    return capacity
+
+
+@contextmanager
+def _inference_slot():
+    """Acquire one inference slot without allowing an unbounded request queue."""
+    acquired = _INFERENCE_SLOTS.acquire(blocking=False)
+    if not acquired:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        _INFERENCE_SLOTS.release()
+
 
 
 
@@ -364,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: object) -> None:
         print("[SYNTRA AI] " + (format % args))
 
-    def _send(self, status_code: int, value: dict) -> None:
+    def _send(self, status_code: int, value: dict, extra_headers: dict[str, str] | None = None) -> None:
         encoded = json.dumps(value, ensure_ascii=False).encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -372,6 +404,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+        for name, header_value in (extra_headers or {}).items():
+            self.send_header(name, header_value)
         self.end_headers()
         self.wfile.write(encoded)
 
@@ -429,14 +463,22 @@ class Handler(BaseHTTPRequestHandler):
                 result = tokenize_text(body.get("text", ""))
                 self._send(200, result)
             elif self.path == "/model/embed":
-                texts = body.get("input") if "input" in body else body.get("texts", [])
-                if isinstance(texts, str):
-                    texts = [texts]
-                result = embed_texts(
-                    texts=texts,
-                    device_name=body.get("device", "auto"),
-                )
-                self._send(200, result)
+                with _inference_slot() as admitted:
+                    if not admitted:
+                        self._send(
+                            503,
+                            {"error": "Native inference capacity is busy; retry the request."},
+                            {"Retry-After": "1"},
+                        )
+                        return
+                    texts = body.get("input") if "input" in body else body.get("texts", [])
+                    if isinstance(texts, str):
+                        texts = [texts]
+                    result = embed_texts(
+                        texts=texts,
+                        device_name=body.get("device", "auto"),
+                    )
+                    self._send(200, result)
             elif self.path == "/model/curriculum":
                 result = synthesize_repository_curriculum(
                     root=body.get("root"),
@@ -445,51 +487,67 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send(200, result)
             elif self.path == "/model/evaluate":
-                result = evaluate(
-                    root=body.get("root", ""),
-                    batches=body.get("batches", 16),
-                    device_name=body.get("device", "auto"),
-                    max_tokens=body.get("max_tokens", 2_000_000),
-                )
-                self._send(200, result)
+                with _inference_slot() as admitted:
+                    if not admitted:
+                        self._send(
+                            503,
+                            {"error": "Native inference capacity is busy; retry the request."},
+                            {"Retry-After": "1"},
+                        )
+                        return
+                    result = evaluate(
+                        root=body.get("root", ""),
+                        batches=body.get("batches", 16),
+                        device_name=body.get("device", "auto"),
+                        max_tokens=body.get("max_tokens", 2_000_000),
+                    )
+                    self._send(200, result)
             elif self.path == "/model/generate":
                 streaming = body.get("stream", False)
                 if type(streaming) is not bool:
                     raise ValueError("stream must be a boolean.")
-                if streaming:
-                    stream = stream_generate(
-                        prompt=body.get("prompt", ""),
-                        max_new_tokens=body.get("max_new_tokens", 256),
-                        temperature=body.get("temperature", 0.7),
-                        top_k=body.get("top_k", 40),
-                        top_p=body.get("top_p", 1.0),
-                        repetition_penalty=body.get("repetition_penalty", 1.0),
-                        device_name=body.get("device", "auto"),
-                    )
-                    first_event = next(stream, None)
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-                    self.send_header("Cache-Control", "no-store")
-                    self.send_header("X-Content-Type-Options", "nosniff")
-                    self.send_header("Referrer-Policy", "no-referrer")
-                    self.end_headers()
-                    if first_event is not None:
-                        self.wfile.write((json.dumps(first_event, ensure_ascii=False) + "\n").encode("utf-8"))
-                        self.wfile.flush()
-                    for event in stream:
-                        self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
-                        self.wfile.flush()
-                else:
-                    result = generate(
-                        prompt=body.get("prompt", ""),
-                        max_new_tokens=body.get("max_new_tokens", 256),
-                        temperature=body.get("temperature", 0.7),
-                        top_k=body.get("top_k", 40),
-                        top_p=body.get("top_p", 1.0),
-                        repetition_penalty=body.get("repetition_penalty", 1.0),
-                        device_name=body.get("device", "auto"),
-                    )
-                    self._send(200, result)
+                with _inference_slot() as admitted:
+                    if not admitted:
+                        self._send(
+                            503,
+                            {"error": "Native inference capacity is busy; retry the request."},
+                            {"Retry-After": "1"},
+                        )
+                        return
+                    if streaming:
+                        stream = stream_generate(
+                            prompt=body.get("prompt", ""),
+                            max_new_tokens=body.get("max_new_tokens", 256),
+                            temperature=body.get("temperature", 0.7),
+                            top_k=body.get("top_k", 40),
+                            top_p=body.get("top_p", 1.0),
+                            repetition_penalty=body.get("repetition_penalty", 1.0),
+                            device_name=body.get("device", "auto"),
+                        )
+                        first_event = next(stream, None)
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                        self.send_header("Cache-Control", "no-store")
+                        self.send_header("X-Content-Type-Options", "nosniff")
+                        self.send_header("Referrer-Policy", "no-referrer")
+                        self.end_headers()
+                        if first_event is not None:
+                            self.wfile.write((json.dumps(first_event, ensure_ascii=False) + "\n").encode("utf-8"))
+                            self.wfile.flush()
+                        for event in stream:
+                            self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
+                            self.wfile.flush()
+                    else:
+                        result = generate(
+                            prompt=body.get("prompt", ""),
+                            max_new_tokens=body.get("max_new_tokens", 256),
+                            temperature=body.get("temperature", 0.7),
+                            top_k=body.get("top_k", 40),
+                            top_p=body.get("top_p", 1.0),
+                            repetition_penalty=body.get("repetition_penalty", 1.0),
+                            device_name=body.get("device", "auto"),
+                        )
+                        self._send(200, result)
             else:
                 self._send(404, {"error": "Route not found."})
         except FileNotFoundError as exc:
@@ -512,7 +570,12 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     if not 1024 <= PORT <= 65535:
         raise SystemExit("SYNTRA_AI_PORT must be between 1024 and 65535.")
+    try:
+        inference_capacity = _configure_inference_slots()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
     server = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"Native inference capacity: {inference_capacity} simultaneous request(s)")
     print(f"SYNTRA native AI API listening on http://{HOST}:{PORT}")
     print("Loopback-only. No hosted model API or pretrained weights are used.")
     try:
