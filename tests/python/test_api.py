@@ -652,6 +652,10 @@ class InferenceAdmissionControlTests(unittest.TestCase):
                         self.assertIsNone(server._worker)
                         self.assertEqual(server._job["status"], "failed")
 
+        from syntra_ai.compute_lock import acquire_compute_lease
+        with acquire_compute_lease("inference"):
+            pass
+
     def test_inference_capacity_configuration_is_strictly_bounded(self):
         from syntra_ai.server import _configure_inference_slots
 
