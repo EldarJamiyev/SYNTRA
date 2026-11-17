@@ -18,6 +18,7 @@ except ImportError:
     torch = None  # type: ignore[assignment]
     SyntraTransformer = None  # type: ignore[assignment]
 
+from .compute_lock import exclusive_compute_guard
 from .config import ModelConfig
 from .checkpoint_io import checkpoint_file_identity, load_torch_checkpoint_snapshot
 from .data import MAX_CORPUS_TOKENS, load_corpus
@@ -485,6 +486,7 @@ def _same_architecture(requested: ModelConfig, stored: ModelConfig) -> bool:
     return requested.to_dict() == stored.to_dict()
 
 
+@exclusive_compute_guard
 def train(
     roots: list[str],
     checkpoint: str | Path,
