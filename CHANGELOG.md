@@ -13,6 +13,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
+- Enforce strict native embedding/evaluation device and integer-budget validation before checkpoint access; stop HTTP coercion for embed, evaluate, and curriculum request parameters.
 - Share strict native generation parameter/device validation between streaming and non-streaming inference, before checkpoint loading; remove HTTP numeric coercion and reject non-boolean stream flags.
 - Apply strict JSON decoding to native HTTP request bodies, rejecting duplicate object keys, non-standard/non-finite numbers, float overflow, and excessive nesting before endpoint dispatch.
 - Validate explicit CUDA device indices in the shared local device selector before training/model allocation; preserve default `cuda` selection and fail clearly for unavailable indices.
