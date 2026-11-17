@@ -2,5 +2,6 @@
 # CUDA users can install a matching CUDA-enabled PyTorch build separately.
 --index-url https://download.pytorch.org/whl/cpu
 --extra-index-url https://pypi.org/simple
+filelock>=4.2.10,<5
 numpy>=2.5.4,<3
 torch>=2.15.0,<2.16
