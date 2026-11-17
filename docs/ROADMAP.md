@@ -527,3 +527,17 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add regressions for both directions of exclusion and failed worker startup.
 
 **Acceptance:** Within one native API process, admitted inference and active training/fine-tuning never overlap; admission decisions and active-request release are serialized, rejected work starts no model operation, and every failure path leaves the service able to accept later work.
+
+
+### Phase 48 — Cross-process native compute coordination
+
+**Objective:** Extend the local API's training/inference exclusion to direct CLI invocations and multiple SYNTRA service processes sharing one OS user profile.
+
+- [x] Add OS-backed lock-file leases with four shared inference slots and an exclusive training/fine-tuning reservation that acquires all slots.
+- [x] Apply inference leases to generation, streamed generation (for the entire iterator lifetime), embeddings, and fresh evaluation.
+- [x] Apply exclusive leases to complete source-training and SFT operations, including checkpoint persistence and validation.
+- [x] Make admission non-queuing and fail closed when another process owns the required slots; release OS locks automatically when a process exits.
+- [x] Keep the lock directory private to the current OS user, reject symlink/non-directory lock paths, and support an explicit private local lock-directory override.
+- [x] Add same-process and real subprocess tests for both exclusion directions, streaming lifetime, capacity, and lock release after process termination.
+
+**Acceptance:** Native heavy-compute operations from the API and CLI cannot overlap on the same host/user lock domain; training requires all four inference slots, inference requires one configured slot, and terminated processes do not leave stale OS locks.
