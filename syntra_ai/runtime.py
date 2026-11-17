@@ -2,7 +2,7 @@
 from __future__ import annotations
 from codecs import getincrementaldecoder
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import Any, Iterator
 import hashlib
 import json
@@ -45,6 +45,9 @@ FALLBACK_BRAIN_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "syntra-brain.pt"
 
 _CACHE_LOCK = RLock()
 _RESIDENT_CACHE: dict[str, tuple[tuple[Any, ...], Any, dict, ModelConfig, ByteBPETokenizer, Any]] = {}
+# Per-checkpoint single-flight locks prevent concurrent requests from constructing
+# duplicate resident models; reference counts keep the lock map bounded.
+_RESIDENT_LOAD_LOCKS: dict[str, tuple[Any, int]] = {}
 
 
 class ContextWindowExceededError(ValueError):
@@ -178,10 +181,7 @@ def _read_checkpoint(
     return target, saved, config, tokenizer
 
 
-def _get_resident_bundle(path: str | Path | None = None, device_name: str = "auto") -> tuple[Path, SyntraTransformer, dict, ModelConfig, ByteBPETokenizer, torch.device]:
-    target = Path(path).expanduser().absolute() if path else checkpoint_path()
-    if not target.is_file():
-        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
+def _resident_cache_signature(target: Path, device_name: str) -> tuple[tuple[Any, ...], Path]:
     load_target = select_inference_checkpoint(target)
     try:
         # Include device, inode, size, mtime and ctime for both the resumable
@@ -194,30 +194,82 @@ def _get_resident_bundle(path: str | Path | None = None, device_name: str = "aut
             str(device_name),
         )
     except OSError:
-        signature = ((-1, -1, -1, -1, -1), str(load_target), (-1, -1, -1, -1, -1), str(device_name))
+        signature = (
+            (-1, -1, -1, -1, -1),
+            str(load_target),
+            (-1, -1, -1, -1, -1),
+            str(device_name),
+        )
+    return signature, load_target
+
+
+def _get_resident_bundle(path: str | Path | None = None, device_name: str = "auto") -> tuple[Path, SyntraTransformer, dict, ModelConfig, ByteBPETokenizer, torch.device]:
+    target = Path(path).expanduser().absolute() if path else checkpoint_path()
+    if not target.is_file():
+        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
 
     cache_key = str(target)
+    signature, _load_target = _resident_cache_signature(target, device_name)
     with _CACHE_LOCK:
         cached = _RESIDENT_CACHE.get(cache_key)
         if cached is not None and cached[0] == signature:
             _, model, saved, config, tokenizer, device = cached
             return target, model, saved, config, tokenizer, device
 
-    target, saved, config, tokenizer = _read_checkpoint(target)
-    device = choose_device(device_name)
-    validate_inference_memory_budget(
-        config, batch_size=1, sequence_length=config.seq_len, device=device
-    )
-    model = SyntraTransformer(config).to(device)
-    model.load_state_dict(saved["model_state"])
-    model.eval()
-    with _CACHE_LOCK:
-        if len(_RESIDENT_CACHE) >= 4:
-            oldest_key = next(iter(_RESIDENT_CACHE))
-            _RESIDENT_CACHE.pop(oldest_key, None)
-        _RESIDENT_CACHE[cache_key] = (signature, model, saved, config, tokenizer, device)
-    return target, model, saved, config, tokenizer, device
+        lock_entry = _RESIDENT_LOAD_LOCKS.get(cache_key)
+        if lock_entry is None:
+            load_lock = Lock()
+            _RESIDENT_LOAD_LOCKS[cache_key] = (load_lock, 1)
+        else:
+            load_lock, users = lock_entry
+            _RESIDENT_LOAD_LOCKS[cache_key] = (load_lock, users + 1)
 
+    load_lock.acquire()
+    try:
+        # Another request may have loaded this checkpoint while we waited.
+        # Re-resolve the inference companion and fingerprint after acquiring the
+        # per-path lock, then re-check the cache before doing expensive work.
+        signature, _load_target = _resident_cache_signature(target, device_name)
+        with _CACHE_LOCK:
+            cached = _RESIDENT_CACHE.get(cache_key)
+            if cached is not None and cached[0] == signature:
+                _, model, saved, config, tokenizer, device = cached
+                return target, model, saved, config, tokenizer, device
+
+        target, saved, config, tokenizer = _read_checkpoint(target)
+        device = choose_device(device_name)
+        validate_inference_memory_budget(
+            config, batch_size=1, sequence_length=config.seq_len, device=device
+        )
+        model = SyntraTransformer(config).to(device)
+        model.load_state_dict(saved["model_state"])
+        model.eval()
+
+        # Never publish a model loaded from bytes whose checkpoint identity is
+        # no longer the identity observed before deserialization/model creation.
+        signature_after, _load_target_after = _resident_cache_signature(target, device_name)
+        if signature_after != signature:
+            raise RuntimeError(
+                "The checkpoint changed while its resident model was loading; retry the request."
+            )
+
+        with _CACHE_LOCK:
+            if len(_RESIDENT_CACHE) >= 4 and cache_key not in _RESIDENT_CACHE:
+                oldest_key = next(iter(_RESIDENT_CACHE))
+                _RESIDENT_CACHE.pop(oldest_key, None)
+            _RESIDENT_CACHE[cache_key] = (
+                signature, model, saved, config, tokenizer, device
+            )
+        return target, model, saved, config, tokenizer, device
+    finally:
+        load_lock.release()
+        with _CACHE_LOCK:
+            entry = _RESIDENT_LOAD_LOCKS.get(cache_key)
+            if entry is not None and entry[0] is load_lock:
+                if entry[1] <= 1:
+                    _RESIDENT_LOAD_LOCKS.pop(cache_key, None)
+                else:
+                    _RESIDENT_LOAD_LOCKS[cache_key] = (load_lock, entry[1] - 1)
 
 def clear_resident_cache() -> None:
     with _CACHE_LOCK:
