@@ -512,3 +512,18 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add live HTTP tests for busy responses, release-on-error, streaming lifetime, and invalid capacity settings.
 
 **Acceptance:** Active heavy inference operations never exceed the configured limit; rejected requests receive a retryable response; each acquired slot is released exactly once on every exit path.
+
+
+
+### Phase 47 — Coordinate native training and inference admission
+
+**Objective:** Prevent local source pretraining or supervised fine-tuning from consuming CPU/GPU memory concurrently with HTTP inference in the same native service.
+
+- [x] Synchronize training admission with the active inference counter so a training job starts only after all admitted inference requests finish.
+- [x] Reject new inference requests immediately while a training/fine-tuning worker is alive, without queueing additional model work.
+- [x] Return retryable HTTP 503 with `Retry-After: 1` when training cannot start due to active inference; preserve the existing inference-busy response for rejected model requests.
+- [x] Keep health, model status, training status, and tokenization available while heavy compute is excluded.
+- [x] Roll back worker state when thread startup fails and prevent inference-capacity reconfiguration while compute is active.
+- [x] Add regressions for both directions of exclusion and failed worker startup.
+
+**Acceptance:** Within one native API process, admitted inference and active training/fine-tuning never overlap; admission decisions and active-request release are serialized, rejected work starts no model operation, and every failure path leaves the service able to accept later work.
