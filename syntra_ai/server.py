@@ -36,6 +36,11 @@ _worker: Thread | None = None
 DEFAULT_MAX_CONCURRENT_INFERENCE = 1
 MAX_CONCURRENT_INFERENCE = 4
 _INFERENCE_SLOTS = BoundedSemaphore(DEFAULT_MAX_CONCURRENT_INFERENCE)
+_ACTIVE_INFERENCE_REQUESTS = 0
+
+
+class ComputeBusyError(RuntimeError):
+    """Raised when training cannot start without overlapping active inference."""
 
 
 def _configure_inference_slots(value: str | None = None) -> int:
@@ -47,21 +52,32 @@ def _configure_inference_slots(value: str | None = None) -> int:
         )
     capacity = int(raw)
     global _INFERENCE_SLOTS
-    _INFERENCE_SLOTS = BoundedSemaphore(capacity)
+    with _job_lock:
+        if _ACTIVE_INFERENCE_REQUESTS or (_worker is not None and _worker.is_alive()):
+            raise ValueError("Inference capacity can only be configured while the native service is idle.")
+        _INFERENCE_SLOTS = BoundedSemaphore(capacity)
     return capacity
 
 
 @contextmanager
 def _inference_slot():
-    """Acquire one inference slot without allowing an unbounded request queue."""
-    acquired = _INFERENCE_SLOTS.acquire(blocking=False)
+    """Admit inference only when training is idle and a bounded slot is available."""
+    global _ACTIVE_INFERENCE_REQUESTS
+    with _job_lock:
+        training_active = _worker is not None and _worker.is_alive()
+        slots = _INFERENCE_SLOTS
+        acquired = not training_active and slots.acquire(blocking=False)
+        if acquired:
+            _ACTIVE_INFERENCE_REQUESTS += 1
     if not acquired:
         yield False
         return
     try:
         yield True
     finally:
-        _INFERENCE_SLOTS.release()
+        with _job_lock:
+            _ACTIVE_INFERENCE_REQUESTS -= 1
+            slots.release()
 
 
 
@@ -339,12 +355,24 @@ def start_training(body: dict) -> dict:
     with _job_lock:
         if _worker is not None and _worker.is_alive():
             raise ValueError("SYNTRA training is already running.")
+        if _ACTIVE_INFERENCE_REQUESTS:
+            raise ComputeBusyError(
+                "Native compute is busy with active inference; retry training after the current request(s) finish."
+            )
         _job.update({
             "status": "starting", "step": 0, "max_steps": body["steps"],
             "train_loss": None, "validation_loss": None, "message": "Training worker is starting."
         })
         _worker = Thread(target=_run_training, args=(dict(body),), daemon=True, name="syntra-training")
-        _worker.start()
+        try:
+            _worker.start()
+        except Exception as exc:
+            _worker = None
+            _job.update({
+                "status": "failed", "finished_at": time.time(),
+                "message": "Training worker could not start: " + str(exc),
+            })
+            raise
         return dict(_job)
 
 
@@ -374,6 +402,10 @@ def start_finetuning(body: dict) -> dict:
     with _job_lock:
         if _worker is not None and _worker.is_alive():
             raise ValueError("SYNTRA training is already running.")
+        if _ACTIVE_INFERENCE_REQUESTS:
+            raise ComputeBusyError(
+                "Native compute is busy with active inference; retry fine-tuning after the current request(s) finish."
+            )
         _job.update({
             "status": "starting", "step": 0, "max_steps": worker_body["steps"],
             "train_loss": None, "validation_loss": None,
@@ -386,7 +418,15 @@ def start_finetuning(body: dict) -> dict:
             target=_run_finetuning, args=(worker_body,),
             daemon=True, name="syntra-instruction-finetuning"
         )
-        _worker.start()
+        try:
+            _worker.start()
+        except Exception as exc:
+            _worker = None
+            _job.update({
+                "status": "failed", "finished_at": time.time(),
+                "message": "Fine-tuning worker could not start: " + str(exc),
+            })
+            raise
         return dict(_job)
 
 
@@ -550,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(200, result)
             else:
                 self._send(404, {"error": "Route not found."})
+        except ComputeBusyError as exc:
+            self._send(503, {"error": str(exc)}, {"Retry-After": "1"})
         except FileNotFoundError as exc:
             self._send(409, {"error": str(exc)})
         except ContextWindowExceededError as exc:
