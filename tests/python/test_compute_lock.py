@@ -91,6 +91,20 @@ class NativeComputeLockTests(unittest.TestCase):
         with exclusive_training_compute():
             pass
 
+    def test_cli_reports_busy_compute_with_nonzero_exit(self):
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from unittest.mock import patch
+        from syntra_ai import cli
+
+        error_output = StringIO()
+        with patch.object(cli, "generate", side_effect=ComputeBusyError("another process is training")):
+            with redirect_stderr(error_output):
+                exit_code = cli.main(["generate", "--prompt", "test prompt"])
+        self.assertEqual(exit_code, 3)
+        self.assertIn("SYNTRA compute admission rejected", error_output.getvalue())
+        self.assertIn("another process is training", error_output.getvalue())
+
     def _run_child_holding(self, lock_kind: str):
         ready = Path(self.temp.name) / f"{lock_kind}.ready"
         if ready.exists():
