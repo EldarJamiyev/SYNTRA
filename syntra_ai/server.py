@@ -358,11 +358,11 @@ def start_training(body: dict) -> dict:
                 "Native compute is busy with active inference; retry training after the current request(s) finish."
             )
         lease = acquire_compute_lease("training")
-        _job.update({
-            "status": "starting", "step": 0, "max_steps": body["steps"],
-            "train_loss": None, "validation_loss": None, "message": "Training worker is starting."
-        })
         try:
+            _job.update({
+                "status": "starting", "step": 0, "max_steps": body["steps"],
+                "train_loss": None, "validation_loss": None, "message": "Training worker is starting."
+            })
             _worker = Thread(
                 target=_run_training,
                 args=(dict(body), lease),
@@ -413,15 +413,15 @@ def start_finetuning(body: dict) -> dict:
                 "Native compute is busy with active inference; retry fine-tuning after the current request(s) finish."
             )
         lease = acquire_compute_lease("training")
-        _job.update({
-            "status": "starting", "step": 0, "max_steps": worker_body["steps"],
-            "train_loss": None, "validation_loss": None,
-            "message": (
-                "Resuming the saved supervised fine-tuning stage."
-                if worker_body["resume"] else "Supervised instruction-tuning worker is starting."
-            )
-        })
         try:
+            _job.update({
+                "status": "starting", "step": 0, "max_steps": worker_body["steps"],
+                "train_loss": None, "validation_loss": None,
+                "message": (
+                    "Resuming the saved supervised fine-tuning stage."
+                    if worker_body["resume"] else "Supervised instruction-tuning worker is starting."
+                )
+            })
             _worker = Thread(
                 target=_run_finetuning,
                 args=(worker_body, lease),
