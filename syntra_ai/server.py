@@ -453,15 +453,18 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send(200, result)
             elif self.path == "/model/generate":
-                if body.get("stream") is True:
+                streaming = body.get("stream", False)
+                if type(streaming) is not bool:
+                    raise ValueError("stream must be a boolean.")
+                if streaming:
                     stream = stream_generate(
                         prompt=body.get("prompt", ""),
-                        max_new_tokens=int(body.get("max_new_tokens", 256)),
-                        temperature=float(body.get("temperature", 0.7)),
-                        top_k=int(body.get("top_k", 40)),
-                        top_p=float(body.get("top_p", 1.0)),
-                        repetition_penalty=float(body.get("repetition_penalty", 1.0)),
-                        device_name=str(body.get("device", "auto")),
+                        max_new_tokens=body.get("max_new_tokens", 256),
+                        temperature=body.get("temperature", 0.7),
+                        top_k=body.get("top_k", 40),
+                        top_p=body.get("top_p", 1.0),
+                        repetition_penalty=body.get("repetition_penalty", 1.0),
+                        device_name=body.get("device", "auto"),
                     )
                     first_event = next(stream, None)
                     self.send_response(200)
@@ -479,12 +482,12 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     result = generate(
                         prompt=body.get("prompt", ""),
-                        max_new_tokens=int(body.get("max_new_tokens", 256)),
-                        temperature=float(body.get("temperature", 0.7)),
-                        top_k=int(body.get("top_k", 40)),
-                        top_p=float(body.get("top_p", 1.0)),
-                        repetition_penalty=float(body.get("repetition_penalty", 1.0)),
-                        device_name=str(body.get("device", "auto")),
+                        max_new_tokens=body.get("max_new_tokens", 256),
+                        temperature=body.get("temperature", 0.7),
+                        top_k=body.get("top_k", 40),
+                        top_p=body.get("top_p", 1.0),
+                        repetition_penalty=body.get("repetition_penalty", 1.0),
+                        device_name=body.get("device", "auto"),
                     )
                     self._send(200, result)
             else:
