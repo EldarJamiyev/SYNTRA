@@ -591,6 +591,59 @@ def _token_bytes_table(tokenizer: ByteBPETokenizer) -> list[bytes]:
 
 
 @_no_grad
+
+def _normalize_generation_options(
+    max_new_tokens: Any,
+    temperature: Any,
+    top_k: Any,
+    top_p: Any,
+    repetition_penalty: Any,
+    device_name: Any,
+) -> tuple[int, float, int, float, float, str]:
+    """Validate generation controls before checkpoint loading or inference allocation."""
+    if type(max_new_tokens) is not int or not 1 <= max_new_tokens <= 4096:
+        raise ValueError("max_new_tokens must be an integer between 1 and 4096.")
+    if type(top_k) is not int or top_k < 1:
+        raise ValueError("top_k must be a positive integer.")
+
+    def finite_number(name: str, value: Any, minimum: float, maximum: float, *, exclusive_min: bool = False) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be a finite number between {minimum} and {maximum}.")
+        try:
+            normalized = float(value)
+        except (OverflowError, TypeError, ValueError):
+            raise ValueError(f"{name} must be a finite number between {minimum} and {maximum}.") from None
+        lower_invalid = normalized <= minimum if exclusive_min else normalized < minimum
+        if not math.isfinite(normalized) or lower_invalid or normalized > maximum:
+            comparator = "exclusive" if exclusive_min else "inclusive"
+            raise ValueError(
+                f"{name} must be a finite number in the {comparator} range "
+                + f"{minimum}..{maximum}."
+            )
+        return normalized
+
+    normalized_temperature = finite_number("temperature", temperature, 0.0, 2.0)
+    normalized_top_p = finite_number("top_p", top_p, 0.0, 1.0, exclusive_min=True)
+    normalized_repetition_penalty = finite_number(
+        "repetition_penalty", repetition_penalty, 1.0, 2.0
+    )
+    if not isinstance(device_name, str) or not device_name.strip():
+        raise ValueError("device must be auto, cpu, cuda, cuda:N, or mps.")
+    normalized_device = device_name.strip().lower()
+    try:
+        choose_device(normalized_device)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError("Requested device is unavailable: " + str(exc)) from None
+    return (
+        max_new_tokens,
+        normalized_temperature,
+        top_k,
+        normalized_top_p,
+        normalized_repetition_penalty,
+        normalized_device,
+    )
+
+
 def stream_generate(
     prompt: str,
     max_new_tokens: int = 256,
@@ -606,10 +659,16 @@ def stream_generate(
         raise ValueError("A non-empty text prompt is required.")
     if len(prompt.encode("utf-8")) > 200_000:
         raise ValueError("Prompt exceeds 200 KB.")
-    if max_new_tokens < 1 or max_new_tokens > 4096:
-        raise ValueError("max_new_tokens must be between 1 and 4096.")
-    if not 0.0 <= temperature <= 2.0:
-        raise ValueError("temperature must be between 0.0 and 2.0.")
+    (
+        max_new_tokens,
+        temperature,
+        top_k,
+        top_p,
+        repetition_penalty,
+        device_name,
+    ) = _normalize_generation_options(
+        max_new_tokens, temperature, top_k, top_p, repetition_penalty, device_name
+    )
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
     full_prompt_ids = _encode_prompt_within_context(prompt, tokenizer, config)
     prompt_ids = full_prompt_ids
@@ -715,6 +774,16 @@ def generate(
         raise ValueError("A non-empty text prompt is required.")
     if len(prompt.encode("utf-8")) > 200_000:
         raise ValueError("Prompt exceeds 200 KB.")
+    (
+        max_new_tokens,
+        temperature,
+        top_k,
+        top_p,
+        repetition_penalty,
+        device_name,
+    ) = _normalize_generation_options(
+        max_new_tokens, temperature, top_k, top_p, repetition_penalty, device_name
+    )
     target, model, saved, config, tokenizer, device = _get_resident_bundle(path=path, device_name=device_name)
     full_prompt_ids = _encode_prompt_within_context(prompt, tokenizer, config)
     prompt_ids = full_prompt_ids

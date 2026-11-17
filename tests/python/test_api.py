@@ -66,6 +66,32 @@ class LocalApiSmokeTests(unittest.TestCase):
                         self.assertEqual(response.status, 400)
                         self.assertIn(expected_error, rejected["error"])
 
+                invalid_generation_cases = [
+                    ({"max_new_tokens": True}, False, "max_new_tokens must be an integer"),
+                    ({"max_new_tokens": 1.5}, True, "max_new_tokens must be an integer"),
+                    ({"temperature": "0.7"}, False, "temperature must be a finite number"),
+                    ({"top_k": False}, True, "top_k must be a positive integer"),
+                    ({"top_p": 0.0}, True, "top_p must be a finite number"),
+                    ({"repetition_penalty": 0.5}, False, "repetition_penalty must be a finite number"),
+                    ({"device": 123}, False, "device must be auto"),
+                    ({"stream": "true"}, False, "stream must be a boolean"),
+                ]
+                for overrides, streaming, expected_error in invalid_generation_cases:
+                    with self.subTest(overrides=overrides, streaming=streaming):
+                        request_body = {"prompt": "valid prompt", **overrides}
+                        if streaming and "stream" not in request_body:
+                            request_body["stream"] = True
+                        connection.request(
+                            "POST",
+                            "/model/generate",
+                            body=json.dumps(request_body),
+                            headers={"Content-Type": "application/json"},
+                        )
+                        response = connection.getresponse()
+                        rejected = json.loads(response.read())
+                        self.assertEqual(response.status, 400)
+                        self.assertIn(expected_error, rejected["error"])
+
                 connection.request(
                     "POST",
                     "/model/generate",
