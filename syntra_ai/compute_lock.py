@@ -81,8 +81,8 @@ def inference_compute_slot() -> Iterator[None]:
         local = _local_slots[slot]
         if not local.acquire(blocking=False):
             continue
-        file_lock = FileLock(str(_lock_path(slot)))
         try:
+            file_lock = FileLock(str(_lock_path(slot)))
             file_lock.acquire(timeout=0)
         except FileLockTimeout:
             local.release()
@@ -93,8 +93,10 @@ def inference_compute_slot() -> Iterator[None]:
         try:
             yield
         finally:
-            file_lock.release()
-            local.release()
+            try:
+                file_lock.release()
+            finally:
+                local.release()
         return
     raise ComputeBusyError(
         "Native compute capacity is busy in another request or SYNTRA process; retry after it finishes."
