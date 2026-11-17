@@ -22,6 +22,7 @@ except ImportError:
     def _no_grad(fn):  # type: ignore[misc]
         return fn
 
+from .compute_lock import inference_compute_guard
 from .config import ModelConfig
 from .checkpoint_io import checkpoint_file_identity, load_torch_checkpoint_snapshot
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
@@ -586,6 +587,7 @@ def tokenize_text(text: str, path: str | Path | None = None) -> dict:
     }
 
 
+@inference_compute_guard
 @_no_grad
 def embed_texts(
     texts: list[str],
@@ -704,6 +706,7 @@ def _normalize_generation_options(
     )
 
 
+@inference_compute_guard
 def stream_generate(
     prompt: str,
     max_new_tokens: int = 256,
@@ -819,6 +822,7 @@ def stream_generate(
     }
 
 
+@inference_compute_guard
 @_no_grad
 def generate(
     prompt: str,
@@ -875,6 +879,7 @@ def generate(
     }
 
 
+@inference_compute_guard
 @_no_grad
 def evaluate(
     root: str | Path,
