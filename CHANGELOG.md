@@ -30,6 +30,9 @@ All notable user-facing changes will be documented here.
 - Enforce the Node.js version range required by the current Vite runtime in package metadata, startup validation, and CI.
 - Clarify that no model-performance score or pretrained starter checkpoint is published until genuine artifacts and reports exist.
 
+### Fixed
+- Restore the three first-party core agent skill references required by repository-aware task prompting and verification, while leaving the deleted third-party skill bundle removed.
+
 ### Removed
 - Remove the optional external inference bridge and provider-selection paths. Chat, coding, retrieval, embeddings, training, and benchmarks now use only SYNTRA's native local PyTorch runtime; unavailable checkpoints fail explicitly.
 
