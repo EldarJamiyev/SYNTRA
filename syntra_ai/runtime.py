@@ -23,6 +23,7 @@ except ImportError:
         return fn
 
 from .config import ModelConfig
+from .compute_lock import compute_operation
 from .checkpoint_io import checkpoint_file_identity, load_torch_checkpoint_snapshot
 from .tokenizer import BOS_ID, EOS_ID, ByteBPETokenizer
 from .training import (
@@ -587,6 +588,7 @@ def tokenize_text(text: str, path: str | Path | None = None) -> dict:
 
 
 @_no_grad
+@compute_operation("inference")
 def embed_texts(
     texts: list[str],
     path: str | Path | None = None,
@@ -704,6 +706,7 @@ def _normalize_generation_options(
     )
 
 
+@compute_operation("inference")
 def stream_generate(
     prompt: str,
     max_new_tokens: int = 256,
@@ -820,6 +823,7 @@ def stream_generate(
 
 
 @_no_grad
+@compute_operation("inference")
 def generate(
     prompt: str,
     max_new_tokens: int = 256,
@@ -876,6 +880,7 @@ def generate(
 
 
 @_no_grad
+@compute_operation("inference")
 def evaluate(
     root: str | Path,
     batches: int = 16,
