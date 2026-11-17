@@ -318,24 +318,25 @@ def _default_checkpoint() -> str:
     return str((Path(__file__).resolve().parent.parent / "data" / "checkpoints" / "syntra.pt").resolve())
 
 
-def _run_training(body: dict) -> None:
+def _run_training(body: dict, lease) -> None:
     try:
-        architecture = body.get("config") or {}
-        config = ModelConfig.from_dict(architecture) if architecture else ModelConfig()
-        result = train(
-            roots=[body["root"]],
-            checkpoint=_default_checkpoint(),
-            steps=body["steps"],
-            batch_size=body["batch_size"],
-            config=config,
-            learning_rate=body["learning_rate"],
-            max_tokens=body["max_tokens"],
-            device_name=body["device"],
-            seed=body["seed"],
-            resume=body["resume"],
-            callback=_set_job,
-        )
-        _set_job(result)
+        with lease:
+            architecture = body.get("config") or {}
+            config = ModelConfig.from_dict(architecture) if architecture else ModelConfig()
+            result = train(
+                roots=[body["root"]],
+                checkpoint=_default_checkpoint(),
+                steps=body["steps"],
+                batch_size=body["batch_size"],
+                config=config,
+                learning_rate=body["learning_rate"],
+                max_tokens=body["max_tokens"],
+                device_name=body["device"],
+                seed=body["seed"],
+                resume=body["resume"],
+                callback=_set_job,
+            )
+            _set_job(result)
     except Exception as exc:
         current = get_job()
         current.update({
@@ -356,14 +357,21 @@ def start_training(body: dict) -> dict:
             raise ComputeBusyError(
                 "Native compute is busy with active inference; retry training after the current request(s) finish."
             )
+        lease = acquire_compute_lease("training")
         _job.update({
             "status": "starting", "step": 0, "max_steps": body["steps"],
             "train_loss": None, "validation_loss": None, "message": "Training worker is starting."
         })
-        _worker = Thread(target=_run_training, args=(dict(body),), daemon=True, name="syntra-training")
         try:
+            _worker = Thread(
+                target=_run_training,
+                args=(dict(body), lease),
+                daemon=True,
+                name="syntra-training",
+            )
             _worker.start()
         except Exception as exc:
+            lease.release()
             _worker = None
             _job.update({
                 "status": "failed", "finished_at": time.time(),
@@ -373,20 +381,21 @@ def start_training(body: dict) -> dict:
         return dict(_job)
 
 
-def _run_finetuning(body: dict) -> None:
+def _run_finetuning(body: dict, lease) -> None:
     try:
-        result = finetune(
-            dataset_path=body["dataset"],
-            checkpoint=_default_checkpoint(),
-            steps=body["steps"],
-            batch_size=body["batch_size"],
-            gradient_accumulation_steps=body["gradient_accumulation_steps"],
-            learning_rate=body["learning_rate"],
-            device_name=body["device"],
-            callback=_set_job,
-            resume=body["resume"],
-        )
-        _set_job(result)
+        with lease:
+            result = finetune(
+                dataset_path=body["dataset"],
+                checkpoint=_default_checkpoint(),
+                steps=body["steps"],
+                batch_size=body["batch_size"],
+                gradient_accumulation_steps=body["gradient_accumulation_steps"],
+                learning_rate=body["learning_rate"],
+                device_name=body["device"],
+                callback=_set_job,
+                resume=body["resume"],
+            )
+            _set_job(result)
     except Exception as exc:
         current = get_job()
         current.update({"status": "failed", "finished_at": time.time(), "message": str(exc)})
@@ -403,6 +412,7 @@ def start_finetuning(body: dict) -> dict:
             raise ComputeBusyError(
                 "Native compute is busy with active inference; retry fine-tuning after the current request(s) finish."
             )
+        lease = acquire_compute_lease("training")
         _job.update({
             "status": "starting", "step": 0, "max_steps": worker_body["steps"],
             "train_loss": None, "validation_loss": None,
@@ -411,13 +421,16 @@ def start_finetuning(body: dict) -> dict:
                 if worker_body["resume"] else "Supervised instruction-tuning worker is starting."
             )
         })
-        _worker = Thread(
-            target=_run_finetuning, args=(worker_body,),
-            daemon=True, name="syntra-instruction-finetuning"
-        )
         try:
+            _worker = Thread(
+                target=_run_finetuning,
+                args=(worker_body, lease),
+                daemon=True,
+                name="syntra-instruction-finetuning",
+            )
             _worker.start()
         except Exception as exc:
+            lease.release()
             _worker = None
             _job.update({
                 "status": "failed", "finished_at": time.time(),
