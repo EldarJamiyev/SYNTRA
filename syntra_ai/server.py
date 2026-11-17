@@ -10,6 +10,7 @@ import os
 import re
 import time
 
+from .compute_lock import ComputeBusyError, configure_compute_inference_capacity
 from .config import ModelConfig
 from .data import MAX_CORPUS_TOKENS
 from .runtime import (
@@ -39,10 +40,6 @@ _INFERENCE_SLOTS = BoundedSemaphore(DEFAULT_MAX_CONCURRENT_INFERENCE)
 _ACTIVE_INFERENCE_REQUESTS = 0
 
 
-class ComputeBusyError(RuntimeError):
-    """Raised when training cannot start without overlapping active inference."""
-
-
 def _configure_inference_slots(value: str | None = None) -> int:
     """Configure bounded simultaneous inference requests before serving traffic."""
     raw = os.environ.get("SYNTRA_MAX_CONCURRENT_INFERENCE", "1") if value is None else value
@@ -51,6 +48,7 @@ def _configure_inference_slots(value: str | None = None) -> int:
             "SYNTRA_MAX_CONCURRENT_INFERENCE must be an integer between 1 and 4."
         )
     capacity = int(raw)
+    configure_compute_inference_capacity(capacity)
     global _INFERENCE_SLOTS
     with _job_lock:
         if _ACTIVE_INFERENCE_REQUESTS or (_worker is not None and _worker.is_alive()):
