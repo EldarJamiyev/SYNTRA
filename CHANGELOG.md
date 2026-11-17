@@ -14,6 +14,7 @@ All notable user-facing changes will be documented here.
 
 ### Changed
 - Bound concurrent HTTP generation, embedding, and evaluation requests with a configurable 1–4 slot admission controller; return retryable HTTP 503 when busy and hold the slot through the full streaming response.
+- Make native API training/fine-tuning mutually exclusive with active inference, using synchronized admission accounting and retryable HTTP 503 responses in both directions; keep the lightweight status and tokenization routes available.
 - Serialize resident model construction per checkpoint path, share one in-flight load among concurrent inference requests, and reject cache publication when checkpoint identity changes during loading.
 - Enforce strict native embedding/evaluation device and integer-budget validation before checkpoint access; stop HTTP coercion for embed, evaluate, and curriculum request parameters.
 - Share strict native generation parameter/device validation between streaming and non-streaming inference, before checkpoint loading; remove HTTP numeric coercion and reject non-boolean stream flags.
