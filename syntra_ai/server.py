@@ -10,7 +10,7 @@ import os
 import re
 import time
 
-from .compute_lock import ComputeBusyError, configure_compute_inference_capacity
+from .compute_lock import ComputeBusyError, configure_compute_inference_capacity, exclusive_training_compute
 from .config import ModelConfig
 from .data import MAX_CORPUS_TOKENS
 from .runtime import (
@@ -357,6 +357,10 @@ def start_training(body: dict) -> dict:
             raise ComputeBusyError(
                 "Native compute is busy with active inference; retry training after the current request(s) finish."
             )
+        # Detect work owned by another SYNTRA process before acknowledging the job.
+        # The worker also acquires its own lease to close the race after this probe.
+        with exclusive_training_compute():
+            pass
         _job.update({
             "status": "starting", "step": 0, "max_steps": body["steps"],
             "train_loss": None, "validation_loss": None, "message": "Training worker is starting."
@@ -404,6 +408,10 @@ def start_finetuning(body: dict) -> dict:
             raise ComputeBusyError(
                 "Native compute is busy with active inference; retry fine-tuning after the current request(s) finish."
             )
+        # Detect work owned by another SYNTRA process before acknowledging the job.
+        # The worker also acquires its own lease to close the race after this probe.
+        with exclusive_training_compute():
+            pass
         _job.update({
             "status": "starting", "step": 0, "max_steps": worker_body["steps"],
             "train_loss": None, "validation_loss": None,
