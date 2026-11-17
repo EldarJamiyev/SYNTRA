@@ -72,3 +72,5 @@ Instruction fine-tuning must preserve the complete conditioning prompt. The JSON
 
 - Embedding and fresh-evaluation calls validate local device selection before checkpoint access; evaluation batch/token budgets require strict integers, and HTTP handlers preserve JSON value types instead of coercing strings, floats, or booleans.
 - Repository curriculum HTTP requests preserve the caller's `max_examples` type so the curriculum engine's strict integer bounds reject fractional, string, and boolean values.
+
+- Resident inference loads are single-flight per checkpoint path: concurrent first requests share one deserialization/model construction, and a checkpoint whose file identity changes while the model is being built is rejected rather than cached.
