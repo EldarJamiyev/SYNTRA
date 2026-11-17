@@ -474,3 +474,15 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add direct runtime and live HTTP regressions proving invalid controls fail before a checkpoint is loaded.
 
 **Acceptance:** Both generation modes accept the same parameter types and ranges; invalid inputs return a client validation error before model loading, while existing valid defaults and output behavior remain unchanged.
+
+
+### Phase 44 — Remaining native endpoint parameter validation
+
+**Objective:** Keep embedding, fresh evaluation, and repository curriculum request values strict from the HTTP boundary through the underlying runtime.
+
+- [x] Validate embedding/evaluation device names and local availability before checkpoint identity checks or model loading.
+- [x] Require strict integer types and supported ranges for evaluation batches and token budgets.
+- [x] Remove HTTP coercion of device, evaluation, and curriculum numeric parameters.
+- [x] Preserve the curriculum engine's existing `max_examples` integer bounds and add live HTTP/direct-runtime regressions.
+
+**Acceptance:** Invalid endpoint values fail with HTTP 400 before checkpoint access or curriculum scanning; valid defaults and string/list embedding input behavior remain unchanged.
