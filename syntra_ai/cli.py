@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from .compute_lock import ComputeBusyError
 from .config import ModelConfig
 from .data import load_corpus
 from .runtime import evaluate, generate, status, tokenize_text
@@ -199,13 +200,17 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint = Path(os.environ.get("SYNTRA_CHECKPOINT", str(
             Path(__file__).resolve().parent.parent / "data" / "checkpoints" / "syntra.pt"
         )))
-        result = train(
-            roots=[args.root], checkpoint=checkpoint, steps=args.steps,
-            batch_size=args.batch_size, config=config, learning_rate=args.learning_rate,
-            max_tokens=args.max_tokens, device_name=args.device, seed=args.seed,
-            resume=args.resume,
-            callback=lambda item: print(json.dumps(item), flush=True),
-        )
+        try:
+            result = train(
+                roots=[args.root], checkpoint=checkpoint, steps=args.steps,
+                batch_size=args.batch_size, config=config, learning_rate=args.learning_rate,
+                max_tokens=args.max_tokens, device_name=args.device, seed=args.seed,
+                resume=args.resume,
+                callback=lambda item: print(json.dumps(item), flush=True),
+            )
+        except ComputeBusyError as exc:
+            print("SYNTRA compute admission rejected: " + str(exc), file=sys.stderr)
+            return 3
         print(json.dumps(result, indent=2))
         return 0
     if args.command == "audit-instructions":
@@ -219,30 +224,44 @@ def main(argv: list[str] | None = None) -> int:
         checkpoint = Path(os.environ.get("SYNTRA_CHECKPOINT", str(
             Path(__file__).resolve().parent.parent / "data" / "checkpoints" / "syntra.pt"
         )))
-        result = finetune(
-            dataset_path=args.dataset,
-            checkpoint=checkpoint,
-            steps=args.steps,
-            batch_size=args.batch_size,
-            gradient_accumulation_steps=args.gradient_accumulation_steps,
-            learning_rate=args.learning_rate,
-            device_name=args.device,
-            callback=lambda item: print(json.dumps(item), flush=True),
-            resume=args.resume,
-        )
+        try:
+            result = finetune(
+                dataset_path=args.dataset,
+                checkpoint=checkpoint,
+                steps=args.steps,
+                batch_size=args.batch_size,
+                gradient_accumulation_steps=args.gradient_accumulation_steps,
+                learning_rate=args.learning_rate,
+                device_name=args.device,
+                callback=lambda item: print(json.dumps(item), flush=True),
+                resume=args.resume,
+            )
+        except ComputeBusyError as exc:
+            print("SYNTRA compute admission rejected: " + str(exc), file=sys.stderr)
+            return 3
         print(json.dumps(result, indent=2))
         return 0
     if args.command == "tokenize":
         print(json.dumps(tokenize_text(args.text), indent=2))
         return 0
     if args.command == "generate":
-        print(json.dumps(generate(args.prompt, args.max_new_tokens, args.temperature, args.top_k), indent=2))
+        try:
+            result = generate(args.prompt, args.max_new_tokens, args.temperature, args.top_k)
+        except ComputeBusyError as exc:
+            print("SYNTRA compute admission rejected: " + str(exc), file=sys.stderr)
+            return 3
+        print(json.dumps(result, indent=2))
         return 0
     if args.command == "status":
         print(json.dumps(status(), indent=2))
         return 0
     if args.command == "evaluate":
-        print(json.dumps(evaluate(args.root, batches=args.batches, device_name=args.device), indent=2))
+        try:
+            result = evaluate(args.root, batches=args.batches, device_name=args.device)
+        except ComputeBusyError as exc:
+            print("SYNTRA compute admission rejected: " + str(exc), file=sys.stderr)
+            return 3
+        print(json.dumps(result, indent=2))
         return 0
     if args.command == "serve":
         os.environ["SYNTRA_AI_PORT"] = str(args.port)
