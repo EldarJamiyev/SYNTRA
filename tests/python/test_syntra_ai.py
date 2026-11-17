@@ -472,6 +472,117 @@ class TransformerTests(unittest.TestCase):
                 self.assertIsNot(resident_before, resident_after)
                 clear_resident_cache()
 
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_concurrent_first_requests_load_one_resident_model_per_checkpoint(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier, Lock
+        import time
+
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import _get_resident_bundle, clear_resident_cache
+
+        with tempfile.TemporaryDirectory(prefix="syntra-resident-single-flight-") as temp:
+            checkpoint = Path(temp) / "selected-model.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            model = SyntraTransformer(config)
+            torch.save({
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": ByteBPETokenizer.empty().to_dict(),
+                "model_state": model.state_dict(),
+                "step": 1,
+                "training_mode": "causal-source-pretraining",
+            }, checkpoint)
+
+            import syntra_ai.runtime as runtime
+            real_read = runtime._read_checkpoint
+            read_count = 0
+            count_lock = Lock()
+            start = Barrier(6)
+
+            def delayed_read(*args, **kwargs):
+                nonlocal read_count
+                with count_lock:
+                    read_count += 1
+                time.sleep(0.12)
+                return real_read(*args, **kwargs)
+
+            def load():
+                start.wait(timeout=5)
+                return _get_resident_bundle(path=checkpoint, device_name="cpu")
+
+            clear_resident_cache()
+            try:
+                with patch("syntra_ai.runtime._read_checkpoint", side_effect=delayed_read):
+                    with ThreadPoolExecutor(max_workers=6) as executor:
+                        results = list(executor.map(lambda _index: load(), range(6)))
+
+                models = [result[1] for result in results]
+                self.assertEqual(read_count, 1, "same-checkpoint requests must share one load")
+                self.assertTrue(all(model is models[0] for model in models))
+            finally:
+                clear_resident_cache()
+
+    @unittest.skipIf(torch is None, TORCH_SKIP_REASON)
+    def test_checkpoint_replaced_during_resident_load_is_never_cached(self):
+        from syntra_ai.model import SyntraTransformer
+        from syntra_ai.runtime import (
+            _get_resident_bundle,
+            _resident_cache_matches_checkpoint,
+            clear_resident_cache,
+        )
+
+        with tempfile.TemporaryDirectory(prefix="syntra-resident-load-replacement-") as temp:
+            checkpoint = Path(temp) / "selected-model.pt"
+            replacement = Path(temp) / "replacement.pt"
+            config = ModelConfig(
+                vocab_size=258, seq_len=32, n_layer=1, n_head=2, n_embd=32, dropout=0.0
+            )
+            initial_model = SyntraTransformer(config)
+            replacement_model = SyntraTransformer(config)
+            with torch.no_grad():
+                replacement_model.token_embedding.weight[0, 0].add_(0.25)
+
+            base_payload = {
+                "format": "syntra-transformer-v1",
+                "config": config.to_dict(),
+                "tokenizer": ByteBPETokenizer.empty().to_dict(),
+                "step": 1,
+                "training_mode": "causal-source-pretraining",
+            }
+            torch.save({**base_payload, "model_state": initial_model.state_dict()}, checkpoint)
+            torch.save({**base_payload, "model_state": replacement_model.state_dict()}, replacement)
+
+            import syntra_ai.runtime as runtime
+            real_read = runtime._read_checkpoint
+
+            def replace_after_snapshot(*args, **kwargs):
+                loaded = real_read(*args, **kwargs)
+                os.replace(replacement, checkpoint)
+                return loaded
+
+            clear_resident_cache()
+            try:
+                with patch("syntra_ai.runtime._read_checkpoint", side_effect=replace_after_snapshot):
+                    with self.assertRaisesRegex(RuntimeError, "checkpoint changed while its resident model was loading"):
+                        _get_resident_bundle(path=checkpoint, device_name="cpu")
+
+                self.assertFalse(
+                    _resident_cache_matches_checkpoint(checkpoint),
+                    "a model loaded across a checkpoint replacement must not enter the resident cache",
+                )
+                _target, model, saved, *_ = _get_resident_bundle(path=checkpoint, device_name="cpu")
+                self.assertEqual(saved["step"], 1)
+                self.assertTrue(torch.equal(
+                    model.token_embedding.weight,
+                    replacement_model.token_embedding.weight,
+                ))
+            finally:
+                clear_resident_cache()
+
     def test_training_memory_estimate_rejects_unsafe_context_settings(self):
         from syntra_ai.resources import estimate_training_memory_bytes, validate_training_memory_budget
 
