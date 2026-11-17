@@ -41,8 +41,13 @@ class _LockAlreadyHeld(Exception):
 
 def _lock_directory() -> Path:
     """Create a private, per-user directory for the persistent OS lock file."""
-    username = os.environ.get("USERNAME") or os.environ.get("USER") or getpass.getuser()
-    user_key = hashlib.sha256(username.encode("utf-8", "surrogatepass")).hexdigest()[:20]
+    if hasattr(os, "getuid"):
+        identity = "uid:" + str(os.getuid())
+    else:
+        # Windows does not expose a standard-library SID accessor. getpass uses
+        # the current Windows account name; normalize case for stable NT identity.
+        identity = "windows-user:" + getpass.getuser().casefold()
+    user_key = hashlib.sha256(identity.encode("utf-8", "surrogatepass")).hexdigest()[:20]
     directory = Path(tempfile.gettempdir()).resolve() / ("syntra-native-compute-" + user_key)
     directory.mkdir(mode=0o700, parents=False, exist_ok=True)
 
