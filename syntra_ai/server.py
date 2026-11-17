@@ -11,6 +11,7 @@ import re
 import time
 
 from .config import ModelConfig
+from .compute_lock import ComputeBusyError, acquire_compute_lease
 from .data import MAX_CORPUS_TOKENS
 from .runtime import (
     ContextWindowExceededError, embed_texts, evaluate, generate, status, stream_generate, tokenize_text,
@@ -37,10 +38,6 @@ DEFAULT_MAX_CONCURRENT_INFERENCE = 1
 MAX_CONCURRENT_INFERENCE = 4
 _INFERENCE_SLOTS = BoundedSemaphore(DEFAULT_MAX_CONCURRENT_INFERENCE)
 _ACTIVE_INFERENCE_REQUESTS = 0
-
-
-class ComputeBusyError(RuntimeError):
-    """Raised when training cannot start without overlapping active inference."""
 
 
 def _configure_inference_slots(value: str | None = None) -> int:
