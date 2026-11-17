@@ -76,6 +76,52 @@ class NativeComputeLeaseTests(unittest.TestCase):
             self.assertEqual(blocked.returncode, 0, blocked.stderr)
             self.assertEqual(blocked.stdout.strip(), "BUSY")
 
+    def test_process_termination_releases_kernel_lock_without_stale_cleanup(self):
+        child_script = (
+            "from syntra_ai.compute_lock import acquire_compute_lease\n"
+            "import time\n"
+            "with acquire_compute_lease('training'):\n"
+            "    print('READY', flush=True)\n"
+            "    time.sleep(30)\n"
+        )
+        env = os.environ.copy()
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(PROJECT_ROOT) + (os.pathsep + existing if existing else "")
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        child = subprocess.Popen(
+            [sys.executable, "-c", child_script],
+            cwd=PROJECT_ROOT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        ready_line: Queue[str] = Queue()
+
+        def read_child_ready():
+            assert child.stdout is not None
+            ready_line.put(child.stdout.readline())
+
+        reader = Thread(target=read_child_ready, daemon=True)
+        try:
+            reader.start()
+            self.assertEqual(ready_line.get(timeout=15).strip(), "READY")
+            child.terminate()
+            child.wait(timeout=5)
+            admitted = probe_compute_from_child("inference")
+            self.assertEqual(admitted.returncode, 0, admitted.stderr)
+            self.assertEqual(admitted.stdout.strip(), "ACQUIRED")
+        finally:
+            if child.poll() is None:
+                child.terminate()
+            child.wait(timeout=5)
+            if child.stdout is not None:
+                child.stdout.close()
+            if child.stderr is not None:
+                child.stderr.close()
+
     def test_api_returns_retryable_503_before_starting_worker_when_other_process_owns_compute(self):
         import json
         from http.client import HTTPConnection
