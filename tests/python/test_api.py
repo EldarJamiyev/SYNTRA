@@ -431,5 +431,116 @@ class FineTuningCliResumeContractTests(unittest.TestCase):
         self.assertEqual(args.gradient_accumulation_steps, 3)
         self.assertEqual(args.steps, 100)
 
+
+class InferenceAdmissionControlTests(unittest.TestCase):
+    def _start_server(self):
+        from syntra_ai.server import Handler
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread
+
+    def test_busy_inference_slot_returns_retryable_503_without_running_endpoint(self):
+        from threading import BoundedSemaphore
+        from unittest.mock import patch
+
+        with patch("syntra_ai.server._INFERENCE_SLOTS", BoundedSemaphore(1)) as slot:
+            self.assertTrue(slot.acquire(blocking=False))
+            server, thread = self._start_server()
+            try:
+                connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                connection.request(
+                    "POST",
+                    "/model/embed",
+                    body=json.dumps({"input": ["bounded test"]}),
+                    headers={"Content-Type": "application/json"},
+                )
+                response = connection.getresponse()
+                payload = json.loads(response.read())
+                self.assertEqual(response.status, 503)
+                self.assertEqual(response.getheader("Retry-After"), "1")
+                self.assertIn("inference capacity is busy", payload["error"])
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+                slot.release()
+
+    def test_inference_slot_is_released_when_endpoint_validation_fails(self):
+        from threading import BoundedSemaphore
+        from unittest.mock import patch
+
+        slot = BoundedSemaphore(1)
+        with patch("syntra_ai.server._INFERENCE_SLOTS", slot):
+            with patch("syntra_ai.server.embed_texts", side_effect=ValueError("invalid embedding input")):
+                server, thread = self._start_server()
+                try:
+                    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                    connection.request(
+                        "POST",
+                        "/model/embed",
+                        body=json.dumps({"input": ["bounded test"]}),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    payload = json.loads(response.read())
+                    self.assertEqual(response.status, 400)
+                    self.assertIn("invalid embedding input", payload["error"])
+                    self.assertTrue(slot.acquire(blocking=False), "request failures must release their slot")
+                    slot.release()
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
+
+    def test_streaming_holds_inference_slot_until_all_events_are_written(self):
+        from threading import BoundedSemaphore
+        from unittest.mock import patch
+
+        slot = BoundedSemaphore(1)
+        observed = []
+
+        def stream_events(**_kwargs):
+            observed.append(slot.acquire(blocking=False))
+            if observed[-1]:
+                slot.release()
+            yield {"delta": "x", "done": False}
+            yield {"delta": "", "text": "x", "done": True}
+
+        with patch("syntra_ai.server._INFERENCE_SLOTS", slot):
+            with patch("syntra_ai.server.stream_generate", side_effect=stream_events):
+                server, thread = self._start_server()
+                try:
+                    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+                    connection.request(
+                        "POST",
+                        "/model/generate",
+                        body=json.dumps({"prompt": "x", "stream": True}),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    stream = response.read().decode("utf-8")
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(len([line for line in stream.splitlines() if line.strip()]), 2)
+                    self.assertEqual(observed, [False], "the slot must stay occupied while streaming")
+                    self.assertTrue(slot.acquire(blocking=False), "stream completion must release its slot")
+                    slot.release()
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=2)
+
+    def test_inference_capacity_configuration_is_strictly_bounded(self):
+        from syntra_ai.server import _configure_inference_slots
+
+        self.assertEqual(_configure_inference_slots("1"), 1)
+        self.assertEqual(_configure_inference_slots("4"), 4)
+        for invalid in ("0", "5", "1.5", "auto", ""):
+            with self.subTest(value=invalid):
+                with self.assertRaisesRegex(ValueError, "between 1 and 4"):
+                    _configure_inference_slots(invalid)
+        _configure_inference_slots("1")
+
+
 if __name__ == "__main__":
     unittest.main()
