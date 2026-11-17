@@ -69,3 +69,6 @@ Instruction fine-tuning must preserve the complete conditioning prompt. The JSON
 - Native HTTP request bodies use strict JSON decoding: duplicate object keys, non-standard NaN/Infinity constants, overflowing decimal numbers, and nesting deeper than 64 levels are rejected before route dispatch.
 
 - Non-streaming and streaming generation share one strict preflight for token counts, temperature, top-k, nucleus probability, repetition penalty, and device selection; invalid controls fail before checkpoint loading, and HTTP values are no longer silently coerced from strings, booleans, or floats.
+
+- Embedding and fresh-evaluation calls validate local device selection before checkpoint access; evaluation batch/token budgets require strict integers, and HTTP handlers preserve JSON value types instead of coercing strings, floats, or booleans.
+- Repository curriculum HTTP requests preserve the caller's `max_examples` type so the curriculum engine's strict integer bounds reject fractional, string, and boolean values.
