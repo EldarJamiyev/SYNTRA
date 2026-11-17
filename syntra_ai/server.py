@@ -11,7 +11,7 @@ import re
 import time
 
 from .config import ModelConfig
-from .compute_lock import ComputeBusyError, acquire_compute_lease
+from .compute_lock import ComputeBusyError, ComputeLease, acquire_compute_lease
 from .data import MAX_CORPUS_TOKENS
 from .runtime import (
     ContextWindowExceededError, embed_texts, evaluate, generate, status, stream_generate, tokenize_text,
@@ -318,7 +318,7 @@ def _default_checkpoint() -> str:
     return str((Path(__file__).resolve().parent.parent / "data" / "checkpoints" / "syntra.pt").resolve())
 
 
-def _run_training(body: dict, lease) -> None:
+def _run_training(body: dict, lease: ComputeLease) -> None:
     try:
         with lease:
             architecture = body.get("config") or {}
@@ -381,7 +381,7 @@ def start_training(body: dict) -> dict:
         return dict(_job)
 
 
-def _run_finetuning(body: dict, lease) -> None:
+def _run_finetuning(body: dict, lease: ComputeLease) -> None:
     try:
         with lease:
             result = finetune(
