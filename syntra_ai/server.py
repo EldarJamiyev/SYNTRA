@@ -34,14 +34,14 @@ _job: dict[str, Any] = {
 _worker: Thread | None = None
 
 DEFAULT_MAX_CONCURRENT_INFERENCE = 1
-MAX_MAX_CONCURRENT_INFERENCE = 4
+MAX_CONCURRENT_INFERENCE = 4
 _INFERENCE_SLOTS = BoundedSemaphore(DEFAULT_MAX_CONCURRENT_INFERENCE)
 
 
 def _configure_inference_slots(value: str | None = None) -> int:
     """Configure bounded simultaneous inference requests before serving traffic."""
     raw = os.environ.get("SYNTRA_MAX_CONCURRENT_INFERENCE", "1") if value is None else value
-    if not isinstance(raw, str) or not re.fullmatch(r"[1-4]", raw):
+    if not isinstance(raw, str) or not re.fullmatch(rf"[1-{MAX_CONCURRENT_INFERENCE}]", raw):
         raise ValueError(
             "SYNTRA_MAX_CONCURRENT_INFERENCE must be an integer between 1 and 4."
         )
