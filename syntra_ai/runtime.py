@@ -270,45 +270,6 @@ def _get_resident_bundle(path: str | Path | None = None, device_name: str = "aut
                     _RESIDENT_LOAD_LOCKS.pop(cache_key, None)
                 else:
                     _RESIDENT_LOAD_LOCKS[cache_key] = (load_lock, entry[1] - 1)
-    target = Path(path).expanduser().absolute() if path else checkpoint_path()
-    if not target.is_file():
-        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
-    load_target = select_inference_checkpoint(target)
-    try:
-        # Include device, inode, size, mtime and ctime for both the resumable
-        # checkpoint and selected inference companion. Promotion uses atomic
-        # replacement, which can preserve size/mtime while changing file identity.
-        signature = (
-            _file_stat_identity(target),
-            str(load_target),
-            _file_stat_identity(load_target),
-            str(device_name),
-        )
-    except OSError:
-        signature = ((-1, -1, -1, -1, -1), str(load_target), (-1, -1, -1, -1, -1), str(device_name))
-
-    cache_key = str(target)
-    with _CACHE_LOCK:
-        cached = _RESIDENT_CACHE.get(cache_key)
-        if cached is not None and cached[0] == signature:
-            _, model, saved, config, tokenizer, device = cached
-            return target, model, saved, config, tokenizer, device
-
-    target, saved, config, tokenizer = _read_checkpoint(target)
-    device = choose_device(device_name)
-    validate_inference_memory_budget(
-        config, batch_size=1, sequence_length=config.seq_len, device=device
-    )
-    model = SyntraTransformer(config).to(device)
-    model.load_state_dict(saved["model_state"])
-    model.eval()
-    with _CACHE_LOCK:
-        if len(_RESIDENT_CACHE) >= 4:
-            oldest_key = next(iter(_RESIDENT_CACHE))
-            _RESIDENT_CACHE.pop(oldest_key, None)
-        _RESIDENT_CACHE[cache_key] = (signature, model, saved, config, tokenizer, device)
-    return target, model, saved, config, tokenizer, device
-
 
 def clear_resident_cache() -> None:
     with _CACHE_LOCK:
