@@ -22,6 +22,9 @@ class StreamingInferenceGradModeTests(unittest.TestCase):
                 self.grad_enabled: list[bool] = []
                 self.calls = 0
 
+            def parameters(self):
+                return ()
+
             def __call__(self, tokens, *, use_cache, past_key_values=None):
                 self.grad_enabled.append(torch.is_grad_enabled())
                 batch_size, sequence_length = tokens.shape
