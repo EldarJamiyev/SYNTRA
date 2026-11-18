@@ -645,9 +645,6 @@ def _token_bytes_table(tokenizer: ByteBPETokenizer) -> list[bytes]:
     return table
 
 
-@_no_grad
-
-
 def _normalize_device_name(device_name: Any) -> str:
     """Validate local device selection before opening a checkpoint or allocating a model."""
     if not isinstance(device_name, str) or not device_name.strip():
@@ -742,7 +739,10 @@ def stream_generate(
     full_text_pieces: list[str] = []
 
     context = tokens[:, -config.seq_len:]
-    logits, _, past_key_values = model(context, use_cache=True)
+    # Streaming runs outside a normal function call boundary: keep the model
+    # forward explicitly out of autograd so its KV cache cannot retain graphs.
+    with torch.no_grad():
+        logits, _, past_key_values = model(context, use_cache=True)
     effective_top_k = max(1, min(int(top_k), config.vocab_size))
 
     for step in range(max_new_tokens):
@@ -793,10 +793,12 @@ def stream_generate(
             break
         cache_length = past_key_values[0][0].shape[-2]
         if cache_length < config.seq_len:
-            logits, _, past_key_values = model(next_token, past_key_values=past_key_values, use_cache=True)
+            with torch.no_grad():
+                logits, _, past_key_values = model(next_token, past_key_values=past_key_values, use_cache=True)
         else:
             context = tokens[:, -config.seq_len:]
-            logits, _, past_key_values = model(context, use_cache=True)
+            with torch.no_grad():
+                logits, _, past_key_values = model(context, use_cache=True)
 
     tail = decoder.decode(b"", final=True)
     if tail:
