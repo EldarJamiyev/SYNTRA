@@ -573,6 +573,7 @@ def _reconcile_checkpoint_status_metadata(
     tokenizer = payload.get("tokenizer")
     if isinstance(tokenizer, dict):
         refreshed["tokenizer_vocab_size"] = tokenizer.get("vocab_size")
+        refreshed["tokenizer_data"] = tokenizer
     model_state = payload.get("model_state")
     if isinstance(model_state, dict) and torch is not None:
         refreshed["parameter_count"] = sum(
