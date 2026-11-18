@@ -13,6 +13,7 @@ All notable user-facing changes will be documented here.
 - Contribution, security, issue-reporting, and pull-request guidance.
 
 ### Changed
+- Serve token-count requests from identity-bound tokenizer metadata without constructing or retaining the resident Transformer; legacy checkpoints use a bounded tokenizer-only cache.
 - Run streamed native Transformer forward passes with autograd disabled so token-by-token generation does not retain unnecessary training graphs.
 - Bound concurrent HTTP generation, embedding, and evaluation requests with a configurable 1–4 slot admission controller; return retryable HTTP 503 when busy and hold the slot through the full streaming response.
 - Make native API training/fine-tuning mutually exclusive with active inference, using synchronized admission accounting and retryable HTTP 503 responses in both directions; keep the lightweight status and tokenization routes available.
