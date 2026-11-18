@@ -49,6 +49,9 @@ _RESIDENT_CACHE: dict[str, tuple[tuple[Any, ...], Any, dict, ModelConfig, ByteBP
 # Per-checkpoint single-flight locks prevent concurrent requests from constructing
 # duplicate resident models; reference counts keep the lock map bounded.
 _RESIDENT_LOAD_LOCKS: dict[str, tuple[Any, int]] = {}
+_TOKENIZER_CACHE: dict[str, tuple[tuple[Any, ...], ModelConfig, ByteBPETokenizer, int]] = {}
+_TOKENIZER_LOAD_LOCKS: dict[str, tuple[Any, int]] = {}
+_TOKENIZER_METADATA_MAX_BYTES = 4 * 1024 * 1024
 
 
 class ContextWindowExceededError(ValueError):
@@ -204,6 +207,166 @@ def _resident_cache_signature(target: Path, device_name: str) -> tuple[tuple[Any
     return signature, load_target
 
 
+def _tokenizer_cache_signature(target: Path) -> tuple[Any, ...]:
+    """Bind tokenizer cache entries to the source, selected companion and status sidecar."""
+    signature, _load_target = _resident_cache_signature(target, "tokenizer")
+    metadata_path = target.with_suffix(target.suffix + ".json")
+    try:
+        metadata_identity = _file_stat_identity(metadata_path)
+    except OSError:
+        metadata_identity = (-1, -1, -1, -1, -1)
+    return signature + (metadata_identity,)
+
+
+def _read_identity_bound_tokenizer_metadata(
+    target: Path,
+    expected_checkpoint_identity: dict[str, int],
+) -> tuple[ModelConfig, ByteBPETokenizer, int] | None:
+    """Read tokenizer metadata only when it is a stable sidecar for this checkpoint."""
+    metadata_path = target.with_suffix(target.suffix + ".json")
+    descriptor: int | None = None
+
+    def stat_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def reject_constant(value: str):
+        raise ValueError(f"Non-standard JSON constant {value} in checkpoint metadata.")
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate key in checkpoint metadata.")
+            result[key] = value
+        return result
+
+    try:
+        before = os.stat(metadata_path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size < 1
+            or before.st_size > _TOKENIZER_METADATA_MAX_BYTES
+        ):
+            return None
+
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(metadata_path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode) or stat_identity(opened) != stat_identity(before):
+                return None
+
+            content = handle.read(_TOKENIZER_METADATA_MAX_BYTES + 1)
+            after = os.fstat(handle.fileno())
+            current = os.stat(metadata_path, follow_symlinks=False)
+            if (
+                len(content) > _TOKENIZER_METADATA_MAX_BYTES
+                or stat_identity(opened) != stat_identity(after)
+                or stat_identity(opened) != stat_identity(current)
+                or len(content) != opened.st_size
+            ):
+                return None
+
+        metadata = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+        )
+        if not isinstance(metadata, dict):
+            return None
+        if metadata.get("checkpoint_identity") != expected_checkpoint_identity:
+            return None
+
+        raw_config = metadata.get("config")
+        raw_tokenizer = metadata.get("tokenizer_data")
+        step = metadata.get("step")
+        if not isinstance(raw_config, dict) or not isinstance(raw_tokenizer, dict):
+            return None
+        if type(step) is not int or step < 0:
+            return None
+
+        config = ModelConfig.from_dict(raw_config)
+        tokenizer = ByteBPETokenizer.from_dict(raw_tokenizer)
+        if tokenizer.vocab_size != config.vocab_size:
+            return None
+        if _file_stat_identity_record(target) != expected_checkpoint_identity:
+            return None
+        return config, tokenizer, step
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _get_tokenizer_bundle(
+    path: str | Path | None = None,
+) -> tuple[Path, ModelConfig, ByteBPETokenizer, int]:
+    """Load only tokenizer/config metadata without constructing or retaining a model."""
+    target = Path(path).expanduser().absolute() if path else checkpoint_path()
+    if not target.is_file():
+        raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
+
+    cache_key = str(target)
+    signature = _tokenizer_cache_signature(target)
+    with _CACHE_LOCK:
+        cached = _TOKENIZER_CACHE.get(cache_key)
+        if cached is not None and cached[0] == signature:
+            if _tokenizer_cache_signature(target) != signature:
+                raise RuntimeError("The checkpoint changed while tokenizer metadata was being retrieved; retry the request.")
+            return target, cached[1], cached[2], cached[3]
+
+        lock_entry = _TOKENIZER_LOAD_LOCKS.get(cache_key)
+        if lock_entry is None:
+            load_lock = Lock()
+            _TOKENIZER_LOAD_LOCKS[cache_key] = (load_lock, 1)
+        else:
+            load_lock, users = lock_entry
+            _TOKENIZER_LOAD_LOCKS[cache_key] = (load_lock, users + 1)
+
+    load_lock.acquire()
+    try:
+        signature = _tokenizer_cache_signature(target)
+        with _CACHE_LOCK:
+            cached = _TOKENIZER_CACHE.get(cache_key)
+            if cached is not None and cached[0] == signature:
+                if _tokenizer_cache_signature(target) != signature:
+                    raise RuntimeError("The checkpoint changed while tokenizer metadata was being retrieved; retry the request.")
+                return target, cached[1], cached[2], cached[3]
+
+        checkpoint_identity = _file_stat_identity_record(target)
+        metadata_bundle = _read_identity_bound_tokenizer_metadata(target, checkpoint_identity)
+        if metadata_bundle is not None:
+            config, tokenizer, trained_steps = metadata_bundle
+        else:
+            _loaded_target, saved, config, tokenizer = _read_checkpoint(target)
+            trained_steps = int(saved.get("step", 0))
+            # Do not keep the deserialized state dictionary alive after extracting
+            # the small tokenizer/config bundle; token counting does not need weights.
+            del saved
+
+        signature_after = _tokenizer_cache_signature(target)
+        if signature_after != signature:
+            raise RuntimeError("The checkpoint changed while tokenizer metadata was loading; retry the request.")
+
+        with _CACHE_LOCK:
+            if len(_TOKENIZER_CACHE) >= 4 and cache_key not in _TOKENIZER_CACHE:
+                oldest_key = next(iter(_TOKENIZER_CACHE))
+                _TOKENIZER_CACHE.pop(oldest_key, None)
+            _TOKENIZER_CACHE[cache_key] = (signature, config, tokenizer, trained_steps)
+        return target, config, tokenizer, trained_steps
+    finally:
+        load_lock.release()
+        with _CACHE_LOCK:
+            entry = _TOKENIZER_LOAD_LOCKS.get(cache_key)
+            if entry is not None and entry[0] is load_lock:
+                if entry[1] <= 1:
+                    _TOKENIZER_LOAD_LOCKS.pop(cache_key, None)
+                else:
+                    _TOKENIZER_LOAD_LOCKS[cache_key] = (load_lock, entry[1] - 1)
+
+
 def _get_resident_bundle(path: str | Path | None = None, device_name: str = "auto") -> tuple[Path, SyntraTransformer, dict, ModelConfig, ByteBPETokenizer, torch.device]:
     target = Path(path).expanduser().absolute() if path else checkpoint_path()
     if not target.is_file():
@@ -275,6 +438,7 @@ def _get_resident_bundle(path: str | Path | None = None, device_name: str = "aut
 def clear_resident_cache() -> None:
     with _CACHE_LOCK:
         _RESIDENT_CACHE.clear()
+        _TOKENIZER_CACHE.clear()
 
 
 def _checkpoint_identity(path: str | Path | None = None) -> str | None:
@@ -574,7 +738,7 @@ def tokenize_text(text: str, path: str | Path | None = None) -> dict:
         raise ValueError("Text must be a string.")
     if len(text.encode("utf-8")) > 300_000:
         raise ValueError("Text exceeds the 300 KB token-count API limit.")
-    target, _, saved, config, tokenizer, _ = _get_resident_bundle(path=path, device_name="cpu")
+    target, config, tokenizer, trained_steps = _get_tokenizer_bundle(path=path)
     count = len(tokenizer.encode(text))
     return {
         "token_count": count,
@@ -583,7 +747,7 @@ def tokenize_text(text: str, path: str | Path | None = None) -> dict:
         "tokenizer": "byte-BPE",
         "tokens_over_context": max(0, count - (config.seq_len - 1)),
         "checkpoint": str(target),
-        "trained_steps": int(saved.get("step", 0)),
+        "trained_steps": trained_steps,
     }
 
 
