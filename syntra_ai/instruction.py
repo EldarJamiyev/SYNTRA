@@ -1052,6 +1052,7 @@ def finetune(
             "validation_loss": last_val_loss,
             "tokenizer": "byte-BPE",
             "tokenizer_vocab_size": tokenizer.vocab_size,
+            "tokenizer_data": tokenizer.to_dict(),
             "context_tokens": config.seq_len,
             "training_mode": "supervised-instruction-finetuning",
             "finetuning_resume_schema": SFT_RESUME_SCHEMA,
