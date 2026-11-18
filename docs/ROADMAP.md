@@ -555,3 +555,17 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [ ] Measure peak memory on the same trained checkpoint and target hardware before publishing any memory-reduction figure.
 
 **Acceptance:** Streaming generation remains functionally identical while every Transformer forward pass runs with autograd disabled, independent of the caller's ambient gradient mode; no synthetic memory measurements or model-quality claims are introduced.
+
+### Phase 50 — Tokenizer-only checkpoint access
+
+**Objective:** Make token-count requests independent of resident Transformer construction and avoid deserializing model weights when an identity-bound tokenizer sidecar is available.
+
+- [x] Persist the exact tokenizer merge table with existing checkpoint status metadata for source training and supervised fine-tuning.
+- [x] Use the sidecar only when its checkpoint identity matches the current regular checkpoint and its bounded JSON content, model config, and tokenizer validate.
+- [x] Fall back to the verified checkpoint snapshot for older or stale metadata, without constructing a Transformer or retaining tensor state.
+- [x] Cache only config/tokenizer/step data, bind the cache to source/companion/sidecar file identities, bound entries, and serialize concurrent legacy loads per checkpoint.
+- [x] Recover tokenizer metadata when status reconciliation repairs an interrupted checkpoint/sidecar update.
+- [x] Add regressions for metadata-only tokenization, stale-sidecar fallback/cache invalidation, and concurrent legacy-checkpoint single-flight loading.
+- [ ] Measure actual peak-RAM changes on an existing trained checkpoint and record only hardware-backed measurements.
+
+**Acceptance:** `/model/tokenize` returns the same token counts, context size, vocabulary and trained-step metadata without constructing or retaining the resident Transformer; a matching sidecar requires no checkpoint tensor deserialization; legacy/stale sidecars fail closed to the verified checkpoint; tokenization never warms the resident-model cache.
