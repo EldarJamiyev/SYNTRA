@@ -126,6 +126,7 @@ class SftStatusCheckpointReconciliationTests(unittest.TestCase):
 
                 repaired_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                 self.assertEqual(repaired_metadata["checkpoint_identity"], current_identity)
+                self.assertEqual(repaired_metadata["tokenizer_data"], self._payload(stage_step=2)["tokenizer"])
                 self.assertEqual(repaired_metadata["finetuning_stage_steps"], 2)
                 self.assertEqual(repaired_metadata["finetuning_remaining_steps"], 2)
 
