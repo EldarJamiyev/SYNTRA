@@ -544,3 +544,14 @@ A phase is not complete merely because the interface looks finished. It must inc
 **Acceptance:** Under one OS user and the same temporary-directory configuration, a SYNTRA process cannot begin native model compute while another process owns the compute reservation; same-process inference concurrency remains governed by SYNTRA_MAX_CONCURRENT_INFERENCE; API conflicts fail immediately with HTTP 503 and Retry-After: 1; process termination releases the OS lock without stale-lock cleanup.
 
 **Boundary:** The process reservation is per OS user and per host temporary-directory configuration. It does not coordinate different OS users, separate hosts, or processes intentionally configured with different temporary directories, and it does not claim to measure or guarantee a specific GPU/CPU memory ceiling.
+
+### Phase 49 — Autograd-free streamed native inference
+
+**Objective:** Ensure token-by-token native inference does not retain training graphs across generated tokens or while a client consumes a stream.
+
+- [x] Execute the initial and incremental Transformer forward passes in explicit no-gradient contexts inside the streaming generator.
+- [x] Keep the existing generator lifetime and compute-lease semantics unchanged; streaming still owns its process reservation until exhaustion or close.
+- [x] Add a regression that runs streaming under an explicitly gradient-enabled caller context and asserts both forward passes observe gradients disabled.
+- [ ] Measure peak memory on the same trained checkpoint and target hardware before publishing any memory-reduction figure.
+
+**Acceptance:** Streaming generation remains functionally identical while every Transformer forward pass runs with autograd disabled, independent of the caller's ambient gradient mode; no synthetic memory measurements or model-quality claims are introduced.
