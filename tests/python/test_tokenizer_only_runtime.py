@@ -83,6 +83,7 @@ class TokenizerOnlyRuntimeTests(unittest.TestCase):
             self.assertFalse(_resident_cache_matches_checkpoint(checkpoint))
 
     def test_stale_metadata_falls_back_to_checkpoint_and_invalidates_tokenizer_cache(self):
+        from syntra_ai.config import ModelConfig
         from syntra_ai.runtime import _read_checkpoint, tokenize_text
         from syntra_ai.training import _atomic_checkpoint
 
@@ -98,7 +99,7 @@ class TokenizerOnlyRuntimeTests(unittest.TestCase):
 
                 # Atomically advance the checkpoint but deliberately retain its old
                 # metadata. The identity mismatch must force the checkpoint fallback.
-                next_config = _config = __import__("syntra_ai.config", fromlist=["ModelConfig"]).ModelConfig(
+                next_config = ModelConfig(
                     vocab_size=tokenizer.vocab_size,
                     seq_len=48,
                     n_layer=1,
