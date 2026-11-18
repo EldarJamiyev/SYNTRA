@@ -742,6 +742,7 @@ def train(
             "training_settings": source_training_settings,
             "tokenizer": "byte-BPE",
             "tokenizer_vocab_size": tokenizer.vocab_size,
+            "tokenizer_data": tokenizer.to_dict(),
             "context_tokens": config.seq_len,
             "training_mode": "causal-source-pretraining",
             "created_by": "SYNTRA from-scratch trainer",
