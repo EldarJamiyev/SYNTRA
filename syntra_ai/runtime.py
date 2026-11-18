@@ -293,11 +293,14 @@ def _read_identity_bound_tokenizer_metadata(
         if _file_stat_identity_record(target) != expected_checkpoint_identity:
             return None
         return config, tokenizer, step
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, RecursionError, json.JSONDecodeError):
         return None
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _get_tokenizer_bundle(
@@ -309,14 +312,21 @@ def _get_tokenizer_bundle(
         raise FileNotFoundError("No trained SYNTRA checkpoint exists at " + str(target) + ". Train a local model first.")
 
     cache_key = str(target)
-    signature = _tokenizer_cache_signature(target)
-    with _CACHE_LOCK:
-        cached = _TOKENIZER_CACHE.get(cache_key)
-        if cached is not None and cached[0] == signature:
-            if _tokenizer_cache_signature(target) != signature:
-                raise RuntimeError("The checkpoint changed while tokenizer metadata was being retrieved; retry the request.")
-            return target, cached[1], cached[2], cached[3]
+    def cached_bundle(signature_value: tuple[Any, ...]):
+        with _CACHE_LOCK:
+            cached_value = _TOKENIZER_CACHE.get(cache_key)
+        if cached_value is None or cached_value[0] != signature_value:
+            return None
+        if _tokenizer_cache_signature(target) != signature_value:
+            raise RuntimeError("The checkpoint changed while tokenizer metadata was being retrieved; retry the request.")
+        return cached_value
 
+    signature = _tokenizer_cache_signature(target)
+    cached = cached_bundle(signature)
+    if cached is not None:
+        return target, cached[1], cached[2], cached[3]
+
+    with _CACHE_LOCK:
         lock_entry = _TOKENIZER_LOAD_LOCKS.get(cache_key)
         if lock_entry is None:
             load_lock = Lock()
@@ -328,12 +338,9 @@ def _get_tokenizer_bundle(
     load_lock.acquire()
     try:
         signature = _tokenizer_cache_signature(target)
-        with _CACHE_LOCK:
-            cached = _TOKENIZER_CACHE.get(cache_key)
-            if cached is not None and cached[0] == signature:
-                if _tokenizer_cache_signature(target) != signature:
-                    raise RuntimeError("The checkpoint changed while tokenizer metadata was being retrieved; retry the request.")
-                return target, cached[1], cached[2], cached[3]
+        cached = cached_bundle(signature)
+        if cached is not None:
+            return target, cached[1], cached[2], cached[3]
 
         checkpoint_identity = _file_stat_identity_record(target)
         metadata_bundle = _read_identity_bound_tokenizer_metadata(target, checkpoint_identity)
