@@ -208,14 +208,25 @@ def _resident_cache_signature(target: Path, device_name: str) -> tuple[tuple[Any
 
 
 def _tokenizer_cache_signature(target: Path) -> tuple[Any, ...]:
-    """Bind tokenizer cache entries to the source, selected companion and status sidecar."""
-    signature, _load_target = _resident_cache_signature(target, "tokenizer")
+    """Bind tokenizer cache entries to source, companion and sidecar file identities."""
+    missing_identity = (-1, -1, -1, -1, -1)
+    try:
+        source_identity = _file_stat_identity(target)
+    except OSError:
+        source_identity = missing_identity
+
+    load_target = select_inference_checkpoint(target)
+    try:
+        companion_identity = _file_stat_identity(load_target)
+    except OSError:
+        companion_identity = missing_identity
+
     metadata_path = target.with_suffix(target.suffix + ".json")
     try:
         metadata_identity = _file_stat_identity(metadata_path)
     except OSError:
-        metadata_identity = (-1, -1, -1, -1, -1)
-    return signature + (metadata_identity,)
+        metadata_identity = missing_identity
+    return (source_identity, str(load_target), companion_identity, metadata_identity)
 
 
 def _read_identity_bound_tokenizer_metadata(
