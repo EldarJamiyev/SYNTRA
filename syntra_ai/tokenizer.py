@@ -63,22 +63,41 @@ class ByteBPETokenizer:
         max_training_bytes: int = 100_000,
         min_pair_frequency: int = 2,
     ) -> "ByteBPETokenizer":
-        if not FIRST_MERGE_ID <= vocab_size <= 8192:
-            raise ValueError("vocab_size must be between 258 and 8,192.")
-        if max_training_bytes < 1024:
-            raise ValueError("max_training_bytes must be at least 1,024.")
+        if type(vocab_size) is not int or not FIRST_MERGE_ID <= vocab_size <= 8192:
+            raise ValueError("vocab_size must be an integer between 258 and 8,192.")
+        if type(max_training_bytes) is not int or max_training_bytes < 1024:
+            raise ValueError("max_training_bytes must be an integer of at least 1,024.")
+        if type(min_pair_frequency) is not int or min_pair_frequency < 1:
+            raise ValueError("min_pair_frequency must be a positive integer.")
+        if isinstance(documents, (str, bytes, bytearray)):
+            raise ValueError("documents must be an iterable of text documents, not a single text value.")
+        try:
+            document_iterator = iter(documents)
+        except TypeError:
+            raise ValueError("documents must be an iterable of text documents.") from None
+
         # Bound tokenizer-training CPU/RAM independently of the full model corpus.
-        sample = bytearray()
-        for document in documents:
-            if len(sample) >= max_training_bytes:
+        # Keep each source document separate so merges cannot span file boundaries.
+        sampled_documents: list[str] = []
+        sampled_bytes = 0
+        for document in document_iterator:
+            if not isinstance(document, str):
+                raise ValueError("Every tokenizer training document must be text.")
+            if sampled_bytes >= max_training_bytes:
                 break
-            remaining = max_training_bytes - len(sample)
-            piece = document.encode("utf-8")[:remaining]
-            sample.extend(piece)
-        text = bytes(sample).decode("utf-8", errors="ignore")
+            try:
+                encoded_document = document.encode("utf-8")
+            except UnicodeEncodeError:
+                raise ValueError("Tokenizer training documents must be valid UTF-8 text.") from None
+            remaining = max_training_bytes - sampled_bytes
+            sampled_piece = encoded_document[:remaining]
+            if sampled_piece:
+                sampled_documents.append(sampled_piece.decode("utf-8", errors="ignore"))
+                sampled_bytes += len(sampled_piece)
         sequences = [
             list(piece.encode("utf-8"))
-            for piece in split_pieces(text)
+            for document in sampled_documents
+            for piece in split_pieces(document)
             if piece
         ]
         merges: list[tuple[int, int]] = []
