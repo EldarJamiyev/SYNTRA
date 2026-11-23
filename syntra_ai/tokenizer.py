@@ -81,10 +81,10 @@ class ByteBPETokenizer:
         sampled_documents: list[str] = []
         sampled_bytes = 0
         for document in document_iterator:
-            if not isinstance(document, str):
-                raise ValueError("Every tokenizer training document must be text.")
             if sampled_bytes >= max_training_bytes:
                 break
+            if not isinstance(document, str):
+                raise ValueError("Every tokenizer training document must be text.")
             try:
                 encoded_document = document.encode("utf-8")
             except UnicodeEncodeError:

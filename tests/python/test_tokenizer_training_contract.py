@@ -48,6 +48,18 @@ class TokenizerTrainingContractTests(unittest.TestCase):
         self.assertIn((FIRST_MERGE_ID, ord("a")), tokenizer.merges)
         self.assertNotIn((ord("a"), FIRST_MERGE_ID + 1), tokenizer.merges)
 
+    def test_documents_after_sample_budget_are_not_validated(self):
+        def documents():
+            yield "a" * 1024
+            yield None
+
+        tokenizer = ByteBPETokenizer.train(
+            documents(),
+            vocab_size=258,
+            max_training_bytes=1024,
+        )
+        self.assertEqual(tokenizer.vocab_size, 258)
+
     def test_empty_iterable_is_valid_and_learns_no_merges(self):
         tokenizer = ByteBPETokenizer.train(iter(()), vocab_size=258)
         self.assertEqual(tokenizer.merges, ())
