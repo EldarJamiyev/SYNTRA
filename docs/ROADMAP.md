@@ -555,3 +555,17 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [ ] Measure peak memory on the same trained checkpoint and target hardware before publishing any memory-reduction figure.
 
 **Acceptance:** Streaming generation remains functionally identical while every Transformer forward pass runs with autograd disabled, independent of the caller's ambient gradient mode; no synthetic memory measurements or model-quality claims are introduced.
+
+
+### Phase 50 — Strict tokenizer-training inputs and document isolation
+
+**Objective:** Make native BPE vocabulary learning reject malformed configuration and avoid creating merge candidates from artificial concatenations of separate source documents.
+
+- [x] Require strict integer types and supported ranges for vocabulary size, training-byte budget, and minimum pair frequency; reject booleans, fractional values, and numeric strings.
+- [x] Require an iterable of UTF-8-encodable text documents and report scalar text, non-text entries, and invalid Unicode explicitly.
+- [x] Apply the aggregate byte sample budget while preserving sampled document boundaries, so merge statistics never cross separate source files.
+- [x] Add focused regressions for parameter validation, malformed document input, empty iterables, and boundary-crossing merge prevention.
+
+**Acceptance:** Valid tokenizer training remains deterministic and bounded by the configured byte sample budget; invalid input fails with a clear ValueError; every learned merge is counted within an individual sampled document, never across adjacent documents. This is a tokenizer correctness/input-contract improvement, not a model-quality claim.
+
+**Sample boundary:** The byte budget counts raw UTF-8 bytes. A truncated final sample may drop incomplete trailing UTF-8 bytes for tokenizer learning only; source files are never modified.
