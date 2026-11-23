@@ -567,3 +567,5 @@ A phase is not complete merely because the interface looks finished. It must inc
 - [x] Add focused regressions for parameter validation, malformed document input, empty iterables, and boundary-crossing merge prevention.
 
 **Acceptance:** Valid tokenizer training remains deterministic and bounded by the configured byte sample budget; invalid input fails with a clear ValueError; every learned merge is counted within an individual sampled document, never across adjacent documents. This is a tokenizer correctness/input-contract improvement, not a model-quality claim.
+
+**Sample boundary:** The byte budget counts raw UTF-8 bytes. A truncated final sample may drop incomplete trailing UTF-8 bytes for tokenizer learning only; source files are never modified.
